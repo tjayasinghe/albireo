@@ -26,6 +26,8 @@ __all__ = [
     "InterpOperator",
     "RebinOperator",
     "bin_edges_from_centers",
+    "convolve_spectrum",
+    "gaussian_kernel",
     "interp_operator",
     "rebin_operator",
     "shift_spectrum",
@@ -97,6 +99,37 @@ def shift_spectrum_adjoint(flux, shift_pix):
     out = out.at[jnp.clip(i0, 0, n - 1)].add(jnp.where(in0, (1.0 - frac) * flux, 0.0))
     out = out.at[jnp.clip(i1, 0, n - 1)].add(jnp.where(in1, frac * flux, 0.0))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Stationary (LSF) convolution on a uniform grid
+# ---------------------------------------------------------------------------
+
+
+def gaussian_kernel(sigma_px, *, truncate: float = 4.0):
+    """Normalized Gaussian kernel at integer pixel offsets, truncated at ±truncate·sigma.
+
+    On the uniform log-wavelength grid a constant-resolving-power Gaussian LSF of
+    velocity width ``sigma_v`` has ``sigma_px = sigma_v / grid.dv_kms``. The kernel has
+    odd length ``2*radius + 1`` and sums to exactly 1.
+    """
+    sigma = float(sigma_px)
+    if sigma <= 0:
+        raise ValueError("sigma_px must be positive")
+    radius = max(1, int(np.ceil(truncate * sigma)))
+    offsets = np.arange(-radius, radius + 1, dtype=np.float64)
+    kernel = np.exp(-0.5 * (offsets / sigma) ** 2)
+    return jnp.asarray(kernel / kernel.sum())
+
+
+def convolve_spectrum(flux, kernel):
+    """Zero-padded 'same' convolution (stationary LSF on the uniform grid).
+
+    Linear in ``flux``; for a symmetric kernel the operator is self-adjoint, and in
+    general the adjoint is convolution with the reversed kernel (verified in tests).
+    Zero padding is exact for deviation spectra that vanish near the grid edges.
+    """
+    return jnp.convolve(jnp.asarray(flux), jnp.asarray(kernel), mode="same")
 
 
 # ---------------------------------------------------------------------------

@@ -261,6 +261,48 @@ def test_rebin_operators_are_jit_compatible():
     np.testing.assert_allclose(np.asarray(apply(op, f)), np.asarray(op(f)), rtol=1e-15)
 
 
+# ---------------------------------------------------------------------------
+# Stationary (LSF) convolution
+# ---------------------------------------------------------------------------
+
+
+def test_gaussian_kernel_properties():
+    k = np.asarray(ab.gaussian_kernel(2.5))
+    assert k.size % 2 == 1
+    np.testing.assert_allclose(k.sum(), 1.0, rtol=1e-14)
+    np.testing.assert_allclose(k, k[::-1], rtol=1e-14)  # symmetric
+    with pytest.raises(ValueError):
+        ab.gaussian_kernel(0.0)
+
+
+def test_convolve_symmetric_kernel_is_self_adjoint():
+    kernel = ab.gaussian_kernel(3.0)
+    u = jnp.asarray(RNG.standard_normal(N))
+    w = jnp.asarray(RNG.standard_normal(N))
+    lhs = jnp.vdot(ab.convolve_spectrum(u, kernel), w)
+    rhs = jnp.vdot(u, ab.convolve_spectrum(w, kernel))
+    np.testing.assert_allclose(float(lhs), float(rhs), rtol=1e-13)
+
+
+def test_convolve_adjoint_is_reversed_kernel():
+    # generic asymmetric kernel: adjoint of zero-padded 'same' convolution is
+    # convolution with the reversed kernel
+    kernel = jnp.asarray(RNG.standard_normal(9))
+    u = jnp.asarray(RNG.standard_normal(N))
+    w = jnp.asarray(RNG.standard_normal(N))
+    (ct,) = jax.linear_transpose(lambda f: ab.convolve_spectrum(f, kernel), u)(w)
+    np.testing.assert_allclose(
+        np.asarray(ct), np.asarray(ab.convolve_spectrum(w, kernel[::-1])), rtol=1e-13, atol=1e-13
+    )
+
+
+def test_convolve_preserves_constant_interior():
+    kernel = ab.gaussian_kernel(4.0)
+    r = (len(np.asarray(kernel)) - 1) // 2
+    out = np.asarray(ab.convolve_spectrum(jnp.ones(N), kernel))
+    np.testing.assert_allclose(out[r:-r], 1.0, rtol=1e-14)
+
+
 def test_edges_from_centers():
     centers = np.array([1.0, 2.0, 4.0])
     edges = ab.bin_edges_from_centers(centers)
