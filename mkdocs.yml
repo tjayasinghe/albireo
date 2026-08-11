@@ -28,6 +28,7 @@ nav:
   - Home: index.md
   - Design: design.md
   - Mathematical foundations: math.md
+  - Benchmarks: benchmarks.md
 
 markdown_extensions:
   - admonition
