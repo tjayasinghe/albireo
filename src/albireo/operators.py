@@ -28,6 +28,7 @@ __all__ = [
     "bin_edges_from_centers",
     "convolve_spectrum",
     "gaussian_kernel",
+    "gaussian_kernel_traced",
     "interp_operator",
     "rebin_operator",
     "shift_spectrum",
@@ -120,6 +121,22 @@ def gaussian_kernel(sigma_px, *, truncate: float = 4.0):
     offsets = np.arange(-radius, radius + 1, dtype=np.float64)
     kernel = np.exp(-0.5 * (offsets / sigma) ** 2)
     return jnp.asarray(kernel / kernel.sum())
+
+
+def gaussian_kernel_traced(sigma_px, radius: int):
+    """Normalized Gaussian kernel with a *static* radius and a traced ``sigma_px``.
+
+    The jit-safe counterpart of :func:`gaussian_kernel` for inference over LSF
+    widths: the kernel length ``2*radius + 1`` is fixed at trace time while the
+    values are differentiable in ``sigma_px``. The caller must ensure
+    ``radius >= truncate * sigma_px`` (build the radius from an upper bound on
+    sigma) — a radius too small for the realized sigma truncates the Gaussian and
+    degrades accuracy, which is why the inference model guards the bound.
+    ``sigma_px`` must be positive (enforce via the prior's support).
+    """
+    offsets = jnp.arange(-radius, radius + 1, dtype=jnp.float64)
+    kernel = jnp.exp(-0.5 * (offsets / sigma_px) ** 2)
+    return kernel / jnp.sum(kernel)
 
 
 def convolve_spectrum(flux, kernel):

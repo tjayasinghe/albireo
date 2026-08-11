@@ -14,7 +14,13 @@ if not os.environ.get("ALBIREO_DISABLE_X64"):
     jax.config.update("jax_enable_x64", True)
 
 from albireo.data import Dataset, EpochData
-from albireo.forward import Problem, build_problem, with_velocities
+from albireo.forward import (
+    Problem,
+    build_problem,
+    with_light_fractions,
+    with_lsf,
+    with_velocities,
+)
 from albireo.grids import C_KMS, LogGrid, log_doppler_shift
 from albireo.inference import (
     MAPResult,
@@ -39,12 +45,14 @@ from albireo.operators import (
     bin_edges_from_centers,
     convolve_spectrum,
     gaussian_kernel,
+    gaussian_kernel_traced,
     interp_operator,
     rebin_operator,
     shift_spectrum,
     shift_spectrum_adjoint,
 )
 from albireo.priors import SmoothnessPrior
+from albireo.scan import K2ScanResult, k2_scan
 from albireo.simulate import (
     InstrumentSpec,
     OrbitParams,
@@ -62,6 +70,7 @@ __all__ = [
     "EpochData",
     "InstrumentSpec",
     "InterpOperator",
+    "K2ScanResult",
     "LogGrid",
     "MAPResult",
     "MarginalOrbitModel",
@@ -77,7 +86,9 @@ __all__ = [
     "convolve_spectrum",
     "draw_spectra",
     "gaussian_kernel",
+    "gaussian_kernel_traced",
     "interp_operator",
+    "k2_scan",
     "laplace_inverse_mass",
     "log_doppler_shift",
     "marginal_loglikelihood",
@@ -97,5 +108,7 @@ __all__ = [
     "synthetic_telluric_spectrum",
     "t_peri_from_t_conj",
     "true_anomaly",
+    "with_light_fractions",
+    "with_lsf",
     "with_velocities",
 ]

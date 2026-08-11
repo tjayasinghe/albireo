@@ -6,10 +6,20 @@ The nonlinear parameter vector ``theta`` is a dict of JAX arrays with sites
 - ``t_conj``      time of conjunction of component 1 (``nu + omega = pi/2``) [d]
 - ``secosw``      ``sqrt(e) cos(omega)``
 - ``sesinw``      ``sqrt(e) sin(omega)``
-- ``k``           RV semi-amplitudes ``(K_1, K_2, ...)`` [km/s], one per stellar
-  component; even components use ``omega``, odd use ``omega + pi``
+- ``k``           RV semi-amplitudes ``(K_1, K_2, ...)`` [km/s], one per inner
+  stellar component; even components use ``omega``, odd use ``omega + pi``
 - ``log_tau``, ``log_eta`` (optional) — log spectral-prior hyperparameters, one per
   model component (including the telluric component when enabled)
+- ``period_out``, ``t_conj_out``, ``secosw_out``, ``sesinw_out``, ``k_out``
+  (optional, all five together) — a hierarchical outer orbit (SB3): the inner
+  components' center of mass moves with semi-amplitude ``k_out[0]`` and argument
+  ``omega_out``, and one additional tertiary component is appended moving with
+  ``k_out[1]`` and ``omega_out + pi``
+- ``light`` (optional) — stellar light fractions, ``(n_stellar,)`` constant or
+  ``(n_epochs, n_stellar)`` per-epoch, rows on the simplex (use Dirichlet priors)
+- ``lsf_sigma`` (optional) — per-instrument Gaussian LSF widths [km/s], ordered as
+  the problem's instrument groups; the construction-time ``lsf_sigma_v`` values act
+  as upper bounds (they fix the kernel radii)
 
 ``gamma`` is identically zero (design decision D14: a systemic velocity is exactly
 degenerate with a common shift of the component spectra). The ``(secosw, sesinw)``
@@ -45,7 +55,7 @@ from numpyro.infer import MCMC, NUTS, init_to_value
 from numpyro.infer.util import initialize_model
 
 from albireo.data import Dataset
-from albireo.forward import build_problem, with_velocities
+from albireo.forward import build_problem, with_light_fractions, with_lsf, with_velocities
 from albireo.grids import LogGrid
 from albireo.kepler import radial_velocity, t_peri_from_t_conj
 from albireo.likelihood import MarginalResult, draw_spectra, marginal_loglikelihood
@@ -63,7 +73,27 @@ __all__ = [
 ]
 
 _ECC_MAX_DEFAULT = 0.95  # the Kepler solver is verified up to e = 0.95
-_THETA_SITES = ("period", "t_conj", "secosw", "sesinw", "k", "log_tau", "log_eta")
+_OUTER_SITES = ("period_out", "t_conj_out", "secosw_out", "sesinw_out", "k_out")
+_THETA_SITES = (
+    "period",
+    "t_conj",
+    "secosw",
+    "sesinw",
+    "k",
+    *_OUTER_SITES,
+    "light",
+    "lsf_sigma",
+    "log_tau",
+    "log_eta",
+)
+
+
+def _has_outer_orbit(theta: Mapping) -> bool:
+    present = [s for s in _OUTER_SITES if s in theta]
+    if present and len(present) != len(_OUTER_SITES):
+        missing = [s for s in _OUTER_SITES if s not in theta]
+        raise ValueError(f"outer orbit needs all of {_OUTER_SITES}; missing {missing}")
+    return bool(present)
 
 
 def _max_relative_shift(problem) -> jax.Array:
@@ -75,45 +105,70 @@ def _max_relative_shift(problem) -> jax.Array:
     return rel
 
 
+def _kepler_block(theta: Mapping, suffix: str, ecc_max: float) -> dict:
+    """One Keplerian's physical parameters from suffixed theta sites (differentiable)."""
+    h = jnp.asarray(theta["secosw" + suffix])
+    s = jnp.asarray(theta["sesinw" + suffix])
+    return {
+        "period": jnp.asarray(theta["period" + suffix]),
+        "t_conj": jnp.asarray(theta["t_conj" + suffix]),
+        "ecc": jnp.minimum(h * h + s * s, ecc_max),
+        "omega": jnp.arctan2(s, h),
+        "k": jnp.atleast_1d(jnp.asarray(theta["k" + suffix])),
+    }
+
+
+def _block_velocity(par: Mapping, bjd, *, component: int):
+    """RV of one component of a Keplerian block (odd components use ``omega + pi``)."""
+    t_peri = t_peri_from_t_conj(
+        par["t_conj"], period=par["period"], ecc=par["ecc"], omega=par["omega"]
+    )
+    return radial_velocity(
+        bjd,
+        period=par["period"],
+        t_peri=t_peri,
+        ecc=par["ecc"],
+        omega=par["omega"] + (component % 2) * jnp.pi,
+        k=par["k"][component],
+    )
+
+
 def orbit_parameters(theta: Mapping, *, ecc_max: float = _ECC_MAX_DEFAULT) -> dict:
     """Physical orbit parameters from a ``theta`` dict (differentiable).
 
     Returns ``{"period", "t_conj", "ecc", "omega", "k"}`` with ``ecc`` clipped to
     ``ecc_max`` (the unclipped value is enforced separately by the model's disk
-    constraint).
+    constraint). If the hierarchical outer-orbit sites are present, an ``"outer"``
+    key holds the same structure for the outer Keplerian
+    (``k = (K_inner_com, K_tertiary)``).
     """
-    h, s = jnp.asarray(theta["secosw"]), jnp.asarray(theta["sesinw"])
-    return {
-        "period": jnp.asarray(theta["period"]),
-        "t_conj": jnp.asarray(theta["t_conj"]),
-        "ecc": jnp.minimum(h * h + s * s, ecc_max),
-        "omega": jnp.arctan2(s, h),
-        "k": jnp.atleast_1d(jnp.asarray(theta["k"])),
-    }
+    par = _kepler_block(theta, "", ecc_max)
+    if _has_outer_orbit(theta):
+        par["outer"] = _kepler_block(theta, "_out", ecc_max)
+    return par
 
 
 def orbit_velocities(theta: Mapping, bjd, *, ecc_max: float = _ECC_MAX_DEFAULT):
     """Stellar radial velocities, shape ``(n_stellar, n_epochs)``, barycentric frame.
 
-    Same convention as :class:`albireo.simulate.OrbitParams`: component ``i`` uses
-    ``omega + (i % 2) * pi`` and semi-amplitude ``k[i]``; ``gamma = 0`` (D14).
+    Inner components follow :class:`albireo.simulate.OrbitParams` conventions:
+    component ``i`` uses ``omega + (i % 2) * pi`` and semi-amplitude ``k[i]``;
+    ``gamma = 0`` (D14). With the outer-orbit sites present (SB3), the outer
+    center-of-mass velocity (semi-amplitude ``k_out[0]``, argument ``omega_out``,
+    conjunction convention on the inner pair's center of mass) is added to every
+    inner component, and one tertiary row is appended with semi-amplitude
+    ``k_out[1]`` and argument ``omega_out + pi``.
     """
     par = orbit_parameters(theta, ecc_max=ecc_max)
-    t_peri = t_peri_from_t_conj(
-        par["t_conj"], period=par["period"], ecc=par["ecc"], omega=par["omega"]
-    )
     bjd = jnp.asarray(bjd)
-    rows = [
-        radial_velocity(
-            bjd,
-            period=par["period"],
-            t_peri=t_peri,
-            ecc=par["ecc"],
-            omega=par["omega"] + (i % 2) * jnp.pi,
-            k=par["k"][i],
-        )
-        for i in range(par["k"].shape[0])
-    ]
+    rows = [_block_velocity(par, bjd, component=i) for i in range(par["k"].shape[0])]
+    if "outer" in par:
+        out = par["outer"]
+        if out["k"].shape[0] != 2:
+            raise ValueError("k_out must have exactly two entries (K_inner_com, K_tertiary)")
+        v_com = _block_velocity(out, bjd, component=0)
+        rows = [v + v_com for v in rows]
+        rows.append(_block_velocity(out, bjd, component=1))
     return jnp.stack(rows)
 
 
@@ -134,12 +189,18 @@ class MarginalOrbitModel:
     Parameters
     ----------
     grid, dataset, light_fractions, lsf_sigma_v, response_coeffs, telluric
-        As in :func:`albireo.forward.build_problem`.
+        As in :func:`albireo.forward.build_problem`. ``light_fractions`` and
+        ``lsf_sigma_v`` are the build-time values, used whenever θ carries no
+        ``light`` / ``lsf_sigma`` site; when those sites *are* inferred, the
+        build-time light fractions only set ``n_stellar``, and the build-time LSF
+        widths become strict upper bounds (they fix the kernel radii — the model
+        rejects wider widths, which the fixed radii would silently truncate).
     v_rel_max_kms
         Bound on the largest relative velocity between any two model components at
-        any epoch (for an SB2: ``(K_1 + K_2)(1 + e)``, plus barycentric motion if a
-        telluric component is enabled). Give it headroom — the prior on ``k`` must
-        not allow configurations that exceed it.
+        any epoch (for an SB2: ``(K_1 + K_2)(1 + e)``; for an SB3 add the outer
+        orbit's ``(K_AB + K_C)(1 + e_out)``; plus barycentric motion if a telluric
+        component is enabled). Give it headroom — the priors must not allow
+        configurations that exceed it, or mixing will stall at the guard.
     prior
         Fixed :class:`SmoothnessPrior`, used whenever ``theta`` carries no
         ``log_tau``/``log_eta`` sites. Optional if the hyperparameters are always in
@@ -185,6 +246,10 @@ class MarginalOrbitModel:
         self.block_size = block_size
         self.ecc_max = float(ecc_max)
         self.fixed_prior = prior
+        # Instrument order for the (optional) "lsf_sigma" theta site; the widths the
+        # kernels were built with are the upper bounds (they fix the kernel radii).
+        self.instruments = tuple(g.instrument for g in self.problem.groups)
+        self._lsf_sigma_max = jnp.asarray([float(lsf_sigma_v[name]) for name in self.instruments])
         self._marginal_jit = jax.jit(self._marginal)
 
     @property
@@ -202,9 +267,33 @@ class MarginalOrbitModel:
             )
         return self.fixed_prior
 
-    def _velocity_problem(self, theta: Mapping):
+    def _theta_problem(self, theta: Mapping):
+        """Problem at θ: velocities always; light fractions / LSF widths if present."""
         vel = orbit_velocities(theta, self.bjd, ecc_max=self.ecc_max)
-        return with_velocities(self.problem, vel)
+        if vel.shape[0] != self.n_stellar:
+            raise ValueError(
+                f"theta implies {vel.shape[0]} stellar components "
+                f"(len(k){' + tertiary' if _has_outer_orbit(theta) else ''}) but the model "
+                f"was built with {self.n_stellar} light fractions"
+            )
+        problem = with_velocities(self.problem, vel)
+        if "light" in theta:
+            ell = jnp.asarray(theta["light"])
+            if ell.ndim == 2:  # per-epoch, Dirichlet layout (n_epochs, n_stellar)
+                ell = ell.T
+            problem = with_light_fractions(problem, ell)
+        if "lsf_sigma" in theta:
+            sig = jnp.atleast_1d(jnp.asarray(theta["lsf_sigma"]))
+            if sig.shape != self._lsf_sigma_max.shape:
+                raise ValueError(
+                    f"lsf_sigma must have one entry per instrument group "
+                    f"{self.instruments}; got shape {sig.shape}"
+                )
+            # Clip into the kernel-radius-valid range so the likelihood stays finite
+            # (and rejectable, via the model's lsf_bound guard) outside it.
+            sig = jnp.clip(sig, 1e-3 * self._lsf_sigma_max, self._lsf_sigma_max)
+            problem = with_lsf(problem, dict(zip(self.instruments, sig, strict=True)))
+        return problem
 
     def _marginal_from_problem(self, problem, theta: Mapping) -> MarginalResult:
         return marginal_loglikelihood(
@@ -215,7 +304,7 @@ class MarginalOrbitModel:
         )
 
     def _marginal(self, theta: Mapping) -> MarginalResult:
-        return self._marginal_from_problem(self._velocity_problem(theta), theta)
+        return self._marginal_from_problem(self._theta_problem(theta), theta)
 
     def marginal(self, theta: Mapping) -> MarginalResult:
         """Jit-compiled marginal result (log-likelihood + conditional spectra) at θ."""
@@ -260,7 +349,24 @@ class MarginalOrbitModel:
             numpyro.deterministic("ecc", jnp.minimum(ecc_raw, self.ecc_max))
             numpyro.deterministic("omega", jnp.arctan2(theta["sesinw"], theta["secosw"]))
             numpyro.factor("ecc_disk", jnp.where(ecc_raw <= self.ecc_max, 0.0, -jnp.inf))
-            problem = self._velocity_problem(theta)
+            if _has_outer_orbit(theta):
+                ecc_out_raw = theta["secosw_out"] ** 2 + theta["sesinw_out"] ** 2
+                numpyro.deterministic("ecc_out", jnp.minimum(ecc_out_raw, self.ecc_max))
+                numpyro.deterministic(
+                    "omega_out", jnp.arctan2(theta["sesinw_out"], theta["secosw_out"])
+                )
+                numpyro.factor(
+                    "ecc_disk_out", jnp.where(ecc_out_raw <= self.ecc_max, 0.0, -jnp.inf)
+                )
+            if "lsf_sigma" in theta:
+                sig = jnp.atleast_1d(theta["lsf_sigma"])
+                # The construction-time widths fix the kernel radii: wider LSFs would
+                # be silently truncated, so they are rejected (see with_lsf).
+                numpyro.factor(
+                    "lsf_bound",
+                    jnp.where(jnp.all(sig <= self._lsf_sigma_max), 0.0, -jnp.inf),
+                )
+            problem = self._theta_problem(theta)
             # Reject configurations whose relative shifts exceed the static bandwidth
             # (the probed marginal likelihood would be silently wrong out there).
             rel = _max_relative_shift(problem)

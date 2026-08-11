@@ -26,7 +26,13 @@ import numpy as np
 
 from albireo.data import Dataset
 from albireo.grids import LogGrid
-from albireo.operators import RebinOperator, gaussian_kernel, rebin_operator, shift_spectrum
+from albireo.operators import (
+    RebinOperator,
+    gaussian_kernel,
+    gaussian_kernel_traced,
+    rebin_operator,
+    shift_spectrum,
+)
 from albireo.operators import shift_spectrum_adjoint as shift_adjoint
 from albireo.simulate import chebyshev_response
 
@@ -40,6 +46,8 @@ __all__ = [
     "normal_matvec",
     "rhs",
     "weighted_data_terms",
+    "with_light_fractions",
+    "with_lsf",
     "with_velocities",
 ]
 
@@ -292,6 +300,69 @@ def with_velocities(problem: Problem, velocities) -> Problem:
         if problem.telluric:
             sp = jnp.concatenate([sp, tell_col], axis=1)
         groups.append(replace(g, shifts=sp))
+    return replace(problem, groups=tuple(groups))
+
+
+def with_light_fractions(problem: Problem, light_fractions) -> Problem:
+    """Return ``problem`` with the stellar light fractions replaced (differentiable).
+
+    The θ-dependent path for light-fraction inference: only the per-epoch light
+    columns are swapped; the telluric column (if present) keeps light fraction 1.
+    Safe inside ``jax.jit`` with traced values. The simplex constraint (non-negative,
+    sum to 1 per epoch) cannot be checked on traced input — it is the caller's
+    responsibility (in the numpyro model it is guaranteed by a Dirichlet prior).
+
+    Parameters
+    ----------
+    problem
+        Output of :func:`build_problem`.
+    light_fractions
+        ``(n_stellar,)`` constant or ``(n_stellar, n_epochs)`` per-epoch.
+    """
+    ell = jnp.asarray(light_fractions)
+    if ell.ndim == 1:
+        ell = jnp.broadcast_to(ell[:, None], (ell.shape[0], problem.n_epochs))
+    if ell.shape != (problem.n_stellar, problem.n_epochs):
+        raise ValueError(
+            f"light_fractions must have shape ({problem.n_stellar},) or "
+            f"({problem.n_stellar}, {problem.n_epochs}); got {ell.shape}"
+        )
+    groups = []
+    for g in problem.groups:
+        idx = list(g.epoch_indices)
+        le = ell[:, idx].T  # (n_epochs_group, n_stellar)
+        if problem.telluric:
+            le = jnp.concatenate([le, jnp.ones((len(idx), 1))], axis=1)
+        groups.append(replace(g, light=le))
+    return replace(problem, groups=tuple(groups))
+
+
+def with_lsf(problem: Problem, lsf_sigma_v: Mapping) -> Problem:
+    """Return ``problem`` with the Gaussian LSF widths replaced (differentiable).
+
+    The θ-dependent path for LSF inference: each group's kernel *values* are
+    recomputed from the traced width while the kernel *radius* stays the one fixed
+    at :func:`build_problem` time — so the ``lsf_sigma_v`` passed at build time must
+    be an upper bound on any width used here (a larger width would be truncated by
+    the fixed radius; the inference model rejects that region). Safe inside
+    ``jax.jit``; widths must be positive (enforce via the prior's support).
+
+    Parameters
+    ----------
+    problem
+        Output of :func:`build_problem`.
+    lsf_sigma_v
+        Per-instrument Gaussian LSF width in km/s (traced scalars allowed); must
+        cover every instrument in the problem.
+    """
+    groups = []
+    for g in problem.groups:
+        if g.instrument not in lsf_sigma_v:
+            raise ValueError(f"no LSF width supplied for instrument {g.instrument!r}")
+        sigma_px = jnp.asarray(lsf_sigma_v[g.instrument]) / problem.grid.dv_kms
+        radius = (g.kernel.shape[0] - 1) // 2
+        kernel = gaussian_kernel_traced(sigma_px, radius)
+        groups.append(replace(g, kernel=kernel, kernel_rev=kernel[::-1]))
     return replace(problem, groups=tuple(groups))
 
 
