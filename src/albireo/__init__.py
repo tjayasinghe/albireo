@@ -14,8 +14,18 @@ if not os.environ.get("ALBIREO_DISABLE_X64"):
     jax.config.update("jax_enable_x64", True)
 
 from albireo.data import Dataset, EpochData
-from albireo.forward import Problem, build_problem
+from albireo.forward import Problem, build_problem, with_velocities
 from albireo.grids import C_KMS, LogGrid, log_doppler_shift
+from albireo.inference import (
+    MAPResult,
+    MarginalOrbitModel,
+    laplace_inverse_mass,
+    orbit_parameters,
+    orbit_velocities,
+    posterior_spectra,
+    run_map,
+    run_nuts,
+)
 from albireo.kepler import radial_velocity, solve_kepler, t_peri_from_t_conj, true_anomaly
 from albireo.likelihood import (
     MarginalResult,
@@ -53,6 +63,8 @@ __all__ = [
     "InstrumentSpec",
     "InterpOperator",
     "LogGrid",
+    "MAPResult",
+    "MarginalOrbitModel",
     "MarginalResult",
     "OrbitParams",
     "Problem",
@@ -66,10 +78,16 @@ __all__ = [
     "draw_spectra",
     "gaussian_kernel",
     "interp_operator",
+    "laplace_inverse_mass",
     "log_doppler_shift",
     "marginal_loglikelihood",
+    "orbit_parameters",
+    "orbit_velocities",
+    "posterior_spectra",
     "radial_velocity",
     "rebin_operator",
+    "run_map",
+    "run_nuts",
     "shift_spectrum",
     "shift_spectrum_adjoint",
     "simulate_dataset",
@@ -79,4 +97,5 @@ __all__ = [
     "synthetic_telluric_spectrum",
     "t_peri_from_t_conj",
     "true_anomaly",
+    "with_velocities",
 ]

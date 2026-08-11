@@ -18,7 +18,7 @@ everywhere.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import jax
 import jax.numpy as jnp
@@ -40,6 +40,7 @@ __all__ = [
     "normal_matvec",
     "rhs",
     "weighted_data_terms",
+    "with_velocities",
 ]
 
 
@@ -58,6 +59,7 @@ class EpochGroup:
     w: jax.Array  # (n_epochs, n_native) effective ivar (masks + coverage folded in)
     r: jax.Array  # (n_epochs, n_native) response
     row_support: int  # max model-pixel span of a rebin row (bandwidth bookkeeping)
+    bary_pix: jax.Array  # (n_epochs,) barycentric shift in model pixels (static)
 
     @property
     def n_epochs(self) -> int:
@@ -71,11 +73,21 @@ class Problem:
     grid: LogGrid
     n_components: int
     groups: tuple[EpochGroup, ...]
+    frame: str = "barycentric"
+    telluric: bool = False
 
     @property
     def n_linear(self) -> int:
         """Dimension of the stacked linear system (n_components * grid pixels)."""
         return self.n_components * self.grid.n
+
+    @property
+    def n_stellar(self) -> int:
+        return self.n_components - (1 if self.telluric else 0)
+
+    @property
+    def n_epochs(self) -> int:
+        return sum(len(g.epoch_indices) for g in self.groups)
 
     @property
     def kernel_radius(self) -> int:
@@ -95,6 +107,23 @@ class Problem:
         """Half-bandwidth of A^T W A between any two components, in model pixels."""
         support = max(g.row_support for g in self.groups)
         return int(np.ceil(self.max_relative_shift)) + 1 + 2 * self.kernel_radius + support
+
+    def half_bandwidth_bound(self, v_rel_max_kms: float) -> int:
+        """Static upper bound on :attr:`natural_half_bandwidth` given a velocity bound.
+
+        ``v_rel_max_kms`` must bound the largest *relative* radial velocity between any
+        two model components at any epoch — for an SB2, ``(K_1 + K_2)(1 + e)`` plus, if
+        a telluric component is present, the stellar velocity relative to the telluric
+        frame (which includes the barycentric motion, up to ~30 km/s). Because the
+        bound is static (independent of the velocity values), it can be passed to
+        :func:`albireo.likelihood.marginal_loglikelihood` as ``half_bandwidth`` inside
+        ``jax.jit`` with traced velocities. The ``+ 1`` pixel of slack in the bandwidth
+        formula also absorbs the (< 1e-5 relative at 1000 km/s) curvature of the
+        relativistic velocity-to-shift mapping.
+        """
+        shift = abs(float(self.grid.velocity_to_pixels(float(v_rel_max_kms))))
+        support = max(g.row_support for g in self.groups)
+        return int(np.ceil(shift)) + 1 + 2 * self.kernel_radius + support
 
 
 def build_problem(
@@ -214,10 +243,56 @@ def build_problem(
                 w=jnp.asarray(np.stack(w_rows)),
                 r=jnp.asarray(np.stack(r_rows)),
                 row_support=row_support,
+                bary_pix=jnp.asarray(bary_pix[list(idx)]),
             )
         )
 
-    return Problem(grid=grid, n_components=n_comp, groups=tuple(groups))
+    return Problem(
+        grid=grid,
+        n_components=n_comp,
+        groups=tuple(groups),
+        frame=dataset.frame,
+        telluric=telluric,
+    )
+
+
+def with_velocities(problem: Problem, velocities) -> Problem:
+    """Return ``problem`` with the stellar velocities replaced (differentiable in them).
+
+    This is the θ-dependent path for joint inference: only the per-epoch shift columns
+    are recomputed — with the same frame composition as :func:`build_problem` — while
+    every static piece (rebin operators, kernels, weights, targets, response) is reused
+    unchanged. Safe to call inside ``jax.jit`` with traced ``velocities``; combine with
+    :meth:`Problem.half_bandwidth_bound` for a static solver bandwidth.
+
+    Parameters
+    ----------
+    problem
+        Output of :func:`build_problem` (any velocities).
+    velocities
+        Stellar radial velocities in the barycentric frame, shape
+        ``(n_stellar, n_epochs)`` (km/s). The telluric column, if present, is
+        reconstructed from the stored barycentric shifts.
+    """
+    vel = jnp.atleast_2d(jnp.asarray(velocities))
+    if vel.shape != (problem.n_stellar, problem.n_epochs):
+        raise ValueError(
+            f"velocities must have shape ({problem.n_stellar}, {problem.n_epochs}); got {vel.shape}"
+        )
+    star_pix = problem.grid.velocity_to_pixels(vel)
+    groups = []
+    for g in problem.groups:
+        idx = list(g.epoch_indices)
+        sp = star_pix[:, idx].T  # (n_epochs_group, n_stellar)
+        if problem.frame == "topocentric":
+            sp = sp - g.bary_pix[:, None]
+            tell_col = jnp.zeros((len(idx), 1))
+        else:
+            tell_col = g.bary_pix[:, None]
+        if problem.telluric:
+            sp = jnp.concatenate([sp, tell_col], axis=1)
+        groups.append(replace(g, shifts=sp))
+    return replace(problem, groups=tuple(groups))
 
 
 # ---------------------------------------------------------------------------

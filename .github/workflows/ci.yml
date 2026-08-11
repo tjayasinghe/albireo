@@ -39,6 +39,9 @@ jobs:
   test:
     name: Test (${{ matrix.os }}, py${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
+    # The M3 NUTS gate test is a few minutes of real sampling; a hung chain (e.g. a
+    # mass-matrix regression driving trees to the depth cap) must fail, not idle.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:

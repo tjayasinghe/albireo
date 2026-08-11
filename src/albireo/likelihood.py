@@ -52,6 +52,7 @@ def _unpack(v, n_comp: int, n_pix: int):
     return jnp.asarray(v).reshape(n_pix, n_comp).T
 
 
+@jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True)
 class MarginalResult:
     """Marginal log-likelihood plus everything needed to recover the spectra."""
@@ -66,12 +67,20 @@ class MarginalResult:
     def n_padded(self) -> int:
         return self.chol.num_blocks * self.chol.block_size
 
+    def tree_flatten(self):
+        return (self.log_likelihood, self.d_hat, self.chol), (self.n_components, self.n_pixels)
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        return cls(*children, n_components=aux[0], n_pixels=aux[1])
+
 
 def marginal_loglikelihood(
     problem: Problem,
     prior: SmoothnessPrior,
     *,
     block_size: int | None = None,
+    half_bandwidth: int | None = None,
     validate: bool = False,
 ) -> MarginalResult:
     """Evaluate the marginal log-likelihood for a fixed-parameter :class:`Problem`.
@@ -84,10 +93,16 @@ def marginal_loglikelihood(
         Spectral prior with one (tau, eta) pair per component (including telluric).
     block_size
         Solver block size; default = the required half-bandwidth.
+    half_bandwidth
+        Static override for the per-component half-bandwidth ``b_natural``. Required
+        under ``jax.jit`` with traced shifts (where :attr:`Problem.natural_half_bandwidth`
+        cannot be computed); use :meth:`Problem.half_bandwidth_bound`. Probing with any
+        value >= the true bandwidth is exact, so an overestimate costs time, not
+        accuracy; an *underestimate* silently corrupts the result — hence ``validate``.
     validate
         If True, verify the probed matrix reproduces the matrix-free operator on a
         random vector (guards against a bandwidth underestimate) — raises AssertionError
-        on mismatch. Cheap relative to assembly; enabled in tests.
+        on mismatch. Cheap relative to assembly; enabled in tests. Not jit-compatible.
     """
     n_comp, n_pix = problem.n_components, problem.grid.n
     if prior.n_components != n_comp:
@@ -96,7 +111,8 @@ def marginal_loglikelihood(
             "(remember the telluric component if enabled)"
         )
     n = n_comp * n_pix
-    b_nat = max(problem.natural_half_bandwidth, prior.half_bandwidth)
+    b_nat = int(half_bandwidth) if half_bandwidth is not None else problem.natural_half_bandwidth
+    b_nat = max(b_nat, prior.half_bandwidth)
     p = n_comp * b_nat + n_comp - 1
 
     def full_matvec(v):
