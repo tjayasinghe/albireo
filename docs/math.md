@@ -1,0 +1,550 @@
+# Mathematical foundations
+
+This document defines the albireo forward model, derives the analytically-marginalized
+likelihood that the whole package is built around, analyzes its computational structure, and
+works out the degeneracy theory that drives the API design. Everything implemented in the code
+must trace back to an equation here; everything here must eventually be covered by a test.
+
+**Status:** v1 design (M0). Frozen only after review.
+
+---
+
+## 0. Notation and conventions
+
+| Symbol | Meaning |
+|---|---|
+| $c$ | speed of light, $299\,792.458\ \mathrm{km\,s^{-1}}$ |
+| $x = \ln\lambda$ | log-wavelength coordinate |
+| $P$ | number of pixels of the common model grid |
+| $N_c$ | number of components (2–3 stars, optionally + 1 telluric) |
+| $J$ | number of epochs; epoch index $j$; component index $i$ |
+| $N_j$ | number of native data pixels at epoch $j$; $N = \sum_j N_j$ |
+| $s_i \in \mathbb{R}^P$ | component $i$ spectrum on the model grid (continuum-normalized) |
+| $d_i = s_i - \mathbf{1}$ | *deviation* spectrum (0 in the continuum; lines are negative dips) |
+| $\theta$ | all nonlinear parameters (orbit, light fractions, LSF, response, noise, prior hypers) |
+| $y_j \in \mathbb{R}^{N_j}$ | observed flux at epoch $j$, on its **native** wavelength grid |
+| $w_j$ | inverse variances; $w = 0$ encodes a masked pixel |
+
+Conventions:
+
+- **Radial velocity sign:** $v > 0$ means the source is receding; observed wavelengths are
+  redshifted.
+- **Frames:** data may be supplied in the topocentric (observed) or barycentric frame; the model
+  handles either (§1.2). Internally all shifts compose additively in $x$.
+- All flux vectors are continuum-normalized. The linear model is formulated in deviation space
+  $d_i$, so that "no signal" is exactly the zero vector and edge padding of shift operators is
+  zeros, not continuum.
+
+---
+
+## 1. The forward model
+
+### 1.1 Log-wavelength grid and Doppler shift as translation
+
+The model grid is uniform in $x=\ln\lambda$:
+
+$$
+x_p = x_0 + p\,\Delta,\qquad p = 0,\dots,P-1 ,
+$$
+
+with $\Delta = \ln(1 + \delta v/c)$ for a chosen pixel velocity width $\delta v$ (default: half
+the finest instrument pixel).
+
+A Doppler shift with radial velocity $v$ maps emitted to observed wavelength as
+$\lambda_{\rm obs} = \lambda_{\rm em}(1+z)$, i.e. a **translation** in $x$ by
+
+$$
+\xi(v) \;=\; \ln(1+z) \;=\;
+\begin{cases}
+\operatorname{artanh}(v/c) & \text{relativistic (default)},\\[2pt]
+\ln(1 + v/c) & \text{classical}.
+\end{cases}
+$$
+
+The relativistic form follows from $1+z = \sqrt{(1+\beta)/(1-\beta)}$ for purely radial motion,
+whose logarithm is $\operatorname{artanh}\beta$. We make it the default for two reasons:
+(i) at $|v| \sim 600\ \mathrm{km\,s^{-1}}$ the classical form is wrong by
+$\sim 0.6\ \mathrm{km\,s^{-1}}$, which is far above our RV error budget; (ii)
+$\operatorname{artanh}$ is exactly antisymmetric, so shifts compose and invert exactly:
+$\xi(-v) = -\xi(v)$, and a barycentric correction is exact additive composition in $x$
+(velocity composition is not additive, log-shifts are).
+
+**The shift operator.** For a shift of $\delta = \xi(v)/\Delta$ pixels, the observed deviation
+spectrum is $d(x - \xi)$, discretized by sparse linear interpolation:
+
+$$
+\left[\mathbf{T}(\delta)\, d\right]_p \;=\; (1-f)\, d_{i_p} + f\, d_{i_p+1},
+\qquad i_p = \lfloor p - \delta \rfloor,\quad f = (p-\delta) - i_p ,
+$$
+
+with zero fill outside $[0, P-1]$ (correct because $d\to 0$ in the continuum). Each row has
+exactly two nonzeros; $\mathbf{T}$ is a banded linear operator, and its adjoint is the
+corresponding scatter-add. $\mathbf{T}(\delta)d$ is differentiable in $\delta$:
+
+$$
+\frac{\partial\,[\mathbf{T}(\delta)d]_p}{\partial \delta} = -\left(d_{i_p+1} - d_{i_p}\right),
+$$
+
+which is piecewise constant in $\delta$ with kinks at integer crossings. The *summed* gradient
+used by HMC is a sum of $\mathcal{O}(P)$ such terms whose breakpoints are all distinct, so the
+total log-density gradient is effectively smooth at realistic $P$; a cubic (4-tap) interpolant
+with $C^1$ gradients is a planned option behind a flag if this ever limits sampler performance.
+
+**Resampling operators.** Data are *never* interpolated onto the model grid (that would
+correlate their noise and invalidate the diagonal noise model). Instead the model is projected
+onto each epoch's native grid by a static sparse operator $\mathbf{R}_j$. Two flavors:
+
+- *Point interpolation* $\mathbf{R}^{\rm interp}$: linear interpolation weights (2 nonzeros/row),
+  for quick tests.
+- *Pixel-integral rebinning* $\mathbf{R}^{\rm rebin}$ (default): instrument pixels integrate flux
+  density, so the value in output pixel $k$ with edges $[a_k, b_k]$ is the bin average
+
+$$
+\left[\mathbf{R}\, f\right]_k = \frac{1}{b_k - a_k} \sum_l \left|\,[a_k,b_k] \cap [e_l, e_{l+1}]\,\right|\; f_l ,
+$$
+
+which conserves integrated flux exactly over fully-covered ranges:
+$\sum_k (b_k - a_k)\,[\mathbf{R}f]_k = \sum_l (e_{l+1}-e_l)\, f_l$. Both are precomputed sparse
+matrices (built once in NumPy, applied as gather/segment-sum in JAX).
+
+### 1.2 Velocities
+
+**Keplerian mode (default).** For component $i$ at time $t_j$ (BJD), the radial velocity is
+
+$$
+v_{ij} = \gamma + K_i\left[\cos(\nu_j + \omega_i) + e\cos\omega_i\right],
+\qquad \omega_2 = \omega_1 + \pi ,
+$$
+
+with true anomaly $\nu_j$ from Kepler's equation for mean anomaly
+$M_j = 2\pi (t_j - T_{\rm p})/P_{\rm orb}$. We support both $T_{\rm p}$ (periastron) and
+$T_0$ (conjunction) parameterizations, and sample in
+$(\sqrt{e}\cos\omega, \sqrt{e}\sin\omega)$ to behave well at low eccentricity. For SB3, a
+hierarchical outer orbit adds its contribution to the inner pair. The Kepler solver is a
+JAX-differentiable Newton iteration with a fixed iteration count (gradients via implicit
+differentiation).
+
+**Free-velocity mode (diagnostic).** $v_{ij}$ free parameters with optional priors — used to
+detect non-Keplerian residuals and validate the orbit model.
+
+**Frames and tellurics.** Let $u_j$ be the barycentric correction velocity at epoch $j$
+(defined so that $v^{\rm bary} = v^{\rm topo} \oplus u_j$). All shifts are composed in log-shift
+space, where composition is exact addition:
+
+| | stellar component $i$ | telluric component |
+|---|---|---|
+| data in topocentric frame | $\xi(v_{ij}) - \xi(u_j)$ | $0$ |
+| data barycentric-corrected | $\xi(v_{ij})$ | $+\xi(u_j)$ |
+
+i.e. the telluric spectrum is just another linear component whose "velocity law" is the
+(known) topocentric one — no new machinery.
+
+**Telluric linearity approximation.** Physically telluric transmission is multiplicative:
+$(1 + d_\star)\,(1 + d_{\rm tell})$. We model it additively,
+$1 + d_\star + d_{\rm tell}$, which is first-order accurate with error
+$d_\star d_{\rm tell}$ — of order $10^{-2}$ only where a deep stellar line overlaps a deep
+telluric line, and standard practice is to mask deep tellurics anyway. This keeps the model
+linear in all component spectra. Exact multiplicative tellurics (alternating solves) are a v2
+candidate; the approximation is documented and testable in the simulator.
+
+### 1.3 LSF, light fractions, response
+
+**LSF.** Per-instrument Gaussian in velocity space with width $\sigma_v$: on the uniform
+log-$\lambda$ grid this is a stationary discrete convolution $\mathbf{B}_j$ (Toeplitz, banded,
+kernel truncated at $\pm 4\sigma$), consistent with a constant-resolving-power spectrograph.
+Because $\mathbf{B}_j$ is stationary on the same uniform grid, it commutes with $\mathbf{T}$
+(up to edges); we apply it after shifting, matching the physical picture (instrument acts in
+the observed frame). Tabulated / wavelength-dependent LSFs become banded non-stationary
+matrices in v2 with no structural change to anything below.
+
+**Light fractions.** $\ell_{ij} \ge 0$ with $\sum_i \ell_{ij} = 1$ over the stellar components
+(continuum-normalized data), telluric fixed at $\ell = 1$. Constant per component by default;
+per-epoch (eclipse) mode is first-class (§5.2 explains why).
+
+**Response.** Per-epoch multiplicative Chebyshev polynomial on the native grid,
+$r_j(\lambda) = \sum_{m=0}^{M} c_{jm}\,\phi_m(\lambda)$ (default $M=2$), absorbing
+continuum-normalization errors. Coefficients live in $\theta$.
+
+### 1.4 The stacked linear model
+
+Putting it together, the model for epoch $j$ is
+
+$$
+m_j(\theta, d) \;=\; \operatorname{diag}\!\big(r_j\big)\,
+\mathbf{R}_j \Big[\mathbf{1} + \sum_{i=1}^{N_c} \ell_{ij}\, \mathbf{B}_j\, \mathbf{T}(\delta_{ij})\, d_i \Big],
+$$
+
+and the crucial property is that **conditional on $\theta$, $m_j$ is affine in the stacked
+deviation vector** $d = (d_1^\top,\dots,d_{N_c}^\top)^\top \in \mathbb{R}^{N_c P}$:
+
+$$
+y = a_0(\theta) + \mathbf{A}(\theta)\, d + n, \qquad n \sim \mathcal{N}\big(0, \mathbf{C}_n\big),
+\quad \mathbf{C}_n = \operatorname{diag}(w)^{-1},
+$$
+
+where row-block $j$ of $\mathbf{A}$ is
+$\big[\ \operatorname{diag}(r_j)\mathbf{R}_j \mathbf{B}_j \mathbf{T}(\delta_{1j})\ \big|\ \cdots\ \big|\
+\operatorname{diag}(r_j)\mathbf{R}_j \mathbf{B}_j \mathbf{T}(\delta_{N_c j})\ \big]$ scaled by
+$\ell_{ij}$, and $a_0 = \operatorname{diag}(r_j)\mathbf{R}_j \mathbf{1}$ collects the continuum.
+Masked pixels have $w=0$ and drop out of every inner product below. An optional per-epoch
+noise-inflation ("jitter") factor $\alpha_j$ rescales $w_j \to w_j/\alpha_j^2$ and joins
+$\theta$.
+
+$\mathbf{A}$ is never formed densely: it is a composition of gathers, stationary convolutions,
+and segment-sums, each with an exact adjoint (tested against `jax.linear_transpose`).
+
+---
+
+## 2. Priors on the component spectra
+
+We place independent Gaussian priors on the deviation spectra,
+$d_i \sim \mathcal{N}(0, \boldsymbol\Lambda_i^{-1})$, specified by **banded precision** matrices —
+never dense kernels (that is the design error that killed PSOAP's scalability):
+
+$$
+\boldsymbol\Lambda_i \;=\; \tau_i\, \mathbf{D}_2^\top \mathbf{D}_2 \;+\; \eta_i\, \mathbf{I},
+$$
+
+where $\mathbf{D}_2$ is the second-difference operator. Interpretation:
+
+- $\tau_i$ penalizes curvature — the continuum limit is an integrated Wiener process, i.e. a
+  smoothness prior with correlation length set by $(\tau_i/\eta_i)^{1/4}$ pixels. Matérn-class
+  priors via their SPDE/state-space banded precision are a drop-in v1.x extension.
+- $\mathbf{D}_2^\top\mathbf{D}_2$ has an affine nullspace (constant + slope per component).
+  These are *exactly* the directions of the low-frequency separation degeneracy (§5.1), so they
+  must be proper: the weak ridge $\eta_i$ anchors them to the continuum ($d_i = 0$) with a
+  large but finite variance. This is a deliberate, documented choice: it sets the scale of the
+  unavoidable low-frequency uncertainty instead of hiding it.
+
+Hyperparameters $\tau_i, \eta_i$ are part of $\theta$: they can be fixed, optimized (ML-II —
+free, since the marginal likelihood is what we compute anyway), or sampled. The prior mean is
+$0$ in deviation space; emission-line components need no special treatment.
+
+$\log\det\boldsymbol\Lambda_i$ is cheap (banded Cholesky, bandwidth 2).
+
+---
+
+## 3. Marginalizing the spectra analytically
+
+This is the core of the package. Conditional on $\theta$, the model is linear-Gaussian in $d$,
+so $d$ integrates out in closed form; the sampler only ever sees the low-dimensional
+$p(y\,|\,\theta)$.
+
+### 3.1 Derivation
+
+Write $\tilde y = y - a_0(\theta)$, $\mathbf{W} = \operatorname{diag}(w)$,
+$\boldsymbol\Lambda = \operatorname{blkdiag}(\boldsymbol\Lambda_1,\dots,\boldsymbol\Lambda_{N_c})$.
+The joint log-density is
+
+$$
+\log p(y, d \,|\, \theta) = -\tfrac12 (\tilde y - \mathbf{A}d)^\top \mathbf{W} (\tilde y - \mathbf{A}d)
+-\tfrac12 d^\top \boldsymbol\Lambda d
++ \tfrac12\log\big|\tfrac{\mathbf{W}}{2\pi}\big|_{+}
++ \tfrac12\log\big|\tfrac{\boldsymbol\Lambda}{2\pi}\big| ,
+$$
+
+where $|\cdot|_+$ runs over unmasked pixels. Collect the terms quadratic and linear in $d$:
+
+$$
+-\tfrac12\, d^\top \underbrace{\left(\boldsymbol\Lambda + \mathbf{A}^\top \mathbf{W} \mathbf{A}\right)}_{\displaystyle \tilde{\boldsymbol\Lambda}(\theta)}\, d
+\;+\; d^\top \underbrace{\mathbf{A}^\top \mathbf{W} \tilde y}_{\displaystyle b(\theta)} .
+$$
+
+Completing the square, $d^\top\tilde{\boldsymbol\Lambda}d - 2d^\top b =
+(d-\hat d)^\top\tilde{\boldsymbol\Lambda}(d-\hat d) - b^\top\tilde{\boldsymbol\Lambda}^{-1}b$
+with $\hat d = \tilde{\boldsymbol\Lambda}^{-1} b$, and integrating the Gaussian in $d$ gives the
+**marginal log-likelihood**
+
+$$
+\boxed{\;
+\log p(y\,|\,\theta) \;=\;
+-\tfrac12\Big[\tilde y^\top \mathbf{W} \tilde y - b^\top \tilde{\boldsymbol\Lambda}^{-1} b\Big]
+\;-\;\tfrac12\log\det\tilde{\boldsymbol\Lambda}
+\;+\;\tfrac12\log\det\boldsymbol\Lambda
+\;+\;\tfrac12\textstyle\sum_{w_u>0}\log\frac{w_u}{2\pi}
+\;}
+$$
+
+Every piece depends on $\theta$: $\mathbf{A}$, $a_0$, and possibly $\mathbf{W}$ (jitter) and
+$\boldsymbol\Lambda$ (hyperparameters).
+
+A numerically preferable equivalent form uses the residual at the conditional mean: with
+$\hat r = \tilde y - \mathbf{A}\hat d$,
+
+$$
+\tilde y^\top\mathbf{W}\tilde y - b^\top\tilde{\boldsymbol\Lambda}^{-1}b
+\;=\; \hat r^\top \mathbf{W} \hat r + \hat d^\top \boldsymbol\Lambda \hat d ,
+$$
+
+i.e. *(weighted misfit at the regularized least-squares solution)* + *(prior penalty of that
+solution)*. In code, with the Cholesky factorization
+$\tilde{\boldsymbol\Lambda} = \mathbf{L}\mathbf{L}^\top$:
+$b^\top\tilde{\boldsymbol\Lambda}^{-1}b = \|\mathbf{L}^{-1}b\|^2$ and
+$\log\det\tilde{\boldsymbol\Lambda} = 2\sum_k \log L_{kk}$.
+
+### 3.2 Relation to profile likelihood + Laplace
+
+$\hat d(\theta)$ is exactly the (regularized) profile solution, and the bracketed quadratic is
+the profile objective. The marginal differs from the profile likelihood only by
+$\tfrac12(\log\det\boldsymbol\Lambda - \log\det\tilde{\boldsymbol\Lambda})$ — the "Laplace
+correction", which is *exact* here because the model is truly linear-Gaussian in $d$. This
+identifies the three computational strategies of §4 as the *same estimator* with different
+$\log\det$ treatments: exact (A), stochastic (B), or frozen/dropped (C). Dropping the
+$\log\det$'s $\theta$-dependence is *not* innocuous: it biases exactly the parameters that
+change the information geometry (light ratios, LSF widths, prior hyperparameters), which is why
+strategy C is quick-look only.
+
+### 3.3 Recovering the spectra and their uncertainties
+
+Conditional on $\theta$, the posterior of the spectra is Gaussian:
+
+$$
+d \,|\, y, \theta \;\sim\; \mathcal{N}\!\left(\hat d(\theta),\; \tilde{\boldsymbol\Lambda}(\theta)^{-1}\right).
+$$
+
+The full posterior of the spectra marginalizes over the $\theta$ posterior — in practice, for
+each NUTS draw $\theta^{(t)}$ we draw one spectrum realization
+
+$$
+d^{(t)} = \hat d(\theta^{(t)}) + \mathbf{L}^{-\top} z, \qquad z \sim \mathcal{N}(0,\mathbf{I}),
+$$
+
+giving samples from $p(d\,|\,y)$ that include *both* the linear-Gaussian pixel noise *and* the
+orbit/calibration uncertainty. This is the headline product: disentangled spectra with honest
+uncertainties, which no incumbent code provides. Pointwise error bars come from the sample
+variance and/or the diagonal of $\tilde{\boldsymbol\Lambda}^{-1}$ (computable without dense
+inversion via Takahashi selected-inversion recursions on the banded/block factor). The
+posterior covariance between pixels — especially the inflated low-frequency modes of §5.1 — is
+available from the same factor and is part of the standard output, not an afterthought.
+
+### 3.4 Gradients
+
+NUTS needs $\nabla_\theta \log p(y|\theta)$. All terms are compositions of JAX primitives, so
+reverse-mode AD applies end-to-end, including through the Cholesky factorization (the
+$\log\det$ gradient $\tfrac12\operatorname{tr}(\tilde{\boldsymbol\Lambda}^{-1}\partial\tilde{\boldsymbol\Lambda})$
+emerges automatically). Two engineering notes:
+
+- The banded/block factorization is a `lax.scan`; reverse-mode memory is controlled with
+  checkpointing (`jax.checkpoint` per scan block).
+- If AD through the factorization ever dominates, a custom VJP using the Jacobi formula with
+  the Takahashi selected inverse computes the same gradient with one extra banded sweep.
+
+---
+
+## 4. Computational structure and strategy
+
+### 4.1 The structure of $\tilde{\boldsymbol\Lambda}$
+
+$\tilde{\boldsymbol\Lambda} = \boldsymbol\Lambda + \mathbf{A}^\top\mathbf{W}\mathbf{A}$ is an
+$N_c \times N_c$ grid of $P\times P$ blocks:
+
+$$
+\big[\mathbf{A}^\top\mathbf{W}\mathbf{A}\big]_{ii'} \;=\;
+\sum_j \ell_{ij}\ell_{i'j}\; \mathbf{T}(\delta_{ij})^\top \mathbf{B}_j^\top \mathbf{R}_j^\top
+\operatorname{diag}(r_j^2 w_j) \mathbf{R}_j \mathbf{B}_j \mathbf{T}(\delta_{i'j}) .
+$$
+
+Let $m$ be the half-bandwidth of $\mathbf{B}^\top(\cdots)\mathbf{B}$ (LSF + rebin support,
+$m \sim 10$–$30$ px). The key observation: $\mathbf{T}(\delta)^\top \mathbf{M}\, \mathbf{T}(\delta')$
+for banded $\mathbf{M}$ is banded *around the offset diagonal* $\delta' - \delta$. Therefore:
+
+- **Diagonal blocks** ($i = i'$): offset $0$ for every epoch → half-bandwidth $\approx m$. Narrow.
+- **Off-diagonal blocks**: offsets range over the epoch-by-epoch relative shifts, so the union
+  is a band of half-width $b_{ii'} = \max_j |\delta_{ij} - \delta_{i'j}| + m$, set by the
+  **relative RV excursion** — for an SB2, $b \approx (K_1+K_2)(1+e)/\delta v + m$ pixels.
+
+Interleaving the component index gives a single banded matrix of dimension $N_c P$ and
+half-bandwidth $p \approx N_c\,(\max_{ii'} b_{ii'} + 1)$. It is *near*-block-Toeplitz (it would
+be exactly Toeplitz-structured for stationary weights; masks and response breaks exactness,
+which is why we factorize rather than FFT).
+
+Design-target numbers ($P = 2\times10^5$, $J=50$, $N_c=2$, $\delta v = 1\ \mathrm{km\,s^{-1}}$,
+$K_1+K_2 = 400\ \mathrm{km\,s^{-1}}$, $m=20$): $b \approx 420$, matrix dimension
+$4\times10^5$, half-bandwidth $p \approx 850$.
+
+### 4.2 Strategy A (primary): block-tridiagonal Cholesky
+
+Partition the interleaved banded matrix into $K = N_cP/p$ dense blocks of size $p$; the matrix
+is block-tridiagonal, and the Cholesky factor follows from the recursion
+
+$$
+\mathbf{L}_{kk}\mathbf{L}_{kk}^\top = \mathbf{D}_k - \mathbf{L}_{k,k-1}\mathbf{L}_{k,k-1}^\top,
+\qquad
+\mathbf{L}_{k+1,k} = \mathbf{E}_k \mathbf{L}_{kk}^{-\top},
+$$
+
+implemented as a `lax.scan` over $K$ steps of dense $p\times p$ operations (GPU-friendly), with
+solves and $\log\det$ from the same sweep. Cost $\approx K \cdot \mathcal{O}(p^3) =
+\mathcal{O}(N_c P\, p^2)$:
+
+$$
+4\times10^5 \times (850)^2 \approx 3\times10^{11}\ \text{flops}
+\;\Rightarrow\; \mathcal{O}(0.1\ \mathrm{s})\ \text{per likelihood+gradient on a modern GPU (fp64)},
+$$
+
+and much less for typical SB2s (at $K_1+K_2 \lesssim 150\ \mathrm{km\,s^{-1}}$ or
+$\delta v = 2\ \mathrm{km\,s^{-1}}$, cost drops by $\sim 10\times$). Assembling the band of
+$\mathbf{A}^\top\mathbf{W}\mathbf{A}$ is $\mathcal{O}(J N_c^2 P (m + \text{taps}))$ via
+shifted-product accumulation — subdominant. Two orthogonal levers batch this further:
+`vmap` over independent wavelength chunks (echelle orders / natural mask gaps make chunks
+*exactly* independent; otherwise chunking is an explicit, benchmarked approximation) and
+`vmap` over systems (survey mode). NUTS with $\sim 10^3$–$10^4$ gradient evaluations then
+lands in the "minutes on one GPU" budget of the definition of done.
+
+### 4.3 Strategy B: matrix-free CG + stochastic log-det
+
+Apply $\tilde{\boldsymbol\Lambda}$ as operators (shift–conv–rebin chains,
+$\mathcal{O}(J N_c P)$ per matvec), solve $\tilde{\boldsymbol\Lambda}\hat d = b$ by
+preconditioned CG (circulant/Toeplitz preconditioner from the epoch-averaged stationary
+operator, applied by FFT), and estimate $\log\det$ by stochastic Lanczos quadrature.
+Assessment: the matvec is cheap but hundreds of CG iterations × probes generally lose to
+Strategy A at our bandwidths, and **SLQ log-det estimates are biased and stochastic** — usable
+inside MAP optimization, but they violate the exactness NUTS needs (a noisy log-density is not
+a valid target; pseudo-marginal MCMC needs unbiased *likelihood*, not log-likelihood,
+estimates). Role: fallback for pathological bandwidths (extreme $K_1+K_2$, very fine grids),
+and cross-validation of Strategy A.
+
+### 4.4 Strategy C: profile likelihood with frozen log-det
+
+Compute the profile term only (CG solve, no factorization), freezing
+$\log\det\tilde{\boldsymbol\Lambda}$ at a reference $\theta_0$ (or dropping it). By §3.2 this
+biases light ratios, LSF and hyperparameter inference. Role: fast MAP quick-look and
+initialization only, never final inference.
+
+**Decision:** implement A as the default engine; B behind the same interface for benchmarks;
+C powers `fit_map(quick=True)`. The A-vs-B crossover is measured at M2/M3 on the design-target
+benchmark and recorded in `docs/benchmarks.md`.
+
+---
+
+## 5. Degeneracies and identifiability
+
+These are properties of the *problem*, not bugs in a method. albireo's stance: derive them,
+regularize them explicitly, report them in the posterior, and force conscious user choices
+where only external information can break them.
+
+### 5.1 The low-frequency degeneracy (the "undulations" theorem)
+
+Take two components, constant light fractions absorbed into $u_i = \ell_i d_i$, no LSF/response,
+unit weights, common grid, epochs $j=1..J$. In Fourier space (continuous transform, mode
+$e^{\mathrm{i}kx}$), a shift is a phase: the model at epoch $j$ is
+$\hat u_1(k)\,e^{-\mathrm{i}k\xi_{1j}} + \hat u_2(k)\,e^{-\mathrm{i}k\xi_{2j}}$. The per-mode
+normal ("information") matrix is
+
+$$
+\mathbf{G}(k) = \begin{pmatrix} J & g(k) \\ g^*(k) & J\end{pmatrix},
+\qquad g(k) = \sum_j e^{\mathrm{i}k\Delta_j},\quad \Delta_j = \xi_{1j} - \xi_{2j},
+$$
+
+with eigenvalues $J \pm |g(k)|$ for the sum and difference modes
+$\hat u_1 \pm e^{\mathrm{i}\phi}\hat u_2$. The sum mode is always well constrained. For the
+difference mode, expanding at small $k$:
+
+$$
+|g(k)| = J\left|\left\langle e^{\mathrm{i}k\Delta}\right\rangle\right|
+\approx J\left(1 - \tfrac{k^2}{2}\operatorname{Var}_j(\Delta)\right)
+\;\;\Rightarrow\;\;
+\lambda_-(k) \approx \tfrac{J k^2}{2} \operatorname{Var}_j(\Delta).
+$$
+
+So the noise amplification of the separation is
+
+$$
+\sigma_-(k) \;\propto\; \frac{1}{k\,\sqrt{J\operatorname{Var}_j(\Delta)}} ,
+$$
+
+diverging as $k\to0$, with $k=0$ exactly singular. **Interpretation:** spectral features
+narrower than the RMS *differential* orbital shift separate cleanly; features broader than it
+cannot be attributed to either star from the data alone. This is precisely the low-frequency
+"undulation" artifact familiar from KOREL/fd3 output — not a numerical quirk but the nullspace
+of the problem, excited by noise. Consequences baked into the design:
+
+1. The prior (§2) makes these directions proper and *sets their scale explicitly* ($\eta_i$).
+2. The posterior covariance of §3.3 *reports* the inflation instead of hiding it.
+3. $\operatorname{Var}_j(\Delta)$ is an **observing-strategy diagnostic**: albireo exposes
+   $\lambda_-(k)$ forecasts from planned epochs (`sensitivity_forecast`), telling observers
+   which phase sampling actually pays for separation quality.
+4. Per-epoch response polynomials deliberately absorb the per-epoch near-constant modes;
+   their order is kept low (default 2) so they cannot eat genuine broad features, and the
+   response–low-$k$ covariance is visible in the posterior.
+
+### 5.2 Light ratio ↔ line depth
+
+With constant light fractions the composite is $1 + \sum_i \ell_i\,\mathbf{T}_{ij} d_i$: the
+likelihood depends on the *products* $\ell_i d_i$ only. Therefore $(\ell_i, d_i)$ are exactly
+degenerate along $\ell_i \to \ell_i/\alpha$, $d_i \to \alpha d_i$ — the data cannot measure the
+continuum light ratio, only each star's *contribution* to the composite lines. The degeneracy
+is broken only by:
+
+1. **Per-epoch light variation** (eclipses): $\ell_{ij}$ varying with known/parameterized
+   geometry makes the products epoch-dependent while $d_i$ is shared — this is why per-epoch
+   light fractions are a first-class feature, not an add-on.
+2. **External photometric priors** on $\ell_i$ (from light-curve solutions or SED fits).
+3. **Physicality floor**: $s_i \ge 0 \Rightarrow \ell_i d_i \ge -\ell_i$; a saturated line in
+   the composite bounds $\ell_i$ from below. Weak, but real — available as an optional
+   constraint.
+4. **Fixing $\ell$** by assumption.
+
+The API refuses to guess: `light_ratio=` must be given explicitly as `Fixed(values)`,
+`Free(prior=...)` (requires 1–3 to be informative, and the docs say so), or
+`PerEpoch(...)`.
+
+### 5.3 Systemic velocity / zero-point
+
+A change $\gamma \to \gamma + \epsilon$ composed with translating every $d_i$ by
+$-\xi(\epsilon)$ leaves the likelihood invariant (up to grid edges), and the stationary priors
+of §2 are translation-invariant too — so $\gamma$ is unidentified by disentangling itself
+(a known property, inherited from the physics, of all disentangling methods). Default:
+$\gamma \equiv 0$; recovered spectra live in the systemic frame, and $\gamma$ is measured
+afterwards by template cross-correlation *of the disentangled spectra* — outside the sampler.
+Users with genuine rest-frame information can free $\gamma$ with an informative prior. $K_i$,
+$e$, $\omega$, $P_{\rm orb}$, $T_{\rm p}$ are unaffected.
+
+### 5.4 Degeneracy ledger
+
+| Degeneracy | Exact/approx | Broken by | albireo policy |
+|---|---|---|---|
+| low-$k$ mode exchange between components | exact at $k=0$, $\propto 1/k$ | phase coverage ($\operatorname{Var}\Delta$), priors | proper priors; covariance reported; forecast tool |
+| $\ell_i$ vs. line depth | exact (constant $\ell$) | eclipses, photometry, saturation floor, assumption | explicit `light_ratio=` choice required |
+| $\gamma$ vs. common shift | exact up to edges | external rest-frame info | $\gamma \equiv 0$ default, post-hoc measurement |
+| per-epoch constants vs. response | approx | low poly order | order $\le 2$ default, covariance reported |
+
+---
+
+## 6. SB1 + faint companion mode ($K_2$ scan)
+
+The dormant-compact-object workflow. Given an SB1 solution (fixed $P_{\rm orb}, e, \omega,
+T_{\rm p}, K_1$; primary spectrum either fixed from a single-component fit or left free), scan
+a grid of trial $K_2$ (optionally × light fraction $\ell_2$): for each trial, the secondary
+deviation spectrum $d_2$ is a linear component and marginalizes analytically, so the detection
+statistic
+
+$$
+D(K_2) = 2\left[\log p(y \,|\, K_2) - \log p(y \,|\, \text{no companion})\right]
+$$
+
+costs one linear solve per grid point (and vmaps over the grid). This is the optimal matched
+filter *marginalized over the unknown companion spectrum* — strictly more sensitive than CCF
+grid searches with assumed templates, and it returns the recovered companion spectrum
+$\hat d_2$ with covariance at the peak. Because $d_2$'s prior scale enters, $D$ is calibrated
+empirically by injection–recovery (same simulator as M1) rather than by an asymptotic $\chi^2$
+claim; the docs will be explicit that the null distribution is estimated, not assumed.
+
+---
+
+## 7. What the tests assert (traceability)
+
+| Claim | Test |
+|---|---|
+| $\mathbf{T}, \mathbf{R}$ are exact adjoint pairs | inner-product identity vs. `jax.linear_transpose`, float64, rtol $10^{-12}$ |
+| shift gradient correct | `jax.grad` vs. central finite differences at non-integer shifts |
+| shift is linear, interior-exact on constants, sum-preserving | direct assertions |
+| relativistic shifts compose/invert exactly | $\xi(-v) = -\xi(v)$; round-trip shift |
+| rebin conserves flux | $\sum \Delta\lambda_{\rm out} f_{\rm out} = \sum \Delta\lambda_{\rm in} f_{\rm in}$ on covered ranges |
+| marginal likelihood correct | brute-force dense Gaussian marginalization on tiny problems, rtol $10^{-10}$ |
+| conditional spectra + covariance correct | closed-loop recovery on simulated data; whitened residual $z$-scores $\sim \mathcal{N}(0,1)$ |
+| posterior calibration | SBC / coverage on injections (M3) |
+| degeneracy analysis (§5.1) | measured posterior variance of difference modes vs. $\lambda_-(k)^{-1}$ prediction |
+
+Sections 1–2 and the operator rows are implemented and tested in this milestone (M0); §3–4
+land in M2, §5 diagnostics and §6 in M3–M4.
