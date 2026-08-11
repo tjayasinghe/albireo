@@ -39,12 +39,17 @@ computation is done in float64 — you do not need to set `JAX_ENABLE_X64` yours
 For a GPU build, install the appropriate `jax[cuda]` wheel for your platform following the
 [JAX installation guide](https://docs.jax.dev/en/latest/installation.html).
 
-## Current API (M3: joint orbit + spectra inference)
+## Current API (M4: joint inference + realism features)
 
-Working today: the simulator, the fixed-orbit marginal solver, and joint NUTS
-inference of the orbit with the spectra marginalized (MAP → Laplace mass matrix →
-NUTS pipeline; hyperparameters by ML-II). A friendlier `Disentangler` façade with
-light-ratio policies is planned; the core below is the supported surface for now.
+Working today: the simulator, the fixed-orbit marginal solver, joint NUTS inference
+of the orbit with the spectra marginalized (MAP → Laplace mass matrix → NUTS
+pipeline; hyperparameters by ML-II), and the realism layer — telluric components,
+hierarchical SB3 triples (`period_out`/…/`k_out` sites), per-epoch light-fraction
+inference (`light` site, Dirichlet priors — the eclipse breaker, inferred),
+multi-instrument LSF-width inference (`lsf_sigma` site; anchor one reference
+instrument), and the SB1 faint-companion K₂ scan (`ab.k2_scan`). A friendlier
+`Disentangler` façade with light-ratio policies is planned; the core below is the
+supported surface for now.
 
 ```python
 import albireo as ab
@@ -74,6 +79,14 @@ mcmc = ab.run_nuts(
     inverse_mass_matrix=ab.laplace_inverse_mass(nuts_model, map_fit.params),
 )
 spectra = ab.posterior_spectra(model, mcmc.get_samples(), key, extra=hyper)
+
+# SB1 + faint companion: marginalized K2 detection scan (docs/math.md §6)
+scan = ab.k2_scan(
+    grid, ds, orbit=sb1_solution, k1=12.0, k2_grid=jnp.arange(10.0, 150.0, 2.0),
+    light_fractions=(0.95, 0.05),  # explicit — see the light-ratio policy
+    lsf_sigma_v={"HERMES": 4.0}, prior=spec_prior, v_rel_max_kms=250.0,
+)
+scan.k2_peak, scan.detection_peak, scan.companion  # + std, null loglike, ...
 ```
 
 ## Documentation

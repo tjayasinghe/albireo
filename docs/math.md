@@ -508,6 +508,20 @@ $e$, $\omega$, $P_{\rm orb}$, $T_{\rm p}$ are unaffected.
 | $\ell_i$ vs. line depth | exact (constant $\ell$) | eclipses, photometry, saturation floor, assumption | explicit `light_ratio=` choice required |
 | $\gamma$ vs. common shift | exact up to edges | external rest-frame info | $\gamma \equiv 0$ default, post-hoc measurement |
 | per-epoch constants vs. response | approx | low poly order | order $\le 2$ default, covariance reported |
+| telluric constant vs. common stellar constant | exact up to edges | ridge anchors ($\eta$) on both | measured in the telluric closed loop: the two offsets cancel in the sum to $\lesssim 10^{-3}$; report both |
+| LSF width vs. intrinsic line widths | near-exact per instrument | cross-instrument spectrum sharing | absolute widths need a *reference instrument* anchor (tight prior); only relative widths are data-identified (M4, benchmarks.md) |
+
+Two of these deserve a sentence. **Telluric constant exchange:** with $\sum_i \ell_i = 1$
+and a telluric component of light fraction 1, adding a constant $a$ to the telluric
+deviation while subtracting $a$ from *every* stellar deviation changes no epoch's
+prediction (constants are shift-invariant away from the grid edges) — a second exact
+$k = 0$ mode, split only by the $\eta$ ridges. **LSF ↔ intrinsic widths:** for one
+instrument a wider Gaussian kernel composed with intrinsically narrower lines is
+observationally near-identical (Gaussian widths add in quadrature), so a template-free
+model cannot measure an absolute LSF width; empirically, ML-II with all widths free
+inflates them by tens of percent while leaving the orbit untouched. Multiple
+instruments *sharing the same spectra* identify the width differences; the absolute
+scale must come from one instrument whose LSF is known.
 
 ---
 
@@ -529,6 +543,19 @@ grid searches with assumed templates, and it returns the recovered companion spe
 $\hat d_2$ with covariance at the peak. Because $d_2$'s prior scale enters, $D$ is calibrated
 empirically by injection–recovery (same simulator as M1) rather than by an asymptotic $\chi^2$
 claim; the docs will be explicit that the null distribution is estimated, not assumed.
+
+Implementation notes (M4, `albireo.scan.k2_scan`): the no-companion model is the
+single-component fit with $\ell_1 = 1$ and the primary's prior; the companion's light
+fraction $\ell_2$ must be chosen explicitly (§5.2 — the observable is $\ell_2 d_2$).
+Because both log-marginals carry their $\tfrac12\log\det$ Occam terms, the extra
+marginalized component *costs* likelihood unless coherent signal pays for it: on a
+companion-free dataset $D(K_2)$ is negative at every trial (measured in the closed-loop
+test), which is the sane baseline for the empirical calibration. One honest caveat,
+inherited from §5.1: at small $\ell_2$ the companion's smooth envelope (continuum level,
+mean line blanketing) is prior-dominated — an error $\Delta$ in the bright primary's
+envelope maps to $-(\ell_1/\ell_2)\Delta$ in the companion, an amplification of ~10 at
+$\ell_2 = 0.1$ — so the recovered $\hat d_2$ carries its line *pattern*, not a
+trustworthy absolute depth scale, unless eclipses or photometry pin the envelope.
 
 ---
 
@@ -597,6 +624,46 @@ $p(d \mid y) = \int p(d \mid y, \theta)\, p(\theta \mid y)\, d\theta$ — a mixt
 uncertainty into the spectra; the pointwise bands from a single $\hat\theta$ (§3.3) are the
 *conditional* uncertainty only. Both are exposed and documented as different objects.
 
+### 7.5 Realism extensions in θ (M4)
+
+**Hierarchical SB3.** A triple is two nested Keplerians: inner pair (A, B) and the
+outer orbit of their center of mass against the tertiary C,
+
+$$
+v_A = v^{\rm in}(t;\, \omega_{\rm in}, K_1) + v^{\rm out}(t;\, \omega_{\rm out}, K_{AB}),
+\qquad
+v_B = v^{\rm in}(t;\, \omega_{\rm in} + \pi, K_2) + v^{\rm out}(t;\, \omega_{\rm out}, K_{AB}),
+$$
+$$
+v_C = v^{\rm out}(t;\, \omega_{\rm out} + \pi, K_C),
+$$
+
+with the light-time effect across the outer orbit neglected (v2 seam; relevant only for
+$P_{\rm out}$ measured to seconds). Sites: the five outer analogues
+(`period_out`, `t_conj_out`, `secosw_out`, `sesinw_out`, `k_out` $= (K_{AB}, K_C)$),
+same $\sqrt{e}$-disk parameterization and constraint, with the outer conjunction
+convention applied to the inner pair's center of mass. The tertiary is one more linear
+component — nothing downstream changes.
+
+**Per-epoch light fractions.** $\ell_{ij}$ enters $\mathbf{A}(\theta)$ *linearly*
+(§1.3), so a `light` site — $(n_{\rm stellar},)$ constant or
+$(J, n_{\rm stellar})$ per-epoch, rows on the simplex via Dirichlet priors — swaps into
+the static graph exactly like the shifts, and the §5.2 eclipse breaker becomes an
+*inferred* quantity. The likelihood is smooth (indeed quadratic-in-$\ell$ per epoch
+pre-marginalization), so MAP/NUTS handle it natively.
+
+**LSF widths.** A Gaussian kernel's *values* at fixed integer offsets are smooth in
+$\sigma$, so `lsf_sigma` (one width per instrument) is traced while the kernel *radius*
+stays fixed at build time by the construction-time width, which thereby becomes a strict
+upper bound: a realized $\sigma$ above it would be silently truncated by the fixed
+radius, so the model rejects it with a $-\infty$ factor (the same
+guard-not-silent-corruption pattern as the bandwidth budget, §7.1). Identifiability is
+§5.4's caveat: anchor one reference instrument.
+
+Per-epoch response coefficients remain build-time constants in M4 (they enter the
+weights and targets, not just the operator — a different swap path); fitting them is
+deferred and recorded in the design ledger.
+
 ---
 
 ## 8. What the tests assert (traceability)
@@ -618,6 +685,11 @@ uncertainty into the spectra; the pointwise bands from a single $\hat\theta$ (§
 | velocity conventions match the simulator | `orbit_velocities(θ)` ≡ `OrbitParams.component_velocities` |
 | ML-II sanity (§7.3) | MAP over (θ, log τ, log η) recovers K's and sane hyperscales |
 | **M3 gate**: $K_1, K_2$ to <1% with valid posteriors | closed-loop NUTS: posterior means within 1%, truth in central 95%, zero divergences |
+| light/LSF θ-paths equal fresh builds (§7.5) | `with_light_fractions` / `with_lsf` vs. `build_problem` at matched kernel radius, rtol $10^{-12}$; FD gradients through both sites |
+| SB3 velocity law (§7.5) | `orbit_velocities` with outer sites ≡ hand-composed nested Keplerians, atol $10^{-12}$ |
+| LSF bound + outer-disk guards | width above build bound / outer $e > e_{\max}$ ⇒ non-finite model log-density |
+| telluric constant exchange (§5.4) | closed loop: the two $k=0$ offsets cancel in the light-weighted sum to $<5\times10^{-3}$ |
+| **M4 gate**: closed loop per realism feature | telluric joint MAP; SB3 MAP (inner and outer $K$'s <2%); per-epoch light inferred (ℓ rms <0.01, components individually recovered); LSF width vs. reference instrument <3%; $K_2$ scan (peak at truth, negative $D$ under null) |
 
 Sections 1–2 and the operator rows are implemented and tested in M0; §3–4 landed in M2;
-§7 landed in M3 (with §5 diagnostics); §6 lands in M4.
+§7.1–7.4 landed in M3 (with §5 diagnostics); §6 and §7.5 landed in M4.

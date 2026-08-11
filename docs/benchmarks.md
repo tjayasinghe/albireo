@@ -168,3 +168,62 @@ interior-of-prior injections show zero. The Laplace mass matrix holds up across 
 whole prior: median 6.6 leapfrogs per transition, max 36. The strict MAP `converged`
 flag (grad-norm < 10⁻²) fired on only 5/24 — the tolerance is conservative; MAP point
 quality (K's to <1% typical) is unaffected.
+
+## M4 — realism: tellurics, SB3, per-epoch light, LSF widths, K₂ scan (2026-08-11)
+
+Machine: same Windows 11 laptop, CPU only, float64, jitted θ-path throughout. Every
+number below is asserted (usually with margin) by a deterministic closed-loop test.
+
+### θ-path exactness (new sites)
+
+| Check | Result | Test |
+|---|---|---|
+| `with_light_fractions` vs. fresh `build_problem` (± telluric, constant & per-epoch) | rtol 1e-14 | `test_forward.py`, `test_realism.py` |
+| `with_lsf` vs. fresh build at matched kernel radius | identical kernels; loglike rtol 1e-12 | same |
+| `with_lsf` at narrower width vs. fresh (smaller-radius) build | truncation-tail level (~1e-5) | `test_with_lsf_narrower_width_agrees_to_truncation` |
+| SB3 `orbit_velocities` vs. hand-composed nested Keplerians | atol 1e-12 | `test_sb3_velocities_match_hand_composed` |
+| ∂ log p / ∂(light, lsf_sigma) vs. finite differences | rtol 1e-4 | `test_gradients_light_lsf_match_finite_differences` |
+| LSF-bound / outer-disk guards reject | non-finite log-density | `test_guards_reject_wide_lsf_and_outer_disk` |
+
+### Closed loops (the M4 acceptance gate — one per feature)
+
+All at the gate scale of M3 (n = 490 px, 10–14 epochs, SNR 110–150, topocentric,
+gaps + cosmics), MAP/ML-II point recovery:
+
+| Feature | Recovery | Wall time |
+|---|---|---|
+| **Tellurics** (3rd component, topocentric) | K₁ 0.07%, K₂ 0.41%; telluric spectrum RMS 0.047, corr 0.989 (135 core px) | 57 s |
+| **SB3** (hierarchical, 14 epochs over 2.2 P_out) | K₁ 0.10%, K₂ −0.08%, K_AB 0.39%, K_C 0.50%; e_in ±0.004, e_out ±0.008, P_out rel 9e-5; observable combination RMS 0.007 | 76 s |
+| **Per-epoch light** (12 epochs, 3 in partial eclipse, ℓ inferred with flat Dirichlet) | ℓ₁ per-epoch rms 0.0028 (eclipse epochs ±0.004); K's −0.77% / −0.14%; **each component individually recovered** (core RMS 0.010 / 0.012) | 48 s |
+| **LSF widths** (2 instruments, reference pinned) | σ_B −0.67% (asserted <3%); K's <0.2% | 36 s |
+| **K₂ scan** (ℓ₂ = 0.1 companion, 15-point grid) | peak exactly at injected K₂ = 38; contrast > 4000 in D over the scan edges; companion line pattern corr 0.977, offset-removed RMS 0.05 | ~3 s/scan |
+
+The per-epoch-light row closes the M2 story: the k = 0 additive indeterminacy that
+capped constant-light component recovery at the ~0.1 level is broken by eclipse
+epochs whose light fractions are *inferred*, not supplied — component spectra come
+back individually at the 0.01 level with ℓ(t) recovered to 0.003.
+
+### Negative results worth as much as the positive ones
+
+1. **Absolute LSF widths are unidentifiable in a template-free model.** ML-II with
+   both instruments free inflates σ by +35% / +13% (trading against intrinsic line
+   widths; K's unaffected at <0.2%). With one *reference instrument* pinned, the
+   other width recovers to <1%. Policy recorded as D25; same honest-anchor
+   philosophy as the light ratio (D13).
+2. **The K₂-scan null is negative.** On a companion-free dataset, D(K₂) ∈
+   [−544, −465] over the whole grid: the marginal likelihood's Occam term charges
+   for the extra marginalized component and nothing pays for it. Detection
+   thresholds remain empirically calibrated (math.md §6), but the baseline is
+   *repulsive*, not neutral.
+3. **The faint companion's envelope is prior-dominated.** At ℓ₂ = 0.1 the §5.1
+   low-frequency degeneracy is amplified by ℓ₁/ℓ₂ = 9: the recovered companion
+   carries a ~+0.19 constant offset (its mean blanketing is absorbed by the
+   primary) while the line pattern is intact. Reported honestly in math.md §6;
+   line-pattern quantities are the deliverable of the scan.
+4. **A second exact k = 0 mode appears with tellurics** (telluric constant vs.
+   common stellar constant, since Σℓ = 1): measured offsets +0.030 / −0.029,
+   cancelling to 0.001 in the light-weighted sum. Ledger row added (§5.4).
+5. **Injected tellurics must be representable on the model grid**: sub-pixel
+   telluric lines behind a 7 km/s LSF are resolution-limited (recovery ceiling
+   RMS ≈ 0.2 against the raw truth no matter the SNR or epoch count) — a
+   simulator-configuration lesson, not a solver limitation.
