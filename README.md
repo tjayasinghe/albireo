@@ -39,26 +39,41 @@ computation is done in float64 — you do not need to set `JAX_ENABLE_X64` yours
 For a GPU build, install the appropriate `jax[cuda]` wheel for your platform following the
 [JAX installation guide](https://docs.jax.dev/en/latest/installation.html).
 
-## Planned API
+## Current API (M3: joint orbit + spectra inference)
 
-> [!NOTE]
-> **Design sketch only.** None of this is implemented yet; it is here to show the intended shape of
-> the interface and will change.
+Working today: the simulator, the fixed-orbit marginal solver, and joint NUTS
+inference of the orbit with the spectra marginalized (MAP → Laplace mass matrix →
+NUTS pipeline; hyperparameters by ML-II). A friendlier `Disentangler` façade with
+light-ratio policies is planned; the core below is the supported surface for now.
 
 ```python
 import albireo as ab
+import jax.numpy as jnp
+import numpyro.distributions as dist
 
 ds = ab.Dataset([ab.EpochData(wave=w, flux=f, ivar=iv, bjd=t, v_bary=vb, instrument="HERMES"), ...])
-model = ab.Disentangler(
-    dataset=ds,
-    grid=ab.LogGrid.from_wavelength_range(4000.0, 6800.0, dv_kms=1.0),
-    components=[ab.Star("A"), ab.Star("B")],
-    orbit=ab.Keplerian(period=..., t_peri=..., ecc=..., omega=..., k1=..., k2=...),
-    light_ratio=ab.FixedLight([0.62, 0.38]),
+model = ab.MarginalOrbitModel(
+    ab.LogGrid.from_wavelength_range(4000.0, 6800.0, dv_kms=1.0),
+    ds,
+    light_fractions=[0.62, 0.38],
+    lsf_sigma_v={"HERMES": 4.0},
+    v_rel_max_kms=250.0,  # velocity budget; wider priors are guarded, not corrupted
 )
-map_fit = model.fit_map()
-posterior = model.sample(num_warmup=1000, num_samples=1000)
-spectra = model.conditional_spectra(posterior)
+priors = {
+    "period": dist.Normal(63.1, 0.01), "t_conj": dist.Normal(2457811.5, 0.1),
+    "secosw": dist.Uniform(-1, 1), "sesinw": dist.Uniform(-1, 1),
+    "k": dist.Uniform(jnp.array([5.0, 5.0]), jnp.array([120.0, 120.0])),
+    "log_tau": dist.Normal(jnp.log(300.0) * jnp.ones(2), 3.0),
+    "log_eta": dist.Normal(jnp.log(5.0) * jnp.ones(2), 3.0),
+}
+map_fit = ab.run_map(model.model(priors), init=init_values)          # MAP + ML-II
+hyper = {s: map_fit.params[s] for s in ("log_tau", "log_eta")}       # empirical Bayes
+nuts_model = model.model({s: d for s, d in priors.items() if s not in hyper}, fixed=hyper)
+mcmc = ab.run_nuts(
+    nuts_model, rng_key=key, init=map_fit.params,
+    inverse_mass_matrix=ab.laplace_inverse_mass(nuts_model, map_fit.params),
+)
+spectra = ab.posterior_spectra(model, mcmc.get_samples(), key, extra=hyper)
 ```
 
 ## Documentation

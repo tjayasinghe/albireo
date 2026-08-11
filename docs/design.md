@@ -74,7 +74,9 @@ and are the ledger for review. Each is cheap to change now and expensive later.
 | D17 | Stack | Python **≥3.12** (deviation from the brief's ≥3.11: current jaxlib 0.11.x ships no cp311 wheels), JAX, numpyro, optax; hatchling; src layout; ruff; pytest; GH Actions (ubuntu+windows, 3.12/3.13); mkdocs-material; BSD-3 | verified against PyPI 2026-08-11 |
 | D18 | Package name | `albireo` — **verified free on PyPI** (2026-08-11); register early | fallback `albireo-spectra` if upload is admin-blocked |
 | D19 | Versioning | SemVer, `0.1.0.dev0` now; public API = documented API | |
-| D20 | Orbit parameterization | sample in (ln P, T, √e cos ω, √e sin ω, ln K_i); T_peri and T_conj both supported | standard well-conditioned choices |
+| D20 | Orbit parameterization | sampled sites (M3): `period`, `t_conj`, `secosw = √e cos ω`, `sesinw = √e sin ω`, `k` (vector); user-chosen numpyro priors supply the scale transforms (e.g. LogNormal for P, K); disk constraint e < 1 via −∞ factor with e clipped at 0.95 (Kepler solver's verified range); γ ≡ 0 (D14) | √e-pair smooth through e = 0 and uniform-disk ⇒ e ~ U(0,1); t_conj well-defined for circular orbits (math.md §7.2) |
+| D21 | Static solver bandwidth | user declares `v_rel_max_kms`; bandwidth bound fixed at build time (jit-static); numpyro model adds a **bandwidth guard** (−∞ when realized shifts exceed the budget) | probing with too small a band is *silently* wrong — the guard makes wide priors safe by construction (math.md §7.1) |
+| D22 | Spectral hyperparameters (τ, η) | empirical Bayes default: MAP jointly over (θ, log τ, log η) = ML-II (spectra already marginalized); NUTS runs with hypers conditioned at ML-II values; full sampling available by putting them in the priors dict | the prior scale *is* the answer for sub-LSF modes (math.md §5.1, §7.3) — it must be estimated deliberately, and the marginal's log det Λp Occam term makes ML-II well-posed |
 
 ---
 

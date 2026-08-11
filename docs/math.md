@@ -532,7 +532,74 @@ claim; the docs will be explicit that the null distribution is estimated, not as
 
 ---
 
-## 7. What the tests assert (traceability)
+## 7. Joint inference over θ (M3)
+
+### 7.1 The marginal posterior and its static computation graph
+
+With the spectra marginalized (§3), inference over the nonlinear parameters is ordinary
+low-dimensional Bayes: $p(\theta \mid y) \propto p(y \mid \theta)\, p(\theta)$, where every
+$\theta$-evaluation rebuilds only the shifts $\delta_{ij}(\theta)$ (Kepler velocities → §1.2
+frame composition) and reuses every static operator. Under `jax.jit` the solver bandwidth
+must be independent of $\theta$, so the probing/factorization pipeline is built once for a
+declared velocity budget $v_{\rm rel}^{\max}$:
+
+$$
+b_{\rm bound} = \left\lceil \xi(v_{\rm rel}^{\max})/\Delta x \right\rceil + 1 + 2r_B + s_R,
+$$
+
+with $r_B$ the LSF kernel radius and $s_R$ the rebin row support (§4.1). Probing with any
+$b \ge b_{\rm true}$ is exact, so the bound costs time, never accuracy. The failure mode is
+an *underestimate* — comb probing then aliases band entries and the likelihood is silently
+wrong. The sampler is therefore protected by a **bandwidth guard**: the numpyro model
+computes the realized $\max_{j,i,i'} |\delta_{ij} - \delta_{i'j}|$ and adds a $-\infty$
+factor whenever it exceeds the budget implied by $b_{\rm bound}$. A prior wider than the
+budget slows mixing near the boundary but cannot corrupt the posterior.
+
+### 7.2 Parameterization
+
+Sampled sites: $P$, $T_{\rm conj}$, $(\sqrt{e}\cos\omega, \sqrt{e}\sin\omega)$, and
+$K_i$ (γ ≡ 0 by §5.3 / D14). The $\sqrt{e}$-pair is smooth through $e = 0$ — where $\omega$
+and $T_{\rm peri}$ are undefined — and a uniform prior on the unit disk maps to
+$e \sim \mathcal{U}(0,1)$, $\omega \sim \mathcal{U}(-\pi,\pi)$; the disk constraint enters
+as a $-\infty$ factor with $e$ clipped at $e_{\max} = 0.95$ (the Kepler solver's verified
+range) before the solve, so out-of-support proposals stay finite and rejectable. The single
+non-smooth point is the origin $\sqrt{e}\cos\omega = \sqrt{e}\sin\omega = 0$ (an
+`arctan2` branch point of measure zero) — circular-orbit initializations should sit slightly
+off it. $T_{\rm conj}$ (the §1.2 convention $\nu + \omega = \pi/2$) replaces $T_{\rm peri}$,
+which degenerates with $\omega$ as $e \to 0$.
+
+One smoothness caveat: with linear (2-tap) shift interpolation (D3), $A(\theta)$ is
+piecewise-linear in each shift, so $\log p(y\mid\theta)$ is piecewise-$C^1$ in the
+velocities with derivative kinks where a shift crosses an integer pixel. On an oversampled
+model grid the kink amplitudes are set by sub-pixel spectral curvature and are far below
+the posterior scale; NUTS treats them as it treats any leapfrog-scale roughness. The 4-tap
+cubic kernel (D3, flagged) is the smoothing upgrade if a dataset ever exposes them.
+
+### 7.3 Hyperparameters: ML-II by default
+
+The prior scales $(\tau_i, \eta_i)$ control exactly the part of spectrum space the data
+cannot constrain (§5.1: sub-LSF modes, low-$k$ anchoring), so they must be *chosen*
+deliberately rather than defaulted. Because the spectra are already integrated out,
+maximizing the marginal posterior jointly over $(\theta, \log\tau, \log\eta)$ **is** ML-II
+/ empirical Bayes (up to weak hyperpriors that keep the optimization proper). The MAP
+pipeline does this with L-BFGS in numpyro's unconstrained space; NUTS then runs with the
+hyperparameters conditioned at their ML-II values (default), or sampling them (at the cost
+of the usual mild underestimation-of-hyperparameter-uncertainty trade swapped for extra
+dimensions — both supported, the choice is recorded in the fit metadata). The marginal
+likelihood already contains the $\tfrac12\log\det\boldsymbol\Lambda_p$ Occam term, so ML-II
+is well-posed: $\tau \to \infty$ is penalized by data misfit, $\tau \to 0$ by the
+determinant.
+
+### 7.4 Posterior spectra
+
+$p(d \mid y) = \int p(d \mid y, \theta)\, p(\theta \mid y)\, d\theta$ — a mixture of the
+§3.3 conditional Gaussians over posterior $\theta$ draws. Draws propagate orbital
+uncertainty into the spectra; the pointwise bands from a single $\hat\theta$ (§3.3) are the
+*conditional* uncertainty only. Both are exposed and documented as different objects.
+
+---
+
+## 8. What the tests assert (traceability)
 
 | Claim | Test |
 |---|---|
@@ -543,8 +610,14 @@ claim; the docs will be explicit that the null distribution is estimated, not as
 | rebin conserves flux | $\sum \Delta\lambda_{\rm out} f_{\rm out} = \sum \Delta\lambda_{\rm in} f_{\rm in}$ on covered ranges |
 | marginal likelihood correct | brute-force dense Gaussian marginalization on tiny problems, rtol $10^{-10}$ |
 | conditional spectra + covariance correct | closed-loop recovery on simulated data; whitened residual $z$-scores $\sim \mathcal{N}(0,1)$ |
-| posterior calibration | SBC / coverage on injections (M3) |
+| posterior calibration | SBC / coverage on injections (M3; `scripts/m3_coverage.py`, results in benchmarks.md) |
 | degeneracy analysis (§5.1) | measured posterior variance of difference modes vs. $\lambda_-(k)^{-1}$ prediction |
+| θ-path equals fixed-parameter path (§7.1) | jitted `MarginalOrbitModel.log_likelihood` vs. `build_problem` + `marginal_loglikelihood`, rtol $10^{-12}$ |
+| θ-gradients correct through probing + Cholesky | `jax.grad` vs. central finite differences per site, rtol $10^{-4}$ |
+| bandwidth guard (§7.1) | out-of-budget orbit ⇒ non-finite model log-density; in-budget ⇒ finite |
+| velocity conventions match the simulator | `orbit_velocities(θ)` ≡ `OrbitParams.component_velocities` |
+| ML-II sanity (§7.3) | MAP over (θ, log τ, log η) recovers K's and sane hyperscales |
+| **M3 gate**: $K_1, K_2$ to <1% with valid posteriors | closed-loop NUTS: posterior means within 1%, truth in central 95%, zero divergences |
 
-Sections 1–2 and the operator rows are implemented and tested in this milestone (M0); §3–4
-land in M2, §5 diagnostics and §6 in M3–M4.
+Sections 1–2 and the operator rows are implemented and tested in M0; §3–4 landed in M2;
+§7 landed in M3 (with §5 diagnostics); §6 lands in M4.
