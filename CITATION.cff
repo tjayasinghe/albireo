@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata from this file."
+title: albireo
+abstract: "GPU-accelerated Bayesian spectral disentangling of double- and multiple-lined spectroscopic binaries."
+type: software
+authors:
+  - family-names: Jayasinghe
+    given-names: Tharindu
+    email: tharindujay96@gmail.com
+repository-code: "https://github.com/tjayasinghe/albireo"
+url: "https://github.com/tjayasinghe/albireo"
+license: BSD-3-Clause
+version: 0.1.0.dev0

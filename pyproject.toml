@@ -1,0 +1,74 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "albireo"
+version = "0.1.0.dev0"
+description = "GPU-accelerated Bayesian spectral disentangling of double- and multiple-lined spectroscopic binaries"
+readme = "README.md"
+# >=3.12 because current jaxlib (0.11.x) no longer ships cp311 wheels
+requires-python = ">=3.12"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+authors = [{ name = "Tharindu Jayasinghe", email = "tharindujay96@gmail.com" }]
+maintainers = [{ name = "Tharindu Jayasinghe", email = "tharindujay96@gmail.com" }]
+keywords = [
+    "astronomy",
+    "spectroscopy",
+    "binaries",
+    "spectral-disentangling",
+    "JAX",
+    "bayesian-inference",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Astronomy",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "numpy>=1.26",
+    "jax>=0.5",
+    "numpyro>=0.16",
+    "optax>=0.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-cov",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "pre-commit",
+]
+docs = [
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]",
+    "mkdocs-jupyter",
+]
+
+[project.urls]
+Repository = "https://github.com/tjayasinghe/albireo"
+Issues = "https://github.com/tjayasinghe/albireo/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/albireo"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "NPY", "RUF"]
+ignore = ["E741"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true

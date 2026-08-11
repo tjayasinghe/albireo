@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# uv
+uv.lock
+
+# Claude Code
+.claude/
