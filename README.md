@@ -65,36 +65,50 @@ model = ab.MarginalOrbitModel(
     v_rel_max_kms=250.0,  # velocity budget; wider priors are guarded, not corrupted
 )
 priors = {
-    "period": dist.Normal(63.1, 0.01), "t_conj": dist.Normal(2457811.5, 0.1),
-    "secosw": dist.Uniform(-1, 1), "sesinw": dist.Uniform(-1, 1),
+    "period": dist.Normal(63.1, 0.01),
+    "t_conj": dist.Normal(2457811.5, 0.1),
+    "secosw": dist.Uniform(-1, 1),
+    "sesinw": dist.Uniform(-1, 1),
     "k": dist.Uniform(jnp.array([5.0, 5.0]), jnp.array([120.0, 120.0])),
     "log_tau": dist.Normal(jnp.log(300.0) * jnp.ones(2), 3.0),
     "log_eta": dist.Normal(jnp.log(5.0) * jnp.ones(2), 3.0),
 }
-map_fit = ab.run_map(model.model(priors), init=init_values)          # MAP + ML-II
-hyper = {s: map_fit.params[s] for s in ("log_tau", "log_eta")}       # empirical Bayes
+map_fit = ab.run_map(model.model(priors), init=init_values)  # MAP + ML-II
+hyper = {s: map_fit.params[s] for s in ("log_tau", "log_eta")}  # empirical Bayes
 nuts_model = model.model({s: d for s, d in priors.items() if s not in hyper}, fixed=hyper)
 mcmc = ab.run_nuts(
-    nuts_model, rng_key=key, init=map_fit.params,
+    nuts_model,
+    rng_key=key,
+    init=map_fit.params,
     inverse_mass_matrix=ab.laplace_inverse_mass(nuts_model, map_fit.params),
 )
 spectra = ab.posterior_spectra(model, mcmc.get_samples(), key, extra=hyper)
 
 # SB1 + faint companion: marginalized K2 detection scan (docs/math.md §6)
 scan = ab.k2_scan(
-    grid, ds, orbit=sb1_solution, k1=12.0, k2_grid=jnp.arange(10.0, 150.0, 2.0),
+    grid,
+    ds,
+    orbit=sb1_solution,
+    k1=12.0,
+    k2_grid=jnp.arange(10.0, 150.0, 2.0),
     light_fractions=(0.95, 0.05),  # explicit — see the light-ratio policy
-    lsf_sigma_v={"HERMES": 4.0}, prior=spec_prior, v_rel_max_kms=250.0,
+    lsf_sigma_v={"HERMES": 4.0},
+    prior=spec_prior,
+    v_rel_max_kms=250.0,
 )
 scan.k2_peak, scan.detection_peak, scan.companion  # + std, null loglike, ...
 ```
 
 ## Documentation
 
+- [`examples/`](examples/) — executable tutorials (SB2 end-to-end, K₂ scan), run in CI; narrative
+  versions in [`docs/tutorials/`](docs/tutorials/).
 - [`docs/design.md`](docs/design.md) — architecture, data model, and the shape of the inference
   problem.
 - [`docs/math.md`](docs/math.md) — the disentangling likelihood, analytic marginalization of the
   component spectra, and the orbital parameterization.
+- [`docs/benchmarks.md`](docs/benchmarks.md) — the running validation and performance record.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — dev setup and the test philosophy.
 
 Docs are built with [MkDocs Material](https://squidfunk.github.io/mkdocs-material/) and will be
 hosted once the package reaches a usable state. To build them locally:

@@ -227,3 +227,139 @@ back individually at the 0.01 level with ℓ(t) recovered to 0.003.
    telluric lines behind a 7 km/s LSF are resolution-limited (recovery ceiling
    RMS ≈ 0.2 against the raw truth no matter the SNR or epoch count) — a
    simulator-configuration lesson, not a solver limitation.
+
+## M5 — scale, benchmarks, release readiness (2026-08-11)
+
+Machine: same Windows 11 laptop (32 GB RAM), CPU only, float64. The M5 scale gate
+("2×10⁵ px / 50 epochs samples in minutes on one GPU") is *projected* from CPU
+measurements here — no GPU on this machine; the actual GPU run is the one open
+item, flagged for hardware the maintainer controls.
+
+### Three scale pathologies, found and fixed (D27)
+
+The first attempt to evaluate the marginal likelihood at survey scale
+(n = 31,750 px × 2 components, 50 epochs, half-bandwidth 513) failed with an
+**82 GB** allocation. Three distinct causes, each now fixed and regression-guarded
+by the exactness suite (identical log-likelihoods to 12 digits before/after):
+
+1. **Closure-captured data arrays.** `jax.jit` of a method closing over the
+   problem embedded every data array as an XLA constant, and constant folding of
+   the θ-independent graph exploded. Fix: `Problem`/`EpochGroup` are registered
+   pytrees, and the jitted marginal takes the problem as an *argument* (runtime
+   parameter). Planned temporaries at the failing size: unchanged symptom until…
+2. **Unrolled probe batches.** Comb probing applied 2p+1 = 1027 matvecs in 16
+   unrolled `vmap` chunks with no data dependence between them — XLA scheduled
+   them with overlapping live ranges, and its own buffer analysis planned
+   **79.6 GB** of temporaries. Fix: probing is a *sequential* `lax.scan` over
+   batches (combs generated from offsets inside the body), which forces buffer
+   reuse: planned temporaries dropped to **2.1 GB** (38×) and compile time fell
+   ~5× (one scan body instead of 16 unrolled copies). The scatter-based block
+   assembly (O(n·p) index maps, ~8 GB at design scale) was likewise replaced by
+   per-block gathers under `lax.map` (O(B²) transients).
+3. **Scan stores the backward pass.** Reverse-mode through the probe scan saved
+   every batch's forward intermediates: gradient memory grew back to the unrolled
+   total — **469 GB requested** at the design target. Fix: `jax.checkpoint` on the
+   batch body; the backward sweep recomputes each batch (~1.5-2× backward probing
+   cost) and gradient memory stays at the outputs array plus one batch.
+
+One trade landed and was corrected the same day: unconditional remat + serialized
+small batches **cost up to 2× NUTS wall time at small scale** (tutorial run
+72 → 141 s; gate test 156 s vs ~102 s M3 baseline — bit-identical posteriors,
+caught by the tutorial smoke runs). The mechanism is instructive: XLA's parallel
+execution of independent unrolled probe batches — the very thing that overlapped
+80 GB of live buffers at scale — is a multi-core *speedup* at small scale. Batch
+size and remat are now size-adaptive on the probe-output footprint (64 MB
+threshold): small problems run all probes as one parallel batch without remat
+(gate test back to 112 s), large problems get the sequential remat scan. The
+prior factor also gets its own small block size instead of the posterior's (its
+bandwidth is 2 per component; factorizing it at block 513 doubled Cholesky cost
+for a determinant that is nearly free).
+
+### Design-target ladder (CPU, jitted, fixed bandwidth p = 513, 50 epochs, SB2)
+
+| n (model px) | native px/epoch | eval | ∇ eval |
+|---|---|---|---|
+| 31,750 | 13,134 | 24.7 s | 102.7 s |
+| 74,331 | 33,134 | 52.5 s | 249.9 s |
+| 135,063 | 66,467 | 96.9 s | 466.0 s |
+| **203,497 (design target)** | 106,467 | **149.7 s** | **729.9 s** |
+
+Both scale linearly in n at fixed bandwidth (~0.75 ms/px eval, ~3.4 ms/px
+gradient), as the O(n·p²) flop count predicts; log-likelihood values are
+bit-identical across all three solver revisions. Peak memory stays within the
+laptop's 32 GB at every size. A single design-target marginal evaluation — the
+"give me disentangled spectra at this orbit" operation — is thus **2.5 min on a
+laptop CPU**; posterior sampling at this scale is the GPU's job (below).
+
+### GPU projection (stated as projection, not measurement)
+
+At the design target a NUTS run needs ~2,600 gradient evaluations (150+250
+transitions × 6.5 mean leapfrogs, the measured M3/M4 pipeline numbers). On this
+CPU that is 2600 × 12.2 min ≈ three weeks — out of reach, which is exactly why
+the design brief targets GPU. The dominant costs (batched probe matvecs; 800-step scanned Cholesky
+of 513² blocks) are dense, batched, and fp64; on a single A100-class device the
+same graph is expected to run the gradient in ~1-3 s (probe batches become large
+GEMM-like work, the block Cholesky ~0.1 s of batched `potrf`/`trsm`), putting a
+converged posterior at **1-2 hours for the widest-bandwidth massive-star config,
+and tens of minutes at moderate bandwidths** (p ~ 200: flops drop ~6×). The
+`probe_chunk` knob (raise on GPU) and `remat=False` (80 GB HBM fits the stored
+backward) are the tuning levers. These projections close only with a real GPU
+run — deliberately left open in this record.
+
+### The hand-set light-ratio systematic, quantified (`scripts/m5_light_ratio_demo.py`)
+
+The LB-1/HR 6819-type failure mode, measured on a seeded simulation (the paper
+asset behind the planned HR 6819 headline case):
+
+1. Disentangling at a hand-set wrong ℓ rescales the recovered line depths by
+   exactly ℓ_true/ℓ_assumed — measured affine slopes 1.44 / 0.97 / 0.59 against
+   predictions 1.50 / 1.00 / 0.60 (assumed ℓ₂ = 0.2 / 0.3 / 0.5, truth 0.3),
+   with the separate additive k≈0 envelope offset isolated by the fit. Line
+   depths feed log g / luminosity-class diagnostics: this is the debate's engine,
+   reproduced.
+2. The marginal likelihood profiled over ℓ₁ **with hyperparameters refit by
+   ML-II at every trial** (like for like) is flat to <0.5 log-units across
+   ℓ₁ ∈ [0.50, 0.85] under constant light — the data carry no light-ratio
+   information, and a first attempt with *fixed* hypers showed O(10–100)
+   spurious curvature that was purely prior-mediated (wrong ℓ forces rescaled
+   spectra, which a fixed prior scale penalizes — a subtle way for an analysis
+   to fool itself, now documented). With three partial-eclipse epochs the same
+   profile peaks at the true ℓ₁ = 0.70 with Δlog L = −145 at ±0.05.
+
+### fd3 comparison harness (`scripts/fd3_bench.py`)
+
+The fd3 v3.1 input format was reverse-engineered from the official example files
+and the C source (documented in the script header): ln-λ master matrix with a
+`# ncols X nrows` header, a comment-free stdin token stream for the control file,
+ω in degrees, per-epoch σ only (no per-pixel weights, no masks — the benchmark
+therefore runs gap-free so neither code is handicapped), component B's RV sign
+applied internally (identical to albireo's ω+π convention), and fd3's internal
+c = 299,800 km/s. The harness simulates an SB2 *on the common log grid fd3
+requires* (no resampling for either code), writes fd3 separation- and fit-mode
+inputs, runs the albireo side, and compares component spectra (raw and
+mean-aligned — both codes carry a k≈0 freedom) and wall time. The fd3 side needs
+the binary (~1.9 MB source tarball, GSL, builds on Linux/WSL; **no license is
+stated** on the fd3 page — v2 was GPL, v3's GPL statement was removed — so the
+author should be contacted before any redistribution). Head-to-head numbers
+pending that build.
+
+### Tutorials, examples, CI
+
+Two executable tutorials (`examples/01_sb2_end_to_end.py`, `02_k2_scan.py`) run
+the real pipeline with asserts and back the narrative docs pages; a dedicated CI
+smoke job runs both with `ALBIREO_EXAMPLE_FAST=1` (~3.6 min + 7 s measured).
+The SB2 example's NUTS posterior at tutorial scale: P to 0.013%, K₁ 0.015%,
+K₂ 0.21%, zero divergences.
+
+### Release readiness (JOSS) and the real-data decision
+
+`paper/paper.md` + `paper.bib` drafted (claims cross-checked against this file;
+"GPU-accelerated" kept out of the title until the GPU gate closes),
+`CONTRIBUTING.md` added; remaining JOSS blockers are maintainer-only (affiliation,
+ORCID, archive DOI at acceptance, PyPI registration). For the real published SB2
+end-to-end, the research recommendation is **HR 6819** (51 public FEROS spectra,
+one ESO program, ~153 MB, no login; hand-set light ratio at the heart of the
+2020 black-hole debate, with an *interferometric* ground truth
+f = 0.439 ± 0.013 from GRAVITY to score the posterior against) with
+**AI Phoenicis** as the precision backup (60 public epochs; K's known to 0.02%).
+Data download awaits maintainer approval.
