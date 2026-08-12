@@ -22,6 +22,7 @@ import hashlib
 import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -53,6 +54,7 @@ __all__ = [
     "with_jitter",
     "with_light_fractions",
     "with_lsf",
+    "with_response",
     "with_velocities",
 ]
 
@@ -84,6 +86,8 @@ class EpochGroup:
     jitter: jax.Array  # (n_epochs,) noise-inflation factor alpha_j; see effective_w
     row_support: int  # max model-pixel span of a rebin row (bandwidth bookkeeping)
     bary_pix: jax.Array  # (n_epochs,) barycentric shift in model pixels (static)
+    base: jax.Array  # (n_native,) R 1 — response-independent rebinned unit continuum
+    cheb_x: jax.Array  # (n_native,) response Chebyshev abscissa 2(l - l_0)/(l_N - l_0) - 1
     pair_val: jax.Array  # static rebin pair tables for direct band assembly
     pair_sid: jax.Array  # (albireo.operators.rebin_pair_tables; sid = c * row_support + o)
     pair_row: jax.Array
@@ -117,6 +121,8 @@ class EpochGroup:
             self.r,
             self.jitter,
             self.bary_pix,
+            self.base,
+            self.cheb_x,
             self.pair_val,
             self.pair_sid,
             self.pair_row,
@@ -125,7 +131,9 @@ class EpochGroup:
 
     @classmethod
     def tree_unflatten(cls, aux, children):
-        rebin, kernel, kernel_rev, shifts, light, z, w, r, jit, bary_pix, pv, ps, pr = children
+        rebin, kernel, kernel_rev, shifts, light, z, w, r, jit, bary, base, cx, pv, ps, pr = (
+            children
+        )
         instrument, epoch_indices, row_support = aux
         return cls(
             instrument=instrument,
@@ -140,7 +148,9 @@ class EpochGroup:
             r=r,
             jitter=jit,
             row_support=row_support,
-            bary_pix=bary_pix,
+            bary_pix=bary,
+            base=base,
+            cheb_x=cx,
             pair_val=pv,
             pair_sid=ps,
             pair_row=pr,
@@ -457,6 +467,10 @@ def build_problem(
                 jitter=jnp.ones(len(idx)),
                 row_support=row_support,
                 bary_pix=jnp.asarray(bary_pix[list(idx)]),
+                base=jnp.asarray(base),
+                cheb_x=jnp.asarray(
+                    2.0 * (wave_native - wave_native[0]) / (wave_native[-1] - wave_native[0]) - 1.0
+                ),
                 pair_val=pair_val,
                 pair_sid=pair_sid,
                 pair_row=pair_row,
@@ -596,6 +610,81 @@ def with_jitter(problem: Problem, jitter) -> Problem:
         replace(g, jitter=alpha[np.asarray(g.epoch_indices, dtype=np.int64)])
         for g in problem.groups
     ]
+    return replace(problem, groups=tuple(groups))
+
+
+def _chebval_traced(x, c):
+    """Clenshaw evaluation of ``sum_m c_m T_m(x)`` with traced coefficients.
+
+    Written with numpy's ``polynomial.chebyshev.chebval`` operation order so that the
+    θ-path (:func:`with_response`) reproduces a fresh :func:`build_problem` to float
+    precision, not merely to an interpolation tolerance. ``c`` must have static length
+    >= 1 (the coefficient count is graph structure, like a kernel radius).
+    """
+    n = c.shape[0]
+    if n == 1:
+        c0, c1 = c[0], jnp.asarray(0.0)
+    elif n == 2:
+        c0, c1 = c[0], c[1]
+    else:
+        x2 = 2.0 * x
+        c0, c1 = c[n - 2], c[n - 1]
+        for i in range(3, n + 1):
+            c0, c1 = c[n - i] - c1, c0 + c1 * x2
+    return c0 + c1 * x
+
+
+def with_response(problem: Problem, response_coeffs) -> Problem:
+    """Return ``problem`` with the multiplicative per-epoch response replaced (differentiable).
+
+    The θ-dependent path for response/continuum inference — the swap D7 deferred,
+    because the response enters the *targets* ``z_j = y_j - r_j (R 1)`` and the
+    normal-matrix weights ``w r^2``, not just the forward operator. The stored
+    ``base = R 1`` is response-independent, which gives the target update in place:
+    ``z_new = z_old + (r_old - r_new) * base``, exact and with no need to carry the raw
+    fluxes. Masked pixels stay exactly zero (every ``z`` entry at ``w = 0`` was zeroed
+    at build time and the update is re-masked), so the D30 ``0 * nan`` trap cannot
+    resurface here. *Replaces* rather than compounds, like :func:`with_jitter`; the
+    ``sum log w`` term is untouched because the noise lives on the data, not on the
+    response-divided data.
+
+    The convention matches :func:`albireo.simulate.chebyshev_response` and
+    :func:`build_problem`: ``r = 1 + sum_m c_m T_m(x)`` with ``x`` the epoch's native
+    wavelength grid scaled to [-1, 1] (per group, so mixed instruments each use their
+    own abscissa); an all-zero coefficient vector is exactly the unit response.
+
+    Identifiability is the ``docs/design.md`` §5 response row: a low-order response
+    trades against the components' *broad* spectral features, so the epoch-*shared*
+    part of a free response is only weakly identified while the epoch-to-epoch
+    differences — the thing a per-epoch continuum treatment is for — are well
+    constrained. Keep the order low and the priors tight and zero-centered; the
+    honest-anchor policy of D13/D25 applies.
+
+    Parameters
+    ----------
+    problem
+        Output of :func:`build_problem`.
+    response_coeffs
+        ``(n_coef,)`` shared across epochs or ``(n_epochs, n_coef)`` per-epoch
+        Chebyshev coefficients with ``n_coef >= 1`` static. Traced values are fine,
+        so this is safe inside ``jax.jit``.
+    """
+    c = jnp.asarray(response_coeffs)
+    if c.ndim == 1:
+        c = jnp.broadcast_to(c[None, :], (problem.n_epochs, c.shape[0]))
+    if c.ndim != 2 or c.shape[0] != problem.n_epochs:
+        raise ValueError(
+            f"response_coeffs must have shape (n_coef,) or ({problem.n_epochs}, n_coef); "
+            f"got {jnp.asarray(response_coeffs).shape}"
+        )
+    if c.shape[1] < 1:
+        raise ValueError("response_coeffs needs at least one coefficient per epoch")
+    groups = []
+    for g in problem.groups:
+        ce = c[np.asarray(g.epoch_indices, dtype=np.int64)]
+        r_new = 1.0 + jax.vmap(partial(_chebval_traced, g.cheb_x))(ce)
+        z_new = jnp.where(g.w > 0.0, g.z + (g.r - r_new) * g.base[None, :], 0.0)
+        groups.append(replace(g, r=r_new, z=z_new))
     return replace(problem, groups=tuple(groups))
 
 

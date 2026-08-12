@@ -237,6 +237,14 @@ def main() -> int:
     # ~175x the no-jitter formal error, because downweighting the noisiest exposures
     # changes which of them carry the period leverage. A noise model that is honest about
     # its scale is still a diagonal noise model, and these residuals are correlated.
+    #
+    # The complementary D33 handle is a per-epoch continuum: add
+    #     "response": dist.Normal(jnp.zeros((len(dataset), 3)), 0.02)
+    # to `priors` (init at zeros) and refit. Measured on this dataset
+    # (scripts/hr6819_response_run.py): it absorbs ~4,000 nats of real epoch-structured
+    # signal with coefficients of a few per mil — and moves nothing else (period by
+    # ~0.4 formal sigma, K by <0.001 km/s, residual sd from 1.674 to 1.668). Whatever
+    # biases this orbit, it is not the continuum.
 
     if os.environ.get("ALBIREO_HR6819_NUTS") != "1":
         print("\nSet ALBIREO_HR6819_NUTS=1 to continue into Laplace + NUTS.")

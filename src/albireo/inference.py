@@ -20,6 +20,14 @@ The nonlinear parameter vector ``theta`` is a dict of JAX arrays with sites
 - ``lsf_sigma`` (optional) — per-instrument Gaussian LSF widths [km/s], ordered as
   the problem's instrument groups; the construction-time ``lsf_sigma_v`` values act
   as upper bounds (they fix the kernel radii)
+- ``response`` (optional) — multiplicative per-epoch Chebyshev response coefficients,
+  ``(n_coef,)`` shared or ``(n_epochs, n_coef)`` per-epoch
+  (:func:`albireo.forward.with_response`, D7/D33; ``r = 1 + sum_m c_m T_m``, so
+  all-zero coefficients are the unit response). This is the per-epoch continuum
+  treatment: keep the order low and the priors tight and zero-centered — a low-order
+  response trades against the components' broad features (design.md §5), and when a
+  ``response`` site is present the construction-time ``response_coeffs`` are replaced
+  outright
 - ``log_jitter`` (optional) — log noise-inflation factor, scalar (shared) or one per
   epoch; the weights become ``w_j / exp(2 log_jitter_j)``
   (:func:`albireo.forward.with_jitter`, D15). Read its caveats before using it: a
@@ -64,6 +72,7 @@ from albireo.forward import (
     with_jitter,
     with_light_fractions,
     with_lsf,
+    with_response,
     with_velocities,
 )
 from albireo.grids import LogGrid
@@ -93,6 +102,7 @@ _THETA_SITES = (
     *_OUTER_SITES,
     "light",
     "lsf_sigma",
+    "response",
     "log_jitter",
     "log_tau",
     "log_eta",
@@ -206,6 +216,9 @@ class MarginalOrbitModel:
         build-time light fractions only set ``n_stellar``, and the build-time LSF
         widths become strict upper bounds (they fix the kernel radii — the model
         rejects wider widths, which the fixed radii would silently truncate).
+        ``response_coeffs`` likewise is the fixed response used whenever θ carries
+        no ``response`` site, and is replaced outright when it does
+        (:func:`albireo.forward.with_response`).
     v_rel_max_kms
         Bound on the largest relative velocity between any two model components at
         any epoch (for an SB2: ``(K_1 + K_2)(1 + e)``; for an SB3 add the outer
@@ -314,6 +327,8 @@ class MarginalOrbitModel:
             # (and rejectable, via the model's lsf_bound guard) outside it.
             sig = jnp.clip(sig, 1e-3 * self._lsf_sigma_max, self._lsf_sigma_max)
             problem = with_lsf(problem, dict(zip(self.instruments, sig, strict=True)))
+        if "response" in theta:
+            problem = with_response(problem, jnp.asarray(theta["response"]))
         if "log_jitter" in theta:
             problem = with_jitter(problem, jnp.exp(jnp.asarray(theta["log_jitter"])))
         return problem

@@ -21,6 +21,7 @@ from albireo.forward import (
     with_jitter,
     with_light_fractions,
     with_lsf,
+    with_response,
     with_velocities,
 )
 from albireo.grids import C_KMS, LogGrid, log_doppler_shift
@@ -158,5 +159,6 @@ __all__ = [
     "with_jitter",
     "with_light_fractions",
     "with_lsf",
+    "with_response",
     "with_velocities",
 ]
