@@ -836,6 +836,81 @@ within 1.4 d of that weighted centroid) and diverge on either side of it.
   0.0289 ± 0.0058 — 0.8σ and 1.3σ, where the no-jitter run gave 0.2σ. Consistent, but the
   0.2σ was luckier than it looked.
 
+## The response site, and the exoneration of the continuum (2026-08-12, D33)
+
+D30's suspect list for the 1.4–1.7× residual excess had "per-epoch continuum residuals"
+near the top, and its closing sentence asked for "a check of whether the period offset
+survives a per-epoch continuum treatment". D33 is the treatment: the multiplicative
+response coefficients D7 fixed at build time became a θ site.
+
+### The swap
+
+The response enters the *targets* ``z = y − r(R·1)`` and the sandwich weights ``w r²``,
+not just the forward operator — the reason D7 deferred it. The swap is nonetheless exact
+and cheap because ``R·1`` (the rebinned unit continuum, now stored per group) is
+response-independent: ``z_new = z_old + (r_old − r_new)·R·1`` rebuilds the target with no
+raw fluxes carried, re-masked so the D30 ``0·nan`` trap cannot resurface, and the
+``Σ log w`` term is untouched because the noise lives on the data (math.md §7.5). The
+traced Clenshaw matches ``np.polynomial.chebyshev.chebval`` operation-for-operation, so
+`with_response` equals a fresh ``build_problem`` with ``r`` **bitwise** identical and the
+marginal to rtol 1e-12 (`tests/test_response.py`).
+
+### Closed loop (10 epochs, order 2, injected c ~ N(0, 0.03), SNR 130)
+
+Joint MAP over orbit + hypers + 30 response coefficients: injected coefficient rms
+0.0343, **difference-mode error rms 0.0020**, K errors +0.21% / −0.10%, and the fitted
+response beats the unit response by 29,938 nats at the same orbit. The epoch-*shared*
+mode comes out at its zero-centered prior, not at truth (c₀ error −0.069 against a 0.05
+prior σ) — §5's response↔broad-features degeneracy, now measured rather than asserted.
+The test asserts the common mode at prior scale, deliberately: tightening that assertion
+would test the prior, not the data.
+
+### The answer on HR 6819: the offsets are not the continuum's fault
+
+`scripts/hr6819_response_run.py`: both windows, 150 L-BFGS steps per config, response
+fits warm-started from the baseline MAP, order 2 per epoch (153 coefficients), prior
+N(0, 0.02²). Uncertainties are conditional-orbit Laplace (nuisances at MAP), computed
+identically for all four fits — they land ~2× the D30-recorded formal errors, which came
+by a different route; immaterial, since every σ in this table exists to be dwarfed.
+
+| | A: baseline | A: response | B: baseline | B: response |
+|---|---|---|---|---|
+| period [d] | 40.36566 ± 0.00099 | 40.36606 ± 0.00099 | 40.36091 ± 0.00140 | 40.36069 ± 0.00140 |
+| K<sub>pre-sd</sub> [km/s] | 63.308 ± 0.015 | 63.308 ± 0.015 | 63.575 ± 0.021 | 63.575 ± 0.021 |
+| K<sub>Be</sub> [km/s] | 1.928 ± 0.189 | 1.928 ± 0.193 | 2.946 ± 0.175 | 2.947 ± 0.178 |
+| eccentricity | 0.0302 | 0.0301 | 0.0240 | 0.0240 |
+| whitened residual sd | 1.674 | **1.668** | 1.401 | **1.394** |
+| Δ log-likelihood | — | **+4,100** | — | **+3,926** |
+| fitted response rms | — | 0.0044 | — | 0.0011 |
+| … difference mode | — | 0.0005 | — | 0.0005 |
+
+Three readings, in order:
+
+* **The site works and the continuum was already good.** Thousands of nats of real,
+  epoch-structured signal absorbed — by coefficients of a few *per mil*, with the
+  epoch-to-epoch differences at 5×10⁻⁴ rms in both windows. `preprocess.normalize`'s
+  log-space knot fit left half-a-per-mil of per-epoch continuum error on the table.
+* **And nothing else moves.** The period shifts by +0.0004 / −0.0002 d (0.4σ / 0.2σ of
+  the *formal* error — against the jitter site's 174σ relocation), K by < 0.001 km/s,
+  the eccentricity by ≤ 0.0001, and the residual sd by 0.4–0.5% — the excess scatter is
+  emphatically not continuum-shaped. Window-to-window disagreement is unchanged:
+  ΔP 2.8σ → 3.1σ, ΔK<sub>pre-sd</sub> 10.5σ → 10.4σ.
+* **So the continuum is crossed off D30's suspect list**, cleanly and by measurement.
+  The surviving suspects for the correlated residual are the pipeline's resampling (the
+  diagonal ivar is optimistic by construction), the Gaussian stand-in for FEROS's real
+  LSF, and the Be star's variable disc emission. The recorded next steps are now a
+  correlated-noise model and a wider window — the continuum treatment is done and keeps
+  its place as a *hygiene* term, not a fix.
+
+One more multimodality sighting, recorded because it keeps being the real lesson: window
+A's baseline here reproduces the D30 record to 0.0002 d, but window B's uniform-procedure
+MAP lands at P = 40.36091 — **0.0093 d below the D30-recorded 40.37022**, 6.6× the
+combined formal errors, with both runs converged (parameters stationary to ~0.0002 d over
+the final 20 steps). After the jitter relocation (174σ) and the two-optima period scan
+(125σ apart), this is the third independent demonstration that this surface holds optima
+far outside their curvature widths, selected by the optimizer's path. Every comparison in
+the table above is therefore between fits sharing one procedure.
+
 ## D32 — the numpyro path stops baking the problem into the graph (2026-08-12)
 
 D27 set the contract for `MarginalOrbitModel.marginal`: the `Problem` pytree is passed to

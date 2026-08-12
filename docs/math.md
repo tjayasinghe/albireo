@@ -816,9 +816,30 @@ radius, so the model rejects it with a $-\infty$ factor (the same
 guard-not-silent-corruption pattern as the bandwidth budget, §7.1). Identifiability is
 §5.4's caveat: anchor one reference instrument.
 
-Per-epoch response coefficients remain build-time constants in M4 (they enter the
-weights and targets, not just the operator — a different swap path); fitting them is
-deferred and recorded in the design ledger.
+**Per-epoch response (D33, post-M5).** The multiplicative response enters the
+likelihood in three places — the target, $z_j = y_j - r_j \odot (\mathbf{R}\mathbf{1})$;
+the sandwich weights, since $\mathbf{A}_j = \mathrm{diag}(r_j)\mathbf{R}_j\mathbf{B}_j\cdots$
+folds $r_j^2$ into $\mathbf{A}^\top W \mathbf{A}$; and the right-hand side through
+$r_j z_j$ — which is why D7 kept its coefficients as build-time constants through M4: a
+`response` swap is not a pure operator swap like the shifts. It is nonetheless cheap,
+because $\mathbf{R}\mathbf{1}$ (the rebinned unit continuum, stored per group) is
+*response-independent*:
+
+$$
+z^{\rm new}_j \;=\; z^{\rm old}_j + \left(r^{\rm old}_j - r^{\rm new}_j\right) \odot \mathbf{R}\mathbf{1}
+$$
+
+rebuilds the target exactly without carrying the raw fluxes (and re-masking keeps
+zero-weight pixels at exactly zero, so the D30 ``0·nan`` trap cannot resurface), while
+the $\sum \log w$ term is untouched — the noise lives on the data, not on
+response-divided data. `response` is a θ site: $(n_{\rm coef},)$ shared or
+$(J, n_{\rm coef})$ per-epoch, $r = 1 + \sum_m c_m T_m(x)$ on each group's native
+abscissa. Identifiability is §5's response row, sharpened by measurement: the
+epoch-to-epoch *differences* of the coefficients are well constrained (closed loop:
+recovered to $\sim 10^{-3}$ against injected $3\times 10^{-2}$), while the epoch-shared
+mode trades against the components' broad features and lands at its zero-centered prior
+rather than at truth. Keep the order low and the priors tight; read the common mode as
+a normalization convention, not a measurement.
 
 ---
 
@@ -842,10 +863,13 @@ deferred and recorded in the design ledger.
 | ML-II sanity (§7.3) | MAP over (θ, log τ, log η) recovers K's and sane hyperscales |
 | **M3 gate**: $K_1, K_2$ to <1% with valid posteriors | closed-loop NUTS: posterior means within 1%, truth in central 95%, zero divergences |
 | light/LSF θ-paths equal fresh builds (§7.5) | `with_light_fractions` / `with_lsf` vs. `build_problem` at matched kernel radius, rtol $10^{-12}$; FD gradients through both sites |
+| response θ-path equals fresh builds (§7.5, D33) | `with_response` vs. `build_problem(response_coeffs=...)`: `r` bitwise, marginal rtol $10^{-12}$; FD gradients; replace-not-compound; masked pixels inert |
+| **D33 gate**: per-epoch response closed loop | difference-mode coefficients to $5\times10^{-3}$ against injected $3\times10^{-2}$; K's <1%; common mode prior-pinned (asserted at prior scale, not at truth) |
 | SB3 velocity law (§7.5) | `orbit_velocities` with outer sites ≡ hand-composed nested Keplerians, atol $10^{-12}$ |
 | LSF bound + outer-disk guards | width above build bound / outer $e > e_{\max}$ ⇒ non-finite model log-density |
 | telluric constant exchange (§5.4) | closed loop: the two $k=0$ offsets cancel in the light-weighted sum to $<5\times10^{-3}$ |
 | **M4 gate**: closed loop per realism feature | telluric joint MAP; SB3 MAP (inner and outer $K$'s <2%); per-epoch light inferred (ℓ rms <0.01, components individually recovered); LSF width vs. reference instrument <3%; $K_2$ scan (peak at truth, negative $D$ under null) |
 
 Sections 1–2 and the operator rows are implemented and tested in M0; §3–4 landed in M2;
-§7.1–7.4 landed in M3 (with §5 diagnostics); §6 and §7.5 landed in M4.
+§7.1–7.4 landed in M3 (with §5 diagnostics); §6 and §7.5 landed in M4, except the §7.5
+response swap, which landed post-M5 (D33).
