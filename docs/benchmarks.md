@@ -835,3 +835,68 @@ within 1.4 d of that weighted centroid) and diverge on either side of it.
 * **The eccentricity survives, less impressively.** 0.0241 and 0.0213 against
   0.0289 ± 0.0058 — 0.8σ and 1.3σ, where the no-jitter run gave 0.2σ. Consistent, but the
   0.2σ was luckier than it looked.
+
+## D32 — the numpyro path stops baking the problem into the graph (2026-08-12)
+
+D27 set the contract for `MarginalOrbitModel.marginal`: the `Problem` pytree is passed to
+`jax.jit` as an *argument*, because closure-captured arrays are embedded in the graph as
+constants, and XLA then evaluates every θ-independent subgraph over them at compile time,
+against compile-time memory — ~80 GB of it at the design target when D27 first measured
+it. The numpyro path never received that contract: the model closure from
+`MarginalOrbitModel.model()` captured `self.problem`, so `run_map`'s jitted L-BFGS step
+and the NUTS sample loop both compiled with the problem baked in. Recorded unfixed at
+D30; fixed now, through numpyro's own machinery for exactly this case:
+
+* the model takes the base problem as an optional argument and advertises it via a
+  `model_args` attribute on the returned closure;
+* `run_map` and `laplace_inverse_mass` build the potential with
+  `initialize_model(..., dynamic_args=True, model_args=...)`;
+* `run_nuts` runs `MCMC(..., jit_model_args=True)`, which regenerates the potential from
+  the *traced* arguments inside the jitted sample loop (`hmc.py`'s `_potential_fn_gen`).
+
+Every existing call site benefits without change (the runners resolve
+`model_args` as explicit argument > model attribute > none). Calling the model with no
+argument — any plain numpyro utility, e.g. `log_density` — falls back to the closure,
+which is correct, just not compile-safe at scale; `model_args=()` forces that path
+deliberately.
+
+### Measured: value+grad of the numpyro potential, the graph L-BFGS and NUTS compile
+
+`scripts/d32_model_args_bench.py`, m5-ladder SB2 (50 epochs, p = 513), CPU, one process
+per cell (the peak-working-set counter is monotone), single run per cell:
+
+| | 31,734 px, arg | 31,734 px, closure | 74,322 px, arg | 74,322 px, closure |
+|---|---|---|---|---|
+| compile | **0.8 s** | 20.9 s | **0.8 s** | 10.8 s |
+| constants baked into the executable | 0.02 GiB | **1.99 GiB** | 0.04 GiB | 0.04 GiB |
+| process peak during compile | +0.00 GiB | **+1.35 GiB** | +0.00 GiB | +0.00 GiB |
+| value+grad runtime | 6.2 s | 5.9 s | 20.6 s | 19.0 s |
+| potential, gradient | identical to all printed digits | ← | identical | ← |
+
+XLA names the mechanism unprompted — its slow-operation alarm fires during the closure
+builds on exactly the predicted instructions: *"Constant folding an instruction is taking
+> 1s: %scatter-add.342 = f64[50,126936] scatter(...)"* — θ-independent weight/response
+subgraphs being evaluated at compile time, at 50 × native-pixels scale.
+
+Two things stated honestly:
+
+* **The memory cost is heuristic-gated, and that is not a defense.** At 31.7k px XLA
+  folded ~2 GiB of derived constants into the executable; at 74.3k px its own folding
+  guards declined the largest folds, so the memory cost happened not to materialize while
+  the compile-time cost (13×) remained. Whether the D27 blow-up recurs at any given scale
+  is a property of XLA's internal thresholds and version — the argument-passing contract
+  removes the exposure instead of betting on the guard.
+* **Folded constants are marginally *faster* at runtime** (5.9 vs 6.2 s at row 0) —
+  that is the trade XLA is designed to make, and at survey scale it is the wrong one:
+  the same mechanism costs tens of GB against the design target (D27), and a NUTS warmup
+  recompiling per mass-matrix window would pay the folding repeatedly.
+
+### Regression tests (`tests/test_inference.py`)
+
+* `test_potential_with_model_args_embeds_no_problem_constants` — asserts on the jaxpr
+  consts in both directions: nothing problem-sized with the problem as an argument, and
+  the closure build must show the leak (so the probe is proven able to see it).
+* `test_run_map_closure_and_argument_paths_agree` (float tolerance — different graphs)
+  and `test_laplace_closure_and_argument_paths_agree` (exact — same eager ops).
+* The M3 NUTS acceptance gate now runs through `jit_model_args=True` as its default
+  path, so the gate itself regression-tests the traced sample loop.
