@@ -388,8 +388,17 @@ class MarginalOrbitModel:
         Returns
         -------
         callable
-            A no-argument numpyro model, for :func:`run_map` / :func:`run_nuts`.
-            Records ``ecc`` and ``omega`` as deterministic sites.
+            A numpyro model for :func:`run_map` / :func:`run_nuts`. Records ``ecc``
+            and ``omega`` as deterministic sites. The model takes the base
+            :class:`~albireo.forward.Problem` as an optional argument and advertises
+            it via a ``model_args`` attribute, and the runners pass it through
+            numpyro as a *traced* jit argument — the same contract as
+            :meth:`marginal` (D27): captured as a closure constant instead, the
+            problem's arrays are baked into the jitted potential as XLA constants,
+            whose compile-time folding allocates multi-GB temporaries at survey
+            scale. Calling the model with no argument (any plain numpyro utility,
+            e.g. ``log_density``) falls back to the closure — correct, just not
+            compile-safe at scale.
         """
         unknown = [s for s in priors if s not in _THETA_SITES]
         if unknown:
@@ -399,7 +408,7 @@ class MarginalOrbitModel:
         if overlap:
             raise ValueError(f"sites both fixed and sampled: {sorted(overlap)}")
 
-        def _model():
+        def _model(base=None):
             theta = {name: numpyro.sample(name, d) for name, d in priors.items()}
             theta.update({name: jnp.asarray(v) for name, v in fixed.items()})
             ecc_raw = theta["secosw"] ** 2 + theta["sesinw"] ** 2
@@ -423,7 +432,7 @@ class MarginalOrbitModel:
                     "lsf_bound",
                     jnp.where(jnp.all(sig <= self._lsf_sigma_max), 0.0, -jnp.inf),
                 )
-            problem = self._theta_problem(theta)
+            problem = self._theta_problem(theta, base=base)
             # Reject configurations whose relative shifts exceed the static bandwidth
             # (the probed marginal likelihood would be silently wrong out there).
             rel = _max_relative_shift(problem)
@@ -432,7 +441,18 @@ class MarginalOrbitModel:
                 "marginal_loglike", self._marginal_from_problem(problem, theta).log_likelihood
             )
 
+        # Advertise the problem as a model argument (picked up by run_map /
+        # laplace_inverse_mass / run_nuts) so numpyro traces it instead of folding it.
+        _model.model_args = (self.problem,)  # type: ignore[attr-defined]
         return _model
+
+
+def _resolve_model_args(model, model_args) -> tuple:
+    """The model's traced arguments: explicit ``model_args`` wins, else the model's
+    own ``model_args`` attribute (:meth:`MarginalOrbitModel.model`), else none."""
+    if model_args is None:
+        model_args = getattr(model, "model_args", ())
+    return tuple(model_args)
 
 
 @dataclass(frozen=True)
@@ -460,6 +480,7 @@ def run_map(
     max_steps: int = 200,
     tol: float = 1e-2,
     callback=None,
+    model_args: tuple | None = None,
 ) -> MAPResult:
     """MAP over all sampled sites of ``model`` via L-BFGS on numpyro's potential.
 
@@ -487,6 +508,13 @@ def run_map(
         with ``params`` the *constrained* site values. Without it this function is silent
         for however long it runs, and a real-data fit can run for hours — a first MAP on a
         new dataset should always pass one. Return ``True`` to stop early.
+    model_args
+        Positional arguments for ``model``, passed through numpyro as *traced* jit
+        arguments rather than closure constants (which XLA constant-folds — the
+        multi-GB-at-scale trap D27 documents). Default: the model's own
+        ``model_args`` attribute when it has one (:meth:`MarginalOrbitModel.model`
+        advertises its base problem there), else ``()``. Pass ``()`` explicitly to
+        force the closure path.
 
     Examples
     --------
@@ -494,16 +522,22 @@ def run_map(
     ...     print(f"{step:4d}  {potential:.3f}  |g|={grad_norm:.3g}  K={params['k']}")
     """
     rng_key = jax.random.PRNGKey(0) if rng_key is None else rng_key
+    model_args = _resolve_model_args(model, model_args)
     model_info = initialize_model(
-        rng_key, model, init_strategy=init_to_value(values=dict(init)), dynamic_args=False
+        rng_key,
+        model,
+        init_strategy=init_to_value(values=dict(init)),
+        dynamic_args=True,
+        model_args=model_args,
     )
-    potential = model_info.potential_fn
+    potential_gen = model_info.potential_fn  # potential_gen(*model_args) -> z -> potential
+    postprocess = model_info.postprocess_fn(*model_args)
     opt = optax.lbfgs()
-    value_and_grad = optax.value_and_grad_from_state(potential)
 
     @jax.jit
-    def step(params, state):
-        value, grad = value_and_grad(params, state=state)
+    def step(params, state, args):
+        potential = potential_gen(*args)
+        value, grad = optax.value_and_grad_from_state(potential)(params, state=state)
         updates, state = opt.update(grad, state, params, value=value, grad=grad, value_fn=potential)
         params = optax.apply_updates(params, updates)
         return params, state, value, grad
@@ -513,19 +547,19 @@ def run_map(
     state = opt.init(params)
     value, grad_norm, steps_taken = np.inf, np.inf, 0
     for steps_taken in range(1, max_steps + 1):
-        params, state, value, grad = step(params, state)
+        params, state, value, grad = step(params, state, model_args)
         grad_norm = float(optax.tree.norm(grad))
         if not np.isfinite(grad_norm):
             raise FloatingPointError(
                 f"non-finite gradient at L-BFGS step {steps_taken} (potential {float(value)})"
             )
         if callback is not None and callback(
-            steps_taken, float(value), grad_norm, model_info.postprocess_fn(params)
+            steps_taken, float(value), grad_norm, postprocess(params)
         ):
             break
         if grad_norm < tol:
             break
-    constrained = model_info.postprocess_fn(params)
+    constrained = postprocess(params)
     return MAPResult(
         params={k: v for k, v in constrained.items()},
         unconstrained=dict(params),
@@ -536,7 +570,9 @@ def run_map(
     )
 
 
-def laplace_inverse_mass(model, params: Mapping, *, rng_key=None, floor: float = 1e-10):
+def laplace_inverse_mass(
+    model, params: Mapping, *, rng_key=None, floor: float = 1e-10, model_args: tuple | None = None
+):
     """Unconstrained-space Laplace covariance at ``params`` — a NUTS starting mass matrix.
 
     Evaluates the Hessian of the model potential at the given constrained site values
@@ -546,12 +582,19 @@ def laplace_inverse_mass(model, params: Mapping, *, rng_key=None, floor: float =
     model: with the mass matrix pre-set to (approximately) the posterior covariance,
     warmup only tunes the step size — without it, parameter scales spanning many
     orders of magnitude drive early trajectories to the tree-depth cap and warmup
-    costs more than sampling.
+    costs more than sampling. ``model_args`` follows the :func:`run_map` contract
+    (default: the model's own ``model_args`` attribute).
     """
     rng_key = jax.random.PRNGKey(0) if rng_key is None else rng_key
+    model_args = _resolve_model_args(model, model_args)
     model_info = initialize_model(
-        rng_key, model, init_strategy=init_to_value(values=dict(params)), dynamic_args=False
+        rng_key,
+        model,
+        init_strategy=init_to_value(values=dict(params)),
+        dynamic_args=True,
+        model_args=model_args,
     )
+    potential = model_info.potential_fn(*model_args)
     z = jax.tree.map(jnp.asarray, model_info.param_info.z)
     flat, unravel = ravel_pytree(z)
     # Reverse-over-reverse, NOT jax.hessian (= forward-over-reverse). Forward-over-
@@ -562,7 +605,7 @@ def laplace_inverse_mass(model, params: Mapping, *, rng_key=None, floor: float =
     # finite differences of the gradient to 8 digits where forward-over-reverse does
     # not (D28). Applying forward mode *directly* to the marginal is separately
     # impossible: JAX rejects jvp of a custom_vjp function.
-    hess = jax.jacrev(jax.jacrev(lambda zf: model_info.potential_fn(unravel(zf))))(flat)
+    hess = jax.jacrev(jax.jacrev(lambda zf: potential(unravel(zf))))(flat)
     hess = 0.5 * (hess + hess.T)
     eigval, eigvec = jnp.linalg.eigh(hess)
     eigval = jnp.maximum(eigval, floor * jnp.max(eigval))
@@ -583,6 +626,7 @@ def run_nuts(
     adapt_mass_matrix: bool | None = None,
     max_tree_depth: int = 8,
     progress_bar: bool = False,
+    model_args: tuple | None = None,
 ) -> MCMC:
     """NUTS over the sampled sites of ``model`` (spectra stay marginalized).
 
@@ -595,9 +639,15 @@ def run_nuts(
     the matrix was meant to avoid (override via ``adapt_mass_matrix=True``). Returns
     the numpyro ``MCMC`` object (``.get_samples()``, ``.print_summary()``);
     divergences and tree depths are collected as extra fields.
+
+    ``model_args`` follows the :func:`run_map` contract (default: the model's own
+    ``model_args`` attribute); with arguments present the MCMC runs with
+    ``jit_model_args=True``, so they are traced through the jitted sample loop
+    rather than baked into it as XLA constants.
     """
     if adapt_mass_matrix is None:
         adapt_mass_matrix = inverse_mass_matrix is None
+    model_args = _resolve_model_args(model, model_args)
     strategy = init_to_value(values=dict(init)) if init is not None else init_to_value()
     kernel = NUTS(
         model,
@@ -617,8 +667,9 @@ def run_nuts(
         num_chains=num_chains,
         chain_method="sequential",
         progress_bar=progress_bar,
+        jit_model_args=bool(model_args),
     )
-    mcmc.run(rng_key, extra_fields=("num_steps", "diverging"))
+    mcmc.run(rng_key, *model_args, extra_fields=("num_steps", "diverging"))
     return mcmc
 
 

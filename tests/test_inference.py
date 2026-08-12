@@ -9,7 +9,8 @@ import jax.numpy as jnp
 import numpy as np
 import numpyro.distributions as dist
 import pytest
-from numpyro.infer.util import log_density
+from numpyro.infer import init_to_value
+from numpyro.infer.util import initialize_model, log_density
 
 import albireo as ab
 from albireo.forward import build_problem, with_velocities
@@ -375,3 +376,73 @@ def test_posterior_spectra_from_samples(gate_data, nuts_fit):
     assert np.sqrt(np.mean(visible_err[core] ** 2)) < 0.02
     for i in range(2):
         assert np.sqrt(np.mean((mean[i][core] - truth_d[i][core]) ** 2)) < 0.15
+
+
+# ---------------------------------------------------------------------------
+# Problem-as-argument through the numpyro path (D32)
+# ---------------------------------------------------------------------------
+
+
+def _largest_const_nbytes(closed_jaxpr) -> int:
+    return max((np.asarray(c).nbytes for c in closed_jaxpr.consts), default=0)
+
+
+def test_model_advertises_its_problem_as_model_args(gate_data):
+    _, _, model = gate_data
+    numpyro_model = model.model(PRIORS)
+    assert len(numpyro_model.model_args) == 1
+    assert numpyro_model.model_args[0] is model.problem
+
+
+def test_potential_with_model_args_embeds_no_problem_constants(gate_data):
+    """The numpyro potential must receive the problem as a traced argument.
+
+    Closure-captured, the problem's arrays become jaxpr constants, which jit bakes
+    into the HLO as literals — and at survey scale XLA's compile-time folding of
+    those literals allocates the multi-GB temporaries D27 documents for the direct
+    `marginal` path. The consts are directly observable on the jaxpr, so assert on
+    them: with the problem passed as an argument nothing problem-sized may remain,
+    and the closure build must show the leak (proving the probe can see it).
+    """
+    _, _, model = gate_data
+    numpyro_model = model.model(PRIORS)
+    info = initialize_model(
+        jax.random.PRNGKey(0),
+        numpyro_model,
+        init_strategy=init_to_value(values=INIT),
+        dynamic_args=True,
+        model_args=(model.problem,),
+    )
+    z = jax.tree.map(jnp.asarray, info.param_info.z)
+    data_nbytes = max(np.asarray(leaf).nbytes for leaf in jax.tree.leaves(model.problem))
+
+    traced = jax.make_jaxpr(lambda zz, pb: info.potential_fn(pb)(zz))(z, model.problem)
+    baked = jax.make_jaxpr(lambda zz: info.potential_fn(model.problem)(zz))(z)
+    assert _largest_const_nbytes(baked) >= data_nbytes, "the probe cannot see the leak"
+    assert _largest_const_nbytes(traced) < data_nbytes
+
+
+def test_run_map_closure_and_argument_paths_agree(gate_data):
+    """model_args=() forces the closure path; the traced default must match it.
+
+    The two builds compile different graphs (embedded constants vs. runtime
+    parameters), so agreement is to float tolerance, not bitwise.
+    """
+    _, _, model = gate_data
+    via_args = run_map(model.model(PRIORS), init=INIT, max_steps=3, tol=0.0)
+    via_closure = run_map(model.model(PRIORS), init=INIT, max_steps=3, tol=0.0, model_args=())
+    assert via_args.num_steps == via_closure.num_steps == 3
+    np.testing.assert_allclose(via_args.potential, via_closure.potential, rtol=1e-8)
+    for site, v in via_args.unconstrained.items():
+        np.testing.assert_allclose(
+            v, via_closure.unconstrained[site], rtol=1e-6, atol=1e-9, err_msg=site
+        )
+
+
+def test_laplace_closure_and_argument_paths_agree(gate_data, map_fit):
+    """Both paths run the same eager ops on the same arrays — exact agreement."""
+    _, _, model = gate_data
+    numpyro_model = model.model(PRIORS)
+    via_args = laplace_inverse_mass(numpyro_model, map_fit.params)
+    via_closure = laplace_inverse_mass(numpyro_model, map_fit.params, model_args=())
+    np.testing.assert_array_equal(via_args, via_closure)
