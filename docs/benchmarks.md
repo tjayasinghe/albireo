@@ -911,6 +911,123 @@ the final 20 steps). After the jitter relocation (174σ) and the two-optima peri
 far outside their curvature widths, selected by the optimizer's path. Every comparison in
 the table above is therefore between fits sharing one procedure.
 
+## The AR(1) chain: whiten the residuals *and* keep the orbit (2026-08-12, D34)
+
+D31 ended with a warning — a rescaled diagonal noise model whitened the residual scale
+and relocated the period by 174 formal σ — and D33 crossed the continuum off the suspect
+list, leaving the pipeline's resampling correlations at the top of it. D34 models the
+correlation: an AR(1) chain per epoch, `C = α²·D^(−1/2)·R_φ·D^(−1/2)` (math.md §1.4a),
+with φ shared across epochs on the θ site (a property of the resampling, not of one
+exposure) alongside the D31 per-epoch jitters.
+
+### Closed forms, and the trap they avoid
+
+The correlation matrix `R_φ` has *unit diagonal by construction* — heteroscedastic
+pixels keep their supplied variances, and the residual-sd diagnostic is therefore
+provably blind to φ. The discriminator is the lag-1 autocorrelation of the whitened
+residuals: ~φ under diagonal whitening, ~0 under the chain whitener.
+
+Masked pixels are exact, not approximated: a subset of a Markov chain is Markov, so a
+gap becomes a single link with `ρ = φ^gap` (capped at build time, `ar1_max_gap=4` —
+beyond it the chain restarts, which at |φ| ≤ 0.9 discards ρ < 0.66⁴ ≈ 0.2 in the worst
+case and ~1e-3 at the fitted values below). The precision stays tridiagonal with
+closed-form `log det`, and the whitener is the innovation transform
+`(ε_i − ρ_i·ε_prev)/√(1 − ρ_i²)`. All of it is pinned against a dense reference that
+shares nothing with the closed forms — the chain *correlation matrix* built from link
+products and inverted with LAPACK: marginal log-likelihood to **rtol 1e-10** with gaps
+and jitter composed, `φ = 0` reproducing the diagonal model to rtol 1e-12, gradients
+against finite differences including exactly at φ = 0 (`jnp.power`'s nan-gradient at a
+zero base; the gap-1 links use φ directly).
+
+Two structural costs, both declared rather than discovered: the D28 band assembly
+assumes diagonal weights, so a correlated problem auto-selects the **probe path** —
+2p + 1 = 347 operator applications per evaluation with plain reverse-mode gradients,
+~15× the D33 per-step cost as measured below (the tridiagonal band-sandwich extension
+is a recorded lever, to be built only if AR(1) earns a permanent place); and the chain
+couples pixels across masked gaps, so the solver bandwidth grows by a statically
+reserved `ar_bandwidth_extra` (D21's declared-bandwidth philosophy — 5 and 6 model
+pixels on the HR 6819 windows), behind an explicit `MarginalOrbitModel(ar1=True)`.
+
+### Closed loop: φ and α jointly, neither poisons the orbit
+
+Gate scale (10 epochs, SNR 130), injecting *both* miscalibrations at once — φ = 0.45
+correlation and supplied `ivar` overstated by α² = 1.5²:
+
+| | injected | recovered |
+|---|---|---|
+| φ | 0.45 | **0.4493** |
+| α | 1.5 | **1.4868** |
+| K errors | — | −0.05% / −0.31% |
+| chain-whitened residual sd, lag-1 | 1, 0 | 0.944, −0.077 |
+| same residuals, diagonal whitener: lag-1 | φ ≈ 0.45 | **+0.395** |
+
+The 0.944 is not a miscalibration — residuals about the *fitted* spectra read low by
+`√(1 − p_eff/N)` (math.md §3.2a, the D31 dof effect; p_eff/N ≈ 0.11 at gate scale),
+and the marginal's own α̂ is dof-corrected anyway. The last two rows are the
+discriminator working on identical residual vectors: the diagonal whitener sees the
+injected correlation, the chain removes it.
+
+### HR 6819: the noise model closes, the orbit stays
+
+Same uniform procedure as D33 (conjunction scan, literature init, 150 L-BFGS steps),
+θ = orbit + hypers + 51 per-epoch jitters + shared φ; ~53–56 s/step on the probe path
+(8,369 / 7,948 s per window) against ~3.6–4.2 s/step for the D33 fits.
+
+| | A: D33 baseline | A: D31 jitter | A: AR(1) | B: D33 baseline | B: D31 jitter | B: AR(1) |
+|---|---|---|---|---|---|---|
+| period [d] | 40.36566 | 40.44429 | **40.37115** | 40.36091 | 40.42979 | **40.36956** |
+| K<sub>pre-sd</sub> [km/s] | 63.308 | 63.074 | **63.242** | 63.575 | 63.400 | **63.518** |
+| K<sub>Be</sub> [km/s] | 1.928 | 1.450 | **2.446** | 2.946 | 2.658 | **3.756** |
+| eccentricity | 0.0302 | 0.0241 | **0.0273** | 0.0240 | 0.0213 | **0.0228** |
+| φ̂ | — | — | **+0.801** | — | — | **+0.694** |
+| α̂ range (median) | — | 1.11–3.61 | 1.55–1.93 (1.66) | — | — | 1.27–1.58 (1.40) |
+| whitened residual sd | 1.674 | 0.997 | **0.997** | 1.401 | 0.997 | **0.997** |
+| whitened residual lag-1 | — | — | **+0.041** | — | — | **+0.012** |
+| … diagonal whitener, lag-1 | — | — | +0.797 | — | — | +0.688 |
+
+(Klement et al. 2025: P 40.3261 ± 0.0013, K 61.15 ± 0.88, K_Be 3.90 ± 0.27,
+e 0.0289 ± 0.0058.)
+
+Five readings, in the order they matter:
+
+* **The noise model finally closes.** Both windows whiten in *both* moments — sd 0.997
+  with lag-1 +0.041 and +0.012 — the first fits in this campaign to do so (D31 fixed the
+  scale and left the structure; D33 fixed neither). The self-consistency check is almost
+  embarrassing: the same residuals read through the diagonal whitener show lag-1 +0.797
+  and +0.688, which is φ̂ (+0.801, +0.694) to two decimals — the model measuring its own
+  necessity. In ML-II terms, window A's chain model sits **~1.7×10⁵ nats** above the D31
+  diagonal-jitter model (1,691,463 vs the 1,518,265 recorded at D31's own MAP): the
+  correlation term is not a refinement to the noise model, it *is* most of the
+  miscalibration.
+* **The D31 relocation does not recur, and α says why.** Under the chain the per-epoch
+  jitters collapse from 1.11–3.61 to 1.55–1.93, and their medians — 1.66 and 1.40 —
+  reproduce the D30 residual sds (1.674, 1.403) almost exactly. What D31's jitters were
+  actually fitting was *correlated* structure, epoch by epoch, as if it were per-exposure
+  scale — and the epochs where they over-fitted it were the ones whose downweighting
+  moved the period. Modeled as correlation, the excess turns out roughly *uniform* across
+  epochs — a pipeline property, exactly what the resampling hypothesis predicts — and the
+  period lands within 0.006/0.009 d of the diagonal baselines instead of 0.08 d away.
+* **The two windows move toward each other.** ΔP across the independent windows:
+  0.00475 d at the baseline, **0.00159 d** under the chain — 3.0× closer, where the D31
+  model widened it to 0.0145 d. K<sub>pre-sd</sub> spread is essentially unchanged
+  (0.267 → 0.276 km/s). Every previous noise model made the windows agree less; this one
+  is the first to make them agree more, which is the strongest available internal
+  evidence that the chain is closer to the truth of these data.
+* **K<sub>Be</sub> moves toward the literature and remains unmeasured.** 1.93 → 2.45 (A)
+  and 2.95 → **3.76** (B), against 3.90 ± 0.27 — window B is now within 1σ of Klement
+  et al. But the A–B spread *grew* (1.02 → 1.31 km/s) and A's value was still drifting
+  at step 150. The ~1/50-linewidth reflex of the Be star (math.md §5.1's unattributable
+  regime) does not yield to a noise model.
+* **The literature period offset survives its third noise model.** 40.3712 and 40.3696
+  against 40.3261 — 0.044 d, marginally *further* than the baseline. It is now measured
+  not to be the continuum (D33), not the noise scale (D31), and not the pixel
+  correlation (D34). Survivors: the Gaussian stand-in for FEROS's LSF, the Be disc's
+  variability — and the published CCF analysis itself, which blends the components this
+  model separates; that last cannot be adjudicated from here. What φ̂ = 0.7–0.8 does
+  settle is the *scale* of D30's optimism: at these correlations a diagonal model
+  overcounts low-frequency information by (1+φ)/(1−φ) ≈ 5.5–9×, which is why formal
+  errors of ±0.0005 d coexisted with window disagreements of 0.005 d.
+
 ## D32 — the numpyro path stops baking the problem into the graph (2026-08-12)
 
 D27 set the contract for `MarginalOrbitModel.marginal`: the `Problem` pytree is passed to

@@ -194,6 +194,54 @@ estimates, and why it is not the same as rescaling by the residual scatter.
 $\mathbf{A}$ is never formed densely: it is a composition of gathers, stationary convolutions,
 and segment-sums, each with an exact adjoint (tested against `jax.linear_transpose`).
 
+### 1.4a Correlated noise: the AR(1) chain (D34)
+
+A pipeline that resamples spectra onto a common wavelength step correlates *adjacent*
+pixels — the leading suspect D31 left standing once a rescaled diagonal model was shown
+to whiten the scale while relocating the orbit. The v1 correlated model keeps every term
+closed-form: per epoch, the noise covariance of the **standardized** residual is AR(1)
+in native-pixel index,
+
+$$
+\mathbf{C}_j \;=\; \alpha_j^2\, \mathbf{D}_j^{-1/2}\, \mathbf{R}_{\phi_j}\, \mathbf{D}_j^{-1/2},
+\qquad \mathbf{D}_j = \operatorname{diag}(w_j),\quad
+(\mathbf{R}_\phi)_{pq} = \phi^{|p-q|},
+$$
+
+so $w$ keeps the per-pixel scale, $\alpha$ (D31) keeps the overall scale, and $\phi$
+correlates; $\phi = 0$ is exactly the diagonal model. Two facts make this exact and
+cheap:
+
+1. **A subset of a Markov chain is Markov.** The observed (unmasked) pixels form a
+   chain whose consecutive pairs, an index distance $g$ apart, carry correlation
+   $\rho = \phi^{g}$ — masking costs no approximation. Links are capped at
+   `ar1_max_gap` (short-range noise does not span a chip gap; the cap also bounds the
+   bandwidth cost below), beyond which the chain restarts.
+2. **A chain's precision is tridiagonal in closed form.** With per-link
+   $a_k = \rho_k^2/(1-\rho_k^2)$ and $c_k = \rho_k/(1-\rho_k^2)$, each link adds $a_k$
+   to *both* endpoints' diagonal and $-c_k$ to their off-diagonal pair, on top of the
+   identity; and
+   $\log\det \mathbf{R}^{-1} = -\sum_{\rm links} \log(1-\rho_k^2)$, so the marginal's
+   noise-normalization term is
+   $\log\det \mathbf{W}_j = \sum_{\rm good}\log w - 2 n_j \log\alpha_j - \sum_{\rm links}\log(1-\rho_k^2)$
+   — the determinant discipline that makes $\phi$ identifiable rather than a free knob,
+   exactly as for $\alpha$ (§3.2a).
+
+The whitener is the Markov factorization
+$\tilde\varepsilon_k = (\varepsilon_k - \rho_k\,\varepsilon_{k-1})/\sqrt{1-\rho_k^2}$
+(`data_residual_zscores` uses it when the problem is correlated). The discriminating
+diagnostic is **lag-1 autocorrelation**, not scale: AR(1) noise has unit marginal
+variance, so a diagonal whitener still reports sd 1 while the residuals carry
+autocorrelation $\approx \phi$.
+
+Two structural consequences, both static. $\mathbf{A}^\top \mathbf{W} \mathbf{A}$
+couples rebin rows up to `ar1_max_gap` apart, widening the half-bandwidth by the
+largest model-pixel offset between a stored link's row supports
+(`Problem.ar_bandwidth_extra`; `MarginalOrbitModel` reserves it behind its ``ar1``
+flag, D21-style). And the D28 band sandwich assumes diagonal weights, so a correlated
+marginal runs on the **probe assembly path** — the tridiagonal-sandwich extension of
+the band path is a recorded lever, not built.
+
 ---
 
 ## 2. Priors on the component spectra
@@ -865,6 +913,8 @@ a normalization convention, not a measurement.
 | light/LSF θ-paths equal fresh builds (§7.5) | `with_light_fractions` / `with_lsf` vs. `build_problem` at matched kernel radius, rtol $10^{-12}$; FD gradients through both sites |
 | response θ-path equals fresh builds (§7.5, D33) | `with_response` vs. `build_problem(response_coeffs=...)`: `r` bitwise, marginal rtol $10^{-12}$; FD gradients; replace-not-compound; masked pixels inert |
 | **D33 gate**: per-epoch response closed loop | difference-mode coefficients to $5\times10^{-3}$ against injected $3\times10^{-2}$; K's <1%; common mode prior-pinned (asserted at prior scale, not at truth) |
+| AR(1) chain closed forms exact (§1.4a, D34) | marginal vs. dense brute force under the correlated covariance — chain correlation built independently and LAPACK-inverted — with masked gaps ($\rho = \phi^{g}$) and jitter composed, rtol $10^{-10}$; FD gradients, including at $\phi = 0$ (the `pow` nan-grad trap); $\phi = 0$ ≡ diagonal model; band assembly rejected statically |
+| **D34 gate**: correlated closed loop | injected $\phi = 0.45$ and ivar scale error $\alpha = 1.5$ recovered ($\pm 0.05$, $\pm 5\%$) jointly with K's <1%; chain whitener removes the lag-1 autocorrelation the diagonal whitener exposes ($\approx\phi$ vs $\approx 0$), while both report unit *scale* |
 | SB3 velocity law (§7.5) | `orbit_velocities` with outer sites ≡ hand-composed nested Keplerians, atol $10^{-12}$ |
 | LSF bound + outer-disk guards | width above build bound / outer $e > e_{\max}$ ⇒ non-finite model log-density |
 | telluric constant exchange (§5.4) | closed loop: the two $k=0$ offsets cancel in the light-weighted sum to $<5\times10^{-3}$ |
@@ -872,4 +922,5 @@ a normalization convention, not a measurement.
 
 Sections 1–2 and the operator rows are implemented and tested in M0; §3–4 landed in M2;
 §7.1–7.4 landed in M3 (with §5 diagnostics); §6 and §7.5 landed in M4, except the §7.5
-response swap, which landed post-M5 (D33).
+response swap, which landed post-M5 (D33), as did the §1.4a correlated-noise chain
+(D34).
