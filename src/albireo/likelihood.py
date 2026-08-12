@@ -22,7 +22,7 @@ from dataclasses import dataclass
 import jax
 import jax.numpy as jnp
 
-from albireo.assembly import band_block_tridiagonal, prior_block_tridiagonal
+from albireo.assembly import band_block_tridiagonal, prior_logdet
 from albireo.forward import Problem, normal_matvec, rhs, weighted_data_terms
 from albireo.priors import SmoothnessPrior
 from albireo.solver import (
@@ -32,7 +32,7 @@ from albireo.solver import (
     logdet,
     probe_block_tridiagonal,
     sample_standard,
-    selected_inverse_blocks,
+    selected_inverse_cotangent,
     selected_inverse_diag,
     solve,
     solve_lower,
@@ -60,28 +60,38 @@ def _unpack(v, n_comp: int, n_pix: int):
 def _solve_stage(bt: BlockTridiagonal, b_pad):
     """Cholesky + solves with a closed-form reverse pass (``docs/math.md`` §3).
 
-    Returns ``(logdet, quad, d_pad, chol)`` for the posterior precision ``bt`` and
+    Returns ``(logdet, quad, d_pad)`` for the posterior precision ``bt`` and
     right-hand side ``b_pad``. The custom VJP replaces reverse-mode through the
     Cholesky/solve scans with the analytic identities
 
         d(logdet)/d(Lambda) = Sigma,      d(quad)/d(Lambda) = -d d^T,
         cotangent(d_pad) = g  ->  b_bar += Sigma g,  Lambda_bar += -(u d^T)|_band,
 
-    where only the *banded* part of ``Sigma`` (block Takahashi,
-    :func:`albireo.solver.selected_inverse_blocks`) is ever formed — the
-    perturbation is block-tridiagonal, so nothing else contributes. This removes
-    the stored backward pass of both scans (memory ~ the factor itself) and costs
-    about one extra Cholesky-equivalent instead of two to three.
+    where only the *banded* part of ``Sigma`` is ever formed — the perturbation is
+    block-tridiagonal, so nothing else contributes — and it is contracted into the
+    cotangent inside the Takahashi sweep that produces it
+    (:func:`albireo.solver.selected_inverse_cotangent`). This removes the stored
+    backward pass of both scans (memory ~ the factor itself) and costs about one
+    extra Cholesky-equivalent instead of two to three.
 
-    Gradient contract: gradients flow through ``logdet``, ``quad``, and ``d_pad``.
-    They do **not** flow through the returned ``chol`` factor (its cotangent is
-    dropped; the factor is a numerical artifact for sampling/variance diagnostics).
+    The Cholesky factor is deliberately *not* an output: a cotangent on it could
+    not be honoured by this rule (propagating it is exactly the reverse-mode pass
+    through the factorization that the rule exists to avoid), and returning it
+    would make gradients of any factor-derived quantity silently zero.
+    :attr:`MarginalResult.chol` therefore rebuilds it outside this boundary, where
+    plain autodiff applies.
+
+    ``diag_bar`` is intentionally left unsymmetrized: ``BlockTridiagonal.diag[k]``
+    stores both triangles of a symmetric block, each read exactly once by the band
+    packing, so mirror entries receive the two halves of ``u d^T + d u^T``
+    separately and the assembled parameter gradient is the same. (The off-diagonal
+    blocks *are* stored once for two triangles, hence their factor of 2.)
     """
     chol = block_cholesky(bt)
     y = solve_lower(chol, b_pad)
     quad = jnp.sum(y * y)
     d_pad = solve_upper(chol, y)
-    return logdet(chol), quad, d_pad, chol
+    return logdet(chol), quad, d_pad
 
 
 def _solve_stage_fwd(bt, b_pad):
@@ -95,26 +105,19 @@ def _solve_stage_fwd(bt, b_pad):
     y = solve_lower(chol, b_pad)
     quad = jnp.sum(y * y)
     d_pad = solve_upper(chol, y)
-    return (logdet(chol), quad, d_pad, chol), (chol, d_pad, bt.n)
+    return (logdet(chol), quad, d_pad), (chol, d_pad, bt.n)
 
 
 def _solve_stage_bwd(res, cot):
     chol, d_pad, n = res
-    g_ld, g_quad, g_d, _g_chol = cot  # chol cotangent dropped by contract
+    g_ld, g_quad, g_d = cot
     k, b = chol.num_blocks, chol.block_size
     u = solve(chol, g_d)
-    s_diag, s_sub = selected_inverse_blocks(chol)
-    db = d_pad.reshape(k, b)
-    ub = u.reshape(k, b)
-
-    def outer(x, y):
-        return x[:, :, None] * y[:, None, :]
-
-    diag_bar = g_ld * s_diag - g_quad * outer(db, db) - outer(ub, db)
-    lower_bar = (
-        2.0 * g_ld * s_sub
-        - 2.0 * g_quad * outer(db[1:], db[:-1])
-        - (outer(ub[1:], db[:-1]) + outer(db[1:], ub[:-1]))
+    # Fused: the Takahashi sweep emits the cotangent blocks directly, so the selected
+    # inverse and the outer-product temporaries are never materialized (2K - 1 blocks,
+    # 3.1 GB at the design target). selected_inverse_blocks remains the test oracle.
+    diag_bar, lower_bar = selected_inverse_cotangent(
+        chol, d_pad.reshape(k, b), u.reshape(k, b), g_ld, g_quad
     )
     b_bar = 2.0 * g_quad * d_pad + u
     return BlockTridiagonal(diag=diag_bar, lower=lower_bar, n=n), b_bar
@@ -130,16 +133,33 @@ class MarginalResult:
 
     log_likelihood: jax.Array
     d_hat: jax.Array  # (n_comp, n_pix) posterior-mean deviation spectra
-    chol: BlockCholesky  # factor of the (interleaved, padded) posterior precision
+    precision: BlockTridiagonal  # the (interleaved, padded) posterior precision
     n_components: int
     n_pixels: int
 
     @property
+    def chol(self) -> BlockCholesky:
+        """Cholesky factor of :attr:`precision`, built on demand.
+
+        The likelihood's own factorization lives inside a ``custom_vjp`` whose
+        reverse rule cannot carry a cotangent on the factor, so returning that one
+        would make gradients of anything derived from it (spectral uncertainties,
+        draws) silently zero. Refactorizing here keeps those paths on plain
+        autodiff — at the price of one extra block Cholesky, paid only by callers
+        that actually want the factor. The sampling hot path reads
+        :attr:`log_likelihood` and :attr:`d_hat` and never triggers it.
+        """
+        return block_cholesky(self.precision)
+
+    @property
     def n_padded(self) -> int:
-        return self.chol.num_blocks * self.chol.block_size
+        return self.precision.num_blocks * self.precision.block_size
 
     def tree_flatten(self):
-        return (self.log_likelihood, self.d_hat, self.chol), (self.n_components, self.n_pixels)
+        return (self.log_likelihood, self.d_hat, self.precision), (
+            self.n_components,
+            self.n_pixels,
+        )
 
     @classmethod
     def tree_unflatten(cls, aux, children):
@@ -201,16 +221,18 @@ def marginal_loglikelihood(
     def prior_matvec(v):
         return _pack(prior.apply(_unpack(v, n_comp, n_pix)), n_comp, n_pix)
 
-    # The prior's bandwidth is tiny (2 per component), so its factor gets its own
-    # small block size: factorizing it at the posterior's block size would double
-    # the Cholesky cost at scale for a determinant that is nearly free.
+    # The prior's bandwidth is tiny (2 per component) and it is block diagonal over
+    # components, so its determinant comes from a scalar banded recursion rather than
+    # a block factorization (assembly.prior_logdet). The probe path keeps the blocked
+    # route as its reference.
     prior_block = max(2 * n_comp, 64)
     if assembly == "band":
         bt = band_block_tridiagonal(problem, prior, b_nat, block_size)
-        bt_prior = prior_block_tridiagonal(prior, n_pix, n_comp, prior_block)
+        ld_prior = prior_logdet(prior, n_pix)
     elif assembly == "probe":
         bt = probe_block_tridiagonal(full_matvec, n, p, block_size)
         bt_prior = probe_block_tridiagonal(prior_matvec, n, 2 * n_comp, prior_block)
+        ld_prior = logdet(block_cholesky(bt_prior))
     else:
         raise ValueError(f"assembly must be 'band' or 'probe'; got {assembly!r}")
     if validate:
@@ -221,27 +243,28 @@ def marginal_loglikelihood(
         want = full_matvec(v)
         err = jnp.max(jnp.abs(got - want)) / (1.0 + jnp.max(jnp.abs(want)))
         assert float(err) < 1e-10, (
-            f"probed matrix disagrees with operator (rel err {float(err):.2e}); "
-            "half-bandwidth underestimated?"
+            f"assembled matrix disagrees with the matrix-free operator (rel err "
+            f"{float(err):.2e}) using assembly={assembly!r}. Most likely an "
+            "underestimated half_bandwidth (use Problem.half_bandwidth_bound); "
+            "otherwise an assembly defect — note that the operator is symmetric, so "
+            "checking the assembled matrix against its own transpose separates the two."
         )
-
-    chol_prior = block_cholesky(bt_prior)
 
     b_vec = _pack(rhs(problem), n_comp, n_pix)
     b_pad = jnp.pad(b_vec, (0, bt.num_blocks * bt.block_size - n))
-    ld, quad, d_pad, chol = _solve_stage(bt, b_pad)
+    ld, quad, d_pad = _solve_stage(bt, b_pad)
     d_hat = _unpack(d_pad[:n], n_comp, n_pix)
 
     zwz, logw, n_good = weighted_data_terms(problem)
     logp = (
         -0.5 * (zwz - quad)
         - 0.5 * ld
-        + 0.5 * logdet(chol_prior)
+        + 0.5 * ld_prior
         + 0.5 * logw
         - 0.5 * n_good * jnp.log(2.0 * jnp.pi)
     )
     return MarginalResult(
-        log_likelihood=logp, d_hat=d_hat, chol=chol, n_components=n_comp, n_pixels=n_pix
+        log_likelihood=logp, d_hat=d_hat, precision=bt, n_components=n_comp, n_pixels=n_pix
     )
 
 
@@ -253,7 +276,8 @@ def draw_spectra(result: MarginalResult, key, num_draws: int):
     """
     n = result.n_components * result.n_pixels
     z = jax.random.normal(key, (num_draws, result.n_padded))
-    x = jax.vmap(lambda zz: sample_standard(result.chol, zz))(z)[:, :n]
+    chol = result.chol  # factorize once, not once per draw
+    x = jax.vmap(lambda zz: sample_standard(chol, zz))(z)[:, :n]
     return jax.vmap(lambda v: _unpack(v, result.n_components, result.n_pixels))(x) + result.d_hat
 
 

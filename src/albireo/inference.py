@@ -486,11 +486,14 @@ def laplace_inverse_mass(model, params: Mapping, *, rng_key=None, floor: float =
     )
     z = jax.tree.map(jnp.asarray, model_info.param_info.z)
     flat, unravel = ravel_pytree(z)
-    # Reverse-over-reverse, NOT jax.hessian (= forward-over-reverse): the marginal's
-    # solve stage is a custom_vjp function, which forward mode rejects outright — and
-    # forward-over-reverse was additionally measured to give an *asymmetric* Hessian
-    # on this stack even for the plain-autodiff path, while jacrev(jacrev(...))
-    # matches central finite differences of the gradient to 8 digits (D28).
+    # Reverse-over-reverse, NOT jax.hessian (= forward-over-reverse). Forward-over-
+    # reverse runs here — it differentiates the custom rule's *backward* pass, which is
+    # plain operations — but it was measured to return an appreciably *asymmetric*
+    # Hessian on this stack, and that on the plain-autodiff path too, so the cause is
+    # the solver scans rather than the custom VJP. jacrev(jacrev(...)) matches central
+    # finite differences of the gradient to 8 digits where forward-over-reverse does
+    # not (D28). Applying forward mode *directly* to the marginal is separately
+    # impossible: JAX rejects jvp of a custom_vjp function.
     hess = jax.jacrev(jax.jacrev(lambda zf: model_info.potential_fn(unravel(zf))))(flat)
     hess = 0.5 * (hess + hess.T)
     eigval, eigvec = jnp.linalg.eigh(hess)

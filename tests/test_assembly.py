@@ -20,9 +20,21 @@ import numpy as np
 import pytest
 
 import albireo as ab
-from albireo.assembly import _prior_diagonals, band_block_tridiagonal, prior_block_tridiagonal
-from albireo.forward import build_problem, rhs, weighted_data_terms, with_lsf, with_velocities
-from albireo.likelihood import _pack, marginal_loglikelihood
+from albireo.assembly import (
+    _prior_diagonals,
+    band_block_tridiagonal,
+    prior_block_tridiagonal,
+    prior_logdet,
+)
+from albireo.forward import (
+    build_problem,
+    normal_matvec,
+    rhs,
+    weighted_data_terms,
+    with_lsf,
+    with_velocities,
+)
+from albireo.likelihood import _pack, marginal_loglikelihood, spectra_std
 from albireo.operators import rebin_operator, rebin_pair_tables
 from albireo.priors import SmoothnessPrior
 from albireo.solver import (
@@ -31,6 +43,7 @@ from albireo.solver import (
     logdet,
     probe_block_tridiagonal,
     selected_inverse_blocks,
+    selected_inverse_cotangent,
     solve_lower,
     solve_upper,
 )
@@ -43,8 +56,14 @@ PRIOR2 = SmoothnessPrior(tau=[200.0, 200.0], eta=[4.0, 4.0])
 PRIOR3 = SmoothnessPrior(tau=[200.0, 200.0, 150.0], eta=[4.0, 4.0, 4.0])
 
 
-def simulate(frame="barycentric", n_comp=2, two_inst=False):
-    """A small multi-epoch dataset; the band/probe equivalence fixtures share it."""
+def simulate(frame="barycentric", n_comp=2, two_inst=False, native=(5002.0, 5038.0)):
+    """A small multi-epoch dataset; the band/probe equivalence fixtures share it.
+
+    ``native`` is the wavelength span of the instrument grid. The default leaves a
+    margin inside the model grid; ``edge_covered`` below closes it, which is the only
+    configuration that exercises the model-grid boundary of the band assembly (with a
+    margin the weights vanish there and boundary defects are multiplied by zero).
+    """
     rng = np.random.default_rng(5)
     bjd = np.sort(rng.uniform(0.0, 14.0, N_EP))
     comps = [
@@ -57,7 +76,9 @@ def simulate(frame="barycentric", n_comp=2, two_inst=False):
     ell = np.array([0.65, 0.35])[:n_comp]
     ell = ell / ell.sum()
     instruments = {
-        "a": ab.InstrumentSpec(wave=np.arange(5002.0, 5038.0, 0.105), sigma_v_lsf=7.0, snr=90.0)
+        "a": ab.InstrumentSpec(
+            wave=np.arange(native[0], native[1], 0.105), sigma_v_lsf=7.0, snr=90.0
+        )
     }
     if two_inst:
         instruments["b"] = ab.InstrumentSpec(
@@ -71,6 +92,10 @@ def simulate(frame="barycentric", n_comp=2, two_inst=False):
         light_fractions=ell,
         orbit=orbit,
         frame=frame,
+        # Without this every epoch is labelled with the first instrument, so the
+        # second one is built and never used and the "two instruments" fixture
+        # degenerates into a duplicate of the single-instrument one.
+        epoch_instruments=(["a", "b"] * (N_EP // 2)) if two_inst else None,
         seed=2,
     )
     return ds, truth, ell
@@ -91,6 +116,7 @@ def _equivalence_cases():
     ds_two, truth_two, ell_two = simulate(two_inst=True)
     ds_topo, truth_topo, ell_topo = simulate(frame="topocentric")
     ds_one, truth_one, _ = simulate(n_comp=1)
+    ds_edge, truth_edge, ell_edge = simulate(native=(5000.4, 5039.6))
 
     rng = np.random.default_rng(11)
     ell_epoch = np.abs(rng.normal(0.6, 0.05, (2, N_EP)))
@@ -145,10 +171,42 @@ def _equivalence_cases():
             ),
             PRIOR1,
         ),
+        (
+            "edge_covered",
+            build_problem(
+                GRID,
+                ds_edge,
+                velocities=truth_edge.velocities,
+                light_fractions=ell_edge,
+                lsf_sigma_v={"a": 7.0},
+            ),
+            PRIOR2,
+        ),
     ]
 
 
 CASES = _equivalence_cases()
+
+
+def test_equivalence_cases_have_the_topologies_they_claim():
+    """Guard the fixtures themselves — a degenerate one tests nothing, silently.
+
+    ``two_instruments`` in particular is only meaningful if the epochs actually carry
+    both labels: ``simulate_dataset`` defaults every epoch to the first instrument, so
+    omitting ``epoch_instruments`` builds the second instrument's operators and never
+    uses them, leaving a numerically identical copy of the plain SB2 case. Groups carry
+    per-instrument rebin support and kernel radii, and the band layout is sized from a
+    single global bandwidth, so multi-group really is a distinct code path.
+    """
+    by_id = {c[0]: c[1] for c in CASES}
+    assert len(by_id["two_instruments"].groups) == 2
+    two = by_id["two_instruments"]
+    supports = {g.instrument: (g.row_support, g.kernel.shape[0]) for g in two.groups}
+    assert supports["a"] != supports["b"], f"groups are not actually distinct: {supports}"
+    assert by_id["sb2_barycentric"].n_components == 2
+    assert by_id["single_component"].n_components == 1
+    assert by_id["topocentric_telluric"].n_components == 3
+    assert by_id["topocentric_telluric"].telluric
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +225,71 @@ def test_band_matches_probe(problem, prior):
 
     d_diff = float(jnp.max(jnp.abs(band.d_hat - probe.d_hat)))
     assert d_diff < 1e-8, f"max |d_hat difference| {d_diff:.2e}"
+
+
+@pytest.mark.parametrize(("problem", "prior"), [c[1:] for c in CASES], ids=[c[0] for c in CASES])
+def test_band_matches_probe_entrywise(problem, prior):
+    """Every *entry* of the assembled precision, not just the scalars it feeds.
+
+    ``test_band_matches_probe`` compares a log-determinant and a solve, both of which
+    average over the matrix; a defect confined to a few dozen rows at the model-grid
+    boundary moves them by ~1e-7 relative and can slip under a loose threshold. This
+    compares the dense matrices directly, which is only affordable at fixture size.
+    """
+    nc, n_pix = problem.n_components, problem.grid.n
+    n = nc * n_pix
+    b_nat = max(problem.natural_half_bandwidth, prior.half_bandwidth)
+
+    def full_matvec(v):
+        d = jnp.asarray(v).reshape(n_pix, nc).T
+        return _pack(normal_matvec(problem, d) + prior.apply(d), nc, n_pix)
+
+    band = dense_from_block_tridiagonal(band_block_tridiagonal(problem, prior, b_nat))
+    probe = dense_from_block_tridiagonal(
+        probe_block_tridiagonal(full_matvec, n, nc * b_nat + nc - 1)
+    )
+    scale = float(np.abs(probe).max())
+    err = float(np.abs(band - probe).max()) / scale
+    assert err < 1e-12, f"max entrywise relative difference {err:.2e}"
+
+
+def test_band_matches_probe_with_model_grid_inside_the_data():
+    """The worst boundary case: zero margin between data coverage and grid edge.
+
+    Choosing a model grid *narrower* than the observed range is the documented way to
+    fit a sub-region, and it drives the data-coverage margin to zero. The band image of
+    ``G`` is nonzero for a strip of ``kernel_radius`` columns past each grid edge (the
+    LSF smears in-grid mass outward), and only the *row* index of the T-sandwich is
+    zero-filled, so before the column mask this configuration was wrong by tens of nats
+    — and asymmetric, which the symmetric probe reference is not. The trigger is
+    ``coverage margin < kernel radius``, so it is also reachable at a fixed grid simply
+    by fitting a wider LSF.
+    """
+    ds, truth, ell = simulate(native=(5001.0, 5039.0))
+    inner = ab.LogGrid.from_wavelength_range(5004.0, 5036.0, dv_kms=5.5)
+    problem = build_problem(
+        inner, ds, velocities=truth.velocities, light_fractions=ell, lsf_sigma_v={"a": 7.0}
+    )
+    nc, n_pix = problem.n_components, inner.n
+    n = nc * n_pix
+    b_nat = max(problem.natural_half_bandwidth, PRIOR2.half_bandwidth)
+
+    def full_matvec(v):
+        d = jnp.asarray(v).reshape(n_pix, nc).T
+        return _pack(normal_matvec(problem, d) + PRIOR2.apply(d), nc, n_pix)
+
+    band = dense_from_block_tridiagonal(band_block_tridiagonal(problem, PRIOR2, b_nat))
+    probe = dense_from_block_tridiagonal(
+        probe_block_tridiagonal(full_matvec, n, nc * b_nat + nc - 1)
+    )
+    scale = float(np.abs(probe).max())
+    assert float(np.abs(band - probe).max()) / scale < 1e-12
+    # only the column side ever leaked, so asymmetry is the sharpest discriminator
+    assert float(np.abs(band - band.T).max()) / scale < 1e-12
+
+    ll_band = marginal_loglikelihood(problem, PRIOR2, assembly="band").log_likelihood
+    ll_probe = marginal_loglikelihood(problem, PRIOR2, assembly="probe").log_likelihood
+    assert abs(float(ll_band) - float(ll_probe)) < 1e-6, "log-likelihood differs in nats"
 
 
 def test_band_jitted_traced_theta():
@@ -211,7 +334,6 @@ def test_solve_stage_vjp_matches_autodiff():
         prior = SmoothnessPrior(jnp.exp(log_tau), jnp.exp(log_eta))
         problem = with_velocities(PROBLEM, v)
         chol = block_cholesky(band_block_tridiagonal(problem, prior, B_NAT))
-        chol_prior = block_cholesky(prior_block_tridiagonal(prior, n_pix, nc, max(2 * nc, 64)))
         n_pad = chol.num_blocks * chol.block_size
         b_pad = jnp.pad(_pack(rhs(problem), nc, n_pix), (0, n_pad - n))
         y = solve_lower(chol, b_pad)
@@ -220,7 +342,7 @@ def test_solve_stage_vjp_matches_autodiff():
         logp = (
             -0.5 * (zwz - jnp.sum(y * y))
             - 0.5 * logdet(chol)
-            + 0.5 * logdet(chol_prior)
+            + 0.5 * prior_logdet(prior, n_pix)
             + 0.5 * logw
             - 0.5 * n_good * jnp.log(2.0 * jnp.pi)
         )
@@ -256,6 +378,30 @@ def test_solve_stage_vjp_matches_autodiff():
     assert abs(float(fd - g_custom[0][0, 3])) / (abs(float(fd)) + 1.0) < 1e-5
 
 
+def test_factor_derived_gradients_are_not_silently_zero():
+    """Gradients through the Cholesky factor must be real, not the custom rule's zero.
+
+    ``_solve_stage``'s reverse rule cannot carry a cotangent on the factorization, so
+    if ``MarginalResult`` handed back *that* factor, every gradient of a factor-derived
+    quantity — the posterior spectral uncertainties, the draws — would come out
+    identically zero with no error. The factor is therefore rebuilt outside the custom
+    boundary; this checks the resulting gradient against central differences.
+    """
+
+    def total_std(v):
+        res = marginal_loglikelihood(with_velocities(PROBLEM, v), PRIOR2, half_bandwidth=B_NAT)
+        return jnp.sum(spectra_std(res))
+
+    g = jax.grad(total_std)(VEL)
+    assert jnp.all(jnp.isfinite(g))
+    assert float(jnp.max(jnp.abs(g))) > 0.0, "factor-derived gradient is identically zero"
+
+    eps = 1e-3
+    step = jnp.zeros_like(VEL).at[0, 2].set(eps)
+    fd = (total_std(VEL + step) - total_std(VEL - step)) / (2 * eps)
+    assert abs(float(fd - g[0, 2])) / (abs(float(fd)) + 1e-6) < 1e-4, f"{float(fd)} vs {g[0, 2]}"
+
+
 # ---------------------------------------------------------------------------
 # Building blocks: prior band, selected inverse, rebin pair tables
 # ---------------------------------------------------------------------------
@@ -274,6 +420,43 @@ def test_prior_diagonals_vs_dense(n_pix):
         np.testing.assert_allclose(np.asarray(d2[i]), np.diag(block, 2), rtol=0, atol=1e-12)
         # nothing outside half-bandwidth 2
         np.testing.assert_allclose(np.diag(block, 3), 0.0, rtol=0, atol=1e-12)
+
+
+@pytest.mark.parametrize("n_pix", [5, 9, 64, 257])
+def test_prior_logdet_matches_blocked_cholesky(n_pix):
+    """The scalar pentadiagonal recursion reproduces the blocked factorization."""
+    prior = SmoothnessPrior(tau=[2.5, 0.75, 40.0], eta=[1e-3, 7.0, 0.2])
+    nc = prior.n_components
+    got = float(prior_logdet(prior, n_pix))
+    want = float(logdet(block_cholesky(prior_block_tridiagonal(prior, n_pix, nc, max(2 * nc, 16)))))
+    assert abs(got - want) / (abs(want) + 1.0) < 1e-12, f"{got!r} vs {want!r}"
+
+    # ... and the dense determinant, so both routes are pinned to ground truth.
+    sign, dense_ld = np.linalg.slogdet(prior.dense(n_pix))
+    assert sign > 0
+    assert abs(got - float(dense_ld)) / (abs(float(dense_ld)) + 1.0) < 1e-10
+
+
+def test_prior_logdet_differentiable_in_hyperparameters():
+    """tau/eta gradients agree with the blocked route (ML-II differentiates this)."""
+    n_pix = 40
+
+    def via_scan(log_tau, log_eta):
+        return prior_logdet(SmoothnessPrior(jnp.exp(log_tau), jnp.exp(log_eta)), n_pix)
+
+    def via_blocks(log_tau, log_eta):
+        prior = SmoothnessPrior(jnp.exp(log_tau), jnp.exp(log_eta))
+        return logdet(block_cholesky(prior_block_tridiagonal(prior, n_pix, 2, 16)))
+
+    lt = jnp.log(jnp.asarray([3.0, 0.4]))
+    le = jnp.log(jnp.asarray([0.5, 2.0]))
+    for a, b in zip(
+        jax.grad(via_scan, argnums=(0, 1))(lt, le),
+        jax.grad(via_blocks, argnums=(0, 1))(lt, le),
+        strict=True,
+    ):
+        assert float(jnp.max(jnp.abs(b))) > 0.0
+        assert float(jnp.max(jnp.abs(a - b)) / jnp.max(jnp.abs(b))) < 1e-10
 
 
 def test_prior_block_tridiagonal_vs_dense():
@@ -334,6 +517,121 @@ def test_selected_inverse_blocks_vs_dense(block_size):
         )
 
 
+@pytest.mark.parametrize("block_size", [24, 8, 7, 6])
+def test_selected_inverse_cotangent_matches_unfused(block_size):
+    """Fusing the cotangent into the Takahashi sweep changes nothing numerically.
+
+    The unfused form materializes ``Sigma`` and then contracts it; the fused form
+    forms each block as the recursion produces it. Same arithmetic, 2K-1 fewer live
+    blocks — this pins them together, including the k == 1 single-block branch.
+    """
+    n, p = 24, 4
+    rng = np.random.default_rng(19)
+    m = _random_banded_spd(n, p, rng)
+    bt = probe_block_tridiagonal(lambda v: jnp.asarray(m) @ v, n, p, block_size)
+    chol = block_cholesky(bt)
+    k, b = bt.num_blocks, bt.block_size
+
+    d = jnp.asarray(rng.standard_normal((k, b)))
+    u = jnp.asarray(rng.standard_normal((k, b)))
+    g_ld, g_quad = 0.37, -1.9
+
+    s_diag, s_sub = selected_inverse_blocks(chol)
+
+    def outer(x, y):
+        return x[:, :, None] * y[:, None, :]
+
+    want_diag = g_ld * s_diag - g_quad * outer(d, d) - outer(u, d)
+    want_sub = (
+        2.0 * g_ld * s_sub
+        - 2.0 * g_quad * outer(d[1:], d[:-1])
+        - (outer(u[1:], d[:-1]) + outer(d[1:], u[:-1]))
+    )
+    got_diag, got_sub = selected_inverse_cotangent(chol, d, u, g_ld, g_quad)
+
+    assert got_diag.shape == want_diag.shape
+    assert got_sub.shape == want_sub.shape
+    np.testing.assert_allclose(np.asarray(got_diag), np.asarray(want_diag), rtol=1e-11, atol=0)
+    if k > 1:
+        np.testing.assert_allclose(np.asarray(got_sub), np.asarray(want_sub), rtol=1e-11, atol=0)
+
+
+@pytest.mark.parametrize("chunk", [1, 3, N_EP])
+def test_band_epoch_chunk_invariance(chunk):
+    """Batching the velocity-independent G pre-pass must not move any number.
+
+    ``epoch_chunk`` only decides how many epochs' worth of G is live at once (and
+    whether the backward recomputes it), so the assembled matrix, the likelihood and
+    the gradient are all invariant — including when the batch size does not divide
+    the epoch count and the last batch is zero-weight padded.
+    """
+
+    def ll(v, epoch_chunk):
+        problem = with_velocities(PROBLEM, v)
+        bt = band_block_tridiagonal(problem, PRIOR2, B_NAT, epoch_chunk=epoch_chunk)
+        return logdet(block_cholesky(bt)), bt
+
+    ref_ld, ref_bt = ll(VEL, N_EP)
+    got_ld, got_bt = ll(VEL, chunk)
+    np.testing.assert_allclose(np.asarray(got_bt.diag), np.asarray(ref_bt.diag), rtol=0, atol=1e-9)
+    np.testing.assert_allclose(
+        np.asarray(got_bt.lower), np.asarray(ref_bt.lower), rtol=0, atol=1e-9
+    )
+    assert abs(float(got_ld - ref_ld)) / (abs(float(ref_ld)) + 1.0) < 1e-12
+
+    g_ref = jax.grad(lambda v: ll(v, N_EP)[0])(VEL)
+    g_got = jax.grad(lambda v: ll(v, chunk)[0])(VEL)
+    assert float(jnp.max(jnp.abs(g_ref))) > 0.0
+    rel = float(jnp.max(jnp.abs(g_got - g_ref)) / jnp.max(jnp.abs(g_ref)))
+    assert rel < 1e-10, f"chunk={chunk} gradient relative difference {rel:.2e}"
+
+
+def test_band_rejects_too_small_half_bandwidth():
+    """A bandwidth below the kernel+rebin floor is refused, not silently mis-assembled.
+
+    The per-epoch block is written into the band with a clamped ``dynamic_update_slice``,
+    so a bandwidth that cannot hold one block would land the window at the wrong offset.
+    """
+    g = PROBLEM.groups[0]
+    floor = g.row_support + 2 * ((g.kernel.shape[0] - 1) // 2)  # zero-shift containment
+    with pytest.raises(ValueError, match="half_bandwidth too small"):
+        band_block_tridiagonal(PROBLEM, PRIOR2, floor - 1)
+    band_block_tridiagonal(PROBLEM, PRIOR2, floor)  # the floor itself fits
+
+
+def test_deleted_native_samples_warn_about_bandwidth():
+    """Deleting samples (rather than masking them) inflates the solver bandwidth.
+
+    Edges sit at midpoints, so removing a block of native samples makes the two
+    bracketing pixels each absorb half the gap. ``row_support`` is a max, so those two
+    pixels set the bandwidth for the entire run — cost grows quadratically. Real spectra
+    hit this constantly (telluric windows, order gaps), hence a warning that names the
+    pixel and the remedy.
+    """
+    wave = np.arange(5002.0, 5038.0, 0.105)
+    gap = (wave > 5015.0) & (wave < 5019.0)  # a "removed" telluric window
+    ds, truth = ab.simulate_dataset(
+        GRID,
+        [ab.synthetic_deviation_spectrum(GRID, n_lines=10, seed=s) for s in (1, 2)],
+        bjd=np.linspace(0.0, 12.0, 4),
+        instruments={"a": ab.InstrumentSpec(wave=wave[~gap], sigma_v_lsf=7.0, snr=90.0)},
+        light_fractions=np.array([0.6, 0.4]),
+        orbit=ab.OrbitParams(period=6.31, t_peri=2.0, ecc=0.25, omega=0.7, k=(34.0, 51.0)),
+        frame="barycentric",
+        seed=2,
+    )
+    with pytest.warns(RuntimeWarning, match="native pixels span far more model pixels"):
+        gappy = build_problem(
+            GRID,
+            ds,
+            velocities=truth.velocities,
+            light_fractions=np.array([0.6, 0.4]),
+            lsf_sigma_v={"a": 7.0},
+        )
+    # and the warning is about something real: the bandwidth actually did blow up
+    assert gappy.groups[0].row_support > 4 * PROBLEM.groups[0].row_support
+
+
 def test_rebin_pair_tables():
     """One segment-sum over the pair tables reproduces ``R^T diag(w) R`` exactly."""
     x_in = np.arange(5000.0, 5001.0, 0.01)
@@ -389,7 +687,6 @@ def test_second_order_reverse_matches_plain_autodiff():
         v = VEL.at[:, 0].set(v0_)
         problem = with_velocities(PROBLEM, v)
         chol = block_cholesky(band_block_tridiagonal(problem, PRIOR2, B_NAT))
-        chol_prior = block_cholesky(prior_block_tridiagonal(PRIOR2, n_pix, nc, max(2 * nc, 64)))
         n_pad = chol.num_blocks * chol.block_size
         b_pad = jnp.pad(_pack(rhs(problem), nc, n_pix), (0, n_pad - n))
         y = solve_lower(chol, b_pad)
@@ -397,7 +694,7 @@ def test_second_order_reverse_matches_plain_autodiff():
         return (
             -0.5 * (zwz - jnp.sum(y * y))
             - 0.5 * logdet(chol)
-            + 0.5 * logdet(chol_prior)
+            + 0.5 * prior_logdet(PRIOR2, n_pix)
             + 0.5 * logw
             - 0.5 * n_good * jnp.log(2.0 * jnp.pi)
         )

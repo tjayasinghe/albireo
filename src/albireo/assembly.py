@@ -23,7 +23,12 @@ Stages per epoch (all exact, all differentiable in shifts / lights / kernel / we
 1. ``H = R^T diag(w r^2) R`` via static *pair tables* precomputed from the rebin
    sparsity at build time (``forward.build_problem``): one ``segment_sum`` per epoch.
 2. ``G = K^T H K`` as two unrolled diagonal-shifted accumulations (the band-image
-   form of the two convolutions; static slices only).
+   form of the two convolutions; static slices only). ``G`` is a matrix on the model
+   grid, so its off-grid columns — which the kernel populates by smearing in-grid
+   mass outward — are masked; the sandwich would otherwise read them whenever a
+   shift places a component's support against a grid edge. Being
+   velocity-independent, this whole stage is a pre-pass over epochs, batched by
+   ``epoch_chunk`` (memory only; see :func:`_epoch_chunk_default`).
 3. The T-sandwich: column q of ``T(delta)`` has entries at rows ``floor(q + delta)``
    (weight ``1 - frac(delta)``) and ``floor(q + delta) + 1`` (weight ``frac(delta)``),
    so each block band is a 4-term tent-weighted combination of row-translated copies
@@ -53,7 +58,13 @@ from albireo.solver import BlockTridiagonal
 __all__ = [
     "band_block_tridiagonal",
     "prior_block_tridiagonal",
+    "prior_logdet",
 ]
+
+# Keep every epoch's G live while the pre-pass is under this; batch it beyond.
+_GP_HOIST_BYTES = 1024**3
+# Target live bytes for one batch of G once batching kicks in.
+_GP_CHUNK_BYTES = 512 * 1024**2
 
 
 def _band_offsets(p: int, nc: int):
@@ -63,7 +74,27 @@ def _band_offsets(p: int, nc: int):
     return off0, n_k
 
 
-def _epoch_band_scan(group: EpochGroup, band, n_pix: int, p: int, nc: int, remat: bool):
+def _epoch_chunk_default(n_ep: int, n_pix: int, w_gp: int) -> int:
+    """Epochs per G batch: hoist the whole pre-pass while it is cheap, else batch it.
+
+    The velocity-independent stage ``G_e`` is computed once per epoch either way, so
+    *any* chunking below ``n_ep`` costs exactly one extra G pass in the backward
+    (the chunk body is rematerialized); the chunk size only trades live bytes against
+    ``vmap`` width. Hence the two-regime policy: keep every epoch's G live while that
+    is under ``_GP_HOIST_BYTES`` (small and gate-scale problems pay nothing), and
+    otherwise batch to about ``_GP_CHUNK_BYTES`` — which at the design target is
+    4.5 GB of ``gp_all`` reduced to under 0.5 GB, the difference between a gradient
+    that fits in 32 GB and one that does not.
+    """
+    per_epoch = n_pix * w_gp * 8
+    if n_ep * per_epoch <= _GP_HOIST_BYTES:
+        return n_ep
+    return max(1, min(n_ep, _GP_CHUNK_BYTES // max(per_epoch, 1)))
+
+
+def _epoch_band_scan(
+    group: EpochGroup, band, n_pix: int, p: int, nc: int, remat: bool, chunk: int | None
+):
     """Accumulate every epoch of one group into the band tensor via ``lax.scan``."""
     off0, n_k = _band_offsets(p, nc)
     h = group.row_support
@@ -75,19 +106,41 @@ def _epoch_band_scan(group: EpochGroup, band, n_pix: int, p: int, nc: int, remat
     h_g = h - 1 + 2 * r
     h_f = h_g + 1
     w_f = 2 * h_f + 1
+    if n_k < w_f:
+        raise ValueError(
+            f"half_bandwidth too small for instrument {group.instrument!r}: the band has "
+            f"{n_k} slots but one epoch's block spans {w_f}. The per-component bound must be "
+            f"at least {h + 2 * r} (rebin row support {h}, kernel radius {r}) even at zero "
+            "relative shift, and in general that plus the maximum relative shift in pixels "
+            "— use Problem.half_bandwidth_bound."
+        )
 
     pair_val, pair_sid, pair_row = group.pair_val, group.pair_sid, group.pair_row
     wprime = group.w * group.r**2  # (n_ep, n_native)
     floors = jnp.floor(group.shifts).astype(jnp.int32)  # (n_ep, nc)
     fracs = group.shifts - floors
-    q_pix = jnp.arange(n_pix)
+    q_pix = jnp.arange(n_pix, dtype=jnp.int32)
+
+    # G lives on the model grid, so entry (x, y) exists only for y in [0, n_pix). The
+    # band image is built by convolving H along its columns, which happily writes
+    # entries at |y| beyond the grid — H itself is clean there (no rebin pairs), but the
+    # kernel smears in-grid mass outward. Those phantom columns are read by the
+    # T-sandwich whenever an epoch's shift places a component's support against a grid
+    # edge, so mask them here, once, for every epoch. Rows are already zero-filled by
+    # the translation in `shift_rows`; this is the same guard on the other index.
+    # (Fixtures whose native grid stops short of the model grid never see it: the
+    # weights vanish there, so the phantom entries are multiplied by zero.)
+    gp_offsets = jnp.arange(w_g + 4, dtype=jnp.int32) - jnp.int32(h_g + 2)
+    y_of = q_pix[:, None] + gp_offsets[None, :]
+    gp_valid = (y_of >= 0) & (y_of < n_pix)
 
     def epoch_g(wp):
         """G = K^T (R^T diag(w') R) K for one epoch, as a band image (n_pix, w_g + 4).
 
         Depends only on the (static) weights and the LSF kernel — not on the
-        velocities — so it runs vmapped over epochs *outside* the accumulation scan
-        and outside its rematerialized backward.
+        velocities — so it is computed in a ``vmap``ped pre-pass rather than inside
+        the accumulation body. How *many* epochs' worth are kept live at once is the
+        ``chunk`` policy of :func:`_epoch_chunk_default`.
         """
         # 1. H = R^T diag(w') R, upper diagonals (n_pix, h).
         h_up = jax.ops.segment_sum(
@@ -110,9 +163,7 @@ def _epoch_band_scan(group: EpochGroup, band, n_pix: int, p: int, nc: int, remat
         g = jnp.zeros((n_pix, w_g))
         for d2 in range(-r, r + 1):
             g = g.at[:, r - d2 : r - d2 + w_u].add(kernel[d2 + r] * u)
-        return jnp.pad(g, ((0, 0), (2, 2)))
-
-    gp_all = jax.vmap(epoch_g)(wprime)
+        return jnp.where(gp_valid, jnp.pad(g, ((0, 0), (2, 2))), 0.0)
 
     def epoch_body(band, xs):
         gp, light, floor_e, frac_e = xs
@@ -131,7 +182,9 @@ def _epoch_band_scan(group: EpochGroup, band, n_pix: int, p: int, nc: int, remat
             return jax.lax.dynamic_slice(gpp, (s, jnp.int32(0)), (n_pix, w_gp))
 
         g_rows = [[shift_rows(floor_e[i] + a) for a in (0, 1)] for i in range(nc)]
-        t_idx = jnp.arange(w_f) - h_f
+        # int32 throughout: under x64 the default integer is int64, and the column
+        # index below is an (n_pix, w_f) array whose only use is a comparison.
+        t_idx = jnp.arange(w_f, dtype=jnp.int32) - jnp.int32(h_f)
 
         for i in range(nc):
             w_i = (1.0 - frac_e[i], frac_e[i])
@@ -160,9 +213,46 @@ def _epoch_band_scan(group: EpochGroup, band, n_pix: int, p: int, nc: int, remat
                 )
         return band, None
 
+    n_ep = group.shifts.shape[0]
+    if chunk is None:
+        chunk = _epoch_chunk_default(n_ep, n_pix, w_g + 4)
+    chunk = max(1, min(int(chunk), n_ep))
+
+    if chunk >= n_ep:
+        # Hoisted: every epoch's G stays live, so the rematerialized backward never
+        # recomputes it. Cheapest in time, most expensive in memory.
+        gp_all = jax.vmap(epoch_g)(wprime)
+        body = jax.checkpoint(epoch_body) if remat else epoch_body
+        band, _ = jax.lax.scan(body, band, (gp_all, group.light, floors, fracs))
+        return band
+
+    # Batched: only one chunk's G is live. The batch (not the epoch) is the unit of
+    # rematerialization, so the backward recomputes each epoch's G exactly once.
+    # Epochs padding the last batch carry zero weight, hence G = 0 and no contribution.
+    n_chunks = -(-n_ep // chunk)
+    pad = n_chunks * chunk - n_ep
+    zpad = ((0, pad), (0, 0))
+    wp_c = jnp.pad(wprime, zpad)
+    light_c = jnp.pad(group.light, zpad)
+    floor_c = jnp.pad(floors, zpad)
+    frac_c = jnp.pad(fracs, zpad)
+
+    def chunk_body(band, xs):
+        wp_b, light_b, floor_b, frac_b = xs
+        band, _ = jax.lax.scan(
+            epoch_body, band, (jax.vmap(epoch_g)(wp_b), light_b, floor_b, frac_b)
+        )
+        return band, None
+
     if remat:
-        epoch_body = jax.checkpoint(epoch_body)
-    band, _ = jax.lax.scan(epoch_body, band, (gp_all, group.light, floors, fracs))
+        chunk_body = jax.checkpoint(chunk_body)
+
+    def batched(a):
+        return a.reshape(n_chunks, chunk, *a.shape[1:])
+
+    band, _ = jax.lax.scan(
+        chunk_body, band, (batched(wp_c), batched(light_c), batched(floor_c), batched(frac_c))
+    )
     return band
 
 
@@ -202,25 +292,41 @@ def _pack_band(band, n_pix: int, nc: int, p: int, block_size: int) -> BlockTridi
     row = jnp.arange(bs)[:, None]
     col = jnp.arange(bs)[None, :]
 
-    def value_at(rr, cc):
-        m = cc - rr
-        q = rr // nc
-        i = rr % nc
+    # The column offset m = cc - rr, and therefore the band's (slot, d) coordinates and
+    # the bandwidth mask, depend only on the *within-block* (row, col) — not on which
+    # block is being read. Hoisting them out of the loop body keeps the per-iteration
+    # residuals at O(B) instead of O(B^2): reverse mode stacks a scanned body's live
+    # intermediates over all K iterations, so leaving the (B, B) index and mask arrays
+    # inside cost K * B^2 of stacked int32/bool residuals (several GB at the design
+    # target) purely to re-derive numbers that never varied.
+    def band_coords(m):
         d = m % nc
         slot = off0 + (m - d) // nc
-        valid = (jnp.abs(m) <= p) & (rr < n) & (cc < n) & (slot >= 0) & (slot < n_k)
-        v = band[
-            jnp.clip(q, 0, n_pix - 1),
-            i,
-            jnp.clip(slot, 0, n_k - 1),
-            d,
-        ]
-        pad_eye = ((rr == cc) & (rr >= n)).astype(band.dtype)
-        return jnp.where(valid, v, 0.0) + pad_eye
+        ok = (jnp.abs(m) <= p) & (slot >= 0) & (slot < n_k)
+        return jnp.clip(slot, 0, n_k - 1), d, ok
 
+    slot_d, dd_d, ok_d = band_coords(col - row)  # diagonal block: rr = cc = kk*bs + .
+    slot_l, dd_l, ok_l = band_coords(col - row - bs)  # lower block: rr is bs rows later
+    eye_mask = row == col
+
+    def gather(rr, cc, slot, dd, ok):
+        """``band`` values for one block, given its (bs,) row/column indices."""
+        v = band[jnp.clip(rr // nc, 0, n_pix - 1)[:, None], (rr % nc)[:, None], slot, dd]
+        return jnp.where(ok & (rr < n)[:, None] & (cc < n)[None, :], v, 0.0)
+
+    # Rematerialized: what is left inside the body after the hoist is index arithmetic
+    # and one gather, but reverse mode would still stack the (B, B) validity mask over
+    # all K iterations. Recomputing it is free next to the block Cholesky it feeds.
+    @jax.checkpoint
     def blocks_at(kk):
-        diag_k = value_at(kk * bs + row, kk * bs + col)
-        lower_k = value_at((kk + 1) * bs + row, kk * bs + col)
+        base = kk * bs
+        rr = base + jnp.arange(bs)
+        cc = base + jnp.arange(bs)
+        # Pad rows of the identity block: only the diagonal can hit them, and only
+        # within a diagonal block (a lower block's rows sit bs beyond its columns).
+        pad_eye = (eye_mask & (rr >= n)[:, None]).astype(band.dtype)
+        diag_k = gather(rr, cc, slot_d, dd_d, ok_d) + pad_eye
+        lower_k = gather(rr + bs, cc, slot_l, dd_l, ok_l)
         return diag_k, lower_k
 
     diag, lower_all = jax.lax.map(blocks_at, jnp.arange(k_blocks))
@@ -235,6 +341,7 @@ def band_block_tridiagonal(
     block_size: int | None = None,
     *,
     remat: bool = True,
+    epoch_chunk: int | None = None,
 ) -> BlockTridiagonal:
     """Assemble the posterior precision ``Lambda_p + A^T W A`` by direct band assembly.
 
@@ -257,6 +364,13 @@ def band_block_tridiagonal(
     remat
         Rematerialize the per-epoch band in reverse mode (default True: one epoch's
         band is cheap to recompute and expensive to store 50 times).
+    epoch_chunk
+        Epochs per batch of the velocity-independent ``G`` pre-pass. ``None``
+        (default) applies the size-adaptive policy of :func:`_epoch_chunk_default`:
+        hoist the whole pre-pass while it is under 1 GB, otherwise batch to ~0.5 GB.
+        Pass ``n_epochs`` to force the fully hoisted (fastest, most memory-hungry)
+        path, or a small integer to cap live memory further. Raise it on a GPU with
+        spare memory; lower it if the gradient does not fit.
     """
     nc, n_pix = problem.n_components, problem.grid.n
     p = nc * int(half_bandwidth) + nc - 1
@@ -266,15 +380,60 @@ def band_block_tridiagonal(
     _, n_k = _band_offsets(p, nc)
     band = jnp.zeros((n_pix, nc, n_k, nc))
     for g in problem.groups:
-        band = _epoch_band_scan(g, band, n_pix, p, nc, remat)
+        band = _epoch_band_scan(g, band, n_pix, p, nc, remat, epoch_chunk)
     band = _add_prior_band(band, prior, n_pix, p, nc)
     return _pack_band(band, n_pix, nc, p, bs)
+
+
+def prior_logdet(prior: SmoothnessPrior, n_pix: int):
+    """``log det(Lambda_p)`` by scalar banded Cholesky — no block factorization.
+
+    ``Lambda_p`` is block diagonal over components and *pentadiagonal* within each
+    (half-bandwidth 2), so its determinant needs only the three Cholesky diagonals
+
+        ``a_i = L[i, i-2]``, ``b_i = L[i, i-1]``, ``c_i = L[i, i]``
+
+    obtained from ``alpha_i = Lambda[i, i-2]``, ``beta_i = Lambda[i, i-1]``,
+    ``gamma_i = Lambda[i, i]`` by
+
+        ``a_i = alpha_i / c_{i-2}``,
+        ``b_i = (beta_i - a_i b_{i-1}) / c_{i-1}``,
+        ``c_i = sqrt(gamma_i - a_i^2 - b_i^2)``,
+
+    with ``log det = 2 sum_i log c_i`` accumulated in the carry. Routing this through
+    :func:`prior_block_tridiagonal` + :func:`albireo.solver.block_cholesky` instead
+    pads the bandwidth-2 matrix out to dense blocks of size 64 and factorizes
+    ``n_comp * n_pix / 64`` of them — 0.78 GB of live blocks at the design target for
+    a quantity that is exactly this ``O(n_pix)`` recursion. Components are carried as
+    a leading ``vmap``-free axis, so the scan is one pass regardless of ``n_comp``.
+    """
+    d0, d1, d2 = _prior_diagonals(prior, n_pix)  # (nc, n), (nc, n-1), (nc, n-2)
+    nc = d0.shape[0]
+    gamma = d0.T
+    beta = jnp.pad(d1.T, ((1, 0), (0, 0)))
+    alpha = jnp.pad(d2.T, ((2, 0), (0, 0)))
+
+    def step(carry, x):
+        c1, c2, b1, acc = carry
+        al, be, ga = x
+        a = al / c2
+        b = (be - a * b1) / c1
+        c = jnp.sqrt(ga - a * a - b * b)
+        return (c, c1, b, acc + jnp.log(c)), None
+
+    init = (jnp.ones(nc), jnp.ones(nc), jnp.zeros(nc), jnp.zeros(nc))
+    (_, _, _, acc), _ = jax.lax.scan(step, init, (alpha, beta, gamma))
+    return 2.0 * jnp.sum(acc)
 
 
 def prior_block_tridiagonal(
     prior: SmoothnessPrior, n_pix: int, nc: int, block_size: int
 ) -> BlockTridiagonal:
-    """The prior precision alone as :class:`BlockTridiagonal` (analytic diagonals)."""
+    """The prior precision alone as :class:`BlockTridiagonal` (analytic diagonals).
+
+    Retained as the reference construction and test oracle; the likelihood takes its
+    determinant from :func:`prior_logdet` instead.
+    """
     p = 2 * nc
     _off0, n_k = _band_offsets(p, nc)
     band = jnp.zeros((n_pix, nc, n_k, nc))

@@ -415,11 +415,11 @@ orbit" — is now **~26 s on a laptop CPU** (was 2.5 min), and a gradient **unde
 2 min** (was 12 min). The gate-scale NUTS test rides along: ~65 s wall
 (Laplace + warmup + 250 samples) vs ~102 s at the M3 baseline and 112 s in the
 M5 record — the small-problem regression the probe-era size-adaptive policy
-existed to prevent is simply gone, along with the policy's reason to exist. The design-target gradient's working set (~25–30 GB:
-band tensor, factor, Takahashi blocks, and their cotangents) grazes this
-machine's 32 GB, which is where the modest ratio erosion at the top row comes
-from; fusing the Takahashi sweep into the cotangent assembly is the recorded
-next lever. At realistic single-star bandwidths (HR 6819-like: p ≈ 160 rather
+existed to prevent is simply gone, along with the policy's reason to exist. The
+design-target gradient's working set turned out to *exceed* this machine's
+32 GB (measured 34.0 GB — see the D29 pass below, which brought it to 18.2 GB
+and, with it, the top row to 22.2 s / 87.4 s), which is where the ratio erosion
+at the top row comes from. At realistic single-star bandwidths (HR 6819-like: p ≈ 160 rather
 than the ladder's conservative 513) the same operations land at seconds per
 gradient, which puts **full NUTS posteriors for real SB2 problems within reach
 of a laptop CPU** — the GPU budget becomes headroom rather than a requirement.
@@ -455,3 +455,138 @@ assembly VJP, and opt-in mixed precision. Projection (still projection, not
 measurement): design-target gradient ~0.5–1.5 s on one A100-class device, a
 converged design-target posterior in **tens of minutes**; the earlier 1–2 h
 projection stands as the conservative bound.
+
+---
+
+## D29 memory pass — and a boundary bug it turned up (2026-08-12)
+
+The D28 speedup left the design target *fast* but not *runnable*: measuring the
+compiled executables rather than estimating them (XLA
+`memory_analysis()`, which reports buffer assignment without allocating it)
+put the design-target gradient at **34.0 GB against 32 GB of RAM**.
+
+### Where the bytes were (design target: 203,440 model px, SB2, 50 epochs, p = 513)
+
+| stage | GB | fate |
+|---|---|---|
+| `G` pre-pass, `vmap`ped over all 50 epochs | ~9 | `vmap` batches *every intermediate* of the chain (H, the two kernel stages), not just the 4.5 GB result |
+| band tensor + its cotangent | 6.2 | unchanged (next lever) |
+| `bt` + Cholesky factor | 6.2 | unchanged (both genuinely live) |
+| selected inverse (`s_diag`, `s_sub`) | 3.1 | **removed** — fused into the cotangent |
+| `_pack_band` gather indices/masks, stacked over K blocks | ~5 | **removed** — hoisted + rematerialized |
+| prior block-tridiagonal factor | 0.8 | **removed** — scalar recursion |
+
+### Four exact reductions
+
+1. **Fuse the Takahashi sweep into the cotangent** (`solver.selected_inverse_cotangent`).
+   Each Σ block is contracted against `d`, `u` at the step that produces it, so
+   the `2K − 1` selected-inverse blocks and the outer-product temporaries never
+   exist. `selected_inverse_blocks` stays as the test oracle.
+2. **Batch the `G` pre-pass over epochs** (`epoch_chunk`). Because `G` is
+   velocity-independent it is computed once per epoch either way, so *any*
+   batching costs exactly one extra `G` pass in the rematerialized backward —
+   the size matters only for `vmap` width. Hence a two-regime default: hoist the
+   whole pre-pass below ~1 GB (small and gate-scale problems pay nothing),
+   otherwise batch to ~0.5 GB.
+3. **Prior determinant by scalar pentadiagonal recursion**
+   (`assembly.prior_logdet`) instead of factorizing a bandwidth-2 matrix as
+   6,358 dense 64×64 blocks.
+4. **Hoist `_pack_band`'s gather indices** out of the `lax.map` body — the band
+   coordinates depend only on the within-block (row, col), never on the block
+   counter — and rematerialize the body, so reverse mode stops stacking (B, B)
+   index and mask arrays over all K iterations.
+
+| n (model px) | eval before → after | ∇ before → after |
+|---|---|---|
+| 31,734 | 2.93 → 2.94 GB | 5.02 → **4.00 GB** |
+| 74,322 | 7.04 → **4.86 GB** | 11.92 → **11.47 GB** |
+| 135,052 | 12.0 → **7.83 GB** | 16.64 → **14.37 GB** |
+| **203,440 (design target)** | 20.64 → **11.06 GB** | 34.00 → **18.24 GB** |
+
+Log-likelihoods, gradients and Hessians are unchanged; the equivalences are
+regression-tested against the routes they replaced (blocked prior determinant,
+unfused selected inverse, unbatched pre-pass).
+
+Wall clock, same laptop, same seeds — the pass was aimed at memory, but at the
+design target it bought time as well:
+
+| n (model px) | eval D28 → D29 | ∇ D28 → D29 |
+|---|---|---|
+| 31,734 | 3.0 → **2.82 s** | 10.6 → 11.22 s |
+| 74,322 | 8.0 → **6.95 s** | 24.9 → 30.67 s |
+| 135,052 | 14.5 → 14.90 s | 56.5 → 59.53 s |
+| **203,440 (design target)** | 26.0 → **22.16 s** | 111.3 → **87.43 s** |
+
+The middle rows' gradients get slower by 5–23%: that is the batched pre-pass's
+extra backward `G` pass, paid where memory was not the binding constraint. At
+the design target — the row that previously did not fit — halving the working
+set wins outright, because the gradient was thrashing against RAM. Raise
+`epoch_chunk` to the epoch count on a machine with memory to spare (or on GPU)
+to trade back.
+
+### The bug the memory work uncovered
+
+Hunting allocation hot spots meant re-deriving the band layout from scratch,
+which exposed a **correctness** defect in D28's assembly. `G = Kᵀ(RᵀW′R)K` is
+built as a band image; `H` is exactly zero outside the model grid, but the LSF
+convolution smears in-grid mass *outward*, writing band entries at column
+indices that correspond to grid pixels that do not exist. The T-sandwich reads
+those entries whenever an epoch's shift places a component's support against a
+grid edge — `T(δ)` has no row there, so the contribution should be zero.
+
+The trigger is precise: **the data-coverage margin, in model pixels, being
+smaller than the LSF kernel radius.** Measured band-vs-probing, dense and
+entrywise (probe is the symmetric ground truth; only the column side leaked, so
+asymmetry is the sharp discriminator):
+
+| coverage margin (model px) | kernel radius | max relative entry error | Δ log L |
+|---|---|---|---|
+| ~24 | 6 | 6.4e-15 | 2.7e-15 |
+| ~8 | 6 | 6.4e-15 | 0 |
+| ~4 | 6 | 6.4e-04 | 1.8e-07 |
+| **0** | **6** | **6.8e-02** (asymmetry 6.8e-02) | **−57 nats** |
+| 19 | 34 | 6.9e-04 | 0.16 nats |
+
+The last row is the one to worry about: at a *fixed* grid, simply fitting a
+wider LSF walks into it. And a margin of zero is not exotic — it is what you get
+by choosing a model grid narrower than the observed range to fit a sub-region,
+which is the documented pattern. Every pre-existing fixture happened to leave a
+margin exceeding the kernel radius, so the weights vanish where the defect lives
+and it is multiplied by zero; that is why 174 tests passed over it. Worth noting
+that `scripts/m5_scale_bench.py`'s largest row sat about one pixel from the
+cliff.
+
+The fix masks `G`'s out-of-grid columns at the source (one static boolean per
+group); the margin-0 case then agrees at 5.7e-15 with asymmetry 2.9e-16. Two
+fixtures now pin it — `edge_covered` in the equivalence set, and a dedicated
+model-grid-inside-the-data case — and the equivalence check gained an
+**entrywise** dense comparison plus an asymmetry assertion: the log-determinant
+and solve it previously relied on average a boundary defect away, and at the
+0.3 Å margin that put it under a 1e-11 scalar threshold.
+
+### Two more silent-wrongness fixes
+
+- **Gradients through the Cholesky factor were identically zero.** `_solve_stage`
+  returned the factor, but its closed-form reverse rule cannot carry a cotangent
+  on it (propagating one is precisely the reverse pass through the factorization
+  the rule exists to avoid). Anything differentiating `spectra_std` or
+  `draw_spectra` therefore got a silent zero. `MarginalResult` now stores the
+  precision and rebuilds the factor outside the custom boundary, where plain
+  autodiff applies; the cost is one extra block Cholesky, paid only by callers
+  that ask for the factor — the sampling hot path never does.
+- **A few wide native pixels silently set the solver bandwidth.** `row_support`
+  is a max over native rows, and it drives a cost quadratic in the block size.
+  In real spectra a wide row usually means samples were *deleted* (telluric
+  window, order or chip gap) rather than genuinely wide: edges sit at midpoints,
+  so removing samples makes the two bracketing pixels absorb half the gap each.
+  `build_problem` now warns, names the offending pixel, and states the remedy
+  (mask with `ivar = 0`, or split into separate instrument labels).
+
+### What is left
+
+The band tensor and its cotangent (6.2 GB) still store both triangles of a
+symmetric matrix, and `bt` and its factor (6.2 GB) are both genuinely live
+across the Cholesky. Folding the band to one triangle, and assembling directly
+into block storage so the band tensor never exists, are the recorded next
+levers — neither is needed to run the design target, which now has ~13 GB of
+headroom on this machine.

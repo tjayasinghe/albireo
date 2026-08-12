@@ -451,6 +451,21 @@ $\mathcal{O}(p)$ operator applications — an order of magnitude at survey bandw
 order (regression-tested; the `validate` path checks the assembled matrix against the
 matrix-free operator directly).
 
+Because $\mathbf{G}_j$ does not depend on the velocities, stage (ii) is a pre-pass over
+epochs rather than part of the accumulation body. How many epochs it covers at once
+(`epoch_chunk`) is purely a memory choice: `vmap` batches every intermediate of the
+chain, so covering all of them costs ~9 GB at the design target, while any partition
+costs exactly one extra $\mathbf{G}$ pass in the rematerialized backward regardless of
+its granularity. The default keeps the whole pre-pass live below a threshold and
+batches above it (D29).
+
+The prior determinant needs no factorization at all: $\boldsymbol\Lambda_p$ is block
+diagonal over components and pentadiagonal within each, so
+$\log\det\boldsymbol\Lambda_p = 2\sum_i \log c_i$ from the three-term banded Cholesky
+recursion $a_i = \alpha_i/c_{i-2}$, $b_i = (\beta_i - a_i b_{i-1})/c_{i-1}$,
+$c_i = \sqrt{\gamma_i - a_i^2 - b_i^2}$ on the analytic diagonals of
+$\tau\mathbf{D}_2^\top\mathbf{D}_2 + \eta\mathbf{I}$ (`assembly.prior_logdet`).
+
 **Closed-form gradient.** With the band cheap, reverse mode through the Cholesky and
 solve scans becomes the bottleneck (it stores or recomputes every scan step). The solve
 stage instead defines a custom VJP from the standard identities: for
@@ -472,26 +487,47 @@ Because every perturbation of $\tilde{\boldsymbol\Lambda}$ is block-tridiagonal,
 *banded part* of $\tilde{\boldsymbol\Sigma}$ is ever contracted — exactly what the block
 Takahashi recursion delivers ($\Sigma_{k+1,k} = -\Sigma_{k+1,k+1}W_k$,
 $\Sigma_{kk} = L_{kk}^{-\top}L_{kk}^{-1} + W_k^\top\Sigma_{k+1,k+1}W_k$,
-$W_k = L_{k+1,k}L_{kk}^{-1}$; `solver.selected_inverse_blocks`). Cross-block cotangents
-carry a factor 2 (the stored lower block represents both triangles); within-block
-cotangents are reported symmetrically, which is exact end-to-end because mirrored band
-entries are assembled by identical functions of θ ($\mathbf{G}_j$ is symmetric). Gradient
-contract: gradients flow through the log-likelihood, the quadratic form, and $\hat d$ —
-not through the returned Cholesky factor (a numerical artifact for sampling
-diagnostics). Verified against plain autodiff to $10^{-13}$ relative and by finite
+$W_k = L_{k+1,k}L_{kk}^{-1}$). Cross-block cotangents carry a factor 2 (the stored lower
+block represents both triangles); the within-block cotangent is left *unsymmetrized*,
+which is exact end-to-end because `diag[k]` stores both triangles of a symmetric block
+and the band packing reads each entry exactly once, so mirrored entries receive the two
+halves of $u\hat d^\top + \hat d u^\top$ separately and sum to the same parameter
+gradient. Each $\Sigma$ block is contracted at the step of the recursion that produces
+it (`solver.selected_inverse_cotangent`), so the selected inverse is never materialized
+— $2K-1$ blocks, 3.1 GB at the design target (D29); `selected_inverse_blocks` remains as
+the reference form and test oracle. Gradient contract: gradients flow through the
+log-likelihood, the quadratic form, and $\hat d$. The Cholesky factor is deliberately
+*not* an output of the custom-VJP stage — a cotangent on it cannot be honoured by this
+rule, since propagating one is precisely the reverse pass through the factorization the
+rule exists to avoid — so `MarginalResult` rebuilds it outside the boundary where plain
+autodiff applies. Verified against plain autodiff to $10^{-13}$ relative and by finite
 differences.
 
-**Second derivatives.** Forward-mode differentiation of a `custom_vjp` function is
-rejected by JAX outright, so Hessians must be taken reverse-over-reverse
-(`jacrev(jacrev(...))`) — which is exact here *because* the forward rule recomputes its
+**Grid boundaries.** $\mathbf{G}$ is a matrix on the model grid, so entry $(x,y)$ exists
+only for $y \in [0, n)$. $\mathbf{H} = \mathbf{R}^\top\mathbf{W}'\mathbf{R}$ is exactly
+zero outside the grid (no rebin pairs there), but the $\mathbf{K}$ convolutions smear
+in-grid mass *outward*, populating band-image entries at absolute columns that do not
+correspond to grid pixels. The T-sandwich reads column $c + \lfloor\delta_j\rfloor + b$,
+which leaves the grid whenever an epoch's shift places a component's support against an
+edge — and $T(\delta_j)$ has no row there, so the contribution is zero. Those columns
+are therefore masked once per group. (Left unmasked this cost $6\times10^{-4}$ relative
+in the assembled matrix and $2\times10^{-7}$ in $\log p$ for data spanning the grid;
+with any margin between data and grid edge the weights vanish there and it is invisible
+— D29.)
+
+**Second derivatives.** Hessians are taken reverse-over-reverse
+(`jacrev(jacrev(...))`), which is exact here *because* the forward rule recomputes its
 primal inline: the second reverse pass then walks plain graphs instead of re-entering
-the custom boundary, where the dropped Cholesky cotangent would silently lose the
-chol-mediated second-order terms (measured $8\times10^{-3}$ relative before that fix;
-equal to plain autodiff at $10^{-15}$ after). Independently, forward-over-reverse
-(`jax.hessian`) was measured to produce an *asymmetric* Hessian on this stack even for
-the plain-autodiff path — a pre-existing defect in the Laplace mass matrix — while
-reverse-over-reverse matches central finite differences of the gradient to 8 digits;
-`laplace_inverse_mass` now uses reverse-over-reverse.
+the custom boundary, where the un-propagated Cholesky cotangent would silently lose the
+factor-mediated second-order terms (measured $8\times10^{-3}$ relative before that fix;
+equal to plain autodiff at $10^{-15}$ after). Forward mode applied *directly* to the
+marginal is impossible — JAX rejects `jvp` of a `custom_vjp` function — but
+`jax.hessian` is forward-over-*reverse* and does run, since the inner `jacrev` resolves
+the custom boundary first. It nonetheless produces an appreciably *asymmetric* Hessian
+on this stack, and does so on the plain-autodiff path too, so the cause is the solver
+scans rather than the custom rule; reverse-over-reverse matches central finite
+differences of the gradient to 8 digits where forward-over-reverse does not.
+`laplace_inverse_mass` uses reverse-over-reverse, fixing a defect present since M3.
 
 ---
 

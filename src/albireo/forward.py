@@ -17,6 +17,7 @@ everywhere.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 
@@ -202,6 +203,36 @@ class Problem:
         return int(np.ceil(shift)) + 1 + 2 * self.kernel_radius + support
 
 
+def _warn_if_row_support_is_an_artifact(instrument, wave_native, per_row, row_support):
+    """Flag a rebin row support set by a few anomalously wide native pixels.
+
+    ``row_support`` is a *max* over native pixels and it propagates straight into the
+    solver half-bandwidth, whose cost is quadratic in the block size. A handful of wide
+    rows therefore taxes the whole run. In real spectra they are usually not wide pixels
+    at all but *deleted* samples — telluric windows, cosmic-ray hits, order or chip gaps
+    — because :func:`albireo.operators.bin_edges_from_centers` places edges at
+    midpoints, so dropping samples makes the two bracketing pixels absorb half the gap
+    each. Masking (``ivar = 0``) keeps the sampling regular; deleting does not.
+    """
+    med = float(np.median(per_row))
+    if row_support <= max(4.0 * med, med + 4.0):
+        return
+    wide = np.flatnonzero(per_row > max(4.0 * med, med + 4.0))
+    k = int(wide[np.argmax(per_row[wide])])
+    warnings.warn(
+        f"instrument {instrument!r}: {wide.size} of {per_row.size} native pixels span far "
+        f"more model pixels than typical (worst is pixel {k} at {wave_native[k]:.4f} with "
+        f"{row_support}, median {med:.0f}). The solver bandwidth follows this maximum, so "
+        f"the run costs roughly ({row_support / max(med, 1.0):.0f}x)^2 more than it need. "
+        "This pattern almost always means samples were *deleted* (telluric window, bad "
+        "pixels, order or chip gap) rather than genuinely wide pixels: keep the pixels and "
+        "set their ivar to 0 instead, or give the disjoint segments distinct instrument "
+        "labels.",
+        RuntimeWarning,
+        stacklevel=3,
+    )
+
+
 def build_problem(
     grid: LogGrid,
     dataset: Dataset,
@@ -292,7 +323,9 @@ def build_problem(
         np.maximum.at(span, rows, cols)
         lo = np.full(wave_native.size, np.iinfo(np.int64).max, dtype=np.int64)
         np.minimum.at(lo, rows, cols)
-        row_support = int(np.max(span - lo) + 1)
+        per_row = span - lo + 1
+        row_support = int(np.max(per_row))
+        _warn_if_row_support_is_an_artifact(instrument, wave_native, per_row, row_support)
 
         sigma_px = float(lsf_sigma_v[instrument]) / grid.dv_kms
         kernel = gaussian_kernel(sigma_px)

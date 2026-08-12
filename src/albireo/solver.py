@@ -31,6 +31,7 @@ __all__ = [
     "probe_block_tridiagonal",
     "sample_standard",
     "selected_inverse_blocks",
+    "selected_inverse_cotangent",
     "selected_inverse_diag",
     "solve",
     "solve_lower",
@@ -309,6 +310,10 @@ def selected_inverse_blocks(chol: BlockCholesky):
     ``Sigma_{k+1,k} = -Sigma_{k+1,k+1} W_k`` and
     ``Sigma_{kk} = L_kk^{-T} L_kk^{-1} + W_k^T Sigma_{k+1,k+1} W_k`` with
     ``W_k = L_{k+1,k} L_kk^{-1}``.
+
+    Reference implementation and test oracle. The likelihood gradient uses the fused
+    :func:`selected_inverse_cotangent`, which never materializes these ``2K - 1``
+    blocks (3.1 GB at the design target).
     """
     k, b = chol.num_blocks, chol.block_size
     eye = jnp.eye(b)
@@ -327,6 +332,70 @@ def selected_inverse_blocks(chol: BlockCholesky):
 
     _, (s_all, subs) = jax.lax.scan(step, s_last, (chol.diag[:-1], chol.lower), reverse=True)
     return jnp.concatenate([s_all, s_last[None]]), subs
+
+
+def selected_inverse_cotangent(chol: BlockCholesky, d_blocks, u_blocks, g_logdet, g_quad):
+    """The marginal-likelihood cotangent of ``Lambda``, fused into the Takahashi sweep.
+
+    Returns the block-tridiagonal storage of
+
+        ``g_logdet * Sigma  -  g_quad * d d^T  -  sym(u d^T)``
+
+    restricted to the block-tridiagonal pattern, where ``Sigma = (L L^T)^{-1}``. This is
+    exactly what :func:`albireo.likelihood._solve_stage`'s reverse rule needs; forming it
+    inside the recursion means each ``Sigma`` block is consumed at the step that produces
+    it and the selected inverse is never stored. Against the unfused route
+    (:func:`selected_inverse_blocks` followed by the outer products) this removes
+    ``2K - 1`` blocks of live storage plus the outer-product temporaries — 3.1 GB at the
+    design target — for identical arithmetic.
+
+    The subdiagonal blocks carry a factor 2 because ``BlockTridiagonal.lower[k]`` is the
+    sole storage for both ``Lambda[k+1, k]`` and ``Lambda[k, k+1]`` (see
+    :meth:`BlockTridiagonal.matvec`, which applies it and its transpose).
+
+    Parameters
+    ----------
+    chol
+        Factor of ``Lambda``.
+    d_blocks, u_blocks
+        ``(K, B)`` block views of ``d = Lambda^{-1} b`` and ``u = Lambda^{-1} g_d``.
+    g_logdet, g_quad
+        Scalar cotangents of ``log det Lambda`` and of ``b^T Lambda^{-1} b``.
+    """
+    k, b = chol.num_blocks, chol.block_size
+    eye = jnp.eye(b)
+    d, u = d_blocks, u_blocks
+
+    def outer(x, y):
+        return x[:, None] * y[None, :]
+
+    inv_last = solve_triangular(chol.diag[-1], eye, lower=True)
+    s_last = inv_last.T @ inv_last
+    diag_last = g_logdet * s_last - g_quad * outer(d[-1], d[-1]) - outer(u[-1], d[-1])
+    if k == 1:
+        return diag_last[None], chol.lower[:0]
+
+    def step(s_next, inputs):
+        lk, llk, dk, uk, dn, un = inputs
+        inv_lk = solve_triangular(lk, eye, lower=True)
+        w = llk @ inv_lk
+        t = s_next @ w  # = -Sigma[k+1, k]
+        s_k = inv_lk.T @ inv_lk + w.T @ t
+        diag_k = g_logdet * s_k - g_quad * outer(dk, dk) - outer(uk, dk)
+        sub_k = (
+            -2.0 * g_logdet * t
+            - 2.0 * g_quad * outer(dn, dk)
+            - (outer(un, dk) + outer(dn, uk))
+        )
+        return s_k, (diag_k, sub_k)
+
+    _, (diags, subs) = jax.lax.scan(
+        step,
+        s_last,
+        (chol.diag[:-1], chol.lower, d[:-1], u[:-1], d[1:], u[1:]),
+        reverse=True,
+    )
+    return jnp.concatenate([diags, diag_last[None]]), subs
 
 
 def dense_from_block_tridiagonal(bt: BlockTridiagonal) -> np.ndarray:
