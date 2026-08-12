@@ -31,6 +31,7 @@ from albireo.operators import (
     gaussian_kernel,
     gaussian_kernel_traced,
     rebin_operator,
+    rebin_pair_tables,
     shift_spectrum,
 )
 from albireo.operators import shift_spectrum_adjoint as shift_adjoint
@@ -74,6 +75,9 @@ class EpochGroup:
     r: jax.Array  # (n_epochs, n_native) response
     row_support: int  # max model-pixel span of a rebin row (bandwidth bookkeeping)
     bary_pix: jax.Array  # (n_epochs,) barycentric shift in model pixels (static)
+    pair_val: jax.Array  # static rebin pair tables for direct band assembly
+    pair_sid: jax.Array  # (albireo.operators.rebin_pair_tables; sid = c * row_support + o)
+    pair_row: jax.Array
 
     @property
     def n_epochs(self) -> int:
@@ -90,12 +94,15 @@ class EpochGroup:
             self.w,
             self.r,
             self.bary_pix,
+            self.pair_val,
+            self.pair_sid,
+            self.pair_row,
         )
         return children, (self.instrument, self.epoch_indices, self.row_support)
 
     @classmethod
     def tree_unflatten(cls, aux, children):
-        rebin, kernel, kernel_rev, shifts, light, z, w, r, bary_pix = children
+        rebin, kernel, kernel_rev, shifts, light, z, w, r, bary_pix, pv, ps, pr = children
         instrument, epoch_indices, row_support = aux
         return cls(
             instrument=instrument,
@@ -110,6 +117,9 @@ class EpochGroup:
             r=r,
             row_support=row_support,
             bary_pix=bary_pix,
+            pair_val=pv,
+            pair_sid=ps,
+            pair_row=pr,
         )
 
 
@@ -296,6 +306,10 @@ def build_problem(
             w_rows.append(np.where(covered, ep.effective_ivar, 0.0))
             r_rows.append(r)
 
+        pair_val, pair_sid, pair_row, pair_h = rebin_pair_tables(rebin)
+        if pair_h != row_support:
+            raise AssertionError(f"pair-table support {pair_h} != row support {row_support}")
+
         groups.append(
             EpochGroup(
                 instrument=instrument,
@@ -310,6 +324,9 @@ def build_problem(
                 r=jnp.asarray(np.stack(r_rows)),
                 row_support=row_support,
                 bary_pix=jnp.asarray(bary_pix[list(idx)]),
+                pair_val=pair_val,
+                pair_sid=pair_sid,
+                pair_row=pair_row,
             )
         )
 

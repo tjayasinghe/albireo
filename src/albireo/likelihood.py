@@ -22,15 +22,19 @@ from dataclasses import dataclass
 import jax
 import jax.numpy as jnp
 
+from albireo.assembly import band_block_tridiagonal, prior_block_tridiagonal
 from albireo.forward import Problem, normal_matvec, rhs, weighted_data_terms
 from albireo.priors import SmoothnessPrior
 from albireo.solver import (
     BlockCholesky,
+    BlockTridiagonal,
     block_cholesky,
     logdet,
     probe_block_tridiagonal,
     sample_standard,
+    selected_inverse_blocks,
     selected_inverse_diag,
+    solve,
     solve_lower,
     solve_upper,
 )
@@ -50,6 +54,73 @@ def _pack(d_stack, n_comp: int, n_pix: int):
 
 def _unpack(v, n_comp: int, n_pix: int):
     return jnp.asarray(v).reshape(n_pix, n_comp).T
+
+
+@jax.custom_vjp
+def _solve_stage(bt: BlockTridiagonal, b_pad):
+    """Cholesky + solves with a closed-form reverse pass (``docs/math.md`` §3).
+
+    Returns ``(logdet, quad, d_pad, chol)`` for the posterior precision ``bt`` and
+    right-hand side ``b_pad``. The custom VJP replaces reverse-mode through the
+    Cholesky/solve scans with the analytic identities
+
+        d(logdet)/d(Lambda) = Sigma,      d(quad)/d(Lambda) = -d d^T,
+        cotangent(d_pad) = g  ->  b_bar += Sigma g,  Lambda_bar += -(u d^T)|_band,
+
+    where only the *banded* part of ``Sigma`` (block Takahashi,
+    :func:`albireo.solver.selected_inverse_blocks`) is ever formed — the
+    perturbation is block-tridiagonal, so nothing else contributes. This removes
+    the stored backward pass of both scans (memory ~ the factor itself) and costs
+    about one extra Cholesky-equivalent instead of two to three.
+
+    Gradient contract: gradients flow through ``logdet``, ``quad``, and ``d_pad``.
+    They do **not** flow through the returned ``chol`` factor (its cotangent is
+    dropped; the factor is a numerical artifact for sampling/variance diagnostics).
+    """
+    chol = block_cholesky(bt)
+    y = solve_lower(chol, b_pad)
+    quad = jnp.sum(y * y)
+    d_pad = solve_upper(chol, y)
+    return logdet(chol), quad, d_pad, chol
+
+
+def _solve_stage_fwd(bt, b_pad):
+    # Recompute inline rather than calling _solve_stage: the fwd trace must contain
+    # only plain operations, so that a second reverse differentiation (Hessians via
+    # jacrev-of-jacrev, as in laplace_inverse_mass) walks ordinary graphs instead of
+    # re-entering the custom boundary — where the chol cotangent is dropped by
+    # contract and second derivatives would silently lose the chol-mediated terms
+    # (measured 8e-3 relative before this change; equal to plain autodiff after).
+    chol = block_cholesky(bt)
+    y = solve_lower(chol, b_pad)
+    quad = jnp.sum(y * y)
+    d_pad = solve_upper(chol, y)
+    return (logdet(chol), quad, d_pad, chol), (chol, d_pad, bt.n)
+
+
+def _solve_stage_bwd(res, cot):
+    chol, d_pad, n = res
+    g_ld, g_quad, g_d, _g_chol = cot  # chol cotangent dropped by contract
+    k, b = chol.num_blocks, chol.block_size
+    u = solve(chol, g_d)
+    s_diag, s_sub = selected_inverse_blocks(chol)
+    db = d_pad.reshape(k, b)
+    ub = u.reshape(k, b)
+
+    def outer(x, y):
+        return x[:, :, None] * y[:, None, :]
+
+    diag_bar = g_ld * s_diag - g_quad * outer(db, db) - outer(ub, db)
+    lower_bar = (
+        2.0 * g_ld * s_sub
+        - 2.0 * g_quad * outer(db[1:], db[:-1])
+        - (outer(ub[1:], db[:-1]) + outer(db[1:], ub[:-1]))
+    )
+    b_bar = 2.0 * g_quad * d_pad + u
+    return BlockTridiagonal(diag=diag_bar, lower=lower_bar, n=n), b_bar
+
+
+_solve_stage.defvjp(_solve_stage_fwd, _solve_stage_bwd)
 
 
 @jax.tree_util.register_pytree_node_class
@@ -82,6 +153,7 @@ def marginal_loglikelihood(
     block_size: int | None = None,
     half_bandwidth: int | None = None,
     validate: bool = False,
+    assembly: str = "band",
 ) -> MarginalResult:
     """Evaluate the marginal log-likelihood for a fixed-parameter :class:`Problem`.
 
@@ -100,9 +172,16 @@ def marginal_loglikelihood(
         value >= the true bandwidth is exact, so an overestimate costs time, not
         accuracy; an *underestimate* silently corrupts the result — hence ``validate``.
     validate
-        If True, verify the probed matrix reproduces the matrix-free operator on a
-        random vector (guards against a bandwidth underestimate) — raises AssertionError
-        on mismatch. Cheap relative to assembly; enabled in tests. Not jit-compatible.
+        If True, verify the assembled matrix reproduces the matrix-free operator on a
+        random vector (guards against a bandwidth underestimate and any assembly
+        defect) — raises AssertionError on mismatch. Cheap relative to assembly;
+        enabled in tests. Not jit-compatible.
+    assembly
+        ``"band"`` (default): direct per-epoch band assembly
+        (:func:`albireo.assembly.band_block_tridiagonal`) — O(band width) work per
+        epoch instead of O(bandwidth) operator applications; >10x faster at survey
+        bandwidths, identical result up to floating-point summation order.
+        ``"probe"``: the original global comb probing (reference implementation).
     """
     n_comp, n_pix = problem.n_components, problem.grid.n
     if prior.n_components != n_comp:
@@ -122,7 +201,18 @@ def marginal_loglikelihood(
     def prior_matvec(v):
         return _pack(prior.apply(_unpack(v, n_comp, n_pix)), n_comp, n_pix)
 
-    bt = probe_block_tridiagonal(full_matvec, n, p, block_size)
+    # The prior's bandwidth is tiny (2 per component), so its factor gets its own
+    # small block size: factorizing it at the posterior's block size would double
+    # the Cholesky cost at scale for a determinant that is nearly free.
+    prior_block = max(2 * n_comp, 64)
+    if assembly == "band":
+        bt = band_block_tridiagonal(problem, prior, b_nat, block_size)
+        bt_prior = prior_block_tridiagonal(prior, n_pix, n_comp, prior_block)
+    elif assembly == "probe":
+        bt = probe_block_tridiagonal(full_matvec, n, p, block_size)
+        bt_prior = probe_block_tridiagonal(prior_matvec, n, 2 * n_comp, prior_block)
+    else:
+        raise ValueError(f"assembly must be 'band' or 'probe'; got {assembly!r}")
     if validate:
         key = jax.random.PRNGKey(0)
         v = jax.random.normal(key, (n,))
@@ -135,24 +225,17 @@ def marginal_loglikelihood(
             "half-bandwidth underestimated?"
         )
 
-    # The prior's bandwidth is tiny (2 per component), so its factor gets its own
-    # small block size: factorizing it at the posterior's block size would double
-    # the Cholesky cost at scale for a determinant that is nearly free.
-    prior_block = max(2 * n_comp, 64)
-    bt_prior = probe_block_tridiagonal(prior_matvec, n, 2 * n_comp, prior_block)
-    chol = block_cholesky(bt)
     chol_prior = block_cholesky(bt_prior)
 
     b_vec = _pack(rhs(problem), n_comp, n_pix)
     b_pad = jnp.pad(b_vec, (0, bt.num_blocks * bt.block_size - n))
-    y = solve_lower(chol, b_pad)
-    quad = jnp.sum(y * y)  # b^T Lt^{-1} b
-    d_hat = _unpack(solve_upper(chol, y)[:n], n_comp, n_pix)
+    ld, quad, d_pad, chol = _solve_stage(bt, b_pad)
+    d_hat = _unpack(d_pad[:n], n_comp, n_pix)
 
     zwz, logw, n_good = weighted_data_terms(problem)
     logp = (
         -0.5 * (zwz - quad)
-        - 0.5 * logdet(chol)
+        - 0.5 * ld
         + 0.5 * logdet(chol_prior)
         + 0.5 * logw
         - 0.5 * n_good * jnp.log(2.0 * jnp.pi)

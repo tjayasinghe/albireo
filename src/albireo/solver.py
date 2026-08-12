@@ -30,6 +30,7 @@ __all__ = [
     "logdet",
     "probe_block_tridiagonal",
     "sample_standard",
+    "selected_inverse_blocks",
     "selected_inverse_diag",
     "solve",
     "solve_lower",
@@ -295,6 +296,37 @@ def selected_inverse_diag(chol: BlockCholesky):
 
     _, diags = jax.lax.scan(step, s_last, (chol.diag[:-1], chol.lower), reverse=True)
     return jnp.concatenate([diags.reshape(-1), jnp.diagonal(s_last)])[: chol.n]
+
+
+def selected_inverse_blocks(chol: BlockCholesky):
+    """Block diagonal and first block subdiagonal of ``(L L^T)^{-1}`` (Takahashi).
+
+    Returns ``(s_diag, s_sub)`` of shapes ``(K, B, B)`` and ``(K-1, B, B)`` with
+    ``s_diag[k] = Sigma[block k, block k]`` and ``s_sub[k] = Sigma[block k+1, block k]``
+    — exactly the banded part of the inverse needed to contract against a
+    block-tridiagonal perturbation (the closed-form marginal-likelihood gradient).
+    Same backward recursion as :func:`selected_inverse_diag`:
+    ``Sigma_{k+1,k} = -Sigma_{k+1,k+1} W_k`` and
+    ``Sigma_{kk} = L_kk^{-T} L_kk^{-1} + W_k^T Sigma_{k+1,k+1} W_k`` with
+    ``W_k = L_{k+1,k} L_kk^{-1}``.
+    """
+    k, b = chol.num_blocks, chol.block_size
+    eye = jnp.eye(b)
+    inv_last = solve_triangular(chol.diag[-1], eye, lower=True)
+    s_last = inv_last.T @ inv_last
+    if k == 1:
+        return s_last[None], chol.lower[:0]
+
+    def step(s_next, inputs):
+        lk, llk = inputs
+        inv_lk = solve_triangular(lk, eye, lower=True)
+        w = llk @ inv_lk
+        t = s_next @ w
+        s_k = inv_lk.T @ inv_lk + w.T @ t
+        return s_k, (s_k, -t)
+
+    _, (s_all, subs) = jax.lax.scan(step, s_last, (chol.diag[:-1], chol.lower), reverse=True)
+    return jnp.concatenate([s_all, s_last[None]]), subs
 
 
 def dense_from_block_tridiagonal(bt: BlockTridiagonal) -> np.ndarray:

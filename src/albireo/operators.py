@@ -31,6 +31,7 @@ __all__ = [
     "gaussian_kernel_traced",
     "interp_operator",
     "rebin_operator",
+    "rebin_pair_tables",
     "shift_spectrum",
     "shift_spectrum_adjoint",
 ]
@@ -335,4 +336,43 @@ def rebin_operator(
         coverage=jnp.asarray(coverage),
         n_out=n_out,
         n_in=n_in,
+    )
+
+
+def rebin_pair_tables(rebin: RebinOperator):
+    """Static pair tables for the banded normal matrix ``R^T diag(w') R``.
+
+    For every native row kappa and every ordered column pair ``(c, c + o)`` with
+    ``o >= 0`` inside that row, ``H[c, c + o] += v_1 v_2 w'_kappa``. Columns within a
+    rebin row are consecutive integers (guaranteed by :func:`rebin_operator`; asserted
+    here), so the pairs at offset ``o`` are exactly the entry pairs ``(t, t + o)``
+    with equal rows. Returns ``(pair_val, pair_sid, pair_row, h)``: static value
+    products, flattened band indices into ``(n_in, h)`` (``sid = c * h + o``), the
+    native row of each pair, and the row support ``h``. Per epoch, the upper band of
+    ``H`` is then one ``segment_sum(pair_val * w'[pair_row], pair_sid)``.
+
+    NumPy-only (concrete arrays): call at build time, never under trace.
+    """
+    rows = np.asarray(rebin.rows)
+    cols = np.asarray(rebin.cols)
+    vals = np.asarray(rebin.vals)
+    if rows.size == 0:
+        raise ValueError("empty rebin operator")
+    same = rows[:-1] == rows[1:]
+    if not np.all(np.diff(cols)[same] == 1):
+        raise AssertionError("rebin columns are not consecutive within a row")
+    counts = np.bincount(rows.astype(np.int64), minlength=int(rows.max()) + 1)
+    h = int(counts.max())
+    idx = np.arange(rows.size)
+    pv, ps, pr = [], [], []
+    for o in range(h):
+        i = idx if o == 0 else idx[:-o][rows[:-o] == rows[o:]]
+        pv.append(vals[i] * vals[i + o])
+        ps.append(cols[i].astype(np.int64) * h + o)
+        pr.append(rows[i])
+    return (
+        jnp.asarray(np.concatenate(pv)),
+        jnp.asarray(np.concatenate(ps), dtype=jnp.int32),
+        jnp.asarray(np.concatenate(pr), dtype=jnp.int32),
+        h,
     )
