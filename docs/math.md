@@ -415,6 +415,84 @@ initialization only, never final inference.
 C powers `fit_map(quick=True)`. The A-vs-B crossover is measured at M2/M3 on the design-target
 benchmark and recorded in `docs/benchmarks.md`.
 
+### 4.5 Direct band assembly and the closed-form gradient (D28)
+
+Through M5 the band of $\tilde{\boldsymbol\Lambda}$ was assembled by comb *probing*:
+$2p+1$ applications of the matrix-free operator, paying for the union of all epochs'
+band offsets. The shipped engine now assembles the band directly from its analytic
+per-epoch structure (the "shifted-product accumulation" anticipated in §4.2), keeping
+probing as the reference implementation and validation oracle.
+
+**Per-epoch band structure.** The data term is
+$\mathbf{A}^\top\mathbf{W}\mathbf{A} = \sum_j \mathbf{S}_j^\top \mathbf{W}'_j \mathbf{S}_j$
+with $\mathbf{S}_j = \mathbf{R}\,\mathbf{K}\sum_i \ell_{ij}\mathbf{T}(\delta_{ij})$ and
+$\mathbf{W}'_j = \mathrm{diag}(w_j r_j^2)$. Its $(i,i')$ component block for epoch $j$ is
+
+$$
+\ell_{ij}\,\ell_{i'j}\;\mathbf{T}(\delta_{ij})^\top\, \mathbf{G}_j\, \mathbf{T}(\delta_{i'j}),
+\qquad
+\mathbf{G}_j = \mathbf{K}^\top \big(\mathbf{R}^\top \mathbf{W}'_j \mathbf{R}\big) \mathbf{K},
+$$
+
+and $\mathbf{G}_j$ is a band of half-width $(s-1) + 2r$ (rebin row support $s$, kernel
+radius $r$) *independent of the velocities*: the T-sandwich only translates the band to
+the offset $\lfloor\delta_{ij}\rfloor - \lfloor\delta_{i'j}\rfloor$ and mixes adjacent
+entries with the interpolation tent weights. Concretely, column $q$ of $\mathbf{T}(\delta)$
+has exactly two entries — rows $q + \lfloor\delta\rfloor$ (weight $1-\mathrm{frac}\,\delta$)
+and $q + \lfloor\delta\rfloor + 1$ (weight $\mathrm{frac}\,\delta$) — so each block band is
+a four-term tent-weighted combination of row-translated copies of $\mathbf{G}_j$. The
+computation is: (i) $\mathbf{R}^\top\mathbf{W}'\mathbf{R}$ by one `segment_sum` over
+static *pair tables* precomputed from the rebin sparsity; (ii) the kernel sandwich as two
+unrolled diagonal-shifted accumulations on the band image; (iii) translation + tent
+mixing + accumulation into a global band tensor. Cost per epoch is
+$\mathcal{O}(P \cdot w)$ with $w = 2(s + 2r) + \mathcal{O}(1)$, versus probing's
+$\mathcal{O}(p)$ operator applications — an order of magnitude at survey bandwidths
+($w \sim 50$, $2p+1 \sim 10^3$), with identical results up to floating-point summation
+order (regression-tested; the `validate` path checks the assembled matrix against the
+matrix-free operator directly).
+
+**Closed-form gradient.** With the band cheap, reverse mode through the Cholesky and
+solve scans becomes the bottleneck (it stores or recomputes every scan step). The solve
+stage instead defines a custom VJP from the standard identities: for
+$\ell d = \log\det\tilde{\boldsymbol\Lambda}$, $Q = b^\top\tilde{\boldsymbol\Lambda}^{-1}b$,
+$\hat d = \tilde{\boldsymbol\Lambda}^{-1} b$,
+
+$$
+\frac{\partial\,\ell d}{\partial \tilde{\boldsymbol\Lambda}} = \tilde{\boldsymbol\Sigma},
+\qquad
+\frac{\partial Q}{\partial \tilde{\boldsymbol\Lambda}} = -\hat d\,\hat d^\top,
+\qquad
+\bar b \mathrel{+}= \tilde{\boldsymbol\Sigma}\,\bar g_{\hat d},
+\quad
+\bar{\tilde{\boldsymbol\Lambda}} \mathrel{+}= -\big(u\,\hat d^\top\big),\;
+u = \tilde{\boldsymbol\Sigma}\,\bar g_{\hat d}.
+$$
+
+Because every perturbation of $\tilde{\boldsymbol\Lambda}$ is block-tridiagonal, only the
+*banded part* of $\tilde{\boldsymbol\Sigma}$ is ever contracted — exactly what the block
+Takahashi recursion delivers ($\Sigma_{k+1,k} = -\Sigma_{k+1,k+1}W_k$,
+$\Sigma_{kk} = L_{kk}^{-\top}L_{kk}^{-1} + W_k^\top\Sigma_{k+1,k+1}W_k$,
+$W_k = L_{k+1,k}L_{kk}^{-1}$; `solver.selected_inverse_blocks`). Cross-block cotangents
+carry a factor 2 (the stored lower block represents both triangles); within-block
+cotangents are reported symmetrically, which is exact end-to-end because mirrored band
+entries are assembled by identical functions of θ ($\mathbf{G}_j$ is symmetric). Gradient
+contract: gradients flow through the log-likelihood, the quadratic form, and $\hat d$ —
+not through the returned Cholesky factor (a numerical artifact for sampling
+diagnostics). Verified against plain autodiff to $10^{-13}$ relative and by finite
+differences.
+
+**Second derivatives.** Forward-mode differentiation of a `custom_vjp` function is
+rejected by JAX outright, so Hessians must be taken reverse-over-reverse
+(`jacrev(jacrev(...))`) — which is exact here *because* the forward rule recomputes its
+primal inline: the second reverse pass then walks plain graphs instead of re-entering
+the custom boundary, where the dropped Cholesky cotangent would silently lose the
+chol-mediated second-order terms (measured $8\times10^{-3}$ relative before that fix;
+equal to plain autodiff at $10^{-15}$ after). Independently, forward-over-reverse
+(`jax.hessian`) was measured to produce an *asymmetric* Hessian on this stack even for
+the plain-autodiff path — a pre-existing defect in the Laplace mass matrix — while
+reverse-over-reverse matches central finite differences of the gradient to 8 digits;
+`laplace_inverse_mass` now uses reverse-over-reverse.
+
 ---
 
 ## 5. Degeneracies and identifiability

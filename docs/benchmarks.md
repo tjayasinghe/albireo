@@ -363,3 +363,95 @@ one ESO program, ~153 MB, no login; hand-set light ratio at the heart of the
 f = 0.439 ± 0.013 from GRAVITY to score the posterior against) with
 **AI Phoenicis** as the precision backup (60 public epochs; K's known to 0.02%).
 Data download awaits maintainer approval.
+
+## M5 speedup pass — direct band assembly + closed-form gradient (2026-08-11, D28)
+
+Same machine, same ladder configuration, same seeds; log-likelihoods agree with
+the M5 record to machine precision (several rows bit-identical, the rest at
+~1e-15 relative — the assembly changes only the floating-point summation order).
+
+### Where the time actually went
+
+A stage-split profile at the 31.7k ladder row attributed **22.3 s of the 24.3 s
+evaluation (92%) to comb probing**; the block Cholesky was 0.86 s, everything
+else noise. Probing pays 2p+1 = 1027 matrix-free operator applications — the
+*union* of all epochs' band offsets — even though each epoch only contributes a
+~50-pixel-wide band at a velocity-determined offset. That redundancy, not the
+factorization, was the entire scale problem.
+
+### What replaced it
+
+1. **Direct per-epoch band assembly** (`albireo/assembly.py`, math.md §4.5): each
+   epoch's (i,j) block is ℓᵢℓⱼ·T(δᵢ)ᵀ·G·T(δⱼ) with G = KᵀRᵀW′RK a narrow band —
+   assembled by static rebin pair tables (one `segment_sum` per epoch), two
+   unrolled kernel-shift passes, and a four-term tent-weighted combination of
+   row-translated copies, accumulated into a global band tensor by
+   `dynamic_update_slice` (no scatters anywhere on the hot path). O(band width)
+   work per epoch instead of O(bandwidth) matvecs: ~12× on the assembly stage.
+   Probing survives as `assembly="probe"` (reference) and as the `validate=True`
+   oracle, which now cross-checks the band assembly against the matrix-free
+   operator directly.
+2. **Closed-form solve-stage gradient** (custom VJP): cotangents of
+   {log det, quadratic form, d̂} against the precision come from the block-
+   Takahashi banded selected inverse and d̂-outer products — reverse mode never
+   walks the Cholesky/solve scans, and assembly-side reverse work shrank further
+   by hoisting the velocity-independent G stage out of the rematerialized scan
+   and by expressing row translation as clip-safe `dynamic_slice` (its transpose
+   is a contiguous copy, where a gather's transpose is a scatter). Verified
+   against plain autodiff at 1e-13 relative and by finite differences.
+
+### Ladder, before → after (CPU, same laptop, jitted, p = 513, 50 epochs, SB2)
+
+| n (model px) | eval before | eval after | ∇ before | ∇ after |
+|---|---|---|---|---|
+| 31,734 | 24.7 s | **3.0 s** (8.2×) | 102.7 s | **10.6 s** (9.7×) |
+| 74,322 | 52.5 s | **8.0 s** (6.6×) | 249.9 s | **24.9 s** (10.0×) |
+| 135,052 | 96.9 s | **14.5 s** (6.7×) | 466.0 s | **56.5 s** (8.2×) |
+| **203,440 (design target)** | 149.7 s | **26.0 s** (5.8×) | 729.9 s | **111.3 s** (6.6×) |
+
+(`scripts/m5_scale_bench.py`, single sequential run, no external load.) A
+design-target marginal evaluation — "give me disentangled spectra at this
+orbit" — is now **~26 s on a laptop CPU** (was 2.5 min), and a gradient **under
+2 min** (was 12 min). The gate-scale NUTS test rides along: ~65 s wall
+(Laplace + warmup + 250 samples) vs ~102 s at the M3 baseline and 112 s in the
+M5 record — the small-problem regression the probe-era size-adaptive policy
+existed to prevent is simply gone, along with the policy's reason to exist. The design-target gradient's working set (~25–30 GB:
+band tensor, factor, Takahashi blocks, and their cotangents) grazes this
+machine's 32 GB, which is where the modest ratio erosion at the top row comes
+from; fusing the Takahashi sweep into the cotangent assembly is the recorded
+next lever. At realistic single-star bandwidths (HR 6819-like: p ≈ 160 rather
+than the ladder's conservative 513) the same operations land at seconds per
+gradient, which puts **full NUTS posteriors for real SB2 problems within reach
+of a laptop CPU** — the GPU budget becomes headroom rather than a requirement.
+
+### Found in passing: the Laplace mass matrix was built from a defective Hessian
+
+Wiring the custom VJP into the suite surfaced two second-order facts. First, the
+initial custom rule was first-order exact but second-order wrong (8e-3 relative):
+its forward rule called the custom function itself, so Hessians re-entered the
+custom boundary and lost the chol-mediated terms through the dropped cotangent —
+fixed by inlining the primal in the forward rule, after which
+`jacrev(jacrev(...))` agrees with plain autodiff to 1e-15. Second, and
+independent of all M5 work: `jax.hessian` (forward-over-reverse) produces an
+**asymmetric** Hessian on this stack even for the plain-autodiff path
+(off-diagonal 0.566 vs 0.855 on the diagnostic problem), while
+reverse-over-reverse matches central finite differences of the gradient to
+8 digits at three step sizes. `laplace_inverse_mass` — the only forward-mode
+consumer in the package — had therefore been symmetrizing a slightly wrong
+matrix since M3. It now uses reverse-over-reverse (math.md §4.5). The mass
+matrix is a preconditioner, so posteriors were never biased; warmup was simply
+tuned from a mildly wrong curvature estimate.
+
+### GPU consequences
+
+The hot path is now vmapped dense convolution-like passes, contiguous dynamic
+slices, and one 50-step scan with large per-step work — all GPU-native shapes;
+the probe-era `probe_chunk`/`remat` tuning story is gone along with probing. The
+remaining GPU-specific bottleneck is chain latency in the sequential block
+Cholesky/Takahashi scans (~800 steps of 513² work at the design target);
+the associative-scan (parallel-prefix) factorization that removes it is on the
+ledger (D28), as are a custom-VJP band→block packing, a fully analytic
+assembly VJP, and opt-in mixed precision. Projection (still projection, not
+measurement): design-target gradient ~0.5–1.5 s on one A100-class device, a
+converged design-target posterior in **tens of minutes**; the earlier 1–2 h
+projection stands as the conservative bound.

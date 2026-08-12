@@ -94,8 +94,10 @@ A `Dataset` of per-epoch spectra (wavelength, flux, inverse variance, time, bary
 instrument) and a log-wavelength model grid define a marginal-likelihood model. `albireo` builds the
 per-epoch forward operator — shift, LSF convolution, rebin to the native grid, response polynomial —
 and evaluates $\log p(y \mid \theta)$ with the component spectra integrated out. The resulting
-precision matrix is block-tridiagonal and is factorized with a scanned banded Cholesky, giving exact
-log-determinants and selected inverses at banded cost.
+precision matrix is block-tridiagonal: its band is assembled analytically epoch by epoch (each epoch
+contributes a narrow band at a velocity-set offset), factorized with a scanned banded Cholesky for
+exact log-determinants and selected inverses at banded cost, and differentiated in closed form
+through the block-Takahashi selected inverse rather than by reverse-mode through the factorization.
 
 Inference runs as a three-stage pipeline: MAP with L-BFGS, which also performs ML-II estimation of
 the spectral-prior hyperparameters; a Laplace approximation at the MAP supplying the inverse mass
