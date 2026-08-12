@@ -590,3 +590,248 @@ across the Cholesky. Folding the band to one triangle, and assembling directly
 into block storage so the band tensor never exists, are the recorded next
 levers — neither is needed to run the design target, which now has ~13 GB of
 headroom on this machine.
+
+## HR 6819 — the first observed dataset (2026-08-12, D30)
+
+The maintainer approved the download, so the stack met real spectra for the first
+time: the 51 public FEROS exposures of HR 6819 (ESO 073.D-0274(A), PI Rivinius,
+153 MB, anonymous), the same data behind every published analysis of the system.
+
+### What the data actually are, versus what the model wanted
+
+| | expected | delivered |
+|---|---|---|
+| continuum | flux ~ 1 | `CONTNORM = False`; raw merged-echelle ADU, response falling **20×** over 3850–4750 Å, negative below ~3830 Å |
+| uncertainties | `ivar > 0` | `ERR` column **entirely NaN** ("Error spectrum not available") |
+| wavelength grid | one per instrument | 0.03 Å step shared, but start wavelengths spread over 0.78 Å and lengths 189621–189653 → **28 distinct grids** |
+| frame | declared | `SPECSYS = BARYCENT`, correction in `ESO DRS BARYCORR` (−25.13 to +16.12 km/s) |
+| time | BJD_TDB mid-exposure | `TMID` = MJD(UTC), and in the **extension** header, not the primary |
+
+### Five defects, each found by a property of the data
+
+1. **NaN at a zero-weight pixel took the whole likelihood to `nan`.** `data.py`
+   documents that a masked pixel's flux "is never read"; `build_problem` formed
+   `z = flux − r·base` unmasked and every consumer multiplies by `w`, so
+   `0 · nan = nan`. `normalize` writes exactly that wherever the fitted continuum
+   collapses. Measured: identical log-likelihood before/after the fix when the
+   masked block holds `nan`, `±inf`, or `1e300`.
+2. **Per-exposure grids were rejected outright.** Grouping is now by
+   (instrument, grid); the instrument key still keys the LSF, so `lsf_sigma_v`
+   stays one entry per instrument rather than 28.
+3. **`prior_logdet` returned `nan` below `eta/tau ≈ 1e-13`** — an unguarded
+   `sqrt` of a difference of like-sized terms, reachable by unbounded ML-II.
+4. **The row-support warning quoted `int64` minimum** as its median whenever more
+   than half an epoch lay outside the model grid: rows the rebin operator never
+   touched carried a sentinel instead of being excluded.
+5. **A region disjoint from the model grid failed as "empty rebin operator"**,
+   with no indication of which of the two ranges was wrong.
+
+### Continuum: why the fit is done in the log
+
+A curvature penalty applied to the flux cannot track a multiplicative response.
+Measured on one exposure over 3850–4750 Å, normalizing with a 150 Å linear-space
+smoother left the 97th percentile of the normalized flux at **0.55–0.63** in the
+worst 50 Å bins — a 40% error. Fitting `log(flux)` instead (a pure exponential is
+a straight line, and straight lines are in the penalty's nullspace):
+
+| smoothing scale | p97 of normalized flux, per 50 Å bin, 3850–4750 Å |
+|---|---|
+| 80 Å | 1.006 – 1.010 |
+| 150 Å | 1.007 – 1.011 |
+
+— flat across the whole 20× gradient, and insensitive to the knob.
+
+The second half of the fix is the knot basis. A per-pixel Whittaker smoother needs
+`λ ≈ (L_px/2π)^4`; at the 5000–10000 pixel smoothing lengths a merged echelle
+spectrum calls for, that is `λ ~ 10¹²`, the weight term is lost to rounding, and
+`solveh_banded` fails with *"leading minor not positive definite"*. Eight knots per
+smoothing length holds `λ ≈ 2.6` at any requested scale.
+
+### Barycentric sign, checked against the sky rather than against ourselves
+
+No test pinned albireo's `v_bary` convention to an external standard. Cross-correlating
+the telluric O₂ A band (7595–7660 Å) across epochs spanning 55 km/s of correction:
+
+| | rms residual |
+|---|---|
+| telluric shift = **+BARYCORR** | **0.138 km/s** |
+| telluric shift = −BARYCORR | 59.3 km/s |
+
+slope 0.9993 — so `frame="barycentric"` with `v_bary = ESO DRS BARYCORR` is right,
+and the 0.14 km/s floor is CCF precision plus real water-vapour variability.
+Independently, astropy's own correction agrees with the pipeline's keyword to
+**0.017 km/s**.
+
+### Configuration for the science run
+
+4380–4600 Å (He I 4388/4471, Mg II 4481, Si III 4552/4568/4575: photospheric in
+both components, no Balmer core, no variable disc emission, nearest telluric band
+1200 Å away). After `share_wavelength_grid` (residual relabelling **0.007 km/s**,
+1/300 of a pixel) the 28 groups collapse to **1**.
+
+| | |
+|---|---|
+| epochs / native pixels | 51 / 373,983 (100.0% good) |
+| model grid | 9,938 px, 4378.45–4601.65 Å, dv = 1.50 km/s |
+| operator groups | 1 |
+| row support / kernel radius | 3 / 8 |
+| half-bandwidth `b_nat`, `p` | 81, 163 |
+| marginal log-likelihood eval | 0.5 s (after a 1.0 s compile) |
+
+### The fit, and what it says about systematics
+
+MAP + ML-II from a conjunction-phase scan: 120 L-BFGS steps, **2820 s**, peak RSS
+**2.6 GB**. The gradient norm plateaus around 4×10² and oscillates — `run_map`'s
+absolute `tol` is unreachable at 3.7×10⁵ good pixels, which is why it grew a
+`callback` (watch the parameters, not the flag).
+
+Profiling the marginal likelihood around the MAP, in **two independent windows**:
+
+| | A: 4380–4600 Å | B: 4120–4330 Å | Klement et al. 2025 |
+|---|---|---|---|
+| lines | He I 4388/4471, Mg II 4481, Si III 4552/68/75 | He I 4144/4169, Si II, Fe II | — |
+| period [d] | 40.36583 ± 0.00045 | 40.37022 ± 0.00065 | 40.3261 ± 0.0013 |
+| K<sub>pre-sd</sub> [km/s] | 63.314 ± 0.013 | 63.724 ± 0.019 | 61.15 ± 0.88 |
+| K<sub>Be</sub> [km/s] | 1.985 ± 0.151 | 3.022 ± 0.153 | 3.90 ± 0.27 |
+| eccentricity | 0.0302 | — | 0.0289 ± 0.0058 |
+| whitened residual sd | 1.674 | 1.403 | 1 if calibrated |
+
+Read in the right order, this is a useful result and **not** a publishable orbit:
+
+* **Eccentricity lands at 0.2σ** — 0.0302 against 0.0289 ± 0.0058, on a nearly circular
+  orbit, from spectra alone.
+* **The quoted ± are statistical only, and they are wrong by at least an order of
+  magnitude.** The two windows differ by 0.0044 d in period (5.6σ of their combined
+  internal errors) and 0.41 km/s in K<sub>pre-sd</sub> (17.8σ). Window-to-window scatter is
+  the honest lower bound on the error bar; the likelihood curvature is not.
+* **The residual scatter says why**: 1.4–1.7× the assumed noise, i.e. real unmodelled
+  structure. Candidates, in rough order of suspicion — the pipeline resampled these
+  spectra onto a common step, so the diagonal `ivar` model is optimistic by construction;
+  per-epoch continuum residuals; a Gaussian LSF standing in for FEROS's real one; and the
+  Be star's disc emission violating the one-static-spectrum-per-component assumption over
+  a 135-day baseline.
+* **K<sub>pre-sd</sub> is 3.5–4% above the literature, consistently in both windows.**
+  Worth stating that the sign is the physically expected one: the published values come
+  from cross-correlation and Gaussian line fits, which blend the sharp lines with the Be
+  star's broad, nearly stationary ones and are therefore biased *toward* the systemic
+  velocity. Deblending should raise K. That is a hypothesis this run does not test, not a
+  claim.
+* **K<sub>Be</sub> is detected but not measured.** The profile is a clean peak — 83 nats
+  above K = 0 in window A — yet the two windows give 1.99 and 3.02 against a literature
+  3.90. Expected: at v sin i ≈ 200 km/s the Be star's reflex motion is ~1/50 of a line
+  width, which `math.md` §5.1 identifies as exactly the unattributable regime, and its
+  recovered spectrum is prior-dominated.
+
+The next step is not NUTS. Sampling would return the same optimistic width around the
+same systematics-limited point; what the run needs first is an honest noise model, a wider
+window, and a check of whether the period offset survives a per-epoch continuum treatment.
+The first of those is the subject of the next section — it was built, and it did not help
+in the way one would hope.
+
+---
+
+## The jitter site, and what it did to HR 6819 (2026-08-12, D31)
+
+D15 always allowed a per-epoch noise-inflation factor and nothing ever built it, so the
+run above had to take its estimated `ivar` at face value and report a residual scatter of
+1.4–1.7 as a caveat. `forward.with_jitter` and the `log_jitter` θ site close that. This
+section is the measurement of what difference it makes, which is not the difference one
+would want.
+
+### First: the marginal counts resolution elements, not pixels
+
+Profiling a single shared α at the previous MAP, against the standard-deviation-of-the-
+whitened-residuals estimator that the tutorial used to recommend:
+
+| | window A | window B |
+|---|---|---|
+| weighted pixels `N` | 373,813 | 356,928 |
+| residual sd (the naive estimator) | 1.6743 | 1.4030 |
+| profiled `α̂` | **1.6807** | **1.4088** |
+| implied `p_eff = N[1 − (sd/α̂)²]` | **2,843** | **2,930** |
+| model pixels `n_comp · n_pix` | 19,876 | 20,160 |
+| resolution elements (FWHM = 4.16 px) | 4,779 | 4,846 |
+
+Two things worth keeping. The correction is real and in the predicted direction
+(`math.md` §3.2a: `α̂² = χ²/(N − p_eff)`, not `χ²/N`) — but here it is only 0.4%, because
+`p_eff` is **not** the model pixel count. At `dv = 1.5` km/s the grid oversamples FEROS by
+4.2×, and the ML-II smoothness prior is stiffer still, so of ~20,000 nominal spectral
+parameters only ~2,900 are data-determined — roughly 60% of the resolution-element count.
+Inverting the two estimators for `p_eff` costs nothing and is otherwise an awkward number
+to get at; in the `tests/test_jitter.py` fixture, built with a deliberately weak prior, the
+same inversion gives `p_eff/N = 0.09` and the naive estimator is 4.6% low.
+
+Per-epoch factors then buy a great deal more than one shared factor: **+19,763 nats** (A)
+and **+10,020 nats** (B) over the best shared α. The exposures are genuinely not equally
+good — α runs 1.11–3.61 in window A, so the worst exposure carries 1/13 of the weight the
+`ERR`-free DER_SNR estimate would have given it.
+
+### Then: it whitens the residuals and makes the orbit worse
+
+Joint MAP over orbit + hyperparameters + 51 per-epoch jitters, 70 L-BFGS steps, ~380 s per
+window, both windows fitted independently:
+
+| | A, no jitter | A, jitter | B, no jitter | B, jitter | Klement et al. 2025 |
+|---|---|---|---|---|---|
+| period [d] | 40.36583 ± 0.00045 | **40.44429 ± 0.00067** | 40.37022 ± 0.00065 | **40.42979 ± 0.00088** | 40.3261 ± 0.0013 |
+| K<sub>pre-sd</sub> [km/s] | 63.314 ± 0.013 | **63.074 ± 0.022** | 63.724 ± 0.019 | **63.400 ± 0.024** | 61.15 ± 0.88 |
+| K<sub>Be</sub> [km/s] | 1.985 ± 0.151 | **1.450 ± 0.209** | 3.022 ± 0.153 | **2.658 ± 0.248** | 3.90 ± 0.27 |
+| eccentricity | 0.0302 | **0.0241** | — | **0.0213** | 0.0289 ± 0.0058 |
+| whitened residual sd | 1.674 | **0.997** | 1.403 | **0.997** | 1 if calibrated |
+
+The noise model is now self-consistent — residual sd 0.997 in both windows, which is what
+a jitter is for. Everything else got worse:
+
+| | no jitter | with jitter |
+|---|---|---|
+| window A vs B, period | 5.6 × combined formal σ | **13.1 ×** |
+| window A vs B, K<sub>pre-sd</sub> | 17.8 × | 10.0 × |
+| window A vs B, K<sub>Be</sub> | 4.8 × | 3.7 × |
+| period vs literature (A) | 28.9 σ | **80.7 σ** |
+| eccentricity vs literature (A) | 0.2 σ | 0.8 σ |
+
+The error bars grew by about α, as they should (1.3–1.7×). The *central values* moved much
+further than that: the period shifted by 0.078 d, which is **174× the no-jitter formal
+error** on the same window, and away from the published value.
+
+### Why — and a check that it is not a bug
+
+Evaluating both parameter vectors under both weightings separates "the reweighting really
+moved the optimum" from "the optimizer walked somewhere the objective would not go":
+
+| | weights α = 1 | weights α = MAP |
+|---|---|---|
+| θ from the no-jitter fit | **1,350,406** | 1,514,430 |
+| θ from the jittered fit | 1,339,784 | **1,518,265** |
+
+Each wins under its own weights — by 10,622 and 3,835 nats respectively. Both fits are
+correct; they are answering different questions. Scanning the period under the *jittered*
+weights confirms the surface has structure far wider than its own curvature: from the
+no-jitter θ the conditional optimum is 40.3600 ± 0.0007, from the jittered θ it is
+40.4442 ± 0.0007 — two optima 125 σ apart, with the second higher.
+
+The mechanism is visible in which exposures got downweighted. Within window A,
+`corr(α, phase along the baseline) = −0.25`: the noisiest exposures concentrate early, four
+of the worst five sitting below phase 0.35 of the 134.7-day baseline. Downweighting one end
+of the baseline is giving up period leverage at that end, and a period fit pivots about the
+weighted centre of its data — which the reweighting moved from phase 0.581 to 0.605. The two
+solutions do behave like a pivot: they agree on a conjunction at BJD 2453221.7 (phase 0.615,
+within 1.4 d of that weighted centroid) and diverge on either side of it.
+
+### What to take from this
+
+* **The jitter site works and is worth having.** It is exact (jitter α is bit-equivalent
+  to being handed `ivar/α²`), it profiles to the dof-corrected estimate, and it turns "the
+  residuals are 1.67× too big" from a caveat in prose into a fitted parameter.
+* **It is not a repair for correlated residuals, and on this dataset it makes the point
+  emphatically.** A diagonal noise model that has been rescaled is still a diagonal noise
+  model. Here it whitened the residual *scale* while leaving whatever generates the
+  structure untouched, and in doing so it relocated the answer by 174 formal σ.
+* **The noise model selects the optimum.** That is the sharpest version of the lesson from
+  the previous section. It is not only that the likelihood curvature understates the
+  uncertainty — it is that two defensible noise models, fitted to the same data in the same
+  window, disagree by far more than either one's stated error. Quote the spread across
+  independent windows *and* across defensible noise models, or quote nothing.
+* **The eccentricity survives, less impressively.** 0.0241 and 0.0213 against
+  0.0289 ± 0.0058 — 0.8σ and 1.3σ, where the no-jitter run gave 0.2σ. Consistent, but the
+  0.2σ was luckier than it looked.

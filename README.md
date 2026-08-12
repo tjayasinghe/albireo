@@ -22,6 +22,9 @@ blue** — GPU-accelerated, fully Bayesian spectral disentangling of spectroscop
 - **SB1 faint-companion detection**, via a K2 scan: profile the marginal likelihood over the
   secondary velocity semi-amplitude to search for companions that never show up as a second set of
   lines.
+- **Reads archival spectra directly** — `albireo.io` turns a directory of ESO Phase-3 or
+  IRAF-style FITS into a `Dataset`, and `albireo.preprocess` supplies the things reduced
+  spectra are missing: a continuum, an inverse variance, masks, and one shared wavelength grid.
 
 ## Installation
 
@@ -36,6 +39,9 @@ pip install -e ".[dev]"
 Python 3.12+ is required (current jaxlib no longer ships 3.11 wheels). JAX's x64 mode is enabled by the package at import time, so all
 computation is done in float64 — you do not need to set `JAX_ENABLE_X64` yourself.
 
+Reading spectra from FITS needs astropy, which is an optional extra — `pip install -e ".[io]"`.
+Nothing else in albireo imports it.
+
 For a GPU build, install the appropriate `jax[cuda]` wheel for your platform following the
 [JAX installation guide](https://docs.jax.dev/en/latest/installation.html).
 
@@ -47,9 +53,40 @@ pipeline; hyperparameters by ML-II), and the realism layer — telluric componen
 hierarchical SB3 triples (`period_out`/…/`k_out` sites), per-epoch light-fraction
 inference (`light` site, Dirichlet priors — the eclipse breaker, inferred),
 multi-instrument LSF-width inference (`lsf_sigma` site; anchor one reference
-instrument), and the SB1 faint-companion K₂ scan (`ab.k2_scan`). A friendlier
+instrument), per-epoch noise rescaling (`log_jitter` site — read
+[the benchmarks](docs/benchmarks.md) before trusting one on real data), and the SB1
+faint-companion K₂ scan (`ab.k2_scan`). A friendlier
 `Disentangler` façade with light-ratio policies is planned; the core below is the
 supported surface for now.
+
+### From a directory of FITS files
+
+Reduced spectra are not what the model consumes: they are rarely continuum-normalized, they
+often ship no usable error array, and pipelines that apply the barycentric correction before
+resampling give every exposure its own wavelength grid. `read_dataset` handles all three, and
+warns about anything it had to assume (frame, time system, wavelength unit) instead of guessing
+silently.
+
+```python
+import albireo as ab
+
+ds = ab.read_dataset(
+    "data/hr6819/*.fits",            # ESO Phase-3 or IRAF-style 1-D spectra
+    instrument="FEROS",
+    region=(4380.0, 4600.0),         # a full echelle order set is far more than you need
+    smooth_angstrom=120.0,           # continuum stiffness
+)
+ds = ab.Dataset(ab.share_wavelength_grid(list(ds)), frame=ds.frame)  # 28 grids -> 1
+grid = ab.LogGrid.covering(ds, dv_kms=1.5, v_margin_kms=90.0, lsf_sigma_kms=2.65)
+print(ds.summary())
+```
+
+`ab.read_spectrum` returns the intermediate `RawSpectrum` if you want to inspect what the
+header actually said before any of it is applied. See
+[`examples/03_hr6819_real_data.py`](examples/03_hr6819_real_data.py) for a complete run on
+real archival data.
+
+### The inference pipeline
 
 ```python
 import albireo as ab
@@ -101,8 +138,9 @@ scan.k2_peak, scan.detection_peak, scan.companion  # + std, null loglike, ...
 
 ## Documentation
 
-- [`examples/`](examples/) — executable tutorials (SB2 end-to-end, K₂ scan), run in CI; narrative
-  versions in [`docs/tutorials/`](docs/tutorials/).
+- [`examples/`](examples/) — executable tutorials (SB2 end-to-end, K₂ scan, and HR 6819 on real
+  archival FEROS spectra); the first two run in CI. Narrative versions in
+  [`docs/tutorials/`](docs/tutorials/).
 - [`docs/design.md`](docs/design.md) — architecture, data model, and the shape of the inference
   problem.
 - [`docs/math.md`](docs/math.md) — the disentangling likelihood, analytic marginalization of the

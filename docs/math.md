@@ -188,7 +188,8 @@ $\big[\ \operatorname{diag}(r_j)\mathbf{R}_j \mathbf{B}_j \mathbf{T}(\delta_{1j}
 $\ell_{ij}$, and $a_0 = \operatorname{diag}(r_j)\mathbf{R}_j \mathbf{1}$ collects the continuum.
 Masked pixels have $w=0$ and drop out of every inner product below. An optional per-epoch
 noise-inflation ("jitter") factor $\alpha_j$ rescales $w_j \to w_j/\alpha_j^2$ and joins
-$\theta$.
+$\theta$ (`forward.with_jitter`, θ site `log_jitter`); §3.2a derives what profiling it
+estimates, and why it is not the same as rescaling by the residual scatter.
 
 $\mathbf{A}$ is never formed densely: it is a composition of gathers, stationary convolutions,
 and segment-sums, each with an exact adjoint (tested against `jax.linear_transpose`).
@@ -293,6 +294,47 @@ $\log\det$ treatments: exact (A), stochastic (B), or frozen/dropped (C). Droppin
 $\log\det$'s $\theta$-dependence is *not* innocuous: it biases exactly the parameters that
 change the information geometry (light ratios, LSF widths, prior hyperparameters), which is why
 strategy C is quick-look only.
+
+### 3.2a What profiling the jitter estimates
+
+The noise-inflation factor of §1.4 is worth a separate line, because the marginal gives it a
+better denominator than the obvious hand calculation. Take one shared $\alpha$ for clarity, so
+$\mathbf{W} = \mathbf{W}_0/\alpha^2$. Only two terms of the boxed marginal depend on $\alpha$
+once the data-dominated directions are separated out: the weight term contributes
+$-N\log\alpha$ ($N$ = unmasked pixels), and
+
+$$
+-\tfrac12\log\det\big(\boldsymbol\Lambda + \mathbf{A}^\top\mathbf{W}_0\mathbf{A}/\alpha^2\big)
+\;\longrightarrow\; +\,p_{\text{eff}}\log\alpha + \text{const},
+\qquad
+p_{\text{eff}} = \operatorname{tr}\!\big[\tilde{\boldsymbol\Lambda}^{-1}\mathbf{A}^\top\mathbf{W}\mathbf{A}\big],
+$$
+
+$p_{\text{eff}}$ being the usual effective number of parameters (prior-dominated directions
+carry no $\alpha$ dependence and drop out). With $\chi^2_0 = \hat r^\top\mathbf{W}_0\hat r$,
+setting $\partial_{\log\alpha} = 0$ gives
+
+$$
+\hat\alpha^2 \;=\; \frac{\chi^2_0}{N - p_{\text{eff}}},
+$$
+
+the degrees-of-freedom-corrected variance estimate. Whitening the residuals and reading off
+their standard deviation instead estimates $\chi^2_0/N$, low by $\sqrt{1 - p_{\text{eff}}/N}$.
+The Occam term is doing the same work here that it does for $(\tau,\eta)$ in §5.1.
+
+How large the correction is depends on the run, and the quantity that sets it is
+$p_{\text{eff}}$, *not* the nominal parameter count $N_c P$. An oversampled model grid with a
+fitted smoothness prior has far fewer data-determined modes than pixels — on HR 6819,
+$p_{\text{eff}} \approx 2900$ against $N_c P = 19{,}876$, roughly the number of *resolution
+elements* rather than pixels, so the correction was 0.4%. Inverting the two estimators gives
+$p_{\text{eff}}$ for free: $p_{\text{eff}} = N\,[1 - (\text{residual sd}/\hat\alpha)^2]$, which
+is a cheap and otherwise awkward diagnostic of how much of the spectrum the data actually
+constrain.
+
+What this does not buy: $\mathbf{W}$ stays diagonal, so a jitter can only rescale a residual,
+never decorrelate one. Against systematics — continuum errors, LSF mismatch, intrinsically
+variable line profiles — $\hat\alpha$ widens the intervals around an unchanged, still-biased
+point estimate, and it silences the residual-scale diagnostic while doing so.
 
 ### 3.3 Recovering the spectra and their uncertainties
 

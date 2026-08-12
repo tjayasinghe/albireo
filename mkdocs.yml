@@ -29,6 +29,7 @@ nav:
   - Tutorials:
       - Disentangle an SB2 end to end: tutorials/sb2-end-to-end.md
       - Find a hidden companion with the K2 scan: tutorials/k2-scan.md
+      - Bring your own spectra (FITS to Dataset): tutorials/real-data.md
   - Design: design.md
   - Mathematical foundations: math.md
   - Benchmarks: benchmarks.md
