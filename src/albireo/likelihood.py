@@ -135,7 +135,11 @@ def marginal_loglikelihood(
             "half-bandwidth underestimated?"
         )
 
-    bt_prior = probe_block_tridiagonal(prior_matvec, n, 2 * n_comp, bt.block_size)
+    # The prior's bandwidth is tiny (2 per component), so its factor gets its own
+    # small block size: factorizing it at the posterior's block size would double
+    # the Cholesky cost at scale for a determinant that is nearly free.
+    prior_block = max(2 * n_comp, 64)
+    bt_prior = probe_block_tridiagonal(prior_matvec, n, 2 * n_comp, prior_block)
     chol = block_cholesky(bt)
     chol_prior = block_cholesky(bt_prior)
 

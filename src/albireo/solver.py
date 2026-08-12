@@ -99,46 +99,28 @@ class BlockCholesky:
         return cls(*children, n=aux)
 
 
-def _probe_scatter_indices(n_pad: int, p: int, block_size: int, num_blocks: int):
-    """Static index maps turning comb-probe outputs into block-tridiagonal storage.
-
-    For every matrix entry ``(q, c)`` with ``|q - c| <= p``, the probe containing
-    column ``c`` is ``c % (2p + 1)`` and the entry value sits at row ``q`` of that
-    probe's output. Entries land either in the diagonal block of ``c`` or (for
-    ``q`` one block below) in a lower block; upper entries follow by symmetry.
-    """
-    b = block_size
-    stride = 2 * p + 1
-    c = np.arange(n_pad)[:, None]
-    q = c + np.arange(-p, p + 1)[None, :]
-    valid = (q >= 0) & (q < n_pad)
-    kc, kq = c // b, q // b
-    probe = np.broadcast_to(c % stride, q.shape)
-
-    same = valid & (kq == kc)
-    down = valid & (kq == kc + 1)
-
-    def gather(mask):
-        qq, cc = q[mask], np.broadcast_to(c, q.shape)[mask]
-        return (
-            (cc // b).astype(np.int32),  # block index (column block)
-            (qq % b).astype(np.int32),  # row within block
-            (cc % b).astype(np.int32),  # col within block
-            probe[mask].astype(np.int32),
-            qq.astype(np.int32),
-        )
-
-    d_idx = gather(same)
-    e_idx = gather(down)
-    if num_blocks == 1 and e_idx[0].size:  # no lower blocks exist
-        e_idx = tuple(a[:0] for a in e_idx)
-    return stride, d_idx, e_idx
+_SMALL_PROBE_BYTES = 64 * 1024 * 1024  # outputs-array size below which memory is a non-issue
 
 
 def probe_block_tridiagonal(
-    matvec, n: int, half_bandwidth: int, block_size: int | None = None, *, probe_chunk: int = 64
+    matvec,
+    n: int,
+    half_bandwidth: int,
+    block_size: int | None = None,
+    *,
+    probe_chunk: int | None = None,
+    remat: bool | None = None,
 ):
     """Assemble a banded SPD operator into :class:`BlockTridiagonal` by comb probing.
+
+    Probes are applied in *sequential* batches of ``probe_chunk`` via ``lax.map``
+    (combs generated from their offsets inside the loop body), and the block
+    storage is read out of the probe outputs with per-block gathers, also under
+    ``lax.map``. Sequential batching is load-bearing: unrolled probe batches have
+    no data dependence, so XLA schedules them with overlapping live ranges and the
+    temporary-buffer plan grows with the *total* probe count (~80 GB at survey
+    scale, measured); a scan reuses one batch's buffers for the next, capping peak
+    memory at the ``(2p + 1, n_pad)`` output array plus one batch's intermediates.
 
     Parameters
     ----------
@@ -154,7 +136,16 @@ def probe_block_tridiagonal(
         Block size ``B >= p`` (default ``max(p, 8)``). Dimension is padded to a
         multiple of ``B``; the pad block is the identity.
     probe_chunk
-        Probes are applied in ``vmap`` batches of this size to bound peak memory.
+        Probes per sequential batch. Peak probing memory scales linearly with it;
+        larger values amortize per-step overhead (raise on GPU, where memory
+        bandwidth favors bigger batches). Default: size-adaptive — 64 for small
+        problems, 8 once the outputs array exceeds ~64 MB.
+    remat
+        Rematerialize probe batches in the backward pass. Saves gradient memory
+        proportional to the probe count at ~1.5-2x backward probing cost. Default:
+        size-adaptive — off for small problems (measured 2x NUTS slowdown at the
+        M3 gate scale for no memory benefit), on at scale (where storing every
+        batch costs hundreds of GB).
     """
     p = int(half_bandwidth)
     b = int(block_size) if block_size is not None else max(p, 8)
@@ -162,25 +153,60 @@ def probe_block_tridiagonal(
         raise ValueError(f"block_size ({b}) must be >= half_bandwidth ({p})")
     k = max(1, -(-n // b))
     n_pad = k * b
+    stride = 2 * p + 1
+    small = stride * n_pad * 8 <= _SMALL_PROBE_BYTES
+    if probe_chunk is None:
+        # Small problems: one batch = all probes, fully parallel across cores (the
+        # serialization that bounds memory at scale costs real wall time here).
+        probe_chunk = stride if small else 8
+    if remat is None:
+        remat = not small
 
     def matvec_padded(v):
         return jnp.concatenate([matvec(v[:n]), v[n:]])
 
-    stride, d_idx, e_idx = _probe_scatter_indices(n_pad, p, b, k)
-    probes = (jnp.arange(n_pad)[None, :] % stride == jnp.arange(stride)[:, None]).astype(
-        jnp.float64
-    )
-    chunks = [
-        jax.vmap(matvec_padded)(probes[i : i + probe_chunk]) for i in range(0, stride, probe_chunk)
-    ]
-    outputs = jnp.concatenate(chunks)  # (stride, n_pad)
+    pos = jnp.arange(n_pad)
 
-    kd, qi, ci, pr, qg = d_idx
-    diag = jnp.zeros((k, b, b)).at[kd, qi, ci].set(outputs[pr, qg])
-    ke, qie, cie, pre, qge = e_idx
-    lower = jnp.zeros((max(k - 1, 0), b, b))
-    if k > 1:
-        lower = lower.at[ke, qie, cie].set(outputs[pre, qge])
+    # Sequential scan over probe batches; see the probe_chunk/remat notes above.
+    def apply_batch(offsets):
+        def apply_probe(offset):
+            comb = (pos % stride == offset).astype(jnp.float64)
+            return matvec_padded(comb)
+
+        return jax.vmap(apply_probe)(offsets)
+
+    if remat:
+        apply_batch = jax.checkpoint(apply_batch)
+
+    n_batches = -(-stride // probe_chunk)
+    all_offsets = jnp.arange(n_batches * probe_chunk).reshape(n_batches, probe_chunk)
+
+    def scan_body(carry, offsets):
+        return carry, apply_batch(offsets)
+
+    # (stride, n_pad); outputs[c % stride, q] = A[q, c]. Padded offsets >= stride
+    # produce all-zero combs whose rows are sliced away.
+    _, batched = jax.lax.scan(scan_body, None, all_offsets)
+    outputs = batched.reshape(n_batches * probe_chunk, n_pad)[:stride]
+
+    # Per-block readout: within the band, probe c % stride carries column c exactly
+    # (the nearest comb alias c +- (2p + 1) is outside the band); entries beyond the
+    # band are masked, which also reproduces the identity pad block.
+    row = jnp.arange(b)[:, None]
+    col = jnp.arange(b)[None, :]
+    in_band_diag = jnp.abs(row - col) <= p
+    in_band_lower = (row - col + b) <= p
+
+    def blocks_at(kk):
+        probe_of_col = (kk * b + col) % stride
+        diag_k = jnp.where(in_band_diag, outputs[probe_of_col, kk * b + row], 0.0)
+        q_low = (kk + 1) * b + row
+        valid = in_band_lower & (q_low < n_pad)
+        lower_k = jnp.where(valid, outputs[probe_of_col, jnp.minimum(q_low, n_pad - 1)], 0.0)
+        return diag_k, lower_k
+
+    diag, lower_all = jax.lax.map(blocks_at, jnp.arange(k))
+    lower = lower_all[:-1] if k > 1 else lower_all[:0]
     return BlockTridiagonal(diag=diag, lower=lower, n=n)
 
 

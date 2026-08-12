@@ -52,9 +52,15 @@ __all__ = [
 ]
 
 
+@jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True)
 class EpochGroup:
-    """All epochs sharing one instrument (one rebin operator, one LSF kernel)."""
+    """All epochs sharing one instrument (one rebin operator, one LSF kernel).
+
+    Registered as a pytree so a whole :class:`Problem` can be passed as a ``jax.jit``
+    *argument* — its arrays then enter the graph as runtime parameters rather than
+    embedded constants, which at scale would trigger multi-GB XLA constant folding.
+    """
 
     instrument: str
     epoch_indices: tuple[int, ...]
@@ -73,16 +79,68 @@ class EpochGroup:
     def n_epochs(self) -> int:
         return self.shifts.shape[0]
 
+    def tree_flatten(self):
+        children = (
+            self.rebin,
+            self.kernel,
+            self.kernel_rev,
+            self.shifts,
+            self.light,
+            self.z,
+            self.w,
+            self.r,
+            self.bary_pix,
+        )
+        return children, (self.instrument, self.epoch_indices, self.row_support)
 
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        rebin, kernel, kernel_rev, shifts, light, z, w, r, bary_pix = children
+        instrument, epoch_indices, row_support = aux
+        return cls(
+            instrument=instrument,
+            epoch_indices=epoch_indices,
+            rebin=rebin,
+            kernel=kernel,
+            kernel_rev=kernel_rev,
+            shifts=shifts,
+            light=light,
+            z=z,
+            w=w,
+            r=r,
+            row_support=row_support,
+            bary_pix=bary_pix,
+        )
+
+
+@jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True)
 class Problem:
-    """A fixed-parameter disentangling problem: data + operators, ready to solve."""
+    """A fixed-parameter disentangling problem: data + operators, ready to solve.
+
+    A registered pytree (see :class:`EpochGroup`); ``grid`` is hashable static
+    metadata and lives in the aux data.
+    """
 
     grid: LogGrid
     n_components: int
     groups: tuple[EpochGroup, ...]
     frame: str = "barycentric"
     telluric: bool = False
+
+    def tree_flatten(self):
+        return (self.groups,), (self.grid, self.n_components, self.frame, self.telluric)
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        grid, n_components, frame, telluric = aux
+        return cls(
+            grid=grid,
+            n_components=n_components,
+            groups=children[0],
+            frame=frame,
+            telluric=telluric,
+        )
 
     @property
     def n_linear(self) -> int:
@@ -99,7 +157,7 @@ class Problem:
 
     @property
     def kernel_radius(self) -> int:
-        return max((np.asarray(g.kernel).size - 1) // 2 for g in self.groups)
+        return max((g.kernel.shape[0] - 1) // 2 for g in self.groups)
 
     @property
     def max_relative_shift(self) -> float:

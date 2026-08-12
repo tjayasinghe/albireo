@@ -250,7 +250,11 @@ class MarginalOrbitModel:
         # kernels were built with are the upper bounds (they fix the kernel radii).
         self.instruments = tuple(g.instrument for g in self.problem.groups)
         self._lsf_sigma_max = jnp.asarray([float(lsf_sigma_v[name]) for name in self.instruments])
-        self._marginal_jit = jax.jit(self._marginal)
+        # The problem is passed as a jit *argument* (Problem is a registered
+        # pytree): its arrays enter the graph as runtime parameters. Capturing
+        # them as closure constants instead triggers XLA constant folding that
+        # allocates tens of GB at survey scale.
+        self._marginal_jit = jax.jit(self._marginal_at)
 
     @property
     def n_stellar(self) -> int:
@@ -267,8 +271,9 @@ class MarginalOrbitModel:
             )
         return self.fixed_prior
 
-    def _theta_problem(self, theta: Mapping):
+    def _theta_problem(self, theta: Mapping, base=None):
         """Problem at θ: velocities always; light fractions / LSF widths if present."""
+        base = self.problem if base is None else base
         vel = orbit_velocities(theta, self.bjd, ecc_max=self.ecc_max)
         if vel.shape[0] != self.n_stellar:
             raise ValueError(
@@ -276,7 +281,7 @@ class MarginalOrbitModel:
                 f"(len(k){' + tertiary' if _has_outer_orbit(theta) else ''}) but the model "
                 f"was built with {self.n_stellar} light fractions"
             )
-        problem = with_velocities(self.problem, vel)
+        problem = with_velocities(base, vel)
         if "light" in theta:
             ell = jnp.asarray(theta["light"])
             if ell.ndim == 2:  # per-epoch, Dirichlet layout (n_epochs, n_stellar)
@@ -303,12 +308,16 @@ class MarginalOrbitModel:
             half_bandwidth=self.half_bandwidth,
         )
 
+    def _marginal_at(self, base, theta: Mapping) -> MarginalResult:
+        return self._marginal_from_problem(self._theta_problem(theta, base=base), theta)
+
     def _marginal(self, theta: Mapping) -> MarginalResult:
-        return self._marginal_from_problem(self._theta_problem(theta), theta)
+        """Un-jitted marginal at θ (for gradient composition and tests)."""
+        return self._marginal_at(self.problem, theta)
 
     def marginal(self, theta: Mapping) -> MarginalResult:
         """Jit-compiled marginal result (log-likelihood + conditional spectra) at θ."""
-        return self._marginal_jit(dict(theta))
+        return self._marginal_jit(self.problem, dict(theta))
 
     def log_likelihood(self, theta: Mapping):
         """Jit-compiled marginal log-likelihood at θ (differentiable)."""
