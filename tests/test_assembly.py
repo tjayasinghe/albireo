@@ -267,9 +267,12 @@ def test_band_matches_probe_with_model_grid_inside_the_data():
     """
     ds, truth, ell = simulate(native=(5001.0, 5039.0))
     inner = ab.LogGrid.from_wavelength_range(5004.0, 5036.0, dv_kms=5.5)
-    problem = build_problem(
-        inner, ds, velocities=truth.velocities, light_fractions=ell, lsf_sigma_v={"a": 7.0}
-    )
+    # build_problem warns about exactly this configuration (weighted native pixels off the
+    # grid); the point of the test is that the assembly is right anyway.
+    with pytest.warns(RuntimeWarning, match="outside the model grid"):
+        problem = build_problem(
+            inner, ds, velocities=truth.velocities, light_fractions=ell, lsf_sigma_v={"a": 7.0}
+        )
     nc, n_pix = problem.n_components, inner.n
     n = nc * n_pix
     b_nat = max(problem.natural_half_bandwidth, PRIOR2.half_bandwidth)

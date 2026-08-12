@@ -5,8 +5,9 @@ parameters (velocities, light fractions, LSF, response):
 
     y_j = r_j ⊙ [ R_j (1 + B_j sum_i l_ij T(delta_ij) d_i) ] + n_j
 
-Epochs are grouped by instrument so that all epochs in a group share the (static) rebin
-operator and LSF kernel and can be batched with ``vmap``. The response enters only
+Epochs are grouped by instrument *and* native wavelength grid so that all epochs in a
+group share the (static) rebin operator and LSF kernel and can be batched with ``vmap``
+(see :func:`_epoch_groups`). The response enters only
 through effective weights and targets: with ``C_j = R_j B_j sum_i l_ij T_ij`` the normal
 equations use ``C^T diag(r^2 w) C`` and ``C^T (r w z)`` where ``z = y - r ⊙ (R 1)``.
 
@@ -17,6 +18,7 @@ everywhere.
 
 from __future__ import annotations
 
+import hashlib
 import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -48,6 +50,7 @@ __all__ = [
     "normal_matvec",
     "rhs",
     "weighted_data_terms",
+    "with_jitter",
     "with_light_fractions",
     "with_lsf",
     "with_velocities",
@@ -57,7 +60,11 @@ __all__ = [
 @jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True)
 class EpochGroup:
-    """All epochs sharing one instrument (one rebin operator, one LSF kernel).
+    """All epochs sharing one instrument *and* one native grid (one rebin operator, one LSF).
+
+    One instrument can own several groups when its exposures do not share a wavelength
+    array (:func:`_epoch_groups`); ``instrument`` is then the same string in each, since
+    it is the key into the LSF and response tables.
 
     Registered as a pytree so a whole :class:`Problem` can be passed as a ``jax.jit``
     *argument* — its arrays then enter the graph as runtime parameters rather than
@@ -74,6 +81,7 @@ class EpochGroup:
     z: jax.Array  # (n_epochs, n_native) y - r * (R 1)
     w: jax.Array  # (n_epochs, n_native) effective ivar (masks + coverage folded in)
     r: jax.Array  # (n_epochs, n_native) response
+    jitter: jax.Array  # (n_epochs,) noise-inflation factor alpha_j; see effective_w
     row_support: int  # max model-pixel span of a rebin row (bandwidth bookkeeping)
     bary_pix: jax.Array  # (n_epochs,) barycentric shift in model pixels (static)
     pair_val: jax.Array  # static rebin pair tables for direct band assembly
@@ -83,6 +91,19 @@ class EpochGroup:
     @property
     def n_epochs(self) -> int:
         return self.shifts.shape[0]
+
+    @property
+    def effective_w(self):
+        """The weights the likelihood actually uses: ``w / alpha_j^2`` (docs/math.md §1.4).
+
+        Every consumer of the weights reads *this*, never :attr:`w`, so a jitter factor
+        enters the normal equations, the right-hand side, and the ``sum log w`` term of
+        the marginal likelihood consistently — which is what makes it identifiable
+        (inflating the noise buys misfit at the cost of that determinant term).
+        :attr:`w` stays the measurement's own inverse variance, so applying a jitter is
+        idempotent rather than cumulative.
+        """
+        return self.w / self.jitter[:, None] ** 2
 
     def tree_flatten(self):
         children = (
@@ -94,6 +115,7 @@ class EpochGroup:
             self.z,
             self.w,
             self.r,
+            self.jitter,
             self.bary_pix,
             self.pair_val,
             self.pair_sid,
@@ -103,7 +125,7 @@ class EpochGroup:
 
     @classmethod
     def tree_unflatten(cls, aux, children):
-        rebin, kernel, kernel_rev, shifts, light, z, w, r, bary_pix, pv, ps, pr = children
+        rebin, kernel, kernel_rev, shifts, light, z, w, r, jit, bary_pix, pv, ps, pr = children
         instrument, epoch_indices, row_support = aux
         return cls(
             instrument=instrument,
@@ -116,6 +138,7 @@ class EpochGroup:
             z=z,
             w=w,
             r=r,
+            jitter=jit,
             row_support=row_support,
             bary_pix=bary_pix,
             pair_val=pv,
@@ -214,7 +237,14 @@ def _warn_if_row_support_is_an_artifact(instrument, wave_native, per_row, row_su
     midpoints, so dropping samples makes the two bracketing pixels absorb half the gap
     each. Masking (``ivar = 0``) keeps the sampling regular; deleting does not.
     """
-    med = float(np.median(per_row))
+    # Only rows the operator actually touches: a native pixel lying entirely outside the
+    # model grid has no rebin entries at all, and counting it as support 0 would drag the
+    # median down (it used to do worse — the empty rows carried a sentinel, so a
+    # region-selected epoch could produce a warning quoting int64 minimum as the median).
+    covered = per_row > 0
+    if not covered.any():
+        return
+    med = float(np.median(per_row[covered]))
     if row_support <= max(4.0 * med, med + 4.0):
         return
     wide = np.flatnonzero(per_row > max(4.0 * med, med + 4.0))
@@ -231,6 +261,69 @@ def _warn_if_row_support_is_an_artifact(instrument, wave_native, per_row, row_su
         RuntimeWarning,
         stacklevel=3,
     )
+
+
+def _warn_if_data_extends_past_grid(instrument, dataset, idx, covered) -> None:
+    """Flag weighted native pixels that the model grid does not fully cover.
+
+    Such pixels are silently zero-weighted (``w = 0`` where ``coverage < 1``), so the fit
+    quietly discards data the user believes it is using. It is also the visible end of a
+    more damaging condition: near a grid edge the shift and LSF operators zero-fill, so
+    the *covered* pixels within a shift-plus-kernel-radius of the boundary are modelled
+    with missing flux while still carrying full weight. :meth:`albireo.grids.LogGrid.covering`
+    sizes the margin correctly; this warning catches the case where it was not used.
+    """
+    weighted_outside = 0
+    for j in idx:
+        weighted_outside += int(np.count_nonzero((dataset[j].effective_ivar > 0) & ~covered))
+    if not weighted_outside:
+        return
+    warnings.warn(
+        f"instrument {instrument!r}: {weighted_outside} pixel(s) with positive weight lie "
+        "outside the model grid and have been zero-weighted. Widen the grid — and by more "
+        "than the bare data range: it must also clear the largest component shift plus the "
+        "LSF kernel radius, or the pixels just *inside* the edge are modelled with "
+        "zero-filled flux at full weight. LogGrid.covering(dataset, dv_kms, "
+        "v_margin_kms=..., lsf_sigma_kms=...) computes the margin.",
+        RuntimeWarning,
+        stacklevel=3,
+    )
+
+
+def _epoch_groups(dataset: Dataset) -> list[tuple[str, list[int]]]:
+    """Partition epoch indices into ``(instrument, indices)`` sharing one native grid.
+
+    A group is the unit that shares static operators, so it must be an instrument *and*
+    a single wavelength array — one rebin operator serves the whole group. Instruments
+    whose epochs sit on a common grid (simulations, and any pipeline that resamples every
+    exposure onto one wavelength solution) therefore give exactly one group each, batched
+    by ``vmap`` as before.
+
+    Pipelines that apply the barycentric correction by shifting *before* rebinning do not:
+    ESO Phase-3 FEROS spectra, for instance, carry a per-exposure grid whose start moves
+    with the correction, so 51 epochs can have 51 grids differing in length and in
+    sub-pixel phase. Splitting them here is exact — each epoch keeps its own grid and its
+    own operator, per ``docs/design.md`` D4 — and costs one operator per distinct grid,
+    which is small next to the solve. The alternative available to callers, relabelling
+    the epochs as distinct *instruments*, would also fork the LSF width and response
+    tables, so widths that are physically one number would have to be inferred (or
+    supplied) once per exposure. The instrument key is what identifies the LSF, so it
+    stays shared across the subgroups here.
+
+    Grids are matched by content hash, so the partition costs one pass over the data
+    rather than a comparison against every group seen so far.
+    """
+    order: list[tuple[str, list[int]]] = []
+    seen: dict[tuple[str, bytes], int] = {}
+    for j, epoch in enumerate(dataset):
+        key = (epoch.instrument, hashlib.blake2b(epoch.wave.tobytes(), digest_size=16).digest())
+        slot = seen.get(key)
+        if slot is None or not np.array_equal(dataset[order[slot][1][0]].wave, epoch.wave):
+            seen[key] = len(order)  # a hash collision (never observed) just makes a group
+            order.append((epoch.instrument, [j]))
+        else:
+            order[slot][1].append(j)
+    return order
 
 
 def build_problem(
@@ -298,34 +391,32 @@ def build_problem(
     if len(response_coeffs) != n_ep:
         raise ValueError("response_coeffs must have one entry per epoch")
 
-    # Group epochs by instrument; all epochs in a group share static operators.
-    by_instrument: dict[str, list[int]] = {}
-    for j, ep in enumerate(dataset):
-        by_instrument.setdefault(ep.instrument, []).append(j)
-
     groups = []
-    for instrument, idx in by_instrument.items():
+    for instrument, idx in _epoch_groups(dataset):
         if instrument not in lsf_sigma_v:
             raise ValueError(f"no LSF width supplied for instrument {instrument!r}")
         wave_native = dataset[idx[0]].wave
-        for j in idx[1:]:
-            if not np.array_equal(dataset[j].wave, wave_native):
-                raise ValueError(
-                    f"epochs of instrument {instrument!r} have differing wavelength grids; "
-                    "give them distinct instrument labels"
-                )
         rebin = rebin_operator(x_in=grid.wave, x_out=wave_native)
+        if np.asarray(rebin.rows).size == 0:
+            raise ValueError(
+                f"instrument {instrument!r}: the model grid ({grid.wave[0]:.3f}-"
+                f"{grid.wave[-1]:.3f}) does not overlap this epoch's wavelengths "
+                f"({wave_native[0]:.3f}-{wave_native[-1]:.3f}), so there is nothing to fit. "
+                "Build the grid from the data — LogGrid.covering(dataset, dv_kms, ...)."
+            )
         coverage = np.asarray(rebin.coverage)
         covered = coverage > 1.0 - 1e-10
         rows = np.asarray(rebin.rows)
         cols = np.asarray(rebin.cols)
+        touched = np.bincount(rows, minlength=wave_native.size) > 0
         span = np.zeros(wave_native.size, dtype=np.int64)
         np.maximum.at(span, rows, cols)
         lo = np.full(wave_native.size, np.iinfo(np.int64).max, dtype=np.int64)
         np.minimum.at(lo, rows, cols)
-        per_row = span - lo + 1
+        per_row = np.where(touched, span - np.where(touched, lo, 0) + 1, 0)
         row_support = int(np.max(per_row))
         _warn_if_row_support_is_an_artifact(instrument, wave_native, per_row, row_support)
+        _warn_if_data_extends_past_grid(instrument, dataset, idx, covered)
 
         sigma_px = float(lsf_sigma_v[instrument]) / grid.dv_kms
         kernel = gaussian_kernel(sigma_px)
@@ -335,8 +426,16 @@ def build_problem(
         for j in idx:
             ep = dataset[j]
             r = chebyshev_response(ep.wave, response_coeffs[j])
-            z_rows.append(ep.flux - r * base)
-            w_rows.append(np.where(covered, ep.effective_ivar, 0.0))
+            w = np.where(covered, ep.effective_ivar, 0.0)
+            # Zero-weight pixels are allowed to hold anything, including nan and inf
+            # (albireo.data: a masked pixel's flux "is never read"). Every consumer of z
+            # multiplies it by w, so zeroing it here changes nothing — except that
+            # `0 * nan` is `nan`, and one such pixel takes the whole marginal likelihood
+            # to nan. Real data reaches this path routinely: albireo.preprocess.normalize
+            # marks pixels where the fitted continuum collapses by writing nan.
+            flux = np.where(np.isfinite(ep.flux), ep.flux, 0.0)
+            z_rows.append(np.where(w > 0.0, flux - r * base, 0.0))
+            w_rows.append(w)
             r_rows.append(r)
 
         pair_val, pair_sid, pair_row, pair_h = rebin_pair_tables(rebin)
@@ -355,6 +454,7 @@ def build_problem(
                 z=jnp.asarray(np.stack(z_rows)),
                 w=jnp.asarray(np.stack(w_rows)),
                 r=jnp.asarray(np.stack(r_rows)),
+                jitter=jnp.ones(len(idx)),
                 row_support=row_support,
                 bary_pix=jnp.asarray(bary_pix[list(idx)]),
                 pair_val=pair_val,
@@ -445,6 +545,60 @@ def with_light_fractions(problem: Problem, light_fractions) -> Problem:
     return replace(problem, groups=tuple(groups))
 
 
+def with_jitter(problem: Problem, jitter) -> Problem:
+    """Return ``problem`` with per-epoch noise-inflation factors ``alpha_j`` (differentiable).
+
+    ``docs/math.md`` §1.4 / ``docs/design.md`` D15: the weights become
+    ``w_j -> w_j / alpha_j^2``, so ``alpha = 1`` is exactly the unmodified problem and
+    ``alpha > 1`` says this epoch's quoted inverse variances are optimistic by that
+    factor. The marginal likelihood keeps its ``+1/2 sum log w`` term, which is what
+    makes ``alpha`` identifiable rather than a free knob, and it supplies the right
+    denominator for free. In the data-dominated limit ``-1/2 log det(Lambda + A^T W A)``
+    contributes ``+p_eff log alpha`` against that term's ``-N log alpha``, so profiling
+    gives ``alpha^2 = chi2 / (N - p_eff)`` with ``p_eff = tr[(Lambda + A^T W A)^-1 A^T W A]``
+    the effective number of parameters the marginalized spectra consume. Whitening the
+    residuals by hand and reading off their standard deviation instead gives ``chi2 / N``,
+    low by ``sqrt(1 - p_eff/N)``. How much that matters is a property of the run, and
+    ``p_eff`` is the *effective* count, not ``n_comp * n_pix``: an oversampled model grid
+    with a fitted smoothness prior can put it an order of magnitude below the pixel count
+    (measured on HR 6819: ~2900 against 19,876 pixels, so the correction was 0.4% — while
+    the weak-prior fixture in ``tests/test_jitter.py`` sees 4.6%). Being joint with the
+    orbit, the widened uncertainties then propagate.
+
+    Two things this is and is not. It is the right handle for archival spectra whose
+    inverse variances were *estimated* rather than measured
+    (:func:`albireo.preprocess.estimate_ivar`), where a scale error is expected and
+    unknowable a priori. It is **not** a repair for unmodelled structure: a jitter fitted
+    against systematics (imperfect continuum, LSF mismatch, line-profile variability)
+    reports a wider — but still wrong — orbit, because inflating a diagonal noise model
+    cannot represent a residual that is correlated across pixels. Check
+    :func:`data_residual_zscores` for structure before trusting the widening; on real
+    data the honest error bar is usually still the scatter between independent
+    wavelength windows.
+
+    Parameters
+    ----------
+    problem
+        Output of :func:`build_problem`.
+    jitter
+        Scalar (one factor shared by every epoch) or ``(n_epochs,)``. Must be positive;
+        supply it as ``exp(log_jitter)`` from an unconstrained parameter. Traced values
+        are fine, so this is safe inside ``jax.jit``.
+    """
+    alpha = jnp.asarray(jitter)
+    if alpha.ndim == 0:
+        alpha = jnp.broadcast_to(alpha, (problem.n_epochs,))
+    if alpha.shape != (problem.n_epochs,):
+        raise ValueError(
+            f"jitter must be a scalar or have shape ({problem.n_epochs},); got {alpha.shape}"
+        )
+    groups = [
+        replace(g, jitter=alpha[np.asarray(g.epoch_indices, dtype=np.int64)])
+        for g in problem.groups
+    ]
+    return replace(problem, groups=tuple(groups))
+
+
 def with_lsf(problem: Problem, lsf_sigma_v: Mapping) -> Problem:
     """Return ``problem`` with the Gaussian LSF widths replaced (differentiable).
 
@@ -522,30 +676,43 @@ def normal_matvec(problem: Problem, d_stack):
     per_group = []
     for g in problem.groups:
         m = _epoch_model(g, jnp.asarray(d_stack))
-        per_group.append(g.w * g.r**2 * m)
+        per_group.append(g.effective_w * g.r**2 * m)
     return apply_model_adjoint(problem, per_group)
 
 
 def rhs(problem: Problem):
     """Right-hand side ``b = A^T W z``, shape ``(n_comp, n)``."""
-    return apply_model_adjoint(problem, [g.w * g.r * g.z for g in problem.groups])
+    return apply_model_adjoint(problem, [g.effective_w * g.r * g.z for g in problem.groups])
 
 
 def weighted_data_terms(problem: Problem):
     """Data-only scalars of the marginal likelihood: ``(z^T W z, sum log w_good, n_good)``."""
-    zwz, logw, n_good = 0.0, 0.0, 0
+    zwz = jnp.asarray(0.0)
+    logw = jnp.asarray(0.0)
+    n_good = jnp.asarray(0)
     for g in problem.groups:
         good = g.w > 0
-        zwz = zwz + jnp.sum(g.w * g.z**2)
+        zwz = zwz + jnp.sum(g.effective_w * g.z**2)
+        # sum log(w / alpha^2) = sum log w - 2 n_j log alpha_j, split so that the jitter
+        # gradient runs through one scalar per epoch instead of an (n_ep, n_native) log.
         logw = logw + jnp.sum(jnp.where(good, jnp.log(jnp.where(good, g.w, 1.0)), 0.0))
+        logw = logw - 2.0 * jnp.sum(jnp.sum(good, axis=1) * jnp.log(g.jitter))
         n_good = n_good + jnp.sum(good)
     return zwz, logw, n_good
 
 
 def data_residual_zscores(problem: Problem, d_stack) -> np.ndarray:
-    """Whitened data residuals ``(z - r * model) sqrt(w)`` over unmasked pixels."""
+    """Whitened data residuals ``(z - r * model) sqrt(w)`` over unmasked pixels.
+
+    Whitened by the weights the model *assumes*, jitter included, so a standard
+    deviation of 1 always means "the noise model matches the residuals". With no
+    jitter that is a statement about the supplied inverse variances; with a fitted
+    jitter it is close to 1 by construction, and the diagnostic that still bites is the
+    *shape* of the distribution (correlated structure, outlying epochs), which no
+    diagonal inflation can fix.
+    """
     out = []
     for g, m in zip(problem.groups, apply_model(problem, d_stack), strict=True):
-        resid = np.asarray((g.z - g.r * m) * jnp.sqrt(g.w))
+        resid = np.asarray((g.z - g.r * m) * jnp.sqrt(g.effective_w))
         out.append(resid[np.asarray(g.w) > 0])
     return np.concatenate(out)

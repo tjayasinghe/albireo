@@ -31,18 +31,25 @@ classifiers = [
 ]
 dependencies = [
     "numpy>=1.26",
+    # scipy: banded SPD solves for the continuum smoother in albireo.preprocess.
+    # Already a hard dependency of jax, so this costs nothing to declare and is honest.
+    "scipy>=1.11",
     "jax>=0.5",
     "numpyro>=0.16",
     "optax>=0.2",
 ]
 
 [project.optional-dependencies]
+# Reading spectra from FITS (albireo.io). Optional: the rest of the package never
+# imports astropy, so users who already hold arrays in memory need not install it.
+io = ["astropy>=6"]
 dev = [
     "pytest>=8",
     "pytest-cov",
     "ruff>=0.8",
     "mypy>=1.13",
     "pre-commit",
+    "astropy>=6",
 ]
 docs = [
     "mkdocs-material>=9.5",

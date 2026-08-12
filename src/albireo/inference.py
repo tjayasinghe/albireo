@@ -20,6 +20,10 @@ The nonlinear parameter vector ``theta`` is a dict of JAX arrays with sites
 - ``lsf_sigma`` (optional) — per-instrument Gaussian LSF widths [km/s], ordered as
   the problem's instrument groups; the construction-time ``lsf_sigma_v`` values act
   as upper bounds (they fix the kernel radii)
+- ``log_jitter`` (optional) — log noise-inflation factor, scalar (shared) or one per
+  epoch; the weights become ``w_j / exp(2 log_jitter_j)``
+  (:func:`albireo.forward.with_jitter`, D15). Read its caveats before using it: a
+  jitter fitted against systematics widens the error bars around a still-biased point.
 
 ``gamma`` is identically zero (design decision D14: a systemic velocity is exactly
 degenerate with a common shift of the component spectra). The ``(secosw, sesinw)``
@@ -55,7 +59,13 @@ from numpyro.infer import MCMC, NUTS, init_to_value
 from numpyro.infer.util import initialize_model
 
 from albireo.data import Dataset
-from albireo.forward import build_problem, with_light_fractions, with_lsf, with_velocities
+from albireo.forward import (
+    build_problem,
+    with_jitter,
+    with_light_fractions,
+    with_lsf,
+    with_velocities,
+)
 from albireo.grids import LogGrid
 from albireo.kepler import radial_velocity, t_peri_from_t_conj
 from albireo.likelihood import MarginalResult, draw_spectra, marginal_loglikelihood
@@ -83,6 +93,7 @@ _THETA_SITES = (
     *_OUTER_SITES,
     "light",
     "lsf_sigma",
+    "log_jitter",
     "log_tau",
     "log_eta",
 )
@@ -248,7 +259,12 @@ class MarginalOrbitModel:
         self.fixed_prior = prior
         # Instrument order for the (optional) "lsf_sigma" theta site; the widths the
         # kernels were built with are the upper bounds (they fix the kernel radii).
-        self.instruments = tuple(g.instrument for g in self.problem.groups)
+        # Deduplicated, first-seen order: one instrument owns several groups whenever its
+        # epochs sit on different native grids (albireo.forward._epoch_groups), and the
+        # LSF width is a property of the instrument, not of the grid — one sampled width
+        # per group would both mis-shape the site and (via dict(zip(...))) silently drop
+        # all but the last group's value.
+        self.instruments = tuple(dict.fromkeys(g.instrument for g in self.problem.groups))
         self._lsf_sigma_max = jnp.asarray([float(lsf_sigma_v[name]) for name in self.instruments])
         # The problem is passed as a jit *argument* (Problem is a registered
         # pytree): its arrays enter the graph as runtime parameters. Capturing
@@ -298,7 +314,39 @@ class MarginalOrbitModel:
             # (and rejectable, via the model's lsf_bound guard) outside it.
             sig = jnp.clip(sig, 1e-3 * self._lsf_sigma_max, self._lsf_sigma_max)
             problem = with_lsf(problem, dict(zip(self.instruments, sig, strict=True)))
+        if "log_jitter" in theta:
+            problem = with_jitter(problem, jnp.exp(jnp.asarray(theta["log_jitter"])))
         return problem
+
+    def problem_at(self, theta: Mapping):
+        """The :class:`albireo.forward.Problem` at ``theta`` — data, weights and operators.
+
+        What you need to look at residuals, which on real data is not optional: the
+        inverse variances of an archival spectrum are usually estimated rather than
+        measured (:func:`albireo.preprocess.estimate_ivar`), and a factor-of-two error
+        there rescales every uncertainty the run reports. Run this first, without a
+        ``log_jitter`` site, to *measure* the discrepancy; only then decide whether to
+        let a jitter absorb it (:func:`albireo.forward.with_jitter` explains when that is
+        legitimate and when it merely widens a biased answer).
+
+        Parameters
+        ----------
+        theta
+            Parameter dict, as passed to :meth:`log_likelihood`.
+
+        Returns
+        -------
+        Problem
+            The problem with ``theta``'s velocities (and light fractions, LSF widths or
+            jitter, if those sites are present) substituted in.
+
+        Examples
+        --------
+        >>> from albireo.forward import data_residual_zscores  # doctest: +SKIP
+        >>> z = data_residual_zscores(model.problem_at(theta), model.marginal(theta).d_hat)
+        >>> z.std()  # 1.0 if the inverse variances are calibrated  # doctest: +SKIP
+        """
+        return self._theta_problem(theta)
 
     def _marginal_from_problem(self, problem, theta: Mapping) -> MarginalResult:
         return marginal_loglikelihood(
@@ -411,6 +459,7 @@ def run_map(
     rng_key=None,
     max_steps: int = 200,
     tol: float = 1e-2,
+    callback=None,
 ) -> MAPResult:
     """MAP over all sampled sites of ``model`` via L-BFGS on numpyro's potential.
 
@@ -427,7 +476,22 @@ def run_map(
         Constrained initial values for every sampled site. Start circular orbits at
         small nonzero ``(secosw, sesinw)`` — the origin is the one non-smooth point.
     tol
-        Convergence threshold on the unconstrained-space gradient norm.
+        Convergence threshold on the unconstrained-space gradient norm. Note that this is
+        an *absolute* threshold on a potential whose scale grows with the number of good
+        pixels: on a survey-sized dataset the gradient norm at the true parameters is
+        already in the hundreds, so the default is unreachable and ``converged`` will be
+        ``False`` however good the fit is. Watch the parameters, via ``callback``, rather
+        than trusting the flag.
+    callback
+        Called after every accepted step as ``callback(step, potential, grad_norm, params)``
+        with ``params`` the *constrained* site values. Without it this function is silent
+        for however long it runs, and a real-data fit can run for hours — a first MAP on a
+        new dataset should always pass one. Return ``True`` to stop early.
+
+    Examples
+    --------
+    >>> def log(step, potential, grad_norm, params):  # doctest: +SKIP
+    ...     print(f"{step:4d}  {potential:.3f}  |g|={grad_norm:.3g}  K={params['k']}")
     """
     rng_key = jax.random.PRNGKey(0) if rng_key is None else rng_key
     model_info = initialize_model(
@@ -455,6 +519,10 @@ def run_map(
             raise FloatingPointError(
                 f"non-finite gradient at L-BFGS step {steps_taken} (potential {float(value)})"
             )
+        if callback is not None and callback(
+            steps_taken, float(value), grad_norm, model_info.postprocess_fn(params)
+        ):
+            break
         if grad_norm < tol:
             break
     constrained = model_info.postprocess_fn(params)

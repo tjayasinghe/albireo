@@ -295,6 +295,51 @@ def test_map_recovers_orbit_and_hyperparameters(map_fit):
     assert np.all(np.asarray(map_fit.params["log_eta"]) > np.log(0.1))
 
 
+def test_run_map_callback_reports_progress_and_can_stop_early(gate_data):
+    """`run_map` is otherwise silent, and on real data it runs for hours.
+
+    Its `tol` is an *absolute* gradient-norm threshold on a potential whose scale grows
+    with the good-pixel count, so at survey sizes it is unreachable and `converged` says
+    nothing. Watching the parameters is the only way to know what the optimizer is doing.
+    """
+    _, _, model = gate_data
+    seen = []
+
+    def record(step, potential, grad_norm, params):
+        seen.append((step, potential, grad_norm, float(np.asarray(params["k"])[0])))
+        return step >= 3  # early stop
+
+    fit = run_map(model.model(PRIORS), init=INIT, max_steps=50, tol=0.0, callback=record)
+    assert [row[0] for row in seen] == [1, 2, 3]
+    assert fit.num_steps == 3, "returning True from the callback must stop the loop"
+    assert all(np.isfinite(row[1]) and np.isfinite(row[2]) for row in seen)
+    assert all(row[3] > 0.0 for row in seen), "callback receives constrained values"
+
+
+def test_problem_at_exposes_the_problem_for_residuals(gate_data, map_fit):
+    """Residual z-scores are the only check there is on estimated inverse variances.
+
+    Getting at them used to need a private method. The scatter is not expected to be
+    exactly 1 even on simulated data — the smoothness prior pulls the conditional
+    spectra away from the pixels — but it is expected to be *of order* 1, and that is
+    what makes it a usable diagnostic for a real dataset whose ivar was estimated.
+    """
+    from albireo.forward import data_residual_zscores
+
+    ds, _, model = gate_data
+    theta = {
+        k: v
+        for k, v in map_fit.params.items()
+        if k in ("period", "t_conj", "secosw", "sesinw", "k", "log_tau", "log_eta")
+    }
+    problem = model.problem_at(theta)
+    assert problem.n_epochs == ds.n_epochs
+    z = data_residual_zscores(problem, model.marginal(theta).d_hat)
+    assert z.size > 0 and np.all(np.isfinite(z))
+    assert 0.5 < float(np.std(z)) < 2.0
+    assert abs(float(np.mean(z))) < 0.2
+
+
 def test_nuts_gate_k_within_one_percent(nuts_fit):
     """M3 acceptance gate: K_1, K_2 posterior means within 1%, healthy chain."""
     mcmc, _ = nuts_fit

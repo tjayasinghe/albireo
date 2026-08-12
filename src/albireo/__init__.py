@@ -17,6 +17,8 @@ from albireo.data import Dataset, EpochData
 from albireo.forward import (
     Problem,
     build_problem,
+    data_residual_zscores,
+    with_jitter,
     with_light_fractions,
     with_lsf,
     with_velocities,
@@ -51,6 +53,18 @@ from albireo.operators import (
     shift_spectrum,
     shift_spectrum_adjoint,
 )
+from albireo.preprocess import (
+    TELLURIC_BANDS,
+    der_snr_sigma,
+    estimate_ivar,
+    fit_continuum,
+    mask_ranges,
+    mask_spikes,
+    mask_tellurics,
+    normalize,
+    select_region,
+    share_wavelength_grid,
+)
 from albireo.priors import SmoothnessPrior
 from albireo.scan import K2ScanResult, k2_scan
 from albireo.simulate import (
@@ -64,8 +78,27 @@ from albireo.simulate import (
 
 __version__ = "0.1.0.dev0"
 
+# albireo.io is the one module that needs astropy, so it is imported on first use rather
+# than at package import: `albireo.read_dataset(...)` stays discoverable, and installs
+# without the [io] extra keep working for everyone who already has arrays in memory.
+_IO_EXPORTS = frozenset({"RawSpectrum", "read_dataset", "read_spectrum", "to_epoch"})
+
+
+def __getattr__(name: str):
+    if name in _IO_EXPORTS:
+        from albireo import io
+
+        return getattr(io, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted(set(__all__) | _IO_EXPORTS)
+
+
 __all__ = [
     "C_KMS",
+    "TELLURIC_BANDS",
     "Dataset",
     "EpochData",
     "InstrumentSpec",
@@ -77,6 +110,7 @@ __all__ = [
     "MarginalResult",
     "OrbitParams",
     "Problem",
+    "RawSpectrum",
     "RebinOperator",
     "SimulationTruth",
     "SmoothnessPrior",
@@ -84,7 +118,11 @@ __all__ = [
     "bin_edges_from_centers",
     "build_problem",
     "convolve_spectrum",
+    "data_residual_zscores",
+    "der_snr_sigma",
     "draw_spectra",
+    "estimate_ivar",
+    "fit_continuum",
     "gaussian_kernel",
     "gaussian_kernel_traced",
     "interp_operator",
@@ -92,13 +130,21 @@ __all__ = [
     "laplace_inverse_mass",
     "log_doppler_shift",
     "marginal_loglikelihood",
+    "mask_ranges",
+    "mask_spikes",
+    "mask_tellurics",
+    "normalize",
     "orbit_parameters",
     "orbit_velocities",
     "posterior_spectra",
     "radial_velocity",
+    "read_dataset",
+    "read_spectrum",
     "rebin_operator",
     "run_map",
     "run_nuts",
+    "select_region",
+    "share_wavelength_grid",
     "shift_spectrum",
     "shift_spectrum_adjoint",
     "simulate_dataset",
@@ -107,7 +153,9 @@ __all__ = [
     "synthetic_deviation_spectrum",
     "synthetic_telluric_spectrum",
     "t_peri_from_t_conj",
+    "to_epoch",
     "true_anomaly",
+    "with_jitter",
     "with_light_fractions",
     "with_lsf",
     "with_velocities",

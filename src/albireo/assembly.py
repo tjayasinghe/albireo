@@ -74,7 +74,7 @@ def _band_offsets(p: int, nc: int):
     return off0, n_k
 
 
-def _epoch_chunk_default(n_ep: int, n_pix: int, w_gp: int) -> int:
+def _epoch_chunk_default(n_ep: int, n_pix: int, w_gp: int, n_groups: int = 1) -> int:
     """Epochs per G batch: hoist the whole pre-pass while it is cheap, else batch it.
 
     The velocity-independent stage ``G_e`` is computed once per epoch either way, so
@@ -85,15 +85,30 @@ def _epoch_chunk_default(n_ep: int, n_pix: int, w_gp: int) -> int:
     otherwise batch to about ``_GP_CHUNK_BYTES`` — which at the design target is
     4.5 GB of ``gp_all`` reduced to under 0.5 GB, the difference between a gradient
     that fits in 32 GB and one that does not.
+
+    The budgets are shared out over ``n_groups``, because the group loop is unrolled into
+    a single jit graph: every group's pre-pass is live in the same buffer-assignment plan,
+    so a per-group budget would be multiplied by the group count. That count is 1 for
+    simulations and for any pipeline delivering one wavelength solution, but real archival
+    data routinely gives one group per exposure (:func:`albireo.forward._epoch_groups`),
+    and there the un-divided budget was measured at 40 GB where the shared grid needs 11.
     """
     per_epoch = n_pix * w_gp * 8
-    if n_ep * per_epoch <= _GP_HOIST_BYTES:
+    groups = max(1, int(n_groups))
+    if n_ep * per_epoch * groups <= _GP_HOIST_BYTES:
         return n_ep
-    return max(1, min(n_ep, _GP_CHUNK_BYTES // max(per_epoch, 1)))
+    return max(1, min(n_ep, _GP_CHUNK_BYTES // groups // max(per_epoch, 1)))
 
 
 def _epoch_band_scan(
-    group: EpochGroup, band, n_pix: int, p: int, nc: int, remat: bool, chunk: int | None
+    group: EpochGroup,
+    band,
+    n_pix: int,
+    p: int,
+    nc: int,
+    remat: bool,
+    chunk: int | None,
+    n_groups: int = 1,
 ):
     """Accumulate every epoch of one group into the band tensor via ``lax.scan``."""
     off0, n_k = _band_offsets(p, nc)
@@ -116,7 +131,7 @@ def _epoch_band_scan(
         )
 
     pair_val, pair_sid, pair_row = group.pair_val, group.pair_sid, group.pair_row
-    wprime = group.w * group.r**2  # (n_ep, n_native)
+    wprime = group.effective_w * group.r**2  # (n_ep, n_native); jitter folded in
     floors = jnp.floor(group.shifts).astype(jnp.int32)  # (n_ep, nc)
     fracs = group.shifts - floors
     q_pix = jnp.arange(n_pix, dtype=jnp.int32)
@@ -215,7 +230,7 @@ def _epoch_band_scan(
 
     n_ep = group.shifts.shape[0]
     if chunk is None:
-        chunk = _epoch_chunk_default(n_ep, n_pix, w_g + 4)
+        chunk = _epoch_chunk_default(n_ep, n_pix, w_g + 4, n_groups)
     chunk = max(1, min(int(chunk), n_ep))
 
     if chunk >= n_ep:
@@ -380,7 +395,7 @@ def band_block_tridiagonal(
     _, n_k = _band_offsets(p, nc)
     band = jnp.zeros((n_pix, nc, n_k, nc))
     for g in problem.groups:
-        band = _epoch_band_scan(g, band, n_pix, p, nc, remat, epoch_chunk)
+        band = _epoch_band_scan(g, band, n_pix, p, nc, remat, epoch_chunk, len(problem.groups))
     band = _add_prior_band(band, prior, n_pix, p, nc)
     return _pack_band(band, n_pix, nc, p, bs)
 
@@ -418,7 +433,13 @@ def prior_logdet(prior: SmoothnessPrior, n_pix: int):
         al, be, ga = x
         a = al / c2
         b = (be - a * b1) / c1
-        c = jnp.sqrt(ga - a * a - b * b)
+        # The pivot is positive for any positive (tau, eta), but it is a difference of
+        # like-sized quantities: below eta/tau ~ 1e-13 it rounds to <= 0 and the sqrt
+        # returns nan, taking the whole likelihood with it. ML-II walks there on its own
+        # — nothing bounds log_eta from below, and a component with little signal in the
+        # data has no reason to stay away. Flooring keeps the recursion finite and the
+        # value monotone, so the optimizer is pushed back rather than derailed.
+        c = jnp.sqrt(jnp.maximum(ga - a * a - b * b, jnp.finfo(ga.dtype).tiny))
         return (c, c1, b, acc + jnp.log(c)), None
 
     init = (jnp.ones(nc), jnp.ones(nc), jnp.zeros(nc), jnp.zeros(nc))
