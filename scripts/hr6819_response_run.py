@@ -54,7 +54,7 @@ LOG_TAU0 = np.log(np.array([1.0e3, 1.0e8]))
 LOG_ETA0 = np.log(np.array([1.0e2, 1.0e2]))
 
 
-def load_window(name: str):
+def load_window(name: str, *, ar1: bool = False):
     data_dir = pathlib.Path(
         os.environ.get("ALBIREO_HR6819_DATA")
         or pathlib.Path(__file__).resolve().parent.parent / "data" / "hr6819"
@@ -76,6 +76,7 @@ def load_window(name: str):
         light_fractions=LIGHT_FRACTIONS,
         lsf_sigma_v={"FEROS": LSF_SIGMA},
         v_rel_max_kms=V_REL_MAX,
+        ar1=ar1,
     )
     return dataset, model
 

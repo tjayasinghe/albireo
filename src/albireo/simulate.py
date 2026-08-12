@@ -107,6 +107,7 @@ class SimulationTruth:
     response_coeffs: tuple[np.ndarray, ...]  # per-epoch Chebyshev coefficients
     noiseless_flux: tuple[np.ndarray, ...]  # per-epoch native-grid flux, pre-noise
     epoch_instruments: tuple[str, ...]
+    ar1_phi: float = 0.0  # AR(1) correlation of the injected noise (0 = white)
 
 
 def synthetic_deviation_spectrum(
@@ -201,6 +202,7 @@ def simulate_dataset(
     telluric: np.ndarray | None = None,
     response_order: int = 0,
     response_amplitude: float = 0.0,
+    ar1_phi: float = 0.0,
     gap_fraction: float = 0.0,
     cosmic_fraction: float = 0.0,
     seed: int = 0,
@@ -237,6 +239,13 @@ def simulate_dataset(
     response_order, response_amplitude
         Per-epoch multiplicative Chebyshev response ``1 + sum_{m<=order} c_m T_m`` with
         ``c_m ~ N(0, response_amplitude^2)``. Amplitude 0 disables it (r = 1).
+    ar1_phi
+        AR(1) correlation of the pixel noise (``|phi| < 1``): the noise is a
+        stationary AR(1) process over the native pixel index with marginal standard
+        deviation ``1/snr`` — the model of :func:`albireo.forward.with_ar1`, so
+        closed-loop tests can inject and recover it. The process runs over *all*
+        pixels (masked ones included), which is what makes the observed subset carry
+        ``phi**gap`` correlations across masked gaps. 0 = white noise (default).
     gap_fraction
         Fraction of each epoch's pixels lost to one contiguous chip gap (ivar = 0 and
         flux overwritten with garbage, so downstream code MUST honor the mask).
@@ -334,7 +343,18 @@ def simulate_dataset(
         noiseless_fluxes.append(noiseless)
 
         sigma = 1.0 / spec.snr
-        flux = noiseless + rng.normal(0.0, sigma, size=n_native)
+        if ar1_phi != 0.0:
+            if not -1.0 < ar1_phi < 1.0:
+                raise ValueError(f"ar1_phi must lie in (-1, 1); got {ar1_phi}")
+            eps = rng.normal(0.0, 1.0, size=n_native)
+            noise = np.empty(n_native)
+            noise[0] = eps[0]  # stationary start: marginal sd 1 everywhere
+            innov = np.sqrt(1.0 - ar1_phi**2)
+            for i in range(1, n_native):
+                noise[i] = ar1_phi * noise[i - 1] + innov * eps[i]
+            flux = noiseless + sigma * noise
+        else:
+            flux = noiseless + rng.normal(0.0, sigma, size=n_native)
         ivar = np.full(n_native, spec.snr**2, dtype=np.float64)
 
         if gap_fraction > 0:
@@ -371,5 +391,6 @@ def simulate_dataset(
         response_coeffs=tuple(response_coeffs),
         noiseless_flux=tuple(noiseless_fluxes),
         epoch_instruments=epoch_instruments,
+        ar1_phi=float(ar1_phi),
     )
     return Dataset(epochs=tuple(epochs), frame=frame), truth

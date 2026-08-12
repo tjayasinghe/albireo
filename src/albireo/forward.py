@@ -46,11 +46,13 @@ __all__ = [
     "Problem",
     "apply_model",
     "apply_model_adjoint",
+    "apply_noise_precision",
     "build_problem",
     "data_residual_zscores",
     "normal_matvec",
     "rhs",
     "weighted_data_terms",
+    "with_ar1",
     "with_jitter",
     "with_light_fractions",
     "with_lsf",
@@ -88,6 +90,10 @@ class EpochGroup:
     bary_pix: jax.Array  # (n_epochs,) barycentric shift in model pixels (static)
     base: jax.Array  # (n_native,) R 1 — response-independent rebinned unit continuum
     cheb_x: jax.Array  # (n_native,) response Chebyshev abscissa 2(l - l_0)/(l_N - l_0) - 1
+    ar_phi: jax.Array  # (n_epochs,) AR(1) correlation of the standardized noise (0 = diagonal)
+    ar_gap: jax.Array  # (n_epochs, n_native) int link table: distance to the previous good
+    #   pixel (0 = no link; capped at build_problem's ar1_max_gap); see with_ar1
+    ar_step: int  # static max model-pixel offset between a stored link's rebin supports
     pair_val: jax.Array  # static rebin pair tables for direct band assembly
     pair_sid: jax.Array  # (albireo.operators.rebin_pair_tables; sid = c * row_support + o)
     pair_row: jax.Array
@@ -123,18 +129,36 @@ class EpochGroup:
             self.bary_pix,
             self.base,
             self.cheb_x,
+            self.ar_phi,
+            self.ar_gap,
             self.pair_val,
             self.pair_sid,
             self.pair_row,
         )
-        return children, (self.instrument, self.epoch_indices, self.row_support)
+        return children, (self.instrument, self.epoch_indices, self.row_support, self.ar_step)
 
     @classmethod
     def tree_unflatten(cls, aux, children):
-        rebin, kernel, kernel_rev, shifts, light, z, w, r, jit, bary, base, cx, pv, ps, pr = (
-            children
-        )
-        instrument, epoch_indices, row_support = aux
+        (
+            rebin,
+            kernel,
+            kernel_rev,
+            shifts,
+            light,
+            z,
+            w,
+            r,
+            jit,
+            bary,
+            base,
+            cx,
+            phi,
+            gap,
+            pv,
+            ps,
+            pr,
+        ) = children
+        instrument, epoch_indices, row_support, ar_step = aux
         return cls(
             instrument=instrument,
             epoch_indices=epoch_indices,
@@ -151,6 +175,9 @@ class EpochGroup:
             bary_pix=bary,
             base=base,
             cheb_x=cx,
+            ar_phi=phi,
+            ar_gap=gap,
+            ar_step=ar_step,
             pair_val=pv,
             pair_sid=ps,
             pair_row=pr,
@@ -171,19 +198,30 @@ class Problem:
     groups: tuple[EpochGroup, ...]
     frame: str = "barycentric"
     telluric: bool = False
+    # Static: True once with_ar1 has been applied (even with numerically zero phi).
+    # The likelihood reads it to select the probe assembly path and widen the
+    # bandwidth — a *structural* decision, so it cannot depend on traced values.
+    correlated: bool = False
 
     def tree_flatten(self):
-        return (self.groups,), (self.grid, self.n_components, self.frame, self.telluric)
+        return (self.groups,), (
+            self.grid,
+            self.n_components,
+            self.frame,
+            self.telluric,
+            self.correlated,
+        )
 
     @classmethod
     def tree_unflatten(cls, aux, children):
-        grid, n_components, frame, telluric = aux
+        grid, n_components, frame, telluric, correlated = aux
         return cls(
             grid=grid,
             n_components=n_components,
             groups=children[0],
             frame=frame,
             telluric=telluric,
+            correlated=correlated,
         )
 
     @property
@@ -213,10 +251,26 @@ class Problem:
         return out
 
     @property
+    def ar_bandwidth_extra(self) -> int:
+        """Extra half-bandwidth consumed by the AR(1) noise coupling (static).
+
+        A noise precision that is tridiagonal over the observed chain couples rebin
+        rows up to ``ar1_max_gap`` native pixels apart, so ``A^T W A`` widens by the
+        largest model-pixel offset between any stored link's row supports —
+        ``EpochGroup.ar_step``, computed exactly at build time. Zero when no links
+        were stored. Read it even for a diagonal problem when a later
+        :func:`with_ar1` swap is planned — probing with the widened bandwidth is
+        exact either way (D21: an overestimate costs time, an underestimate silently
+        corrupts).
+        """
+        return max(g.ar_step for g in self.groups)
+
+    @property
     def natural_half_bandwidth(self) -> int:
         """Half-bandwidth of A^T W A between any two components, in model pixels."""
         support = max(g.row_support for g in self.groups)
-        return int(np.ceil(self.max_relative_shift)) + 1 + 2 * self.kernel_radius + support
+        base = int(np.ceil(self.max_relative_shift)) + 1 + 2 * self.kernel_radius + support
+        return base + (self.ar_bandwidth_extra if self.correlated else 0)
 
     def half_bandwidth_bound(self, v_rel_max_kms: float) -> int:
         """Static upper bound on :attr:`natural_half_bandwidth` given a velocity bound.
@@ -345,6 +399,7 @@ def build_problem(
     lsf_sigma_v: Mapping[str, float],
     response_coeffs: Sequence[np.ndarray] | None = None,
     telluric: bool = False,
+    ar1_max_gap: int = 4,
 ) -> Problem:
     """Assemble a :class:`Problem` from a dataset and fixed nonlinear parameters.
 
@@ -368,6 +423,14 @@ def build_problem(
         If True, append a telluric component (light fraction 1) whose velocity law is
         the topocentric one — static for topocentric-frame data, ``+v_bary`` for
         barycentric-frame data.
+    ar1_max_gap
+        Longest masked gap (in native pixels) an AR(1) noise link may span
+        (:func:`with_ar1`). Links between good pixels ``gap`` apart carry correlation
+        ``phi**gap``; beyond the cap the chain restarts — the physically honest choice
+        for short-range resampling correlation, and what keeps the coupling's
+        bandwidth cost (:attr:`Problem.ar_bandwidth_extra`) bounded. The tables are
+        always built (cheap, static); they cost nothing unless :func:`with_ar1` is
+        applied.
     """
     vel = np.atleast_2d(np.asarray(velocities, dtype=np.float64))
     n_stellar, n_ep = vel.shape
@@ -432,7 +495,8 @@ def build_problem(
         kernel = gaussian_kernel(sigma_px)
         base = np.asarray(rebin(jnp.ones(grid.n)))  # R 1 (= coverage)
 
-        z_rows, w_rows, r_rows = [], [], []
+        z_rows, w_rows, r_rows, gap_rows = [], [], [], []
+        ar_step = 0
         for j in idx:
             ep = dataset[j]
             r = chebyshev_response(ep.wave, response_coeffs[j])
@@ -447,6 +511,18 @@ def build_problem(
             z_rows.append(np.where(w > 0.0, flux - r * base, 0.0))
             w_rows.append(w)
             r_rows.append(r)
+            # AR(1) link table (with_ar1): each good pixel links to the previous good
+            # pixel when the index gap is within ar1_max_gap; the link carries phi**gap.
+            good_px = w > 0.0
+            pix = np.arange(w.size)
+            prev = np.concatenate(([-1], np.maximum.accumulate(np.where(good_px, pix, -1))[:-1]))
+            gap = np.where(good_px & (prev >= 0), pix - prev, 0)
+            gap = np.where(gap <= ar1_max_gap, gap, 0)
+            link = gap > 0
+            if np.any(link):
+                dlo = lo[pix[link]] - lo[pix[link] - gap[link]]
+                ar_step = max(ar_step, int(np.max(np.maximum(dlo, 0))))
+            gap_rows.append(gap)
 
         pair_val, pair_sid, pair_row, pair_h = rebin_pair_tables(rebin)
         if pair_h != row_support:
@@ -471,6 +547,9 @@ def build_problem(
                 cheb_x=jnp.asarray(
                     2.0 * (wave_native - wave_native[0]) / (wave_native[-1] - wave_native[0]) - 1.0
                 ),
+                ar_phi=jnp.zeros(len(idx)),
+                ar_gap=jnp.asarray(np.stack(gap_rows)),
+                ar_step=ar_step,
                 pair_val=pair_val,
                 pair_sid=pair_sid,
                 pair_row=pair_row,
@@ -611,6 +690,153 @@ def with_jitter(problem: Problem, jitter) -> Problem:
         for g in problem.groups
     ]
     return replace(problem, groups=tuple(groups))
+
+
+def _ar1_links(g: EpochGroup):
+    """Per-link AR coefficients ``(rho, a, c, prev)`` for the masked chain (traced).
+
+    Link ``i`` connects pixel ``i`` to ``prev_i = i - gap_i`` with correlation
+    ``rho_i = phi**gap_i`` (0 where there is no link): a subset of an AR(1) chain is
+    still Markov, with the correlation across a masked gap being the process
+    correlation at that index distance — so masking is exact, not approximate
+    (``docs/math.md`` §1.4a). ``a = rho^2/(1-rho^2)`` and ``c = rho/(1-rho^2)`` are
+    the precision increments: on top of the identity, each link adds ``a`` to *both*
+    endpoints' diagonal and ``-c`` to their off-diagonal pair. The gap-1 branch uses
+    ``phi`` directly so the gradient at ``phi = 0`` is exact (``jnp.power`` has a nan
+    gradient at a zero base); multi-gap links go through a zero-guarded base, whose
+    true gradient at 0 is 0 and stays 0.
+    """
+    gap = g.ar_gap
+    phi = g.ar_phi[:, None]
+    phi_nz = jnp.where(jnp.abs(phi) > 1e-150, phi, 1e-150)
+    rho = jnp.where(gap == 1, phi, jnp.where(gap >= 2, phi_nz ** gap.astype(jnp.float64), 0.0))
+    one_m = 1.0 - rho * rho
+    a = rho * rho / one_m
+    c = rho / one_m
+    prev = jnp.arange(gap.shape[1])[None, :] - gap
+    return rho, a, c, prev
+
+
+def apply_noise_precision(g: EpochGroup, x):
+    """``W x`` for one group's noise model, ``W = D^{1/2} R^{-1} D^{1/2} / alpha^2``.
+
+    ``D = diag(w)``, ``R`` the AR(1) correlation of the standardized residuals over
+    the masked chain (:func:`_ar1_links`), ``alpha`` the jitter. Rows and columns at
+    masked pixels are exactly zero (``sqrt(w) = 0`` on both sides). With ``rho = 0``
+    this is ``effective_w * x`` up to floating-point ordering — callers on the
+    diagonal path keep the direct product, gated by :attr:`Problem.correlated`.
+    """
+    s = jnp.sqrt(g.w)
+    u = s * x
+    _, a, c, prev = _ar1_links(g)
+
+    def one(u_e, a_e, c_e, prev_e):
+        diag = 1.0 + a_e + jnp.zeros_like(a_e).at[prev_e].add(a_e)
+        return diag * u_e - c_e * u_e[prev_e] - jnp.zeros_like(u_e).at[prev_e].add(c_e * u_e)
+
+    return s * jax.vmap(one)(u, a, c, prev) / g.jitter[:, None] ** 2
+
+
+def _noise_quad_logdet(g: EpochGroup, x):
+    """``(x^T W x, log det W|_good)`` for one group (docs/math.md §1.4a).
+
+    ``log det W`` over the good-pixel subspace is closed-form:
+    ``sum_good log w  -  2 n_good log alpha  -  sum_links log(1 - rho^2)``.
+    """
+    s = jnp.sqrt(g.w)
+    u = s * x
+    rho, a, c, prev = _ar1_links(g)
+
+    def one(u_e, a_e, c_e, prev_e):
+        diag = 1.0 + a_e + jnp.zeros_like(a_e).at[prev_e].add(a_e)
+        return jnp.sum(diag * u_e * u_e) - 2.0 * jnp.sum(c_e * u_e * u_e[prev_e])
+
+    quad = jnp.sum(jax.vmap(one)(u, a, c, prev) / g.jitter**2)
+    good = g.w > 0
+    logdet = (
+        jnp.sum(jnp.where(good, jnp.log(jnp.where(good, g.w, 1.0)), 0.0))
+        - 2.0 * jnp.sum(jnp.sum(good, axis=1) * jnp.log(g.jitter))
+        - jnp.sum(jnp.log1p(-rho * rho))
+    )
+    return quad, logdet
+
+
+def _whiten_residuals(g: EpochGroup, resid):
+    """Exact chain whitener of the group noise model applied to native residuals.
+
+    ``eps = sqrt(w) resid / alpha`` standardizes; the Markov factorization
+    ``(eps_i - rho_i eps_prev) / sqrt(1 - rho_i^2)`` then decorrelates the links, so
+    the output is iid N(0, 1) exactly when the noise model holds. With ``rho = 0``
+    it reduces to the diagonal whitening.
+    """
+    eps = jnp.sqrt(g.w) * resid / g.jitter[:, None]
+    rho, _, _, prev = _ar1_links(g)
+
+    def one(e_e, rho_e, prev_e):
+        return (e_e - rho_e * e_e[prev_e]) / jnp.sqrt(1.0 - rho_e * rho_e)
+
+    return jax.vmap(one)(eps, rho, prev)
+
+
+def with_ar1(problem: Problem, phi) -> Problem:
+    """Return ``problem`` with AR(1)-correlated noise (differentiable in ``phi``).
+
+    The noise model D15 could not express and D31 measured the need for: per epoch,
+    the noise covariance is ``C = alpha^2 D^{-1/2} R_phi D^{-1/2}`` with
+    ``D = diag(w)`` and ``R_phi`` the AR(1) correlation in native-pixel index —
+    adjacent pixels of the *standardized* residual share correlation ``phi``, the
+    physically expected shape when a pipeline resamples spectra onto a common step
+    (each output pixel mixes the same input pixels as its neighbours). ``phi = 0``
+    is exactly the D31 model; the jitter ``alpha`` continues to scale, ``phi``
+    correlates, and the two compose (``with_jitter`` and this swap are independent
+    and each *replaces* its own parameter).
+
+    Everything stays closed-form (docs/math.md §1.4a). The precision
+    ``W = D^{1/2} R^{-1} D^{1/2} / alpha^2`` is tridiagonal over the observed chain
+    with per-link entries; masked pixels are handled *exactly*, because a subset of
+    a Markov chain is Markov — a link across a gap of ``d`` pixels carries
+    ``phi**d`` — up to ``build_problem``'s ``ar1_max_gap``, beyond which the chain
+    restarts (short-range noise does not span a chip gap, and the cap bounds the
+    solver-bandwidth cost). ``log det W`` needs one extra term,
+    ``-sum_links log(1 - rho^2)``, which is what makes ``phi`` identifiable in the
+    marginal rather than a free knob — the same logdet discipline as the jitter.
+
+    Two structural consequences, both static:
+
+    * the marginal runs on the **probe assembly path** — the D28 band sandwich
+      assumes diagonal weights, and :func:`albireo.likelihood.marginal_loglikelihood`
+      selects probing automatically (requesting ``assembly="band"`` raises); the
+      band-path extension is a recorded lever, not built;
+    * ``A^T W A`` widens by :attr:`Problem.ar_bandwidth_extra` model pixels —
+      :attr:`Problem.natural_half_bandwidth` includes it once this swap is applied,
+      and a static ``half_bandwidth`` chosen *before* the swap must add it
+      (:class:`albireo.inference.MarginalOrbitModel` does, behind its ``ar1`` flag).
+
+    Applying this swap marks the problem correlated even at ``phi = 0`` (a traced
+    value cannot make structural decisions); the result then equals the diagonal
+    model to floating-point ordering, just on the slower probe path.
+
+    Parameters
+    ----------
+    problem
+        Output of :func:`build_problem`.
+    phi
+        Scalar (shared) or ``(n_epochs,)`` AR(1) correlation, ``|phi| < 1``; clipped
+        to ``+-0.999`` so the likelihood stays finite (and rejectable) under
+        optimizer excursions. Traced values are fine.
+    """
+    phi = jnp.asarray(phi)
+    if phi.ndim == 0:
+        phi = jnp.broadcast_to(phi, (problem.n_epochs,))
+    if phi.shape != (problem.n_epochs,):
+        raise ValueError(
+            f"phi must be a scalar or have shape ({problem.n_epochs},); got {phi.shape}"
+        )
+    phi = jnp.clip(phi, -0.999, 0.999)
+    groups = [
+        replace(g, ar_phi=phi[np.asarray(g.epoch_indices, dtype=np.int64)]) for g in problem.groups
+    ]
+    return replace(problem, groups=tuple(groups), correlated=True)
 
 
 def _chebval_traced(x, c):
@@ -765,43 +991,66 @@ def normal_matvec(problem: Problem, d_stack):
     per_group = []
     for g in problem.groups:
         m = _epoch_model(g, jnp.asarray(d_stack))
-        per_group.append(g.effective_w * g.r**2 * m)
+        if problem.correlated:
+            per_group.append(g.r * apply_noise_precision(g, g.r * m))
+        else:
+            per_group.append(g.effective_w * g.r**2 * m)
     return apply_model_adjoint(problem, per_group)
 
 
 def rhs(problem: Problem):
     """Right-hand side ``b = A^T W z``, shape ``(n_comp, n)``."""
-    return apply_model_adjoint(problem, [g.effective_w * g.r * g.z for g in problem.groups])
+    if problem.correlated:
+        per_group = [g.r * apply_noise_precision(g, g.z) for g in problem.groups]
+    else:
+        per_group = [g.effective_w * g.r * g.z for g in problem.groups]
+    return apply_model_adjoint(problem, per_group)
 
 
 def weighted_data_terms(problem: Problem):
-    """Data-only scalars of the marginal likelihood: ``(z^T W z, sum log w_good, n_good)``."""
+    """Data-only scalars of the marginal likelihood: ``(z^T W z, log det W_good, n_good)``.
+
+    For a diagonal noise model the determinant term is ``sum log(w/alpha^2)`` over
+    good pixels; the correlated model adds its closed-form link correction
+    (:func:`_noise_quad_logdet`).
+    """
     zwz = jnp.asarray(0.0)
     logw = jnp.asarray(0.0)
     n_good = jnp.asarray(0)
     for g in problem.groups:
         good = g.w > 0
-        zwz = zwz + jnp.sum(g.effective_w * g.z**2)
-        # sum log(w / alpha^2) = sum log w - 2 n_j log alpha_j, split so that the jitter
-        # gradient runs through one scalar per epoch instead of an (n_ep, n_native) log.
-        logw = logw + jnp.sum(jnp.where(good, jnp.log(jnp.where(good, g.w, 1.0)), 0.0))
-        logw = logw - 2.0 * jnp.sum(jnp.sum(good, axis=1) * jnp.log(g.jitter))
+        if problem.correlated:
+            quad, ld = _noise_quad_logdet(g, g.z)
+            zwz = zwz + quad
+            logw = logw + ld
+        else:
+            zwz = zwz + jnp.sum(g.effective_w * g.z**2)
+            # sum log(w / alpha^2) = sum log w - 2 n_j log alpha_j, split so the jitter
+            # gradient runs through one scalar per epoch, not an (n_ep, n_native) log.
+            logw = logw + jnp.sum(jnp.where(good, jnp.log(jnp.where(good, g.w, 1.0)), 0.0))
+            logw = logw - 2.0 * jnp.sum(jnp.sum(good, axis=1) * jnp.log(g.jitter))
         n_good = n_good + jnp.sum(good)
     return zwz, logw, n_good
 
 
 def data_residual_zscores(problem: Problem, d_stack) -> np.ndarray:
-    """Whitened data residuals ``(z - r * model) sqrt(w)`` over unmasked pixels.
+    """Whitened data residuals over unmasked pixels, under the assumed noise model.
 
-    Whitened by the weights the model *assumes*, jitter included, so a standard
-    deviation of 1 always means "the noise model matches the residuals". With no
-    jitter that is a statement about the supplied inverse variances; with a fitted
-    jitter it is close to 1 by construction, and the diagnostic that still bites is the
-    *shape* of the distribution (correlated structure, outlying epochs), which no
-    diagonal inflation can fix.
+    Whitened by what the model *assumes* — jitter and AR(1) correlation included —
+    so a standard deviation of 1 always means "the noise model matches the
+    residuals". With no fitted noise parameters that is a statement about the
+    supplied inverse variances; with fitted ones it is close to 1 by construction,
+    and the diagnostic that still bites is the *shape* of the distribution. For the
+    correlated model the whitener is the exact Markov factorization
+    (:func:`_whiten_residuals`), so surviving structure means the correlation is not
+    AR(1)-shaped (longer-range, line-locked, or epoch-outlier structure).
     """
     out = []
     for g, m in zip(problem.groups, apply_model(problem, d_stack), strict=True):
-        resid = np.asarray((g.z - g.r * m) * jnp.sqrt(g.effective_w))
-        out.append(resid[np.asarray(g.w) > 0])
+        resid = g.z - g.r * m
+        if problem.correlated:
+            rows = np.asarray(_whiten_residuals(g, resid))
+        else:
+            rows = np.asarray(resid * jnp.sqrt(g.effective_w))
+        out.append(rows[np.asarray(g.w) > 0])
     return np.concatenate(out)

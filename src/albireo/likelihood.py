@@ -173,7 +173,7 @@ def marginal_loglikelihood(
     block_size: int | None = None,
     half_bandwidth: int | None = None,
     validate: bool = False,
-    assembly: str = "band",
+    assembly: str | None = None,
 ) -> MarginalResult:
     """Evaluate the marginal log-likelihood for a fixed-parameter :class:`Problem`.
 
@@ -197,17 +197,30 @@ def marginal_loglikelihood(
         defect) — raises AssertionError on mismatch. Cheap relative to assembly;
         enabled in tests. Not jit-compatible.
     assembly
-        ``"band"`` (default): direct per-epoch band assembly
-        (:func:`albireo.assembly.band_block_tridiagonal`) — O(band width) work per
-        epoch instead of O(bandwidth) operator applications; >10x faster at survey
-        bandwidths, identical result up to floating-point summation order.
-        ``"probe"``: the original global comb probing (reference implementation).
+        ``None`` (default) selects automatically: ``"band"`` — direct per-epoch band
+        assembly (:func:`albireo.assembly.band_block_tridiagonal`), O(band width)
+        work per epoch instead of O(bandwidth) operator applications, >10x faster at
+        survey bandwidths, identical result up to floating-point summation order —
+        for a diagonal noise model, and ``"probe"`` (the original global comb
+        probing, the reference implementation) when the problem carries correlated
+        noise (:func:`albireo.forward.with_ar1`): the band sandwich assumes diagonal
+        weights, so requesting ``"band"`` on a correlated problem raises rather than
+        silently mis-assembling. The band-path extension to the tridiagonal noise
+        sandwich is a recorded lever (design.md D34), not built.
     """
     n_comp, n_pix = problem.n_components, problem.grid.n
     if prior.n_components != n_comp:
         raise ValueError(
             f"prior has {prior.n_components} components, problem has {n_comp} "
             "(remember the telluric component if enabled)"
+        )
+    if assembly is None:
+        assembly = "probe" if problem.correlated else "band"
+    elif assembly == "band" and problem.correlated:
+        raise ValueError(
+            "assembly='band' assumes a diagonal noise model, but this problem carries "
+            "correlated (AR(1)) noise — use assembly='probe' or leave assembly=None "
+            "(automatic). The band-sandwich extension is a recorded lever, not built."
         )
     n = n_comp * n_pix
     b_nat = int(half_bandwidth) if half_bandwidth is not None else problem.natural_half_bandwidth

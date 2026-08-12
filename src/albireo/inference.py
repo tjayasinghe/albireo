@@ -32,6 +32,11 @@ The nonlinear parameter vector ``theta`` is a dict of JAX arrays with sites
   epoch; the weights become ``w_j / exp(2 log_jitter_j)``
   (:func:`albireo.forward.with_jitter`, D15). Read its caveats before using it: a
   jitter fitted against systematics widens the error bars around a still-biased point.
+- ``ar1_phi`` (optional) — AR(1) correlation of the standardized noise, scalar
+  (shared) or one per epoch, ``|phi| < 1`` (:func:`albireo.forward.with_ar1`, D34).
+  Requires the model to be built with ``ar1=True`` (the correlated coupling widens
+  the static solver bandwidth, and the marginal runs on the probe assembly path).
+  Composes with ``log_jitter``: alpha scales, phi correlates.
 
 ``gamma`` is identically zero (design decision D14: a systemic velocity is exactly
 degenerate with a common shift of the component spectra). The ``(secosw, sesinw)``
@@ -69,6 +74,7 @@ from numpyro.infer.util import initialize_model
 from albireo.data import Dataset
 from albireo.forward import (
     build_problem,
+    with_ar1,
     with_jitter,
     with_light_fractions,
     with_lsf,
@@ -104,6 +110,7 @@ _THETA_SITES = (
     "lsf_sigma",
     "response",
     "log_jitter",
+    "ar1_phi",
     "log_tau",
     "log_eta",
 )
@@ -233,6 +240,12 @@ class MarginalOrbitModel:
         Eccentricity clip/constraint (default 0.95, the solver's verified range).
     block_size
         Solver block size passed through to the marginal likelihood.
+    ar1
+        Allow an ``ar1_phi`` site (correlated noise, D34). The AR coupling widens
+        ``A^T W A`` by a static amount (:attr:`albireo.forward.Problem.ar_bandwidth_extra`),
+        which must be reserved in the solver bandwidth *up front* — so the site is an
+        explicit construction-time choice, like the bandwidth itself (D21). Costs a
+        few extra pixels of bandwidth whether or not θ ends up carrying the site.
     """
 
     def __init__(
@@ -248,6 +261,7 @@ class MarginalOrbitModel:
         prior: SmoothnessPrior | None = None,
         ecc_max: float = _ECC_MAX_DEFAULT,
         block_size: int | None = None,
+        ar1: bool = False,
     ):
         ell = np.asarray(light_fractions, dtype=np.float64)
         n_stellar = ell.shape[0]
@@ -261,12 +275,16 @@ class MarginalOrbitModel:
             telluric=telluric,
         )
         self.bjd = jnp.asarray(dataset.bjd)
-        self.half_bandwidth = self.problem.half_bandwidth_bound(v_rel_max_kms)
+        hb = self.problem.half_bandwidth_bound(v_rel_max_kms)
         # The shift budget inside half_bandwidth (inverse of half_bandwidth_bound);
         # the numpyro model rejects any configuration whose actual relative shifts
         # exceed it, so a prior wider than v_rel_max cannot silently corrupt probing.
+        # Computed from the *base* bandwidth: the AR extra below is reserved for the
+        # noise coupling's reach and must not be spent on shifts.
         support = max(g.row_support for g in self.problem.groups)
-        self._shift_bound = self.half_bandwidth - 1 - 2 * self.problem.kernel_radius - support
+        self._shift_bound = hb - 1 - 2 * self.problem.kernel_radius - support
+        self.ar1 = bool(ar1)
+        self.half_bandwidth = hb + (self.problem.ar_bandwidth_extra if self.ar1 else 0)
         self.block_size = block_size
         self.ecc_max = float(ecc_max)
         self.fixed_prior = prior
@@ -331,6 +349,15 @@ class MarginalOrbitModel:
             problem = with_response(problem, jnp.asarray(theta["response"]))
         if "log_jitter" in theta:
             problem = with_jitter(problem, jnp.exp(jnp.asarray(theta["log_jitter"])))
+        if "ar1_phi" in theta:
+            if not self.ar1:
+                raise ValueError(
+                    "theta carries an ar1_phi site but the model was built without "
+                    "ar1=True — the AR coupling's bandwidth was not reserved, so the "
+                    "probed marginal would be silently wrong. Rebuild the "
+                    "MarginalOrbitModel with ar1=True."
+                )
+            problem = with_ar1(problem, jnp.asarray(theta["ar1_phi"]))
         return problem
 
     def problem_at(self, theta: Mapping):
@@ -447,6 +474,11 @@ class MarginalOrbitModel:
                     "lsf_bound",
                     jnp.where(jnp.all(sig <= self._lsf_sigma_max), 0.0, -jnp.inf),
                 )
+            if "ar1_phi" in theta:
+                phi = jnp.atleast_1d(theta["ar1_phi"])
+                # with_ar1 clips at +-0.999 so the likelihood stays finite (and
+                # rejectable, via this factor) outside the stationary region.
+                numpyro.factor("ar1_bound", jnp.where(jnp.all(jnp.abs(phi) < 1.0), 0.0, -jnp.inf))
             problem = self._theta_problem(theta, base=base)
             # Reject configurations whose relative shifts exceed the static bandwidth
             # (the probed marginal likelihood would be silently wrong out there).

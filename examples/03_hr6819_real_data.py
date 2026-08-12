@@ -245,6 +245,17 @@ def main() -> int:
     # signal with coefficients of a few per mil — and moves nothing else (period by
     # ~0.4 formal sigma, K by <0.001 km/s, residual sd from 1.674 to 1.668). Whatever
     # biases this orbit, it is not the continuum.
+    #
+    # D34 closes the loop on that correlation: build the model with
+    #     MarginalOrbitModel(..., ar1=True)
+    # and add "ar1_phi": dist.Uniform(-0.9, 0.9) alongside the jitters to model the
+    # correlation itself — an AR(1) chain per epoch, on the probe assembly path at ~15x
+    # the per-step cost (the fast band assembly assumes diagonal noise). Measured on this
+    # dataset (scripts/hr6819_ar1_run.py): phi comes out at 0.7-0.8, the residuals
+    # whiten in scale *and* lag-1 autocorrelation, the jitters collapse to a near-uniform
+    # 1.3-1.9, the D31 period relocation does not recur, and the two analysis windows
+    # land 3x closer to each other in period. The ~0.044 d offset from the published
+    # period survives every noise model tried; see docs/benchmarks.md for the ledger.
 
     if os.environ.get("ALBIREO_HR6819_NUTS") != "1":
         print("\nSet ALBIREO_HR6819_NUTS=1 to continue into Laplace + NUTS.")
