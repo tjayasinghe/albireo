@@ -144,9 +144,6 @@ def test_with_lsf_matches_build_at_same_radius():
     for g_ref, g_new in zip(reference.groups, swapped.groups, strict=True):
         assert g_ref.kernel.shape == g_new.kernel.shape
         np.testing.assert_allclose(np.asarray(g_new.kernel), np.asarray(g_ref.kernel), atol=1e-15)
-        np.testing.assert_allclose(
-            np.asarray(g_new.kernel_rev), np.asarray(g_ref.kernel)[::-1], atol=1e-15
-        )
 
 
 def test_with_lsf_narrower_width_agrees_to_truncation():

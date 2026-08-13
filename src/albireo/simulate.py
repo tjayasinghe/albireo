@@ -26,7 +26,9 @@ from albireo.grids import LogGrid
 from albireo.kepler import radial_velocity
 from albireo.operators import (
     convolve_spectrum,
+    convolve_varying,
     gaussian_kernel,
+    gaussian_lsf_profiles,
     rebin_operator,
     shift_spectrum,
 )
@@ -51,14 +53,21 @@ class InstrumentSpec:
     wave
         Native wavelength grid (Å), strictly increasing; must lie inside the model grid.
     sigma_v_lsf
-        Gaussian LSF width in km/s.
+        Gaussian LSF width in km/s: a scalar for a stationary LSF, or — with
+        ``lsf_anchors_angstrom`` — one width per anchor for a wavelength-dependent
+        LSF (D37), linearly interpolated across the grid exactly as the forward
+        model realizes it (:func:`albireo.operators.gaussian_lsf_profiles`).
     snr
         Per-pixel continuum signal-to-noise (noise sigma = 1/snr on normalized flux).
+    lsf_anchors_angstrom
+        Optional anchor wavelengths (strictly increasing, >= 2) for a
+        wavelength-dependent LSF; None keeps the stationary one.
     """
 
     wave: np.ndarray
-    sigma_v_lsf: float
+    sigma_v_lsf: float | Sequence[float]
     snr: float
+    lsf_anchors_angstrom: tuple[float, ...] | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -303,7 +312,19 @@ def simulate_dataset(
         if np.any(np.asarray(op.coverage) < 1.0 - 1e-10):
             raise ValueError(f"instrument {name!r} wavelength grid extends beyond the model grid")
         rebin_ops[name] = op
-        kernels[name] = gaussian_kernel(spec.sigma_v_lsf / grid.dv_kms)
+        if spec.lsf_anchors_angstrom is not None:
+            sig = np.atleast_1d(np.asarray(spec.sigma_v_lsf, dtype=np.float64))
+            if sig.size == 1:
+                sig = np.full(len(spec.lsf_anchors_angstrom), sig[0])
+            kernels[name] = jnp.asarray(
+                gaussian_lsf_profiles(sig / grid.dv_kms, spec.lsf_anchors_angstrom, grid.wave)
+            )
+        else:
+            if not isinstance(spec.sigma_v_lsf, (int, float)):
+                raise ValueError(
+                    f"instrument {name!r}: per-anchor LSF widths need lsf_anchors_angstrom"
+                )
+            kernels[name] = gaussian_kernel(spec.sigma_v_lsf / grid.dv_kms)
 
     if telluric is not None:
         telluric = np.asarray(telluric, dtype=np.float64)
@@ -331,7 +352,10 @@ def simulate_dataset(
             d_total = d_total + ell[i, j] * shift_spectrum(components[i], star_pix[i, j])
         if telluric is not None:
             d_total = d_total + shift_spectrum(telluric, tell_pix[j])
-        d_total = convolve_spectrum(d_total, kernels[epoch_instruments[j]])
+        kern = kernels[epoch_instruments[j]]
+        d_total = (
+            convolve_varying(d_total, kern) if kern.ndim == 2 else convolve_spectrum(d_total, kern)
+        )
         flux_native = np.asarray(rebin_ops[epoch_instruments[j]](1.0 + d_total))
 
         if response_amplitude > 0:

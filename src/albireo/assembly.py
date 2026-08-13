@@ -28,7 +28,12 @@ Stages per epoch (all exact, all differentiable in shifts / lights / kernel / we
    ``ar_step`` (``operators.rebin_link_pair_tables``; the traced link weights carry
    phi, so the whole band stays differentiable in it).
 2. ``G = K^T H K`` as two unrolled diagonal-shifted accumulations (the band-image
-   form of the two convolutions; static slices only). ``G`` is a matrix on the model
+   form of the two convolutions; static slices only). A wavelength-dependent LSF
+   (``forward.build_problem(lsf_anchors_angstrom=...)``, D37) keeps the identical
+   structure with the scalar kernel taps replaced by row-shifted profile columns;
+   the second application then runs against the band-transpose of the first, since
+   only *left* applications broadcast on a row-major band image and ``G`` is
+   symmetric: ``G = K^T (K^T H)^T``. ``G`` is a matrix on the model
    grid, so its off-grid columns — which the kernel populates by smearing in-grid
    mass outward — are masked; the sandwich would otherwise read them whenever a
    shift places a component's support against a grid edge. Being
@@ -120,7 +125,10 @@ def _epoch_band_scan(
     off0, n_k = _band_offsets(p, nc)
     h = group.row_support
     kernel = group.kernel
-    r = (kernel.shape[0] - 1) // 2
+    r = (kernel.shape[-1] - 1) // 2
+    # Static structural branch (D37): one bank row = stationary kernel, scalar taps;
+    # a full per-pixel bank = wavelength-dependent LSF, row-indexed taps.
+    varying = kernel.shape[0] > 1
     # The AR(1) chain couples rebin rows across links, so H widens by the group's
     # static ar_step (Problem.natural_half_bandwidth reserves the same amount).
     h_eff = h + group.ar_step if correlated else h
@@ -200,16 +208,49 @@ def _epoch_band_scan(
         for o in range(1, h_eff):
             b_h = b_h.at[o:, h_eff - 1 - o].set(h_up[: n_pix - o, o])
 
-        # 3. G = K^T H K as two unrolled shifted accumulations.
-        bhp = jnp.pad(b_h, ((r, r), (0, 0)))
-        u = jnp.zeros((n_pix, w_u))
-        for d1 in range(-r, r + 1):
-            u = u.at[:, r + d1 : r + d1 + w_h].add(
-                kernel[d1 + r] * jax.lax.slice(bhp, (r + d1, 0), (r + d1 + n_pix, w_h))
+        # 3. G = K^T H K. Stationary: two unrolled shifted accumulations with scalar
+        # kernel taps (the v1 path, unchanged). Wavelength-dependent (D37): the left
+        # application K^T M generalizes tap by tap — the scalar becomes a row-shifted
+        # profile column, K[c + d, c] = P[c + d, d + r] — but a *right* application's
+        # taps would vary along the band image's columns, which the row-major layout
+        # cannot broadcast. H (hence G) is symmetric, so compute G = K^T (K^T H)^T
+        # instead: band-transpose U = K^T H (a static column-slice shuffle) and run
+        # the same left application once more.
+        if not varying:
+            bhp = jnp.pad(b_h, ((r, r), (0, 0)))
+            u = jnp.zeros((n_pix, w_u))
+            for d1 in range(-r, r + 1):
+                u = u.at[:, r + d1 : r + d1 + w_h].add(
+                    kernel[0, d1 + r] * jax.lax.slice(bhp, (r + d1, 0), (r + d1 + n_pix, w_h))
+                )
+            g = jnp.zeros((n_pix, w_g))
+            for d2 in range(-r, r + 1):
+                g = g.at[:, r - d2 : r - d2 + w_u].add(kernel[0, d2 + r] * u)
+        else:
+            kp = jnp.pad(kernel, ((r, r), (0, 0)))
+
+            def kt_left(img, w_in):
+                """(K^T M) band image from M's, widening w_in by 2r (zero-fill rows)."""
+                imgp = jnp.pad(img, ((r, r), (0, 0)))
+                out = jnp.zeros((n_pix, w_in + 2 * r))
+                for d in range(-r, r + 1):
+                    tap = jax.lax.slice(kp, (r + d, d + r), (r + d + n_pix, d + r + 1))
+                    out = out.at[:, r + d : r + d + w_in].add(
+                        tap * jax.lax.slice(imgp, (r + d, 0), (r + d + n_pix, w_in))
+                    )
+                return out
+
+            u = kt_left(b_h, w_h)
+            hw_u = (w_u - 1) // 2
+            up = jnp.pad(u, ((hw_u, hw_u), (0, 0)))
+            ut = jnp.stack(
+                [
+                    jax.lax.slice(up, (j, w_u - 1 - j), (j + n_pix, w_u - j))[:, 0]
+                    for j in range(w_u)
+                ],
+                axis=1,
             )
-        g = jnp.zeros((n_pix, w_g))
-        for d2 in range(-r, r + 1):
-            g = g.at[:, r - d2 : r - d2 + w_u].add(kernel[d2 + r] * u)
+            g = kt_left(ut, w_u)
         return jnp.where(gp_valid, jnp.pad(g, ((0, 0), (2, 2))), 0.0)
 
     def epoch_body(band, xs):

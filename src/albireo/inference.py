@@ -17,9 +17,11 @@ The nonlinear parameter vector ``theta`` is a dict of JAX arrays with sites
   ``k_out[1]`` and ``omega_out + pi``
 - ``light`` (optional) — stellar light fractions, ``(n_stellar,)`` constant or
   ``(n_epochs, n_stellar)`` per-epoch, rows on the simplex (use Dirichlet priors)
-- ``lsf_sigma`` (optional) — per-instrument Gaussian LSF widths [km/s], ordered as
-  the problem's instrument groups; the construction-time ``lsf_sigma_v`` values act
-  as upper bounds (they fix the kernel radii)
+- ``lsf_sigma`` (optional) — Gaussian LSF widths [km/s]: one entry per LSF anchor
+  for instruments built with ``lsf_anchors_angstrom`` (wavelength-dependent LSF,
+  D37), one entry per un-anchored instrument, concatenated in instrument order; the
+  construction-time ``lsf_sigma_v`` values act as per-entry upper bounds (they fix
+  the kernel radii)
 - ``response`` (optional) — multiplicative per-epoch Chebyshev response coefficients,
   ``(n_coef,)`` shared or ``(n_epochs, n_coef)`` per-epoch
   (:func:`albireo.forward.with_response`, D7/D33; ``r = 1 + sum_m c_m T_m``, so
@@ -58,7 +60,7 @@ the user's choice.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 import jax
@@ -216,15 +218,17 @@ class MarginalOrbitModel:
 
     Parameters
     ----------
-    grid, dataset, light_fractions, lsf_sigma_v, response_coeffs, telluric
+    grid, dataset, light_fractions, lsf_sigma_v, lsf_anchors_angstrom, response_coeffs, telluric
         As in :func:`albireo.forward.build_problem`. ``light_fractions`` and
         ``lsf_sigma_v`` are the build-time values, used whenever θ carries no
         ``light`` / ``lsf_sigma`` site; when those sites *are* inferred, the
         build-time light fractions only set ``n_stellar``, and the build-time LSF
         widths become strict upper bounds (they fix the kernel radii — the model
         rejects wider widths, which the fixed radii would silently truncate).
-        ``response_coeffs`` likewise is the fixed response used whenever θ carries
-        no ``response`` site, and is replaced outright when it does
+        ``lsf_anchors_angstrom`` makes an instrument's LSF wavelength-dependent
+        (D37) and gives it one ``lsf_sigma`` site entry per anchor rather than one
+        in total. ``response_coeffs`` likewise is the fixed response used whenever
+        θ carries no ``response`` site, and is replaced outright when it does
         (:func:`albireo.forward.with_response`).
     v_rel_max_kms
         Bound on the largest relative velocity between any two model components at
@@ -254,8 +258,9 @@ class MarginalOrbitModel:
         dataset: Dataset,
         *,
         light_fractions,
-        lsf_sigma_v: Mapping[str, float],
+        lsf_sigma_v: Mapping[str, float | Sequence[float]],
         v_rel_max_kms: float,
+        lsf_anchors_angstrom: Mapping[str, Sequence[float]] | None = None,
         response_coeffs=None,
         telluric: bool = False,
         prior: SmoothnessPrior | None = None,
@@ -271,6 +276,7 @@ class MarginalOrbitModel:
             velocities=np.zeros((n_stellar, dataset.n_epochs)),
             light_fractions=ell,
             lsf_sigma_v=lsf_sigma_v,
+            lsf_anchors_angstrom=lsf_anchors_angstrom,
             response_coeffs=response_coeffs,
             telluric=telluric,
         )
@@ -296,7 +302,18 @@ class MarginalOrbitModel:
         # per group would both mis-shape the site and (via dict(zip(...))) silently drop
         # all but the last group's value.
         self.instruments = tuple(dict.fromkeys(g.instrument for g in self.problem.groups))
-        self._lsf_sigma_max = jnp.asarray([float(lsf_sigma_v[name]) for name in self.instruments])
+        # Site layout: one width per LSF anchor for anchored instruments (D37), one per
+        # un-anchored instrument, concatenated in instrument order. build_problem has
+        # already validated the counts.
+        anchors = lsf_anchors_angstrom or {}
+        sizes, maxima = [], []
+        for name in self.instruments:
+            n_a = max(len(anchors.get(name, ())), 1)
+            sig = np.atleast_1d(np.asarray(lsf_sigma_v[name], dtype=np.float64))
+            maxima.append(np.full(n_a, sig[0]) if sig.size == 1 else sig)
+            sizes.append(n_a)
+        self._lsf_sizes = tuple(sizes)
+        self._lsf_sigma_max = jnp.asarray(np.concatenate(maxima))
         # The problem is passed as a jit *argument* (Problem is a registered
         # pytree): its arrays enter the graph as runtime parameters. Capturing
         # them as closure constants instead triggers XLA constant folding that
@@ -338,13 +355,19 @@ class MarginalOrbitModel:
             sig = jnp.atleast_1d(jnp.asarray(theta["lsf_sigma"]))
             if sig.shape != self._lsf_sigma_max.shape:
                 raise ValueError(
-                    f"lsf_sigma must have one entry per instrument group "
-                    f"{self.instruments}; got shape {sig.shape}"
+                    f"lsf_sigma must have {self._lsf_sigma_max.shape[0]} entries — one per "
+                    f"LSF anchor of an anchored instrument, one per un-anchored instrument "
+                    f"(instruments {self.instruments}, sizes {self._lsf_sizes}); "
+                    f"got shape {sig.shape}"
                 )
             # Clip into the kernel-radius-valid range so the likelihood stays finite
             # (and rejectable, via the model's lsf_bound guard) outside it.
             sig = jnp.clip(sig, 1e-3 * self._lsf_sigma_max, self._lsf_sigma_max)
-            problem = with_lsf(problem, dict(zip(self.instruments, sig, strict=True)))
+            parts, start = {}, 0
+            for name, n_a in zip(self.instruments, self._lsf_sizes, strict=True):
+                parts[name] = sig[start] if n_a == 1 else sig[start : start + n_a]
+                start += n_a
+            problem = with_lsf(problem, parts)
         if "response" in theta:
             problem = with_response(problem, jnp.asarray(theta["response"]))
         if "log_jitter" in theta:

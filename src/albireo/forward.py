@@ -32,8 +32,12 @@ from albireo.data import Dataset
 from albireo.grids import LogGrid
 from albireo.operators import (
     RebinOperator,
+    convolve_varying,
+    convolve_varying_adjoint,
     gaussian_kernel,
     gaussian_kernel_traced,
+    gaussian_lsf_profiles,
+    lsf_anchor_tables,
     rebin_link_pair_tables,
     rebin_operator,
     rebin_pair_tables,
@@ -80,8 +84,10 @@ class EpochGroup:
     instrument: str
     epoch_indices: tuple[int, ...]
     rebin: RebinOperator
-    kernel: jax.Array
-    kernel_rev: jax.Array
+    kernel: jax.Array  # (n_rows, 2r+1) LSF profile bank: one row = stationary kernel
+    #   (applied with jnp.convolve, exactly the v1 operator); n_grid rows = per-model-pixel
+    #   profiles in the same convention (operators.convolve_varying), realized from
+    #   per-anchor kernels via the static lsf_anchor_wave interpolation tables (D37)
     shifts: jax.Array  # (n_epochs, n_comp) shift in model pixels
     light: jax.Array  # (n_epochs, n_comp)
     z: jax.Array  # (n_epochs, n_native) y - r * (R 1)
@@ -103,6 +109,10 @@ class EpochGroup:
     link_sid: jax.Array  # (albireo.operators.rebin_link_pair_tables;
     link_row: jax.Array  #  sid = cmin * (row_support + ar_step) + o); link_row is the
     link_gap: jax.Array  #  link's later endpoint, link_gap its stored native-pixel gap
+    # Static LSF anchor wavelengths [A]; () = stationary. Aux (not traced): with_lsf
+    # rebuilds the interpolation tables from these and the (static) grid, so a traced
+    # per-anchor width vector can re-realize the profile bank without new structure.
+    lsf_anchor_wave: tuple[float, ...] = ()
 
     @property
     def n_epochs(self) -> int:
@@ -125,7 +135,6 @@ class EpochGroup:
         children = (
             self.rebin,
             self.kernel,
-            self.kernel_rev,
             self.shifts,
             self.light,
             self.z,
@@ -145,14 +154,19 @@ class EpochGroup:
             self.link_row,
             self.link_gap,
         )
-        return children, (self.instrument, self.epoch_indices, self.row_support, self.ar_step)
+        return children, (
+            self.instrument,
+            self.epoch_indices,
+            self.row_support,
+            self.ar_step,
+            self.lsf_anchor_wave,
+        )
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         (
             rebin,
             kernel,
-            kernel_rev,
             shifts,
             light,
             z,
@@ -172,13 +186,12 @@ class EpochGroup:
             lr,
             lg,
         ) = children
-        instrument, epoch_indices, row_support, ar_step = aux
+        instrument, epoch_indices, row_support, ar_step, lsf_anchor_wave = aux
         return cls(
             instrument=instrument,
             epoch_indices=epoch_indices,
             rebin=rebin,
             kernel=kernel,
-            kernel_rev=kernel_rev,
             shifts=shifts,
             light=light,
             z=z,
@@ -199,6 +212,7 @@ class EpochGroup:
             link_sid=ls,
             link_row=lr,
             link_gap=lg,
+            lsf_anchor_wave=lsf_anchor_wave,
         )
 
 
@@ -257,7 +271,7 @@ class Problem:
 
     @property
     def kernel_radius(self) -> int:
-        return max((g.kernel.shape[0] - 1) // 2 for g in self.groups)
+        return max((g.kernel.shape[-1] - 1) // 2 for g in self.groups)
 
     @property
     def max_relative_shift(self) -> float:
@@ -408,13 +422,46 @@ def _epoch_groups(dataset: Dataset) -> list[tuple[str, list[int]]]:
     return order
 
 
+def _lsf_bank(instrument, lsf_sigma_v, lsf_anchors_angstrom, grid):
+    """Realized LSF profile bank for one instrument (build time, NumPy).
+
+    Returns ``(bank, anchor_wave)``: a ``(1, 2r+1)`` stationary kernel and ``()``
+    without anchors, else the ``(grid.n, 2r+1)`` per-model-pixel profiles from
+    per-anchor Gaussians through the static interpolation tables. The radius follows
+    the *largest* width (truncate at 4 sigma, as :func:`albireo.operators.gaussian_kernel`),
+    so every later :func:`with_lsf` swap bounded by the build widths stays untruncated.
+    """
+    sig = np.atleast_1d(np.asarray(lsf_sigma_v[instrument], dtype=np.float64))
+    if sig.ndim != 1 or np.any(sig <= 0):
+        raise ValueError(f"instrument {instrument!r}: LSF widths must be positive scalars")
+    anchors = None if lsf_anchors_angstrom is None else lsf_anchors_angstrom.get(instrument)
+    if anchors is None:
+        if sig.size != 1:
+            raise ValueError(
+                f"instrument {instrument!r}: {sig.size} LSF widths supplied but no "
+                "anchors — per-anchor widths need lsf_anchors_angstrom for this instrument."
+            )
+        return jnp.asarray(gaussian_kernel(float(sig[0]) / grid.dv_kms))[None, :], ()
+    anchor_wave = tuple(float(x) for x in anchors)
+    if sig.size == 1:
+        sig = np.full(len(anchor_wave), sig[0])
+    if sig.size != len(anchor_wave):
+        raise ValueError(
+            f"instrument {instrument!r}: {sig.size} LSF widths for "
+            f"{len(anchor_wave)} anchors — supply one per anchor (or one scalar)."
+        )
+    profiles = gaussian_lsf_profiles(sig / grid.dv_kms, anchor_wave, grid.wave)
+    return jnp.asarray(profiles), anchor_wave
+
+
 def build_problem(
     grid: LogGrid,
     dataset: Dataset,
     *,
     velocities,
     light_fractions,
-    lsf_sigma_v: Mapping[str, float],
+    lsf_sigma_v: Mapping[str, float | Sequence[float]],
+    lsf_anchors_angstrom: Mapping[str, Sequence[float]] | None = None,
     response_coeffs: Sequence[np.ndarray] | None = None,
     telluric: bool = False,
     ar1_max_gap: int = 4,
@@ -434,7 +481,18 @@ def build_problem(
     light_fractions
         ``(n_stellar,)`` or ``(n_stellar, n_epochs)``; must sum to 1 per epoch.
     lsf_sigma_v
-        Per-instrument Gaussian LSF width (km/s).
+        Per-instrument Gaussian LSF width (km/s): a scalar for a stationary LSF, or —
+        with matching ``lsf_anchors_angstrom`` — one width per anchor for a
+        wavelength-dependent LSF (a scalar then broadcasts to every anchor). The
+        largest width fixes the kernel radius, so build-time widths are the upper
+        bounds a later :func:`with_lsf` swap must respect.
+    lsf_anchors_angstrom
+        Optional per-instrument anchor wavelengths (strictly increasing, >= 2). When
+        given, the instrument's LSF varies across the grid: per-anchor Gaussian
+        kernels are linearly interpolated (in log-wavelength, clamped beyond the end
+        anchors) into a per-model-pixel profile bank applied by
+        :func:`albireo.operators.convolve_varying` — the tabulated-LSF slot of
+        design.md D8. Instruments absent from the mapping stay stationary.
     response_coeffs
         Optional per-epoch Chebyshev response coefficients (empty/None = unit response).
     telluric
@@ -509,8 +567,7 @@ def build_problem(
         _warn_if_row_support_is_an_artifact(instrument, wave_native, per_row, row_support)
         _warn_if_data_extends_past_grid(instrument, dataset, idx, covered)
 
-        sigma_px = float(lsf_sigma_v[instrument]) / grid.dv_kms
-        kernel = gaussian_kernel(sigma_px)
+        kernel, anchor_wave = _lsf_bank(instrument, lsf_sigma_v, lsf_anchors_angstrom, grid)
         base = np.asarray(rebin(jnp.ones(grid.n)))  # R 1 (= coverage)
 
         z_rows, w_rows, r_rows, gap_rows = [], [], [], []
@@ -566,7 +623,6 @@ def build_problem(
                 epoch_indices=tuple(idx),
                 rebin=rebin,
                 kernel=kernel,
-                kernel_rev=kernel[::-1],
                 shifts=jnp.asarray(shifts[:, idx].T),
                 light=jnp.asarray(light[:, idx].T),
                 z=jnp.asarray(np.stack(z_rows)),
@@ -589,6 +645,7 @@ def build_problem(
                 link_sid=link_sid,
                 link_row=link_row,
                 link_gap=link_gap,
+                lsf_anchor_wave=anchor_wave,
             )
         )
 
@@ -991,17 +1048,40 @@ def with_lsf(problem: Problem, lsf_sigma_v: Mapping) -> Problem:
     problem
         Output of :func:`build_problem`.
     lsf_sigma_v
-        Per-instrument Gaussian LSF width in km/s (traced scalars allowed); must
-        cover every instrument in the problem.
+        Per-instrument Gaussian LSF width in km/s (traced values allowed); must
+        cover every instrument in the problem. For a group built with LSF anchors
+        (``lsf_anchors_angstrom``), one width per anchor — the traced bank is
+        re-interpolated into the per-pixel profiles through the same static tables
+        the build used — or a scalar, which broadcasts to every anchor. A group
+        built without anchors takes a scalar only.
     """
     groups = []
     for g in problem.groups:
         if g.instrument not in lsf_sigma_v:
             raise ValueError(f"no LSF width supplied for instrument {g.instrument!r}")
-        sigma_px = jnp.asarray(lsf_sigma_v[g.instrument]) / problem.grid.dv_kms
-        radius = (g.kernel.shape[0] - 1) // 2
-        kernel = gaussian_kernel_traced(sigma_px, radius)
-        groups.append(replace(g, kernel=kernel, kernel_rev=kernel[::-1]))
+        sigma_px = jnp.atleast_1d(jnp.asarray(lsf_sigma_v[g.instrument])) / problem.grid.dv_kms
+        radius = (g.kernel.shape[-1] - 1) // 2
+        if not g.lsf_anchor_wave:
+            if sigma_px.shape[0] != 1:
+                raise ValueError(
+                    f"instrument {g.instrument!r} was built without LSF anchors — "
+                    "with_lsf takes a scalar width for it."
+                )
+            kernel = gaussian_kernel_traced(sigma_px[0], radius)
+            groups.append(replace(g, kernel=kernel[None, :]))
+            continue
+        n_anchor = len(g.lsf_anchor_wave)
+        if sigma_px.shape[0] == 1:
+            sigma_px = jnp.broadcast_to(sigma_px, (n_anchor,))
+        if sigma_px.shape[0] != n_anchor:
+            raise ValueError(
+                f"instrument {g.instrument!r}: {sigma_px.shape[0]} LSF widths for "
+                f"{n_anchor} anchors — supply one per anchor (or one scalar)."
+            )
+        bank = jax.vmap(partial(gaussian_kernel_traced, radius=radius))(sigma_px)
+        idx, t = lsf_anchor_tables(g.lsf_anchor_wave, problem.grid.wave)
+        profiles = (1.0 - t)[:, None] * bank[idx] + t[:, None] * bank[idx + 1]
+        groups.append(replace(g, kernel=profiles))
     return replace(problem, groups=tuple(groups))
 
 
@@ -1017,7 +1097,12 @@ def _epoch_model(group: EpochGroup, d_stack):
         acc = jnp.zeros(d_stack.shape[1])
         for i in range(d_stack.shape[0]):
             acc = acc + light_e[i] * shift_spectrum(d_stack[i], shifts_e[i])
-        conv = jnp.convolve(acc, group.kernel, mode="same")
+        # Static branch on the bank shape: one row is the stationary kernel (v1 path,
+        # bit-identical), a full bank is the wavelength-dependent LSF (D37).
+        if group.kernel.shape[0] == 1:
+            conv = jnp.convolve(acc, group.kernel[0], mode="same")
+        else:
+            conv = convolve_varying(acc, group.kernel)
         return group.rebin(conv)
 
     return jax.vmap(one_epoch)(group.shifts, group.light)
@@ -1029,7 +1114,10 @@ def _epoch_model_adjoint(group: EpochGroup, v):
 
     def one_epoch(v_e, shifts_e, light_e):
         t = group.rebin.adjoint(v_e)
-        t = jnp.convolve(t, group.kernel_rev, mode="same")
+        if group.kernel.shape[0] == 1:
+            t = jnp.convolve(t, group.kernel[0, ::-1], mode="same")
+        else:
+            t = convolve_varying_adjoint(t, group.kernel)
         return jnp.stack([light_e[i] * shift_adjoint(t, shifts_e[i]) for i in range(n_comp)])
 
     return jnp.sum(jax.vmap(one_epoch)(v, group.shifts, group.light), axis=0)

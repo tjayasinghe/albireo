@@ -27,9 +27,13 @@ __all__ = [
     "RebinOperator",
     "bin_edges_from_centers",
     "convolve_spectrum",
+    "convolve_varying",
+    "convolve_varying_adjoint",
     "gaussian_kernel",
     "gaussian_kernel_traced",
+    "gaussian_lsf_profiles",
     "interp_operator",
+    "lsf_anchor_tables",
     "rebin_link_pair_tables",
     "rebin_operator",
     "rebin_pair_tables",
@@ -149,6 +153,100 @@ def convolve_spectrum(flux, kernel):
     Zero padding is exact for deviation spectra that vanish near the grid edges.
     """
     return jnp.convolve(jnp.asarray(flux), jnp.asarray(kernel), mode="same")
+
+
+def convolve_varying(flux, profiles):
+    """Row-varying 'same' convolution (wavelength-dependent LSF, D37).
+
+    Each output pixel applies its own kernel row, in the convention of
+    :func:`convolve_spectrum`:
+
+    ``out[m] = sum_d profiles[m, d + r] * flux[m - d]``,   ``r = (w - 1) // 2``,
+
+    so a ``profiles`` whose rows are all equal to ``kernel`` reproduces
+    ``convolve_spectrum(flux, kernel)`` exactly. The matrix realized is banded,
+    ``K[m, c] = profiles[m, m - c + r]`` for ``|m - c| <= r`` — the "banded matrix"
+    slot design.md D8 reserved for a tabulated LSF. Zero-padded at the grid edges
+    (exact for deviation spectra); linear in ``flux`` *and* in ``profiles``, so a
+    traced profile bank (LSF inference) differentiates through it.
+    """
+    flux = jnp.asarray(flux)
+    profiles = jnp.asarray(profiles)
+    n = flux.shape[0]
+    w = profiles.shape[1]
+    r = (w - 1) // 2
+    fp = jnp.pad(flux, (r, r))
+    out = jnp.zeros(n, dtype=jnp.result_type(flux, profiles))
+    for j in range(w):
+        out = out + profiles[:, j] * jax.lax.slice(fp, (2 * r - j,), (2 * r - j + n,))
+    return out
+
+
+def convolve_varying_adjoint(flux, profiles):
+    """Exact adjoint of :func:`convolve_varying` (same ``profiles`` argument).
+
+    ``out[c] = sum_d profiles[c + d, d + r] * flux[c + d]`` — each *input* pixel
+    scatters back through the rows that read it. Verified in the tests against
+    ``jax.linear_transpose``.
+    """
+    flux = jnp.asarray(flux)
+    profiles = jnp.asarray(profiles)
+    n = flux.shape[0]
+    w = profiles.shape[1]
+    r = (w - 1) // 2
+    fp = jnp.pad(flux, (r, r))
+    pp = jnp.pad(profiles, ((r, r), (0, 0)))
+    out = jnp.zeros(n, dtype=jnp.result_type(flux, profiles))
+    for j in range(w):
+        out = out + jax.lax.slice(pp, (j, j), (j + n, j + 1))[:, 0] * jax.lax.slice(
+            fp, (j,), (j + n,)
+        )
+    return out
+
+
+def gaussian_lsf_profiles(sigma_px, anchor_wave, grid_wave):
+    """Per-pixel LSF profiles from per-anchor Gaussian widths (build time, NumPy).
+
+    Builds one normalized Gaussian kernel per anchor — the radius follows the
+    *largest* width (truncate at 4 sigma, as :func:`gaussian_kernel`) — and linearly
+    interpolates them onto the grid through :func:`lsf_anchor_tables`. Rows are convex
+    combinations of unit-sum kernels, so every row sums to exactly 1. Shape
+    ``(len(grid_wave), 2 * radius + 1)``, ready for :func:`convolve_varying`.
+    ``sigma_px`` must supply one positive width per anchor.
+    """
+    sigma_px = np.atleast_1d(np.asarray(sigma_px, dtype=np.float64))
+    idx, t = lsf_anchor_tables(anchor_wave, grid_wave)
+    if sigma_px.shape != (len(anchor_wave),):
+        raise ValueError(f"need one width per anchor; got {sigma_px.shape} for {len(anchor_wave)}")
+    if np.any(sigma_px <= 0):
+        raise ValueError("sigma_px must be positive")
+    radius = max(1, int(np.ceil(4.0 * float(np.max(sigma_px)))))
+    off = np.arange(-radius, radius + 1, dtype=np.float64)
+    bank = np.exp(-0.5 * (off[None, :] / sigma_px[:, None]) ** 2)
+    bank /= bank.sum(axis=1, keepdims=True)
+    return (1.0 - t)[:, None] * bank[idx] + t[:, None] * bank[idx + 1]
+
+
+def lsf_anchor_tables(anchor_wave, grid_wave):
+    """Per-pixel linear-interpolation tables onto LSF anchor wavelengths (build time).
+
+    Maps each model-grid pixel to its bracketing anchor pair: the realized kernel row
+    at pixel ``m`` is ``(1 - t[m]) * bank[idx[m]] + t[m] * bank[idx[m] + 1]``.
+    Piecewise linear in log-wavelength (the grid's uniform coordinate) and clamped
+    beyond the end anchors, so anchors need not span the grid. NumPy-only: the tables
+    depend on the (static) grid and anchor positions, never on kernel values, so the
+    θ-path (:func:`albireo.forward.with_lsf`) reuses them with traced banks.
+    """
+    a = np.asarray(anchor_wave, dtype=np.float64)
+    g = np.asarray(grid_wave, dtype=np.float64)
+    if a.ndim != 1 or a.size < 2:
+        raise ValueError("anchor_wave must be a 1-D array of at least 2 wavelengths")
+    if np.any(np.diff(a) <= 0):
+        raise ValueError("anchor_wave must be strictly increasing")
+    la, lg = np.log(a), np.log(g)
+    idx = np.clip(np.searchsorted(la, lg, side="right") - 1, 0, a.size - 2)
+    t = np.clip((lg - la[idx]) / (la[idx + 1] - la[idx]), 0.0, 1.0)
+    return idx.astype(np.int32), t
 
 
 # ---------------------------------------------------------------------------

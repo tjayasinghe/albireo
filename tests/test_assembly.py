@@ -201,7 +201,7 @@ def test_equivalence_cases_have_the_topologies_they_claim():
     by_id = {c[0]: c[1] for c in CASES}
     assert len(by_id["two_instruments"].groups) == 2
     two = by_id["two_instruments"]
-    supports = {g.instrument: (g.row_support, g.kernel.shape[0]) for g in two.groups}
+    supports = {g.instrument: (g.row_support, g.kernel.shape[-1]) for g in two.groups}
     assert supports["a"] != supports["b"], f"groups are not actually distinct: {supports}"
     assert by_id["sb2_barycentric"].n_components == 2
     assert by_id["single_component"].n_components == 1
@@ -596,7 +596,7 @@ def test_band_rejects_too_small_half_bandwidth():
     so a bandwidth that cannot hold one block would land the window at the wrong offset.
     """
     g = PROBLEM.groups[0]
-    floor = g.row_support + 2 * ((g.kernel.shape[0] - 1) // 2)  # zero-shift containment
+    floor = g.row_support + 2 * ((g.kernel.shape[-1] - 1) // 2)  # zero-shift containment
     with pytest.raises(ValueError, match="half_bandwidth too small"):
         band_block_tridiagonal(PROBLEM, PRIOR2, floor - 1)
     band_block_tridiagonal(PROBLEM, PRIOR2, floor)  # the floor itself fits
