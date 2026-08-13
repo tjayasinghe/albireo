@@ -154,8 +154,23 @@ log-$\lambda$ grid this is a stationary discrete convolution $\mathbf{B}_j$ (Toe
 kernel truncated at $\pm 4\sigma$), consistent with a constant-resolving-power spectrograph.
 Because $\mathbf{B}_j$ is stationary on the same uniform grid, it commutes with $\mathbf{T}$
 (up to edges); we apply it after shifting, matching the physical picture (instrument acts in
-the observed frame). Tabulated / wavelength-dependent LSFs become banded non-stationary
-matrices in v2 with no structural change to anything below.
+the observed frame). The v2 seam is open (D37): a wavelength-dependent LSF is the banded
+non-stationary matrix $K[m, c] = P[m,\, m - c + r]$ — each model pixel applies its own
+kernel row, realized from per-anchor kernels by linear interpolation in log-$\lambda$
+(`operators.convolve_varying`; per-anchor Gaussian widths are the built-in
+parameterization, but the operator takes arbitrary — including asymmetric — profile
+banks). Two consequences worth stating. *Identifiability:* the commutation argument cuts
+both ways — a stationary kernel change is absorbed exactly by the free component spectra
+(reparameterize $d \to \mathbf{B}'\mathbf{B}^{-1} d$), so the marginal identifies only
+the *wavelength variation* of the LSF, and only through the epoch-dependent shifts that
+sample $\sigma(\lambda)$ at different observed wavelengths; measured at gate scale the
+absolute width level is prior-dominated (the flat profile beat an injected ramp by ~3
+nats under ML-II-style freedom — fitted anchor widths are diagnostics, not
+measurements). *Orbit relevance:* by the same argument a stationary LSF error — any
+shape — cannot bias the orbit; only wavelength dependence can, and symmetric width
+variation only at second order (a symmetric kernel moves no centroid). The first-order
+channel is wavelength-dependent *asymmetry*, whose epoch-coupled part enters as an
+apparent velocity perturbation $\propto \lambda\, c'(\lambda)\, v(t)/c$.
 
 **Light fractions.** $\ell_{ij} \ge 0$ with $\sum_i \ell_{ij} = 1$ over the stellar components
 (continuum-normalized data), telluric fixed at $\ell = 1$. Constant per component by default;
@@ -537,7 +552,14 @@ a four-term tent-weighted combination of row-translated copies of $\mathbf{G}_j$
 computation is: (i) $\mathbf{R}^\top\mathbf{W}'\mathbf{R}$ by one `segment_sum` over
 static *pair tables* precomputed from the rebin sparsity; (ii) the kernel sandwich as two
 unrolled diagonal-shifted accumulations on the band image; (iii) translation + tent
-mixing + accumulation into a global band tensor. Cost per epoch is
+mixing + accumulation into a global band tensor. A wavelength-dependent kernel (D37)
+keeps stage (ii)'s structure with the scalar taps replaced by row-shifted profile
+columns, $K[c+d,\,c] = P[c+d,\, r-d]$ — but only *left* applications $\mathbf{K}^\top
+\mathbf{M}$ broadcast on a row-major band image (a right application's taps vary along
+the columns), so the second application runs against the band-transpose of the first,
+using the symmetry of $\mathbf{G}$:
+$\mathbf{G} = \mathbf{K}^\top (\mathbf{K}^\top \mathbf{H})^\top$. One band transpose
+(a static column-slice shuffle) per epoch; same width, same flop count. Cost per epoch is
 $\mathcal{O}(P \cdot w)$ with $w = 2(s + 2r) + \mathcal{O}(1)$, versus probing's
 $\mathcal{O}(p)$ operator applications — an order of magnitude at survey bandwidths
 ($w \sim 50$, $2p+1 \sim 10^3$), with identical results up to floating-point summation
@@ -894,12 +916,15 @@ the static graph exactly like the shifts, and the §5.2 eclipse breaker becomes 
 pre-marginalization), so MAP/NUTS handle it natively.
 
 **LSF widths.** A Gaussian kernel's *values* at fixed integer offsets are smooth in
-$\sigma$, so `lsf_sigma` (one width per instrument) is traced while the kernel *radius*
-stays fixed at build time by the construction-time width, which thereby becomes a strict
-upper bound: a realized $\sigma$ above it would be silently truncated by the fixed
-radius, so the model rejects it with a $-\infty$ factor (the same
+$\sigma$, so `lsf_sigma` (one width per un-anchored instrument; one per LSF anchor for
+an instrument built with `lsf_anchors_angstrom`, D37 — the traced per-anchor bank is
+re-interpolated through the same static tables the build used) is traced while the
+kernel *radius* stays fixed at build time by the construction-time widths, which thereby
+become strict per-entry upper bounds: a realized $\sigma$ above them would be silently
+truncated by the fixed radius, so the model rejects it with a $-\infty$ factor (the same
 guard-not-silent-corruption pattern as the bandwidth budget, §7.1). Identifiability is
-§5.4's caveat: anchor one reference instrument.
+§5.4's caveat sharpened by §1.3: anchor one reference instrument for absolute widths,
+and read fitted per-anchor profiles as diagnostics, not measurements.
 
 **Per-epoch response (D33, post-M5).** The multiplicative response enters the
 likelihood in three places — the target, $z_j = y_j - r_j \odot (\mathbf{R}\mathbf{1})$;

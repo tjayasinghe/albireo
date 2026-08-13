@@ -1211,3 +1211,69 @@ suspects are the Gaussian stand-in for FEROS's real LSF — the next lever, and 
 seam by design (D8: a tabulated LSF is a banded-operator swap) — the Be disc's
 variability, and the published CCF analysis itself, which blends the components this
 model separates.
+
+## D37 — the tabulated-LSF seam opened: fitted σ(λ), and the orbit's answer (2026-08-12)
+
+D8 reserved the seam ("tabulated LSF is v2 — a banded matrix, no structural
+change"); D37 opens it. The kernel slot becomes a per-pixel profile bank realized
+from per-anchor kernels through static log-λ interpolation tables
+(`operators.convolve_varying`, exact adjoint pair, arbitrary asymmetric banks
+accepted); the band assembly keeps its exact structure with scalar taps replaced by
+row-shifted profile columns and the second sandwich application run against the
+band-transpose of the first (G = Kᵀ(KᵀH)ᵀ, by G's symmetry — only left
+applications broadcast on a row-major band image). Band == probe == dense at
+rtol 1e-12/1e-10 under diagonal and AR(1) noise, per-anchor width gradients to
+1e-9, random asymmetric banks pinned against a hidden kernel flip. 320 tests.
+
+**What the closed loop measured first (gate scale, injected σ ramp 5.0→9.5 km/s):**
+the joint fit leaves the orbit unbiased (K to 0.3%) and recovers the ramp's
+*direction*, but the marginal does **not** prefer the injected truth — a flat width
+beat it by ~3 nats, and the ML profile beat the truth by ~8 while sitting ~3 km/s
+off one anchor. The physics: a stationary kernel change commutes with the shifts,
+so the free spectra absorb it (deconvolution), and the width preference is
+dominated by the smoothness prior's taste, not the instrument. Only the
+anchor-to-anchor *variation* is data-identified, through the epoch-dependent
+shifts. **Fitted anchor widths are diagnostics, not measurements** — the design
+consequence is that the orbit's response, not σ̂(λ) itself, is the readout.
+
+**HR 6819** (`scripts/hr6819_lsf_run.py`): the D36 configuration exactly — wide
+window 4120–4600 Å, Hγ core masked, per-epoch jitters + shared AR(1) φ — plus 13
+Gaussian width anchors every 40 Å (the FEROS order scale), bounds 1.5–3.5 km/s
+around the nominal 2.652 (radius from the bound: half-bandwidth 91 vs 87). 200
+L-BFGS steps, 5,650 s at 28.3 s/step (2.3× D36: larger radius, varying-kernel
+band stages, 13-anchor VJP).
+
+| | D36 (fixed σ = 2.652) | **D37 (fitted σ(λ) ×13)** | Klement et al. 2025 |
+|---|---|---|---|
+| period [d] | 40.36750 | **40.36769** | 40.3261 ± 0.0013 |
+| K<sub>pre-sd</sub> [km/s] | 63.396 | **63.395** | 61.15 ± 0.88 |
+| eccentricity | 0.0261 | **0.0262** | 0.0289 ± 0.0058 |
+| φ̂ | +0.737 | **+0.737** | — |
+| α̂ range (median) | 1.46–1.86 (1.61) | 1.46–1.86 (1.61) | — |
+| whitened residual sd, lag-1 | 0.997, +0.019 | 0.998, +0.019 | 1, 0 |
+| log-likelihood | 3,388,604.2 | **3,388,694.7** | — |
+
+σ̂(λ) at the anchors [km/s]: 2.15 at 4120 Å, then 3.1–3.4 across the rest of the
+window, hugging the 3.5 bound — the closed-loop behavior on real data: the marginal
+buys smoother implied spectra with broader kernels, so the absolute level is
+bound-limited and diagnostic only. K<sub>Be</sub> is deliberately absent from the
+table: it did not converge in 200 steps here — it oscillated 1.30–4.16 across the
+last 100 steps (a band that *spans* the D36 value 3.48), ending at 1.30 with
+|grad| 59 where D36 ended at 3.85. The 13 near-flat width directions slow the
+already-flattest axis; every tabulated quantity above was pinned over the same
+trajectory (P within ±0.001, K₁ within ±0.02, φ̂ to three digits).
+
+**The reading: +90.5 nats, and nothing moves.** The fitted width profile absorbs
+real likelihood — there is wavelength structure in the effective width — and the
+orbit does not respond: P +0.0002 d (0.5% of the offset, within the trajectory
+wobble), K₁ −0.001 km/s, e +0.0001, φ̂ and every residual moment unchanged. This is
+D33's pattern again (the response site absorbed +4,100 nats and moved nothing), now
+for the LSF. **The literature period offset survives its fifth configuration**, and
+LSF *width* variation joins the exonerated list: not the continuum (D33), not the
+noise scale (D31), not the pixel correlation (D34), not the window (D36), not σ(λ)
+(D37). The surviving LSF suspect is narrowed to profile *asymmetry* — the
+first-order centroid channel, whose epoch-coupled part enters as an apparent
+velocity perturbation ∝ λc′(λ)v(t)/c (math.md §1.3) — for which the operator
+already accepts arbitrary banks; only a θ-parameterization (e.g. per-anchor
+Gauss–Hermite h₃) would be new. Beyond the LSF: disc variability, and the published
+CCF blending itself.
