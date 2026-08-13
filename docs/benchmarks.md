@@ -1092,3 +1092,68 @@ Two things stated honestly:
   and `test_laplace_closure_and_argument_paths_agree` (exact — same eager ops).
 * The M3 NUTS acceptance gate now runs through `jit_model_args=True` as its default
   path, so the gate itself regression-tests the traced sample loop.
+
+## D35 — the band assembly learns the chain (2026-08-12)
+
+D34 ran the HR 6819 AR(1) fits on the probe path at ~15× the D33 per-step cost and
+closed with a condition: the tridiagonal band-sandwich extension gets built only if
+AR(1) earns a permanent place. The science verdict — the only noise model that
+whitens both moments *and* the first one to bring the two windows closer together —
+earned it, and the next recorded step (a wider window) cannot be paid for on the
+probe path: its gradient peaked at 23.7 GiB at *current* window scale on a 32 GB
+machine. So the lever gets pulled.
+
+### The extension
+
+The only stage of the D28 assembly that assumed diagonal noise was the innermost
+sandwich `H = RᵀW′R`. The chain adds one symmetric cross-row term per link —
+`−c·√(wₙw_p)·rₙr_p·(RₙᵀR_p + R_pᵀRₙ)` — and re-weights the diagonal by the chain
+diagonal `1 + Σ a` (math.md §4.5a). Both enter through the same machinery that
+already carried the diagonal: a second set of static pair tables
+(`operators.rebin_link_pair_tables`), built at `build_problem` time over the *union*
+of links realized in any epoch, consumed by one extra `segment_sum` per epoch whose
+traced weights carry φ, α and r; a per-epoch gap test selects each epoch's own links
+against the shared tables, because masks differ by epoch. `H` widens by the group's
+static `ar_step` — exactly the `ar_bandwidth_extra` the bandwidth reservation already
+declared — and **everything downstream is untouched**: the LSF convolutions, the
+T-sandwich, the band accumulation, the D29 chunking, and the custom-VJP solve see
+only a slightly wider velocity-independent band image. The likelihood's auto-selection
+becomes `"band"` unconditionally; probing remains the reference implementation and
+the `validate` oracle.
+
+Exactness carried over wholesale: the D34 dense-LAPACK gold test (gaps + jitter
+composed) now runs the band path at the same rtol 1e-10, band = probe at rtol 1e-12
+with ∂/∂φ agreeing to 1e-9, and the `epoch_chunk` batching is invariant — the AR
+weight tuple (diagonal, link, gap table) pads and slices together, pinned by a test
+because a batched run that dropped link terms would fail silently.
+
+### Measured: the correlated marginal at HR-window scale
+
+`scripts/d35_ar1_band_bench.py`, 51 epochs, 9,796 model px, 367,200 native px,
+half-bandwidth 85, CPU, one assembly path per process (the peak-working-set counter
+is monotone). Gradients in velocities, φ and the jitter — one L-BFGS step's work:
+
+| | probe (D34) | band (D35) | ratio |
+|---|---|---|---|
+| eval, steady | 5.10 s | **0.71 s** | 7.2× |
+| value+grad, steady | 58.83 s | **3.07 s** | **19.2×** |
+| eval peak working set | 11.34 GiB | **1.14 GiB** | 9.9× |
+| grad peak working set | 23.69 GiB | **1.85 GiB** | **12.8×** |
+| log-likelihood, gradients | 1165077.330 | identical to all printed digits | — |
+
+The gradient gap exceeding the eval gap is the D28 story repeating: the band path's
+solve stage carries the closed-form custom VJP, while the probe path pays plain
+reverse mode through 2p + 1 = 347 operator applications — the pre-D28 cost profile.
+At 1.85 GiB, the wider window fits comfortably where 23.7 GiB was already pressing
+against the machine.
+
+### The proof on real data: window A, refit unchanged
+
+`scripts/hr6819_ar1_run.py --windows A`, rerun with no changes beyond the assembly:
+**868 s where D34 took 8,369** (9.6× end-to-end, 5.8 vs 55.8 s/step), converging to
+the same optimum — log-likelihood 1,691,463.5 to the printed digit, φ̂ +0.801,
+P 40.37113 vs 40.37115 (0.02 formal σ), α range 1.55–1.93 (median 1.66) and residual
+diagnostics (chain sd/lag-1 0.997/+0.041, diagonal lag-1 +0.797) identical.
+K<sub>Be</sub> reads 2.420 vs 2.446 — the direction both runs were still sliding
+along at step 150, i.e. the flattest axis of the surface, not a path discrepancy.
+The wider window stops being a budget question.

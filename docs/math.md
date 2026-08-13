@@ -238,9 +238,12 @@ Two structural consequences, both static. $\mathbf{A}^\top \mathbf{W} \mathbf{A}
 couples rebin rows up to `ar1_max_gap` apart, widening the half-bandwidth by the
 largest model-pixel offset between a stored link's row supports
 (`Problem.ar_bandwidth_extra`; `MarginalOrbitModel` reserves it behind its ``ar1``
-flag, D21-style). And the D28 band sandwich assumes diagonal weights, so a correlated
-marginal runs on the **probe assembly path** — the tridiagonal-sandwich extension of
-the band path is a recorded lever, not built.
+flag, D21-style). And the inner sandwich of the D28 band assembly gains the chain's
+cross-row terms: each link contributes the symmetrized outer product
+$-c_k \sqrt{w_n w_p}\, r_n r_p (\mathbf{R}_n^\top \mathbf{R}_p + \mathbf{R}_p^\top \mathbf{R}_n)$
+of two *different* rebin rows, carried by static link pair tables (§4.5a, D35), so the
+correlated marginal stays on the band path; comb probing remains the reference
+implementation.
 
 ---
 
@@ -619,6 +622,40 @@ scans rather than the custom rule; reverse-over-reverse matches central finite
 differences of the gradient to 8 digits where forward-over-reverse does not.
 `laplace_inverse_mass` uses reverse-over-reverse, fixing a defect present since M3.
 
+### 4.5a The tridiagonal noise sandwich: link pair tables (D35)
+
+The stage-1 sandwich above assumed $\mathbf{W}'$ diagonal. With the AR(1) chain
+(§1.4a) the noise precision adds one symmetric off-diagonal term per link,
+so per epoch
+
+$$
+\mathbf{H} \;=\; \mathbf{R}^\top \mathbf{W}' \mathbf{R}
+\;=\; \underbrace{\mathbf{R}^\top \mathrm{diag}\!\big(w\, r^2 d^{\rm chain}/\alpha^2\big) \mathbf{R}}_{\text{equal-row pair tables}}
+\;-\; \sum_{\rm links} \frac{c_k \sqrt{w_n w_p}\, r_n r_p}{\alpha^2}
+\underbrace{\big(\mathbf{R}_n^\top \mathbf{R}_p + \mathbf{R}_p^\top \mathbf{R}_n\big)}_{\text{cross-row pair tables}},
+$$
+
+where $d^{\rm chain} = 1 + \sum_{\text{links at pixel}} a_k$ is the chain diagonal and
+$(n, p)$ are the link's endpoint rows. The diagonal part reuses the D28 pair tables
+with a re-weighted per-pixel vector; the cross-row part gets its own static tables
+(`operators.rebin_link_pair_tables`): for every *realized* link — the union over
+epochs of `ar_gap[e, n] == g`, since masks differ by epoch — and every ordered entry
+pair of the two rows, the product $v_1 v_2$ lands on the upper band entry
+$(\min(c_1, c_2), |c_1 - c_2|)$; the two orderings supply the two transposes, and
+coincide on the diagonal, where the value is doubled instead. Per epoch the increment
+is one `segment_sum` whose traced weights carry $\phi$, $\alpha$, and $r$ — the gap
+test `ar_gap[e, link_row] == link_gap` selects each epoch's own links against the
+shared union tables. $\mathbf{H}$ widens by the group's static `ar_step` (the largest
+model-pixel offset between a realized link's row supports — the same quantity
+`Problem.ar_bandwidth_extra` reserves), and every downstream stage is untouched: the
+$\mathbf{K}$ convolutions, the T-sandwich, the band accumulation, and the custom-VJP
+solve see only a slightly wider velocity-independent band image. Restores the full
+D28/D29 cost profile for correlated problems — measured at HR-window scale: eval
+$7.2\times$, gradient $19\times$ faster than probing, gradient peak memory
+$23.7 \to 1.9$ GiB (benchmarks.md D35). Comb probing remains the reference path and
+the `validate` oracle; band $=$ probe $=$ dense LAPACK is pinned in
+`tests/test_ar1.py`.
+
 ---
 
 ## 5. Degeneracies and identifiability
@@ -913,8 +950,9 @@ a normalization convention, not a measurement.
 | light/LSF θ-paths equal fresh builds (§7.5) | `with_light_fractions` / `with_lsf` vs. `build_problem` at matched kernel radius, rtol $10^{-12}$; FD gradients through both sites |
 | response θ-path equals fresh builds (§7.5, D33) | `with_response` vs. `build_problem(response_coeffs=...)`: `r` bitwise, marginal rtol $10^{-12}$; FD gradients; replace-not-compound; masked pixels inert |
 | **D33 gate**: per-epoch response closed loop | difference-mode coefficients to $5\times10^{-3}$ against injected $3\times10^{-2}$; K's <1%; common mode prior-pinned (asserted at prior scale, not at truth) |
-| AR(1) chain closed forms exact (§1.4a, D34) | marginal vs. dense brute force under the correlated covariance — chain correlation built independently and LAPACK-inverted — with masked gaps ($\rho = \phi^{g}$) and jitter composed, rtol $10^{-10}$; FD gradients, including at $\phi = 0$ (the `pow` nan-grad trap); $\phi = 0$ ≡ diagonal model; band assembly rejected statically |
+| AR(1) chain closed forms exact (§1.4a, D34) | marginal vs. dense brute force under the correlated covariance — chain correlation built independently and LAPACK-inverted — with masked gaps ($\rho = \phi^{g}$) and jitter composed, rtol $10^{-10}$; FD gradients, including at $\phi = 0$ (the `pow` nan-grad trap); $\phi = 0$ ≡ diagonal model |
 | **D34 gate**: correlated closed loop | injected $\phi = 0.45$ and ivar scale error $\alpha = 1.5$ recovered ($\pm 0.05$, $\pm 5\%$) jointly with K's <1%; chain whitener removes the lag-1 autocorrelation the diagonal whitener exposes ($\approx\phi$ vs $\approx 0$), while both report unit *scale* |
+| correlated band assembly (§4.5a, D35) | band $=$ probe on the gapped+jittered fixture (loglike rtol $10^{-12}$, `validate` operator check); $\partial/\partial\phi$ band $=$ probe to $10^{-9}$; `epoch_chunk` batching invariant (the AR weight tuple pads and slices together); the D34 dense gold test runs the band path |
 | SB3 velocity law (§7.5) | `orbit_velocities` with outer sites ≡ hand-composed nested Keplerians, atol $10^{-12}$ |
 | LSF bound + outer-disk guards | width above build bound / outer $e > e_{\max}$ ⇒ non-finite model log-density |
 | telluric constant exchange (§5.4) | closed loop: the two $k=0$ offsets cancel in the light-weighted sum to $<5\times10^{-3}$ |
@@ -923,4 +961,4 @@ a normalization convention, not a measurement.
 Sections 1–2 and the operator rows are implemented and tested in M0; §3–4 landed in M2;
 §7.1–7.4 landed in M3 (with §5 diagnostics); §6 and §7.5 landed in M4, except the §7.5
 response swap, which landed post-M5 (D33), as did the §1.4a correlated-noise chain
-(D34).
+(D34) and its §4.5a band assembly (D35).
