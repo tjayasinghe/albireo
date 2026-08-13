@@ -1,0 +1,278 @@
+# Roadmap
+
+This page records what albireo intends to become and why, in enough detail that the ordering can be
+argued with. It is a plan, not a promise: items move, and items that turn out to be answering a
+question nobody asked get deleted. Decisions that have actually been *made* live in the
+[decision ledger](design.md#2-decisions-recorded-defaults); this page is upstream of that.
+
+## Where albireo sits
+
+Three facts about the surrounding ecosystem set the strategy.
+
+**The technique is mature; the software is not.** Spectral disentangling has been in use since
+Simon & Sturm (1994) and Hadrava (1995), and the codes that implement it are, without exception,
+either unmaintained or awkward to obtain. KOREL is Fortran, last released 2011, and is not
+distributed as source at all — it is reachable only through a registered web service with a
+16,384-bin ceiling. FDBinary is marked deprecated by its own ASCL entry; fd3, its successor, is
+still used in papers published this year, and its distribution page has not been updated since 2014
+and states no license. Spectangular's last papers are from 2017 and 2019. UNWIND, released in 2026,
+is IDL, and its own paper describes it as lacking a manual or an installation package. The
+shift-and-add code used to identify the companions in LB-1 and HR 6819 is a small research script
+with no license file, which is a real barrier to anyone who would build on it. Nobody in this list
+is doing anything wrong; disentangling is a means to an end for all of them, and the software is a
+by-product of the science. But it means there is no maintained, installable, tested implementation
+of a technique that, in the three years to mid-2026, roughly eight papers a year named in their
+*abstract* alone — and many more used in a methods section.
+
+**The one thing everybody wants is uncertainties on the disentangled spectra, and no existing code
+provides them.** The disentangled spectra are almost never the final product: they are fed to an
+atmosphere code to get effective temperatures, gravities, and abundances. The uncertainties on
+*those* quantities are therefore systematically understated across the literature, and the papers
+say so explicitly — TMBM III notes that normalization uncertainty is simply not propagated into the
+quoted properties. This is not an oversight that better bookkeeping fixes. Disentangling is an
+ill-conditioned linear inverse problem with a genuine low-frequency null space, and getting an
+honest error band out of it means having a posterior, which means either sampling something very
+high-dimensional or marginalizing it away. albireo does the second. That capability is the reason
+the package exists, and everything on this page is downstream of making it usable.
+
+**The obvious approach was tried, and it died of compute.** PSOAP (Czekala et al. 2017) put a
+Gaussian-process prior on the component spectra and sampled the joint posterior. It is the closest
+thing to a direct predecessor, and its last commit is from December 2017. The paper is candid about
+why: the dense GP cost restricted it to narrow bandpasses and required cluster access. albireo's
+analytic marginalization plus banded structure plus JAX is a response to exactly that failure — the
+component spectra are integrated out in closed form rather than sampled, and the linear algebra is
+banded rather than dense. Being the package that made this tractable is the positioning; keeping
+that claim honest is the reason the [benchmark record](benchmarks.md) is as long as it is.
+
+What follows is ordered by that logic: make the existing capability usable (Tier 1), then reach the
+communities whose problems it already solves (Tier 2), then extend the model (Tier 3).
+
+## Tier 1 — make it usable (done)
+
+A capability nobody can install, cite, or plot is not a capability. These items added no new
+science and were the highest-leverage work available. They are **done**; what is left of this
+tier is not code but pushing, tagging and registering, and that sequence — where the ordering
+genuinely matters — is written down in [Releasing](releasing.md).
+
+| | Item | Why it came first |
+|---|---|---|
+| 1 | `slow` / `network` / `gpu` markers and a `conftest` | Everything below adds tests; the fast suite went from 14 minutes to 6 |
+| 2 | Single-sourced version, upgraded `CITATION.cff`, `CHANGELOG.md`, a [citing](citing.md) page, a tag-driven release workflow | Nothing could say `pip install albireo` until this was true |
+| 3 | Deployed docs with a rendered [API reference](api/index.md), `py.typed`, coverage | 70 exported names with good docstrings, rendered nowhere |
+| 4 | `load_example()` and a [five-minute quickstart](quickstart.md) that runs offline | Time-to-first-plot is the best-attested adoption lever there is |
+| 5 | `albireo.results`: arviz conversion, save/load, export to FITS/ECSV/ASCII | An hours-long fit used to produce printed text and nothing else |
+| 6 | `albireo.plotting` | The three most reusable plotting functions in the repo were stranded inside example scripts |
+
+Two of these deserve their reasoning recorded rather than asserted.
+
+**Export is not a convenience feature.** The disentangled spectrum plus its uncertainty band is the
+product. Until it could leave the process in a format an atmosphere code reads, albireo was the
+middle of a pipeline with no downstream connector, and the uncertainty — the entire differentiator
+— was dropped at exactly the joint where it matters. See Tier 2 item 8 for the other half of this.
+
+**The quickstart must not require finding data.** The pattern worth copying is lightkurve's: the
+first code block does science, not configuration, on data the user did not have to locate. So a
+small simulated dataset ships inside the wheel — no download, no astropy, no archive account — and
+a real archival example is the second step, once the ESO loader below exists.
+
+## Tier 2 — reach the communities
+
+Each of these is aimed at a specific group of people with a specific unmet need, ordered so that
+earlier items unblock later ones.
+
+### 1. A nebular component with a free per-epoch amplitude
+
+Massive stars are born in H II regions, so their spectra carry nebular emission lines that do not
+move with either star and vary in strength from night to night with seeing and slit losses. Left in,
+they artificially narrow the disentangled line profiles and bias the derived temperatures and
+gravities. The literature's handling of this is a sequence of one-off workarounds: TMBM III models
+the nebular features as a third component with static velocity and variable intensity, built by
+hand; a 2026 paper in the same series masks the contaminated pixels by setting their error values to
+999.
+
+In albireo this is a static component whose per-epoch amplitude is a free parameter — structurally
+the telluric component with a traced amplitude instead of a fixed one, and physically correct, since
+nebular flux is added on top of the total continuum and takes no light from the stars. Two details
+carry the work: the nebular component is static in the *barycentric* frame, which is the opposite
+convention from the telluric one, and confining it to the Balmer, He I and forbidden-line windows
+needs the smoothness prior's regularization strength to become per-pixel. Highest impact per line of
+code on this page.
+
+### 2. Calibrated faint-companion detection
+
+The K₂ scan already answers "is there a companion, and at what velocity semi-amplitude" — the
+question at the center of every dormant-black-hole candidate. What it does not yet do is say how
+often noise alone would produce the peak it found. The current state of the art in the literature is
+a bare χ² map with no false-alarm probability attached, and the papers are explicit about the
+resulting fragility: small deviations in the assumed primary semi-amplitude produce spurious
+features in the recovered secondary spectrum. Marginalizing over K₁ removes that failure mode
+outright.
+
+The work is: vectorize the scan (it is currently a Python loop over the grid), then add an
+injection–recovery calibration that turns the detection statistic into a false-alarm rate and a
+limit of the form "any companion contributing more than *X*% of the light would have been detected
+at 95% confidence." This is what the Gaia BH and stripped-star communities actually need to quote,
+and the [HR 6819 campaign](benchmarks.md) is a ready-made validation set.
+
+### 3. A per-epoch radial-velocity table
+
+Free per-epoch velocities — no Keplerian — is listed in the [design](design.md) as a diagnostic mode
+and has never been exposed. The low-level machinery exists and is differentiable; only the sampling
+path is missing. Two reasons it is worth more than its size: a per-epoch RV table with honest
+uncertainties is the artifact the binary-star community expects from any spectroscopic analysis, and
+it is the natural bridge for users of cross-correlation and shift-and-add codes, who can compare
+against something familiar before trusting the joint fit. It is also the model check for the
+Keplerian mode — fit free velocities, then ask whether a Keplerian threads the resulting posterior.
+
+The honest caveat belongs in the docstring: with the systemic velocity fixed at zero, the table is
+differential, and it is the velocity *difference* that is sharply constrained.
+
+### 4. An ESO archive loader, and BLOeM in one line
+
+`scripts/download_hr6819.py` is already a working ObsCore/TAP client with retries and atomic
+downloads. Promoted into the package, one loader covers FEROS, HARPS, UVES, X-shooter, GIRAFFE and
+ESPRESSO — a single query language, a single file layout, and a one-year proprietary period after
+which everything is public.
+
+The reason to do it is BLOeM. The survey has ~929 targets in the Small Magellanic Cloud with roughly
+25 epochs each, an intrinsic binary fraction above 70%, and something like 70 double-lined systems —
+all of it public, and the survey team's own disentangling of those systems is still listed as future
+work. A one-line fetch of a real BLOeM target, disentangled with posteriors, is simultaneously the
+tutorial, the evidence of research use that software journals now ask for, and a paper. It is
+sequenced after the nebular component deliberately: BLOeM's targets sit in nebulosity, so the demo
+needs that component to be honest.
+
+### 5. The `Disentangler` façade
+
+The [design](design.md#6-api-sketch-target-user-code) sketches a friendlier API and the README
+promises it. The current path asks a new user to hand-build a dictionary of numpyro distributions, call three
+functions in the right order, extract two hyperparameters for empirical Bayes, and rebuild the model
+— which is a fine expert interface and a poor first impression.
+
+It is sequenced *after* the nebular component and the RV mode on purpose. A façade is a vocabulary,
+and a vocabulary is expensive to change once people are using it; the components and modes it names
+should exist before it names them. It ships marked experimental, with the low-level API documented
+and supported in parallel.
+
+### 6. `sensitivity_forecast()`
+
+"Will twelve more epochs at these phases break the degeneracy?" is a question about the posterior
+covariance of the component spectra, and the posterior covariance does not depend on the flux
+values — only on the epochs, the phases, the weights, and the prior. So it can be computed for
+observations that have not been taken. Every piece needed already exists; nobody else can answer the
+question at all. Worth its two days on the strength of that asymmetry alone.
+
+### 7. A Gaia RVS loader, before December
+
+Gaia DR4 is scheduled for 2 December 2026 and is the first release to publish epoch RVS spectra —
+about 6.9 billion of them, already normalized and already in the barycentric frame, alongside
+several hundred thousand spectroscopic-binary orbit solutions. A loader written against DR3's shape
+now becomes a DR4 loader on release day, and being the package that works on the day the data lands
+is a once-only opportunity.
+
+Two honest caveats belong on the page next to it: 24 nm around the calcium triplet is a narrow
+window for disentangling, and DR3's mean spectra are one per source, so DR3 is a loader demo rather
+than a disentangling dataset. The genuinely interesting DR3 demonstration is combining RVS with
+ground-based epochs — which albireo handles natively, since multi-instrument data with different
+line-spread functions is the case it was built for.
+
+This also forces a small correctness fix worth doing anyway: RVS wavelengths are vacuum and most
+optical spectrographs deliver air, and there is currently no field in which to declare which is
+which. Making it a declared, validated property turns a silent sub-ångström error into an exception.
+
+### 8. Downstream handoff
+
+The current workflow in the literature is a relay race: measure velocities, fit an eclipsing-binary
+model, disentangle in one code, renormalize by hand against an external light ratio, then fit
+atmospheres in another. Five tools, five format conversions, and the uncertainty is dropped at the
+disentangling joint because the disentangling code never produced one.
+
+albireo should be the front half of that pipeline and should not attempt to be the back half —
+GSSP, iSpec, Korg.jl and PySME are good at what they do. What it should ship is clean writers for
+the formats they ingest, and a tutorial whose punchline is the thing only a posterior makes
+possible: export *N* draws from the component-spectrum posterior, fit all *N*, and read the spread
+in temperature and gravity. That converts a dropped uncertainty into a propagated one at the cost of
+disk space.
+
+### 9. A benchmark page against the incumbents
+
+New codes are trusted after they reproduce old ones, not before. `scripts/fd3_bench.py` already
+contains a format-verified fd3 exporter; what is missing is a built fd3 binary, a shift-and-add
+reference implementation, and a system to run them on.
+
+Three notes on doing this fairly. The comparison system should be AI Phoenicis, not HR 6819: it
+eclipses, so the light ratio is externally known and the one genuinely free choice in disentangling
+stops being a confound, and its semi-amplitudes are published to 0.02%. The shift-and-add comparison
+must be a clean-room implementation from the published algorithm, because the existing code carries
+no license. And the framing is agreement plus speed plus posteriors — never "the old code is wrong."
+Where results differ, the page reports a diagnosis, not a verdict; a fair comparison also has to
+handicap albireo down to fd3's conditions (common grid, uniform weights) before showing the
+unhandicapped case separately.
+
+The single most useful figure on that page is the cheapest: an SB2 with a nebular line, disentangled
+by a method that can mask the contaminated pixels and by methods that structurally cannot.
+
+## Tier 3 — later, and why later
+
+**Time-variable component spectra.** The core assumption of disentangling is that each component's
+spectrum is constant; the systems people most want to study — Be stars with variable discs,
+interacting binaries, pulsators — violate it. Tier 2's nebular component is already rank-one time
+variation (a fixed shape with a free per-epoch amplitude), and that captures more than it sounds
+like: "the disc emission was 1.4× stronger that night" is most of what anyone models. Line *shape*
+variation needs a second basis vector per variable component, with a shrinkage prior and the same
+windowing machinery. The important structural point is that this stays inside the linear-Gaussian
+family, so the analytic marginalization survives — this is a change of basis, not a change of
+method. It waits for the dataset that demands it, which per the D38 record is HR 6819, where disc
+variability is now one of only two surviving explanations for the period offset.
+
+**specutils interoperability.** Accept and return `Spectrum` objects at the boundary; do not adopt
+them internally. The reason for the asymmetry is concrete: `SpectrumCollection` requires equal-length
+spectra and rejects per-epoch metadata differences, so it cannot represent a ragged multi-epoch
+multi-instrument dataset, which is albireo's central input. Writing down *why* is itself worth doing,
+because it names a problem the reader has already hit.
+
+**More archives.** SOPHIE/ELODIE is the cheapest (no authentication, decades of high-resolution
+planet-search cadence); LAMOST's medium-resolution time-domain survey is the largest by volume;
+SDSS-V has the largest catalog of double-lined candidates but the most download plumbing, and its
+visit spectra must be read in the un-shifted form.
+
+**Survey-scale throughput.** Batch fitting and a measured systems-per-GPU-hour number. This waits on
+GPU hardware, which is also the one open acceptance gate from M5 — the current scale projections are
+extrapolated from CPU measurements and say so.
+
+**A command-line interface.** Deferred until after the façade, because the façade is the
+configuration schema and building a CLI first would freeze a second one. When it happens, the
+subcommand with real value is `albireo fetch`, not `albireo fit`.
+
+**A guard at zero eccentricity.** The `(√e cos ω, √e sin ω)` parameterization is singular at exactly
+the origin: ω is undefined, `e·cos ω` behaves like `|x|`, and the gradient is NaN. numpyro then
+reports `Cannot find valid initial parameters`, which points nowhere near the cause. Since tidally
+circularized close binaries are exactly the population a user is most likely to bring, an
+initialization at `secosw = sesinw = 0` is a predictable first experience, and it deserves a
+message that says so rather than a documentation note. Cheap, and worth doing before the façade
+freezes the initialization API.
+
+**Community mechanics.** Discussions enabled, contributions labeled, and — the highest-conversion
+and most-neglected item — writing to the handful of people whose systems albireo is built for and
+offering to run one. A user who leaves with a disentangled spectrum of *their* star is a user.
+
+## Explicit non-goals
+
+Recorded so they stop being reconsidered.
+
+- **No telluric radiative-transfer fitting and no molecfit wrapper.** Several wrappers already exist
+  and are fragile. Masking and downweighting telluric regions inside the likelihood is already
+  supported and is the right tool; exact multiplicative treatment remains the recorded v2 seam.
+- **No WEAVE- or 4MOST-specific loaders.** 4MOST's processed data is released through the ESO
+  archive, so it arrives free with the loader in Tier 2.
+- **No replacement for GSSP, iSpec, Korg.jl, PHOEBE, or PySME.** Interoperate. Being the front half
+  of everyone's pipeline is a better position than being a worse version of the back half.
+- **No GUI**, per the v1 non-goals.
+
+## What would change this page
+
+The roadmap above assumes the bottleneck is reach rather than capability. Three observations would
+falsify that and reorder everything: real BLOeM spectra failing to load or to disentangle sensibly;
+the K₂ null calibration showing the detection statistic is far less powerful than the HR 6819 work
+implies; or the GPU gate closing with numbers materially worse than the CPU projections, which would
+make throughput the story instead of statistics.
