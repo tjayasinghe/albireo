@@ -30,6 +30,7 @@ __all__ = [
     "gaussian_kernel",
     "gaussian_kernel_traced",
     "interp_operator",
+    "rebin_link_pair_tables",
     "rebin_operator",
     "rebin_pair_tables",
     "shift_spectrum",
@@ -375,4 +376,67 @@ def rebin_pair_tables(rebin: RebinOperator):
         jnp.asarray(np.concatenate(ps), dtype=jnp.int32),
         jnp.asarray(np.concatenate(pr), dtype=jnp.int32),
         h,
+    )
+
+
+def rebin_link_pair_tables(rebin: RebinOperator, link_row, link_gap, width: int):
+    """Static pair tables for the AR(1) cross-row band of ``R^T W R``.
+
+    An AR(1) link between native rows ``n`` and ``p = n - g`` contributes
+    ``w_link (R[n]^T R[p] + R[p]^T R[n])`` to ``H`` — the symmetrized outer product of
+    two *different* rebin rows, which :func:`rebin_pair_tables` (equal rows only)
+    cannot express. ``(link_row, link_gap)`` lists the realized links — the union over
+    epochs of ``ar_gap[e, n] == g`` — because only realized links are covered by the
+    build-time ``ar_step`` bound that sizes ``width``. For every listed link and every
+    ordered entry pair ``(t1 in row n, t2 in row p)``, the product ``v1 v2`` lands on
+    the upper band entry ``(min(c1, c2), |c1 - c2|)``: the two orderings supply the
+    two transposes of each off-diagonal entry, and coincide on the diagonal, where the
+    value is doubled instead. Returns ``(link_val, link_sid, link_row, link_gap)``
+    with ``sid = cmin * width + o``; per epoch the band increment is one
+    ``segment_sum(link_val * wl[link_row] * (gap_row[link_row] == link_gap), link_sid)``
+    — the gap test keeps each epoch's own realized links, since masks differ by epoch.
+
+    NumPy-only (concrete arrays): call at build time, never under trace.
+    """
+    rows = np.asarray(rebin.rows).astype(np.int64)
+    cols = np.asarray(rebin.cols).astype(np.int64)
+    vals = np.asarray(rebin.vals)
+    link_row = np.asarray(link_row, dtype=np.int64)
+    link_gap = np.asarray(link_gap, dtype=np.int64)
+    if link_row.size and (np.any(link_gap < 1) or np.any(link_row - link_gap < 0)):
+        raise ValueError("links must have gap >= 1 and a non-negative partner row")
+
+    empty = (
+        jnp.zeros(0),
+        jnp.zeros(0, dtype=jnp.int32),
+        jnp.zeros(0, dtype=jnp.int32),
+        jnp.zeros(0, dtype=jnp.int32),
+    )
+    if link_row.size == 0 or rows.size == 0:
+        return empty
+    counts = np.bincount(rows, minlength=int(rebin.n_out))
+    starts = np.concatenate(([0], np.cumsum(counts)[:-1]))
+    prev_row = link_row - link_gap
+    c1 = counts[link_row]
+    c2 = counts[prev_row]
+    pairs = c1 * c2  # rows without rebin entries (never good, never linked) drop out
+    total = int(pairs.sum())
+    if total == 0:
+        return empty
+    k = np.repeat(np.arange(link_row.size), pairs)
+    off = np.arange(total) - np.repeat(np.concatenate(([0], np.cumsum(pairs)[:-1])), pairs)
+    t1 = starts[link_row[k]] + off // c2[k]
+    t2 = starts[prev_row[k]] + off % c2[k]
+    ca, cb = cols[t1], cols[t2]
+    o = np.abs(ca - cb)
+    if int(o.max()) >= width:
+        raise AssertionError(
+            f"link pair offset {int(o.max())} exceeds the declared band width {width} "
+            "(ar_step must bound the model-pixel offset of every realized link)"
+        )
+    return (
+        jnp.asarray(vals[t1] * vals[t2] * np.where(ca == cb, 2.0, 1.0)),
+        jnp.asarray(np.minimum(ca, cb) * width + o, dtype=jnp.int32),
+        jnp.asarray(link_row[k], dtype=jnp.int32),
+        jnp.asarray(link_gap[k], dtype=jnp.int32),
     )

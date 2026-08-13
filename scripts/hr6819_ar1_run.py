@@ -7,9 +7,9 @@ This is the remaining recorded check: model the correlation itself — scalar AR
 exposure) alongside the D31 per-epoch jitters — and see where the orbit goes, what
 ``phi`` comes out, and whether the chain whitener removes the lag-1 autocorrelation.
 Same uniform procedure as scripts/hr6819_response_run.py (conjunction scan, literature
-init, 150 L-BFGS steps), so the D33 table is the comparison baseline. Runs on the
-probe assembly path (the band sandwich assumes diagonal weights, design.md D34);
-expect ~5-10x the per-step cost of the D33 fits.
+init, 150 L-BFGS steps), so the D33 table is the comparison baseline. The D34 record
+ran on the probe assembly path at ~15x the D33 per-step cost; since D35 the correlated
+marginal runs the band assembly (link pair tables), so a rerun pays near-D33 cost.
 
 Run:  python scripts/hr6819_ar1_run.py [--windows A B] [--max-steps 150]
 """

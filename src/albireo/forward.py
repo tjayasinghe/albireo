@@ -34,6 +34,7 @@ from albireo.operators import (
     RebinOperator,
     gaussian_kernel,
     gaussian_kernel_traced,
+    rebin_link_pair_tables,
     rebin_operator,
     rebin_pair_tables,
     shift_spectrum,
@@ -47,6 +48,7 @@ __all__ = [
     "apply_model",
     "apply_model_adjoint",
     "apply_noise_precision",
+    "ar1_band_weights",
     "build_problem",
     "data_residual_zscores",
     "normal_matvec",
@@ -97,6 +99,10 @@ class EpochGroup:
     pair_val: jax.Array  # static rebin pair tables for direct band assembly
     pair_sid: jax.Array  # (albireo.operators.rebin_pair_tables; sid = c * row_support + o)
     pair_row: jax.Array
+    link_val: jax.Array  # static cross-row pair tables for the AR(1) band assembly
+    link_sid: jax.Array  # (albireo.operators.rebin_link_pair_tables;
+    link_row: jax.Array  #  sid = cmin * (row_support + ar_step) + o); link_row is the
+    link_gap: jax.Array  #  link's later endpoint, link_gap its stored native-pixel gap
 
     @property
     def n_epochs(self) -> int:
@@ -134,6 +140,10 @@ class EpochGroup:
             self.pair_val,
             self.pair_sid,
             self.pair_row,
+            self.link_val,
+            self.link_sid,
+            self.link_row,
+            self.link_gap,
         )
         return children, (self.instrument, self.epoch_indices, self.row_support, self.ar_step)
 
@@ -157,6 +167,10 @@ class EpochGroup:
             pv,
             ps,
             pr,
+            lv,
+            ls,
+            lr,
+            lg,
         ) = children
         instrument, epoch_indices, row_support, ar_step = aux
         return cls(
@@ -181,6 +195,10 @@ class EpochGroup:
             pair_val=pv,
             pair_sid=ps,
             pair_row=pr,
+            link_val=lv,
+            link_sid=ls,
+            link_row=lr,
+            link_gap=lg,
         )
 
 
@@ -199,7 +217,7 @@ class Problem:
     frame: str = "barycentric"
     telluric: bool = False
     # Static: True once with_ar1 has been applied (even with numerically zero phi).
-    # The likelihood reads it to select the probe assembly path and widen the
+    # The assembly reads it to include the chain's link terms and widen the
     # bandwidth — a *structural* decision, so it cannot depend on traced values.
     correlated: bool = False
 
@@ -528,6 +546,20 @@ def build_problem(
         if pair_h != row_support:
             raise AssertionError(f"pair-table support {pair_h} != row support {row_support}")
 
+        # Cross-row pair tables for the AR(1) band assembly, over the union of links
+        # realized in any epoch (masks differ per epoch; the per-epoch gap test in the
+        # assembly selects each epoch's own). Realized links are exactly the ones whose
+        # model-pixel offset entered ar_step, so the table width is bounded.
+        gap_stack = np.stack(gap_rows)
+        ep_i, px_i = np.nonzero(gap_stack > 0)
+        link_key = np.unique(px_i.astype(np.int64) * (ar1_max_gap + 1) + gap_stack[ep_i, px_i])
+        link_val, link_sid, link_row, link_gap = rebin_link_pair_tables(
+            rebin,
+            link_key // (ar1_max_gap + 1),
+            link_key % (ar1_max_gap + 1),
+            row_support + ar_step,
+        )
+
         groups.append(
             EpochGroup(
                 instrument=instrument,
@@ -553,6 +585,10 @@ def build_problem(
                 pair_val=pair_val,
                 pair_sid=pair_sid,
                 pair_row=pair_row,
+                link_val=link_val,
+                link_sid=link_sid,
+                link_row=link_row,
+                link_gap=link_gap,
             )
         )
 
@@ -717,6 +753,31 @@ def _ar1_links(g: EpochGroup):
     return rho, a, c, prev
 
 
+def ar1_band_weights(g: EpochGroup):
+    """Diagonal and link weights of ``diag(r) W diag(r)`` for direct band assembly.
+
+    The chain precision splits into a diagonal part — the pixel's own weight scaled
+    by the chain diagonal ``1 + sum of the a's of the links touching it`` — and one
+    symmetric off-diagonal term per link, ``-c sqrt(w_n w_p) r_n r_p / alpha^2``
+    (:func:`apply_noise_precision` is the matrix-free form of the same split).
+    Returns ``(wp, wl)``, each ``(n_epochs, n_native)``: ``wp`` feeds the diagonal
+    pair tables exactly where ``effective_w * r**2`` does on the diagonal path, and
+    ``wl[.., n]`` weights the link whose *later* endpoint is ``n`` (zero where the
+    epoch has none), consumed against the static cross-row tables
+    (:func:`albireo.operators.rebin_link_pair_tables`).
+    """
+    _, a, c, prev = _ar1_links(g)
+
+    def one(a_e, c_e, prev_e, w_e, r_e):
+        dchain = 1.0 + a_e + jnp.zeros_like(a_e).at[prev_e].add(a_e)
+        s = jnp.sqrt(w_e)
+        return w_e * r_e**2 * dchain, -c_e * s * s[prev_e] * r_e * r_e[prev_e]
+
+    wp, wl = jax.vmap(one)(a, c, prev, g.w, g.r)
+    alpha2 = g.jitter[:, None] ** 2
+    return wp / alpha2, wl / alpha2
+
+
 def apply_noise_precision(g: EpochGroup, x):
     """``W x`` for one group's noise model, ``W = D^{1/2} R^{-1} D^{1/2} / alpha^2``.
 
@@ -803,10 +864,11 @@ def with_ar1(problem: Problem, phi) -> Problem:
 
     Two structural consequences, both static:
 
-    * the marginal runs on the **probe assembly path** — the D28 band sandwich
-      assumes diagonal weights, and :func:`albireo.likelihood.marginal_loglikelihood`
-      selects probing automatically (requesting ``assembly="band"`` raises); the
-      band-path extension is a recorded lever, not built;
+    * the D28 band assembly carries the chain's off-diagonal terms through static
+      *cross-row* link pair tables built at :func:`build_problem` time (D35,
+      :func:`albireo.operators.rebin_link_pair_tables`), so the correlated marginal
+      stays on the fast path; global comb probing remains the reference
+      implementation (``assembly="probe"``) and the ``validate`` oracle;
     * ``A^T W A`` widens by :attr:`Problem.ar_bandwidth_extra` model pixels —
       :attr:`Problem.natural_half_bandwidth` includes it once this swap is applied,
       and a static ``half_bandwidth`` chosen *before* the swap must add it
@@ -814,7 +876,7 @@ def with_ar1(problem: Problem, phi) -> Problem:
 
     Applying this swap marks the problem correlated even at ``phi = 0`` (a traced
     value cannot make structural decisions); the result then equals the diagonal
-    model to floating-point ordering, just on the slower probe path.
+    model to floating-point ordering, just with the widened bandwidth.
 
     Parameters
     ----------

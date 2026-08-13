@@ -20,8 +20,13 @@ order; agreement is verified against probing and dense construction in the tests
 
 Stages per epoch (all exact, all differentiable in shifts / lights / kernel / weights):
 
-1. ``H = R^T diag(w r^2) R`` via static *pair tables* precomputed from the rebin
-   sparsity at build time (``forward.build_problem``): one ``segment_sum`` per epoch.
+1. ``H = R^T W' R`` via static *pair tables* precomputed from the rebin sparsity at
+   build time (``forward.build_problem``): one ``segment_sum`` per epoch for the
+   diagonal part ``diag(w r^2)``, and — when the problem carries AR(1) correlated
+   noise (``forward.with_ar1``) — a second ``segment_sum`` over *cross-row* link
+   tables for the tridiagonal chain terms, which widen ``H`` by the group's static
+   ``ar_step`` (``operators.rebin_link_pair_tables``; the traced link weights carry
+   phi, so the whole band stays differentiable in it).
 2. ``G = K^T H K`` as two unrolled diagonal-shifted accumulations (the band-image
    form of the two convolutions; static slices only). ``G`` is a matrix on the model
    grid, so its off-grid columns — which the kernel populates by smearing in-grid
@@ -51,7 +56,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
-from albireo.forward import EpochGroup, Problem
+from albireo.forward import EpochGroup, Problem, ar1_band_weights
 from albireo.priors import SmoothnessPrior
 from albireo.solver import BlockTridiagonal
 
@@ -108,6 +113,7 @@ def _epoch_band_scan(
     nc: int,
     remat: bool,
     chunk: int | None,
+    correlated: bool = False,
     n_groups: int = 1,
 ):
     """Accumulate every epoch of one group into the band tensor via ``lax.scan``."""
@@ -115,23 +121,35 @@ def _epoch_band_scan(
     h = group.row_support
     kernel = group.kernel
     r = (kernel.shape[0] - 1) // 2
-    w_h = 2 * h - 1  # full H band width
+    # The AR(1) chain couples rebin rows across links, so H widens by the group's
+    # static ar_step (Problem.natural_half_bandwidth reserves the same amount).
+    h_eff = h + group.ar_step if correlated else h
+    w_h = 2 * h_eff - 1  # full H band width
     w_u = w_h + 2 * r
     w_g = w_u + 2 * r
-    h_g = h - 1 + 2 * r
+    h_g = h_eff - 1 + 2 * r
     h_f = h_g + 1
     w_f = 2 * h_f + 1
     if n_k < w_f:
         raise ValueError(
             f"half_bandwidth too small for instrument {group.instrument!r}: the band has "
             f"{n_k} slots but one epoch's block spans {w_f}. The per-component bound must be "
-            f"at least {h + 2 * r} (rebin row support {h}, kernel radius {r}) even at zero "
+            f"at least {h_eff + 2 * r} (rebin row support {h}"
+            + (f" + AR(1) step {group.ar_step}" if correlated else "")
+            + f", kernel radius {r}) even at zero "
             "relative shift, and in general that plus the maximum relative shift in pixels "
             "— use Problem.half_bandwidth_bound."
         )
 
     pair_val, pair_sid, pair_row = group.pair_val, group.pair_sid, group.pair_row
-    wprime = group.effective_w * group.r**2  # (n_ep, n_native); jitter folded in
+    weights: tuple[jax.Array, ...]
+    if correlated:
+        wp_all, wl_all = ar1_band_weights(group)  # jitter folded into both
+        weights = (wp_all, wl_all, group.ar_gap)
+        link_val, link_sid = group.link_val, group.link_sid
+        link_row, link_gap = group.link_row, group.link_gap
+    else:
+        weights = (group.effective_w * group.r**2,)  # (n_ep, n_native); jitter folded in
     floors = jnp.floor(group.shifts).astype(jnp.int32)  # (n_ep, nc)
     fracs = group.shifts - floors
     q_pix = jnp.arange(n_pix, dtype=jnp.int32)
@@ -149,24 +167,38 @@ def _epoch_band_scan(
     y_of = q_pix[:, None] + gp_offsets[None, :]
     gp_valid = (y_of >= 0) & (y_of < n_pix)
 
-    def epoch_g(wp):
-        """G = K^T (R^T diag(w') R) K for one epoch, as a band image (n_pix, w_g + 4).
+    def epoch_g(ws):
+        """G = K^T (R^T W' R) K for one epoch, as a band image (n_pix, w_g + 4).
 
-        Depends only on the (static) weights and the LSF kernel — not on the
-        velocities — so it is computed in a ``vmap``ped pre-pass rather than inside
-        the accumulation body. How *many* epochs' worth are kept live at once is the
-        ``chunk`` policy of :func:`_epoch_chunk_default`.
+        Depends only on the weights and the LSF kernel — not on the velocities — so
+        it is computed in a ``vmap``ped pre-pass rather than inside the accumulation
+        body. How *many* epochs' worth are kept live at once is the ``chunk`` policy
+        of :func:`_epoch_chunk_default`. ("Static" weights here still means traced
+        values — jitter, response and phi all flow through them.)
         """
-        # 1. H = R^T diag(w') R, upper diagonals (n_pix, h).
+        # 1. H = R^T W' R, upper diagonals (n_pix, h_eff): the diagonal part through
+        # the equal-row pair tables, plus — on a correlated problem — one symmetrized
+        # cross-row term per AR(1) link through the link tables. The gap test keeps
+        # each epoch's own realized links: the tables hold the union over epochs,
+        # because masks differ by epoch.
         h_up = jax.ops.segment_sum(
-            pair_val * wp[pair_row], pair_sid, num_segments=n_pix * h
+            pair_val * ws[0][pair_row], pair_sid, num_segments=n_pix * h
         ).reshape(n_pix, h)
+        if correlated:
+            wl, gap_e = ws[1], ws[2]
+            lw = wl[link_row] * (gap_e[link_row] == link_gap)
+            h_up = (
+                jax.ops.segment_sum(link_val * lw, link_sid, num_segments=n_pix * h_eff)
+                .reshape(n_pix, h_eff)
+                .at[:, :h]
+                .add(h_up)
+            )
 
-        # 2. Mirror to the full band image B_H[c, (h-1) + o] = H[c, c + o].
+        # 2. Mirror to the full band image B_H[c, (h_eff-1) + o] = H[c, c + o].
         b_h = jnp.zeros((n_pix, w_h))
-        b_h = b_h.at[:, h - 1 :].set(h_up)
-        for o in range(1, h):
-            b_h = b_h.at[o:, h - 1 - o].set(h_up[: n_pix - o, o])
+        b_h = b_h.at[:, h_eff - 1 :].set(h_up)
+        for o in range(1, h_eff):
+            b_h = b_h.at[o:, h_eff - 1 - o].set(h_up[: n_pix - o, o])
 
         # 3. G = K^T H K as two unrolled shifted accumulations.
         bhp = jnp.pad(b_h, ((r, r), (0, 0)))
@@ -236,7 +268,7 @@ def _epoch_band_scan(
     if chunk >= n_ep:
         # Hoisted: every epoch's G stays live, so the rematerialized backward never
         # recomputes it. Cheapest in time, most expensive in memory.
-        gp_all = jax.vmap(epoch_g)(wprime)
+        gp_all = jax.vmap(epoch_g)(weights)
         body = jax.checkpoint(epoch_body) if remat else epoch_body
         band, _ = jax.lax.scan(body, band, (gp_all, group.light, floors, fracs))
         return band
@@ -247,15 +279,15 @@ def _epoch_band_scan(
     n_chunks = -(-n_ep // chunk)
     pad = n_chunks * chunk - n_ep
     zpad = ((0, pad), (0, 0))
-    wp_c = jnp.pad(wprime, zpad)
+    weights_c = tuple(jnp.pad(a, zpad) for a in weights)
     light_c = jnp.pad(group.light, zpad)
     floor_c = jnp.pad(floors, zpad)
     frac_c = jnp.pad(fracs, zpad)
 
     def chunk_body(band, xs):
-        wp_b, light_b, floor_b, frac_b = xs
+        ws_b, light_b, floor_b, frac_b = xs
         band, _ = jax.lax.scan(
-            epoch_body, band, (jax.vmap(epoch_g)(wp_b), light_b, floor_b, frac_b)
+            epoch_body, band, (jax.vmap(epoch_g)(ws_b), light_b, floor_b, frac_b)
         )
         return band, None
 
@@ -266,7 +298,9 @@ def _epoch_band_scan(
         return a.reshape(n_chunks, chunk, *a.shape[1:])
 
     band, _ = jax.lax.scan(
-        chunk_body, band, (batched(wp_c), batched(light_c), batched(floor_c), batched(frac_c))
+        chunk_body,
+        band,
+        (jax.tree.map(batched, weights_c), batched(light_c), batched(floor_c), batched(frac_c)),
     )
     return band
 
@@ -395,7 +429,9 @@ def band_block_tridiagonal(
     _, n_k = _band_offsets(p, nc)
     band = jnp.zeros((n_pix, nc, n_k, nc))
     for g in problem.groups:
-        band = _epoch_band_scan(g, band, n_pix, p, nc, remat, epoch_chunk, len(problem.groups))
+        band = _epoch_band_scan(
+            g, band, n_pix, p, nc, remat, epoch_chunk, problem.correlated, len(problem.groups)
+        )
     band = _add_prior_band(band, prior, n_pix, p, nc)
     return _pack_band(band, n_pix, nc, p, bs)
 

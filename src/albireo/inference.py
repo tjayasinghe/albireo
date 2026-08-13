@@ -34,9 +34,9 @@ The nonlinear parameter vector ``theta`` is a dict of JAX arrays with sites
   jitter fitted against systematics widens the error bars around a still-biased point.
 - ``ar1_phi`` (optional) — AR(1) correlation of the standardized noise, scalar
   (shared) or one per epoch, ``|phi| < 1`` (:func:`albireo.forward.with_ar1`, D34).
-  Requires the model to be built with ``ar1=True`` (the correlated coupling widens
-  the static solver bandwidth, and the marginal runs on the probe assembly path).
-  Composes with ``log_jitter``: alpha scales, phi correlates.
+  Requires the model to be built with ``ar1=True``, because the correlated coupling
+  widens the static solver bandwidth; the marginal stays on the band assembly path
+  (D35). Composes with ``log_jitter``: alpha scales, phi correlates.
 
 ``gamma`` is identically zero (design decision D14: a systemic velocity is exactly
 degenerate with a common shift of the component spectra). The ``(secosw, sesinw)``

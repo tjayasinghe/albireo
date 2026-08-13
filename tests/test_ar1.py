@@ -13,6 +13,8 @@ injected ``phi`` and noise-scale error jointly with the orbit.
 
 from __future__ import annotations
 
+from functools import partial
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -20,6 +22,7 @@ import numpyro.distributions as dist
 import pytest
 
 import albireo as ab
+from albireo.assembly import band_block_tridiagonal
 from albireo.data import Dataset, EpochData
 from albireo.forward import build_problem, data_residual_zscores, with_ar1, with_jitter
 from albireo.inference import MarginalOrbitModel, run_map
@@ -159,17 +162,58 @@ def test_zero_phi_reproduces_the_diagonal_model():
     base = marginal_loglikelihood(problem, prior, assembly="probe")
     same = marginal_loglikelihood(with_ar1(problem, 0.0), prior)
     np.testing.assert_allclose(float(same.log_likelihood), float(base.log_likelihood), rtol=1e-12)
-    np.testing.assert_allclose(np.asarray(same.d_hat), np.asarray(base.d_hat), rtol=1e-9)
+    # Since D35 this is also a cross-path comparison (the correlated problem runs the
+    # band assembly at a widened bandwidth, the base runs probing), so d_hat carries
+    # float-reordering noise amplified by solver conditioning — same tolerance story
+    # as the response swap's d_hat check (tests/test_response.py).
+    np.testing.assert_allclose(
+        np.asarray(same.d_hat), np.asarray(base.d_hat), rtol=1e-8, atol=1e-11
+    )
 
 
-def test_band_assembly_is_rejected_and_auto_selection_works():
+def test_band_assembly_matches_probe_and_is_the_default():
+    """D35: the correlated marginal runs the band assembly; probing is the oracle."""
     _, _, problem, prior = small_problem()
-    correlated = with_ar1(problem, 0.3)
-    with pytest.raises(ValueError, match="diagonal noise model"):
-        marginal_loglikelihood(correlated, prior, assembly="band")
-    res = marginal_loglikelihood(correlated, prior)  # assembly=None -> probe, no raise
-    assert np.isfinite(float(res.log_likelihood))
+    correlated = with_jitter(with_ar1(problem, jnp.asarray([0.4, -0.3, 0.55])), [1.3, 0.8, 1.0])
+    band = marginal_loglikelihood(correlated, prior, assembly="band")
+    probe = marginal_loglikelihood(correlated, prior, assembly="probe")
+    auto = marginal_loglikelihood(correlated, prior)
+    np.testing.assert_allclose(float(band.log_likelihood), float(probe.log_likelihood), rtol=1e-12)
+    assert float(auto.log_likelihood) == float(band.log_likelihood)
     assert correlated.natural_half_bandwidth >= problem.natural_half_bandwidth
+
+
+def test_correlated_band_epoch_chunk_invariance():
+    """The batched G pre-pass must thread the link weights exactly like the hoisted one.
+
+    ``epoch_chunk`` batching pads the trailing chunk with zero-weight epochs; the AR
+    weight tuple (diagonal, link, gap table) must pad and slice together or a batched
+    run silently drops link terms. Mirrors the diagonal-path invariance test in
+    tests/test_assembly.py.
+    """
+    _, _, problem, prior = small_problem()
+    correlated = with_jitter(with_ar1(problem, jnp.asarray([0.4, -0.3, 0.55])), [1.3, 0.8, 1.0])
+    b_nat = correlated.natural_half_bandwidth
+    ref = band_block_tridiagonal(correlated, prior, b_nat)
+    got = band_block_tridiagonal(correlated, prior, b_nat, epoch_chunk=1)
+    np.testing.assert_allclose(np.asarray(got.diag), np.asarray(ref.diag), rtol=0, atol=1e-9)
+    np.testing.assert_allclose(np.asarray(got.lower), np.asarray(ref.lower), rtol=0, atol=1e-9)
+
+
+def test_band_and_probe_gradients_agree_in_phi():
+    """The traced link weights must carry d/dphi through the band assembly exactly."""
+    _, _, problem, prior = small_problem()
+    bandwidth = with_ar1(problem, 0.0).natural_half_bandwidth
+    phi0 = jnp.asarray([0.4, -0.3, 0.55])
+
+    def loglike(assembly, phi):
+        return marginal_loglikelihood(
+            with_ar1(problem, phi), prior, half_bandwidth=bandwidth, assembly=assembly
+        ).log_likelihood
+
+    g_band = jax.grad(partial(loglike, "band"))(phi0)
+    g_probe = jax.grad(partial(loglike, "probe"))(phi0)
+    np.testing.assert_allclose(np.asarray(g_band), np.asarray(g_probe), rtol=1e-9)
 
 
 def test_gradient_matches_finite_differences():
