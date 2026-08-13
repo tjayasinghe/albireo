@@ -1,0 +1,44 @@
+{
+  "@context": "https://w3id.org/codemeta/3.0",
+  "@type": "SoftwareSourceCode",
+  "name": "albireo",
+  "description": "GPU-accelerated Bayesian spectral disentangling of double- and multiple-lined spectroscopic binaries. albireo jointly infers the orbital elements and the individual component spectra from a time series of composite spectra, marginalizing the component spectra analytically so that only the low-dimensional orbit is sampled, and reporting honest uncertainties on both.",
+  "version": "0.1.0.dev0",
+  "developmentStatus": "concept",
+  "license": "https://spdx.org/licenses/BSD-3-Clause",
+  "codeRepository": "https://github.com/tjayasinghe/albireo",
+  "issueTracker": "https://github.com/tjayasinghe/albireo/issues",
+  "programmingLanguage": "Python",
+  "runtimePlatform": "Python 3.12",
+  "author": [
+    {
+      "@type": "Person",
+      "givenName": "Tharindu",
+      "familyName": "Jayasinghe",
+      "email": "tharindujay96@gmail.com"
+    }
+  ],
+  "maintainer": [
+    {
+      "@type": "Person",
+      "givenName": "Tharindu",
+      "familyName": "Jayasinghe",
+      "email": "tharindujay96@gmail.com"
+    }
+  ],
+  "keywords": [
+    "astronomy",
+    "spectroscopy",
+    "binary stars",
+    "spectral disentangling",
+    "Bayesian inference",
+    "JAX"
+  ],
+  "softwareRequirements": [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "jax>=0.5",
+    "numpyro>=0.16",
+    "optax>=0.2"
+  ]
+}

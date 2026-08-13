@@ -285,6 +285,7 @@ def test_bandwidth_guard_rejects_out_of_bound_orbits(gate_data):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_map_recovers_orbit_and_hyperparameters(map_fit):
     k_map = np.asarray(map_fit.params["k"])
     np.testing.assert_allclose(k_map, K_TRUE, rtol=5e-3)
@@ -296,6 +297,7 @@ def test_map_recovers_orbit_and_hyperparameters(map_fit):
     assert np.all(np.asarray(map_fit.params["log_eta"]) > np.log(0.1))
 
 
+@pytest.mark.slow
 def test_run_map_callback_reports_progress_and_can_stop_early(gate_data):
     """`run_map` is otherwise silent, and on real data it runs for hours.
 
@@ -317,6 +319,7 @@ def test_run_map_callback_reports_progress_and_can_stop_early(gate_data):
     assert all(row[3] > 0.0 for row in seen), "callback receives constrained values"
 
 
+@pytest.mark.slow
 def test_problem_at_exposes_the_problem_for_residuals(gate_data, map_fit):
     """Residual z-scores are the only check there is on estimated inverse variances.
 
@@ -341,6 +344,7 @@ def test_problem_at_exposes_the_problem_for_residuals(gate_data, map_fit):
     assert abs(float(np.mean(z))) < 0.2
 
 
+@pytest.mark.slow
 def test_nuts_gate_k_within_one_percent(nuts_fit):
     """M3 acceptance gate: K_1, K_2 posterior means within 1%, healthy chain."""
     mcmc, _ = nuts_fit
@@ -359,6 +363,7 @@ def test_nuts_gate_k_within_one_percent(nuts_fit):
     assert abs(np.asarray(samples["t_conj"]).mean() - TCONJ_TRUE) < 0.01
 
 
+@pytest.mark.slow
 def test_posterior_spectra_from_samples(gate_data, nuts_fit):
     _, truth, model = gate_data
     mcmc, hyper = nuts_fit
@@ -422,6 +427,7 @@ def test_potential_with_model_args_embeds_no_problem_constants(gate_data):
     assert _largest_const_nbytes(traced) < data_nbytes
 
 
+@pytest.mark.slow
 def test_run_map_closure_and_argument_paths_agree(gate_data):
     """model_args=() forces the closure path; the traced default must match it.
 
@@ -439,6 +445,7 @@ def test_run_map_closure_and_argument_paths_agree(gate_data):
         )
 
 
+@pytest.mark.slow
 def test_laplace_closure_and_argument_paths_agree(gate_data, map_fit):
     """Both paths run the same eager ops on the same arrays — exact agreement."""
     _, _, model = gate_data

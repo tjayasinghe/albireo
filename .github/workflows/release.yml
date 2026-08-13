@@ -1,0 +1,101 @@
+name: Release
+
+# Tagging is the trigger: `git tag v0.1.0 && git push --tags` builds and publishes. The
+# tag must match the version in src/albireo/__init__.py, which the verify step below
+# enforces — publishing a wheel whose version disagrees with its tag is not recoverable,
+# because PyPI will not let that version number be reused.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      test_pypi:
+        description: "Publish to TestPyPI instead of PyPI"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.13
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      # Read the version off the built wheel rather than re-parsing the source: the wheel
+      # is what actually gets published, and its name is where hatchling recorded the
+      # version it resolved from src/albireo/__init__.py.
+      - name: Verify the tag matches the package version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          wheel=$(ls dist/*.whl)
+          version=$(basename "$wheel" | cut -d- -f2)
+          tag="${GITHUB_REF_NAME#v}"
+          echo "built wheel: $(basename "$wheel")"
+          echo "version: $version   tag: $tag"
+          if [ "$version" != "$tag" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package version $version"
+            exit 1
+          fi
+
+      # A wheel that cannot be installed and imported is worse than no release. This
+      # installs the built artifact itself — not the source tree — and checks that the
+      # packaged example data made it in, since that is the quickstart's first line.
+      - name: Smoke-test the built wheel
+        run: |
+          uv venv --python 3.13 /tmp/relcheck
+          VIRTUAL_ENV=/tmp/relcheck uv pip install dist/*.whl
+          VIRTUAL_ENV=/tmp/relcheck uv run --no-project python -c "
+          import albireo as ab
+          print('version', ab.__version__)
+          ds = ab.load_example()
+          assert len(list(ds)) == 12, ds
+          print('packaged example loads:', ds.summary().splitlines()[0])
+          "
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-latest
+    # Trusted publishing: PyPI verifies this workflow's OIDC identity, so there is no API
+    # token to store or leak. Configure the publisher once at
+    # https://pypi.org/manage/account/publishing/ before the first release.
+    permissions:
+      id-token: write
+    environment:
+      name: ${{ (github.event_name == 'workflow_dispatch' && inputs.test_pypi) && 'testpypi' || 'pypi' }}
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to TestPyPI
+        if: github.event_name == 'workflow_dispatch' && inputs.test_pypi
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+      - name: Publish to PyPI
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: pypa/gh-action-pypi-publish@release/v1

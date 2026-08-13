@@ -1,7 +1,12 @@
 site_name: albireo
 site_description: GPU-accelerated Bayesian spectral disentangling of double- and multiple-lined spectroscopic binaries
+site_url: https://tjayasinghe.github.io/albireo/
 repo_url: https://github.com/tjayasinghe/albireo
 repo_name: tjayasinghe/albireo
+
+# A broken internal link or a docstring that fails to resolve fails the build rather than
+# shipping a dead page. The docs workflow runs `mkdocs build --strict` for the same reason.
+strict: true
 
 theme:
   name: material
@@ -26,13 +31,47 @@ theme:
 
 nav:
   - Home: index.md
+  - Quickstart: quickstart.md
   - Tutorials:
       - Disentangle an SB2 end to end: tutorials/sb2-end-to-end.md
       - Find a hidden companion with the K2 scan: tutorials/k2-scan.md
       - Bring your own spectra (FITS to Dataset): tutorials/real-data.md
   - Design: design.md
   - Mathematical foundations: math.md
+  - Roadmap: roadmap.md
   - Benchmarks: benchmarks.md
+  - API reference:
+      - Overview: api/index.md
+      - Data and grids: api/data.md
+      - Reading spectra: api/io.md
+      - Preprocessing: api/preprocess.md
+      - Forward model: api/forward.md
+      - Likelihood and priors: api/likelihood.md
+      - Inference: api/inference.md
+      - Companion scan: api/scan.md
+      - Results and plotting: api/results.md
+      - Simulator: api/simulate.md
+      - Operators: api/operators.md
+      - Kepler solver: api/kepler.md
+      - Linear algebra: api/solver.md
+  - Citing albireo: citing.md
+  - Releasing: releasing.md
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: numpy
+            show_source: false
+            show_root_heading: true
+            show_signature_annotations: true
+            separate_signature: true
+            members_order: source
+            filters: ["!^_"]
+            merge_init_into_class: true
 
 markdown_extensions:
   - admonition

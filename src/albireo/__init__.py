@@ -14,6 +14,7 @@ if not os.environ.get("ALBIREO_DISABLE_X64"):
     jax.config.update("jax_enable_x64", True)
 
 from albireo.data import Dataset, EpochData
+from albireo.examples import clear_example_cache, example_info, example_names, load_example
 from albireo.forward import (
     Problem,
     build_problem,
@@ -73,6 +74,7 @@ from albireo.preprocess import (
     share_wavelength_grid,
 )
 from albireo.priors import SmoothnessPrior
+from albireo.results import load_fit, save_fit, to_inference_data, write_ascii
 from albireo.scan import K2ScanResult, k2_scan
 from albireo.simulate import (
     InstrumentSpec,
@@ -88,7 +90,27 @@ __version__ = "0.1.0.dev0"
 # albireo.io is the one module that needs astropy, so it is imported on first use rather
 # than at package import: `albireo.read_dataset(...)` stays discoverable, and installs
 # without the [io] extra keep working for everyone who already has arrays in memory.
-_IO_EXPORTS = frozenset({"RawSpectrum", "read_dataset", "read_spectrum", "to_epoch"})
+_IO_EXPORTS = frozenset(
+    {"RawSpectrum", "read_dataset", "read_spectrum", "to_epoch", "write_spectra"}
+)
+
+# albireo.plotting needs matplotlib (and arviz, for the corner plot), which are optional
+# for the same reason astropy is: a fit that runs on a headless cluster node should not
+# have to install a plotting stack. Same lazy treatment, so `albireo.plot_spectra` stays
+# discoverable and raises an actionable error rather than an ImportError from inside a
+# figure.
+_PLOT_EXPORTS = frozenset(
+    {
+        "plot_corner",
+        "plot_detection",
+        "plot_light_fractions",
+        "plot_lsf",
+        "plot_phase_fold",
+        "plot_residual_zscores",
+        "plot_rv_curve",
+        "plot_spectra",
+    }
+)
 
 
 def __getattr__(name: str):
@@ -96,11 +118,15 @@ def __getattr__(name: str):
         from albireo import io
 
         return getattr(io, name)
+    if name in _PLOT_EXPORTS:
+        from albireo import plotting
+
+        return getattr(plotting, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def __dir__():
-    return sorted(set(__all__) | _IO_EXPORTS)
+    return sorted(set(__all__) | _IO_EXPORTS | _PLOT_EXPORTS)
 
 
 __all__ = [
@@ -124,6 +150,7 @@ __all__ = [
     "__version__",
     "bin_edges_from_centers",
     "build_problem",
+    "clear_example_cache",
     "convolve_spectrum",
     "convolve_varying",
     "convolve_varying_adjoint",
@@ -131,6 +158,8 @@ __all__ = [
     "der_snr_sigma",
     "draw_spectra",
     "estimate_ivar",
+    "example_info",
+    "example_names",
     "fit_continuum",
     "gauss_hermite_kernel_traced",
     "gaussian_kernel",
@@ -139,6 +168,8 @@ __all__ = [
     "interp_operator",
     "k2_scan",
     "laplace_inverse_mass",
+    "load_example",
+    "load_fit",
     "log_doppler_shift",
     "lsf_anchor_tables",
     "marginal_loglikelihood",
@@ -148,6 +179,14 @@ __all__ = [
     "normalize",
     "orbit_parameters",
     "orbit_velocities",
+    "plot_corner",
+    "plot_detection",
+    "plot_light_fractions",
+    "plot_lsf",
+    "plot_phase_fold",
+    "plot_residual_zscores",
+    "plot_rv_curve",
+    "plot_spectra",
     "posterior_spectra",
     "radial_velocity",
     "read_dataset",
@@ -155,6 +194,7 @@ __all__ = [
     "rebin_operator",
     "run_map",
     "run_nuts",
+    "save_fit",
     "select_region",
     "share_wavelength_grid",
     "shift_spectrum",
@@ -166,6 +206,7 @@ __all__ = [
     "synthetic_telluric_spectrum",
     "t_peri_from_t_conj",
     "to_epoch",
+    "to_inference_data",
     "true_anomaly",
     "with_ar1",
     "with_jitter",
@@ -173,4 +214,6 @@ __all__ = [
     "with_lsf",
     "with_response",
     "with_velocities",
+    "write_ascii",
+    "write_spectra",
 ]

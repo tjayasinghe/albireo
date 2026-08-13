@@ -1232,7 +1232,7 @@ def weighted_data_terms(problem: Problem):
     return zwz, logw, n_good
 
 
-def data_residual_zscores(problem: Problem, d_stack) -> np.ndarray:
+def data_residual_zscores(problem: Problem, d_stack, *, per_epoch: bool = False):
     """Whitened data residuals over unmasked pixels, under the assumed noise model.
 
     Whitened by what the model *assumes* — jitter and AR(1) correlation included —
@@ -1243,7 +1243,26 @@ def data_residual_zscores(problem: Problem, d_stack) -> np.ndarray:
     correlated model the whitener is the exact Markov factorization
     (:func:`_whiten_residuals`), so surviving structure means the correlation is not
     AR(1)-shaped (longer-range, line-locked, or epoch-outlier structure).
+
+    Parameters
+    ----------
+    problem
+        The :class:`Problem` the residuals are taken against.
+    d_stack
+        Component deviation spectra, shape ``(n_comp, n_pix)``.
+    per_epoch
+        If True, return a list of 1-D arrays — one per epoch, ordered as in the
+        :class:`~albireo.data.Dataset` — instead of one concatenated array. Per-epoch
+        structure is what makes an outlying exposure or a drifting night visible at all,
+        and it is what the lag-1 autocorrelation test needs: the lag-1 statistic is only
+        meaningful within a single spectrum, since consecutive pixels of *different*
+        epochs are unrelated.
+
+    Returns
+    -------
+    numpy.ndarray or list[numpy.ndarray]
     """
+    per_index: dict[int, np.ndarray] = {}
     out = []
     for g, m in zip(problem.groups, apply_model(problem, d_stack), strict=True):
         resid = g.z - g.r * m
@@ -1251,5 +1270,12 @@ def data_residual_zscores(problem: Problem, d_stack) -> np.ndarray:
             rows = np.asarray(_whiten_residuals(g, resid))
         else:
             rows = np.asarray(resid * jnp.sqrt(g.effective_w))
-        out.append(rows[np.asarray(g.w) > 0])
+        good = np.asarray(g.w) > 0
+        if per_epoch:
+            for local, index in enumerate(g.epoch_indices):
+                per_index[index] = rows[local][good[local]]
+        else:
+            out.append(rows[good])
+    if per_epoch:
+        return [per_index[i] for i in sorted(per_index)]
     return np.concatenate(out)

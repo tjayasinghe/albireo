@@ -327,6 +327,7 @@ def sb3_fit():
     return model, comps, ell, fit
 
 
+@pytest.mark.slow
 def test_sb3_map_recovers_inner_and_outer(sb3_fit):
     _, _, _, fit = sb3_fit
     np.testing.assert_allclose(np.asarray(fit.params["k"]), K_IN, rtol=0.02)
@@ -336,6 +337,7 @@ def test_sb3_map_recovers_inner_and_outer(sb3_fit):
     np.testing.assert_allclose(float(fit.params["period_out"]), P_OUT, rtol=2e-3)
 
 
+@pytest.mark.slow
 def test_sb3_spectra_recovered(sb3_fit):
     model, comps, ell, fit = sb3_fit
     theta = {
@@ -418,6 +420,7 @@ def light_fit():
     return model, comps, ell1, fit
 
 
+@pytest.mark.slow
 def test_per_epoch_light_recovered(light_fit):
     _, _, ell1_true, fit = light_fit
     ell1_hat = np.asarray(fit.params["light"])[:, 0]
@@ -426,6 +429,7 @@ def test_per_epoch_light_recovered(light_fit):
     np.testing.assert_allclose(np.asarray(fit.params["k"]), K_IN, rtol=0.015)
 
 
+@pytest.mark.slow
 def test_eclipse_epochs_break_additive_indeterminacy(light_fit):
     # With per-epoch light fractions *inferred*, the k = 0 invisible direction of
     # the constant-light case (math.md §5.2) becomes observable: each component is
@@ -508,6 +512,7 @@ def lsf_fit():
     return model, fit
 
 
+@pytest.mark.slow
 def test_lsf_width_recovered_against_reference_instrument(lsf_fit):
     model, fit = lsf_fit
     true_sigma = {"A": 6.0, "B": 10.0}

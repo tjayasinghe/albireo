@@ -21,6 +21,11 @@ from albireo.simulate import InstrumentSpec, OrbitParams, simulate_dataset
 from albireo.simulate import synthetic_deviation_spectrum as synth_spectrum
 from albireo.simulate import synthetic_telluric_spectrum as synth_telluric
 
+# Every test here reads the same module-scoped MAP fit, so the whole module is one
+# acceptance gate: deselecting it with -m "not slow" skips the fit itself, not just the
+# assertions on it.
+pytestmark = pytest.mark.slow
+
 GRID = ab.LogGrid.from_wavelength_range(5000.0, 5045.0, dv_kms=5.5)
 P_TRUE, TCONJ_TRUE, ECC_TRUE, OMEGA_TRUE = 6.31, 2.05, 0.2, 0.7
 K_TRUE = np.array([30.0, 22.0])

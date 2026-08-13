@@ -4,7 +4,10 @@ build-backend = "hatchling.build"
 
 [project]
 name = "albireo"
-version = "0.1.0.dev0"
+# Single-sourced from src/albireo/__init__.py (see [tool.hatch.version]); `albireo.__version__`
+# and the installed distribution metadata can therefore never disagree. tests/test_metadata.py
+# asserts that, and that CITATION.cff — the one copy no build backend can read — agrees too.
+dynamic = ["version"]
 description = "GPU-accelerated Bayesian spectral disentangling of double- and multiple-lined spectroscopic binaries"
 readme = "README.md"
 # >=3.12 because current jaxlib (0.11.x) no longer ships cp311 wheels
@@ -43,6 +46,10 @@ dependencies = [
 # Reading spectra from FITS (albireo.io). Optional: the rest of the package never
 # imports astropy, so users who already hold arrays in memory need not install it.
 io = ["astropy>=6"]
+# Figures and posterior diagnostics (albireo.plotting, albireo.results.to_inference_data).
+# Optional for the same reason astropy is: a fit running on a headless cluster node should
+# not have to install a plotting stack.
+plots = ["matplotlib>=3.8", "arviz>=0.18"]
 dev = [
     "pytest>=8",
     "pytest-cov",
@@ -50,6 +57,8 @@ dev = [
     "mypy>=1.13",
     "pre-commit",
     "astropy>=6",
+    "matplotlib>=3.8",
+    "arviz>=0.18",
 ]
 docs = [
     "mkdocs-material>=9.5",
@@ -61,12 +70,23 @@ docs = [
 Repository = "https://github.com/tjayasinghe/albireo"
 Issues = "https://github.com/tjayasinghe/albireo/issues"
 
+[tool.hatch.version]
+path = "src/albireo/__init__.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/albireo"]
+# The packaged example dataset (albireo.examples.load_example) and the PEP 561 marker are
+# data files, not modules, so they are listed explicitly rather than picked up as Python.
+artifacts = ["src/albireo/data_files/*.npz", "src/albireo/py.typed"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# Recent ruff formats Python code blocks inside Markdown as well as .py files. The docs
+# align inline comments deliberately — it is what makes a long argument list readable in a
+# tutorial — and reformatting would collapse that alignment across every page. The prose is
+# reviewed by reading it, not by a formatter.
+extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "NPY", "RUF"]
@@ -74,7 +94,20 @@ ignore = ["E741"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+# `-q` for signal; `--strict-markers` so a typo'd marker is an error rather than a test
+# that silently never runs.
+addopts = "-q --strict-markers"
+# tests/ has no __init__.py, so pytest's prepend import mode puts tests/ — not the repo
+# root — on sys.path, and the cross-module helper imports (`from tests.test_likelihood
+# import dense_marginal` in test_ar1/test_lsf_h3/test_lsf_varying) fail to collect under
+# the `pytest` console script. They only worked under `python -m pytest`, which adds the
+# working directory itself. Declaring the path here makes both invocations equivalent.
+pythonpath = ["."]
+markers = [
+    "slow: real sampling or multi-minute closed-loop fits; deselect with -m 'not slow'",
+    "network: needs the public internet (archive queries, example-data downloads)",
+    "gpu: needs a JAX GPU backend",
+]
 
 [tool.mypy]
 python_version = "3.12"

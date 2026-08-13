@@ -17,6 +17,8 @@ The name comes from Albireo, the famous gold-and-blue double star in Cygnus:
 
 ## Where to go next
 
+- [Quickstart](quickstart.md) — load an example dataset that ships with the package, fit it,
+  and plot the result. No data of your own, no network, about twenty seconds.
 - Tutorials: [disentangle an SB2 end to end](tutorials/sb2-end-to-end.md) and
   [find a hidden companion with the K₂ scan](tutorials/k2-scan.md) — both backed by
   executable scripts in `examples/` that run in CI.
@@ -25,7 +27,10 @@ The name comes from Albireo, the famous gold-and-blue double star in Cygnus:
   of the component spectra, and the orbital parameterization.
 - [Benchmarks](benchmarks.md) — the running correctness/performance record per milestone,
   including the closed-loop recovery gates and the degeneracy analyses.
+- [Roadmap](roadmap.md) — where albireo is going, in what order, and what it will not do.
 
 ## Source
 
 Code and issue tracker: [github.com/tjayasinghe/albireo](https://github.com/tjayasinghe/albireo)
+
+If albireo contributed to a result, please see [Citing albireo](citing.md).

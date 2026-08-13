@@ -1,13 +1,28 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it using the metadata from this file."
 title: albireo
-abstract: "GPU-accelerated Bayesian spectral disentangling of double- and multiple-lined spectroscopic binaries."
+abstract: "GPU-accelerated Bayesian spectral disentangling of double- and multiple-lined spectroscopic binaries. albireo jointly infers the orbital elements and the individual component spectra from a time series of composite spectra, marginalizing the component spectra analytically so that only the low-dimensional orbit is sampled, and reporting honest uncertainties on both."
 type: software
 authors:
   - family-names: Jayasinghe
     given-names: Tharindu
     email: tharindujay96@gmail.com
+    # TODO(release): add `orcid: "https://orcid.org/0000-0000-0000-0000"` and
+    # `affiliation:`. Both are also TODO in paper/paper.md; JOSS expects an ORCID for
+    # the corresponding author, and the astropy/pyOpenSci review asks for an affiliation.
 repository-code: "https://github.com/tjayasinghe/albireo"
 url: "https://github.com/tjayasinghe/albireo"
 license: BSD-3-Clause
 version: 0.1.0.dev0
+# TODO(release): set to the tag date and add the Zenodo DOI once the first release is
+# archived. Enable the GitHub-Zenodo webhook *before* tagging, or the tag is not archived
+# and the DOI story starts one release late.
+#   date-released: 2026-08-13
+#   doi: 10.5281/zenodo.XXXXXXX
+keywords:
+  - astronomy
+  - spectroscopy
+  - binary stars
+  - spectral disentangling
+  - Bayesian inference
+  - JAX

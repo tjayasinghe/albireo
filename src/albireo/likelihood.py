@@ -148,7 +148,21 @@ class MarginalResult:
         autodiff — at the price of one extra block Cholesky, paid only by callers
         that actually want the factor. The sampling hot path reads
         :attr:`log_likelihood` and :attr:`d_hat` and never triggers it.
+
+        Raises
+        ------
+        ValueError
+            If the result carries no precision, which happens only for one read back by
+            :func:`albireo.results.load_fit` and saved without ``precision=True``.
         """
+        if self.precision is None:
+            raise ValueError(
+                "this MarginalResult carries no posterior precision, so it cannot be "
+                "factorized. It was read back by albireo.results.load_fit, which stores "
+                "the precision only when saved with precision=True (the blocks are large). "
+                "The posterior mean is in .d_hat and, if it was saved, the pointwise "
+                "standard deviation is in .d_std; re-run the fit to draw new spectra."
+            )
         return block_cholesky(self.precision)
 
     @property

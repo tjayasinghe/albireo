@@ -323,6 +323,7 @@ def test_problem_at_reflects_the_jitter():
         np.testing.assert_allclose(np.asarray(g.effective_w), np.asarray(g.w) / 4.0, rtol=1e-14)
 
 
+@pytest.mark.slow
 def test_log_jitter_is_a_sampleable_site():
     """It has to survive numpyro's site-name validation and one MAP step."""
     model, theta = orbit_model_and_theta()

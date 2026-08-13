@@ -1,11 +1,46 @@
 # albireo
 
+[![CI](https://github.com/tjayasinghe/albireo/actions/workflows/ci.yml/badge.svg)](https://github.com/tjayasinghe/albireo/actions/workflows/ci.yml)
+[![Docs](https://github.com/tjayasinghe/albireo/actions/workflows/docs.yml/badge.svg)](https://tjayasinghe.github.io/albireo/)
+[![License: BSD-3-Clause](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
+
 Albireo is the famous gold-and-blue double star in Cygnus: **albireo separates the gold from the
 blue** — GPU-accelerated, fully Bayesian spectral disentangling of spectroscopic binaries in JAX.
 
 > [!WARNING]
 > **Status: pre-alpha, under active development, API unstable.**
 > Expect breaking changes without notice. Not yet suitable for production science.
+
+## Quickstart
+
+An example dataset ships inside the package, so the first thing you run needs no data of
+your own and no network:
+
+```python
+import albireo as ab
+
+dataset, truth = ab.load_example("sb2_sim", with_truth=True)   # simulated SB2, 12 epochs
+grid = ab.LogGrid(x0=truth["grid_x0"], dx=truth["grid_dx"], n=int(truth["grid_n"]))
+
+model = ab.MarginalOrbitModel(
+    grid, dataset,
+    light_fractions=truth["light_fractions"],
+    lsf_sigma_v={"DEMO": 6.5},
+    v_rel_max_kms=160.0,
+)
+priors, init = ...              # elided; the runnable version is examples/00_quickstart.py
+fit = ab.run_map(model.model(priors), init=init)
+marginal = model.marginal(fit.params)
+
+ab.plot_spectra(grid, marginal.d_hat, std=ab.spectra_std(marginal))
+```
+
+`K_1` and `K_2` come back to better than 0.05% in about twenty seconds on a laptop, and no
+per-epoch radial velocity was measured anywhere: the orbit is inferred from the spectra
+directly, with the component spectra marginalized out in closed form. Run
+[`examples/00_quickstart.py`](examples/00_quickstart.py) for the whole thing, or read
+[`docs/quickstart.md`](docs/quickstart.md) for the annotated walk through it.
 
 ## Why albireo
 
@@ -39,8 +74,12 @@ pip install -e ".[dev]"
 Python 3.12+ is required (current jaxlib no longer ships 3.11 wheels). JAX's x64 mode is enabled by the package at import time, so all
 computation is done in float64 — you do not need to set `JAX_ENABLE_X64` yourself.
 
-Reading spectra from FITS needs astropy, which is an optional extra — `pip install -e ".[io]"`.
-Nothing else in albireo imports it.
+Two optional extras, both genuinely optional — the core never imports either, so a fit on a
+headless node needs neither:
+
+- `pip install -e ".[io]"` — astropy, for reading and writing FITS (`albireo.io`).
+- `pip install -e ".[plots]"` — matplotlib and arviz, for `albireo.plotting` and the
+  posterior diagnostics.
 
 For a GPU build, install the appropriate `jax[cuda]` wheel for your platform following the
 [JAX installation guide](https://docs.jax.dev/en/latest/installation.html).
@@ -138,14 +177,16 @@ scan.k2_peak, scan.detection_peak, scan.companion  # + std, null loglike, ...
 
 ## Documentation
 
-- [`examples/`](examples/) — executable tutorials (SB2 end-to-end, K₂ scan, and HR 6819 on real
-  archival FEROS spectra); the first two run in CI. Narrative versions in
+- [`docs/quickstart.md`](docs/quickstart.md) — the five-minute version, on packaged data.
+- [`examples/`](examples/) — executable tutorials (quickstart, SB2 end-to-end, K₂ scan, and
+  HR 6819 on real archival FEROS spectra); the first three run in CI. Narrative versions in
   [`docs/tutorials/`](docs/tutorials/).
 - [`docs/design.md`](docs/design.md) — architecture, data model, and the shape of the inference
   problem.
 - [`docs/math.md`](docs/math.md) — the disentangling likelihood, analytic marginalization of the
   component spectra, and the orbital parameterization.
 - [`docs/benchmarks.md`](docs/benchmarks.md) — the running validation and performance record.
+- [`docs/roadmap.md`](docs/roadmap.md) — where albireo is going and why, with the non-goals recorded.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — dev setup and the test philosophy.
 
 Docs are built with [MkDocs Material](https://squidfunk.github.io/mkdocs-material/) and will be

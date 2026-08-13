@@ -48,6 +48,7 @@ import os
 import warnings
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -67,6 +68,7 @@ __all__ = [
     "read_dataset",
     "read_spectrum",
     "to_epoch",
+    "write_spectra",
 ]
 
 _C_KMS = 299_792.458
@@ -118,10 +120,11 @@ def _require_astropy():
         from astropy.time import Time  # noqa: F401
     except ImportError as exc:  # pragma: no cover - exercised only without astropy
         raise ImportError(
-            "albireo.io needs astropy to read FITS files. Install it with "
+            "albireo.io needs astropy to read and write FITS files. Install it with "
             "'pip install \"albireo[io]\"' (or 'pip install astropy'). The rest of "
             "albireo has no astropy dependency — if you already have wavelengths, "
-            "fluxes and inverse variances in memory, build EpochData directly."
+            "fluxes and inverse variances in memory, build EpochData directly, and "
+            "albireo.results.write_ascii exports spectra with no extras at all."
         ) from exc
     from astropy.io import fits
 
@@ -774,3 +777,159 @@ def read_dataset(
         raws.sort(key=lambda r: r.bjd)
     epochs = tuple(to_epoch(r, **epoch_kwargs) for r in raws)
     return Dataset(epochs, frame=raws[0].frame)
+
+
+def write_spectra(
+    path,
+    grid,
+    d_hat,
+    std=None,
+    *,
+    format: str = "fits",
+    light_fractions=None,
+    prior=None,
+    meta: Mapping[str, object] | None = None,
+    overwrite: bool = True,
+):
+    """Write disentangled component spectra to FITS or ECSV.
+
+    The disentangled spectrum and its uncertainty band are what the rest of a project
+    consumes — an atmosphere code, a line-profile fit, a co-author. This is how they leave.
+
+    Parameters
+    ----------
+    path
+        Output path. The suffix is set from ``format`` if it is missing.
+    grid
+        The :class:`~albireo.grids.LogGrid` the spectra were solved on.
+    d_hat
+        Deviation spectra, shape ``(n_comp, n_pix)`` or ``(n_pix,)``. Written as flux
+        ``1 + d``, i.e. the normalized component spectrum.
+    std
+        Pointwise standard deviations with the same shape, e.g. from
+        :func:`albireo.likelihood.spectra_std`. Written as the ``ERR`` column.
+    format
+        ``"fits"`` — one ``BinTableHDU`` per component, each with ``WAVE`` / ``FLUX`` and,
+        if ``std`` was given, ``ERR``. ``"ecsv"`` — an Astropy ECSV table, which carries
+        column metadata as readable YAML and is the better choice for handing spectra to
+        another Python tool.
+    light_fractions
+        Recorded in the header as ``LIGHTFR*``. Worth passing: the recovered quantity is
+        the light-weighted contribution, so the line depths are only interpretable
+        alongside the light fractions assumed or inferred for the fit.
+    prior
+        A :class:`~albireo.priors.SmoothnessPrior`, recorded as ``TAU*`` / ``ETA*``.
+    meta
+        Extra header cards (FITS) or table metadata (ECSV). Keys longer than eight
+        characters are written as FITS ``HIERARCH`` cards.
+    overwrite
+        Overwrite an existing file.
+
+    Returns
+    -------
+    pathlib.Path
+        The path written.
+
+    Notes
+    -----
+    The written flux is the *component* spectrum ``1 + d``, not its contribution to the
+    composite, which is ``l_i * d_i``. Where the smoothness prior dominates — between
+    lines, and wherever the epochs give little leverage — the values are prior-set rather
+    than data-set; the ``ERR`` column is what says so, and it is the reason to write it.
+    See ``docs/math.md`` §5.1.
+    """
+    fmt = format.lower()
+    if fmt not in {"fits", "ecsv"}:
+        raise ValueError(f"format must be 'fits' or 'ecsv', got {format!r}")
+
+    _require_astropy()
+
+    d_hat = np.atleast_2d(np.asarray(d_hat))
+    std_arr = None if std is None else np.atleast_2d(np.asarray(std))
+    wave = np.asarray(grid.wave)
+    if d_hat.shape[-1] != wave.size:
+        raise ValueError(
+            f"d_hat has {d_hat.shape[-1]} pixels but the grid has {wave.size}; "
+            "they must come from the same fit."
+        )
+    if std_arr is not None and std_arr.shape != d_hat.shape:
+        raise ValueError(f"std has shape {std_arr.shape}, expected {d_hat.shape}")
+
+    path = Path(path)
+    if not path.suffix:
+        path = path.with_suffix(".fits" if fmt == "fits" else ".ecsv")
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    provenance = _spectra_provenance(d_hat.shape[0], light_fractions, prior, meta)
+    if fmt == "fits":
+        _write_spectra_fits(path, wave, d_hat, std_arr, provenance, overwrite)
+    else:
+        _write_spectra_ecsv(path, wave, d_hat, std_arr, provenance, overwrite)
+    return path
+
+
+def _spectra_provenance(n_comp, light_fractions, prior, meta) -> dict[str, object]:
+    from albireo import __version__
+
+    out: dict[str, object] = {"ALBIREO": __version__, "NCOMP": int(n_comp)}
+    if light_fractions is not None:
+        for i, value in enumerate(np.atleast_1d(np.asarray(light_fractions, dtype=float)).ravel()):
+            out[f"LIGHTFR{i + 1}"] = float(value)
+    if prior is not None:
+        for name in ("tau", "eta"):
+            values = getattr(prior, name, None)
+            if values is None:
+                continue
+            for i, value in enumerate(np.atleast_1d(np.asarray(values, dtype=float)).ravel()):
+                out[f"{name.upper()}{i + 1}"] = float(value)
+    if meta:
+        out.update(meta)
+    return out
+
+
+def _write_spectra_fits(path, wave, d_hat, std_arr, provenance, overwrite) -> None:
+    fits = _require_astropy()
+
+    primary = fits.PrimaryHDU()
+    for key, value in provenance.items():
+        primary.header[key] = value
+    primary.header["COMMENT"] = "Disentangled component spectra from albireo."
+    primary.header["COMMENT"] = "FLUX is the normalized component spectrum 1 + d."
+    primary.header["COMMENT"] = "The observable is l_i * d_i; depths depend on the light"
+    primary.header["COMMENT"] = "fractions recorded above. See docs/math.md section 5.2."
+    if std_arr is not None:
+        primary.header["COMMENT"] = "ERR is the marginal posterior standard deviation;"
+        primary.header["COMMENT"] = "it is large where the prior, not the data, sets the"
+        primary.header["COMMENT"] = "spectrum. See docs/math.md section 5.1."
+
+    hdus = [primary]
+    for i in range(d_hat.shape[0]):
+        columns = [
+            fits.Column(name="WAVE", format="D", unit="Angstrom", array=wave),
+            fits.Column(name="FLUX", format="D", array=1.0 + d_hat[i]),
+        ]
+        if std_arr is not None:
+            columns.append(fits.Column(name="ERR", format="D", array=std_arr[i]))
+        hdu = fits.BinTableHDU.from_columns(columns, name=f"COMP{i + 1}")
+        hdu.header["COMPONEN"] = (i + 1, "component index, 1-based")
+        hdus.append(hdu)
+    fits.HDUList(hdus).writeto(path, overwrite=overwrite)
+
+
+def _write_spectra_ecsv(path, wave, d_hat, std_arr, provenance, overwrite) -> None:
+    from astropy.table import Table
+
+    table = Table()
+    table["wave"] = wave
+    table["wave"].unit = "Angstrom"
+    for i in range(d_hat.shape[0]):
+        table[f"flux_{i + 1}"] = 1.0 + d_hat[i]
+        if std_arr is not None:
+            table[f"err_{i + 1}"] = std_arr[i]
+    table.meta.update(provenance)
+    table.meta["comment"] = (
+        "Disentangled component spectra from albireo. flux_i is the normalized "
+        "component spectrum 1 + d for component i; the observable is l_i * d_i, so "
+        "depths depend on the recorded light fractions (docs/math.md section 5.2)."
+    )
+    table.write(path, format="ascii.ecsv", overwrite=overwrite)

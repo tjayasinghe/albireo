@@ -36,12 +36,78 @@ jobs:
       - name: Ruff format check
         run: uv run --no-sync ruff format --check .
 
+      # Not gating yet: the codebase has never been type-checked end to end and JAX
+      # annotations will produce a backlog. Visible now, enforced once the backlog is
+      # cleared.
+      - name: Mypy (advisory)
+        continue-on-error: true
+        run: uv run --no-sync mypy src/albireo
+
+  bare-install:
+    name: Bare install (no extras)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.13
+
+      # Installs *without* any extra, so astropy and matplotlib are absent. This is the
+      # job that proves the optional-dependency guards are real: `import albireo` must
+      # work, and the optional surfaces must raise an actionable error rather than an
+      # ImportError traceback from somewhere deep in the package.
+      - name: Create virtual environment and install package
+        run: |
+          uv venv --python 3.13
+          uv pip install -e .
+
+      - name: Import, load the packaged example, and check the guards
+        run: |
+          uv run --no-sync python - <<'PY'
+          import importlib.util as u
+          assert u.find_spec("astropy") is None, "this job must run without astropy"
+          assert u.find_spec("matplotlib") is None, "this job must run without matplotlib"
+
+          import numpy as np
+          import albireo as ab
+          print("albireo", ab.__version__)
+
+          # The quickstart's first line, on a bare install. This is also what proves the
+          # packaged .npz made it into the distribution.
+          dataset = ab.load_example()
+          assert len(list(dataset)) == 12, dataset
+
+          grid = ab.LogGrid.from_wavelength_range(5000.0, 5010.0, dv_kms=5.0)
+          spectra = np.zeros((1, grid.n))
+
+          # Optional surfaces must fail with an actionable message naming the extra,
+          # not with an ImportError from somewhere inside a figure or a FITS writer.
+          for call, needle in (
+              (lambda: ab.plot_spectra(grid, spectra), "albireo[plots]"),
+              (lambda: ab.write_spectra("x.fits", grid, spectra), "albireo[io]"),
+          ):
+              try:
+                  call()
+              except (ImportError, ModuleNotFoundError) as exc:
+                  assert needle in str(exc), f"unhelpful message: {exc}"
+              else:
+                  raise AssertionError(f"expected a guard mentioning {needle}")
+
+          # ... and the no-dependency export path must actually work.
+          ab.write_ascii("spectra.txt", grid, spectra)
+          print("bare install OK")
+          PY
+
   test:
     name: Test (${{ matrix.os }}, py${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
-    # The M3 NUTS gate test is a few minutes of real sampling; a hung chain (e.g. a
-    # mass-matrix regression driving trees to the depth cap) must fail, not idle.
-    timeout-minutes: 45
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -63,8 +129,41 @@ jobs:
           uv venv --python ${{ matrix.python-version }}
           uv pip install -e ".[dev]"
 
+      # The acceptance gates (real NUTS sampling, the multi-minute closed-loop fits) run
+      # once, in the `gates` job below, rather than four times across the matrix.
       - name: Run tests
-        run: uv run --no-sync pytest
+        run: uv run --no-sync pytest --no-slow --no-network
+
+  gates:
+    name: Acceptance gates (slow)
+    runs-on: ubuntu-latest
+    # The M3 NUTS gate test is a few minutes of real sampling; a hung chain (e.g. a
+    # mass-matrix regression driving trees to the depth cap) must fail, not idle.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.13
+
+      - name: Create virtual environment and install package
+        run: |
+          uv venv --python 3.13
+          uv pip install -e ".[dev]"
+
+      - name: Run the full suite with coverage
+        run: uv run --no-sync pytest --no-network --cov=albireo --cov-report=xml
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage.xml
+          fail_ci_if_error: false
 
   examples:
     name: Examples (smoke)
@@ -90,5 +189,6 @@ jobs:
         env:
           ALBIREO_EXAMPLE_FAST: "1"
         run: |
+          uv run --no-sync python examples/00_quickstart.py
           uv run --no-sync python examples/02_k2_scan.py
           uv run --no-sync python examples/01_sb2_end_to_end.py

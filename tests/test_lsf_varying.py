@@ -423,6 +423,7 @@ def test_data_term_prefers_the_injected_width_profile_at_fixed_spectra():
     assert c_ramp < c_flat - 100.0, f"ramp chi2 {c_ramp:.1f} vs flat {c_flat:.1f}"
 
 
+@pytest.mark.slow
 def test_closed_loop_joint_fit_recovers_orbit_and_ramp_direction():
     """The D37 gate: per-anchor widths free, and the orbit must not be corrupted.
 

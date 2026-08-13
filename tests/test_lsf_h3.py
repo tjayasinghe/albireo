@@ -243,6 +243,7 @@ def test_data_term_prefers_the_injected_h3_profile_at_fixed_spectra():
     assert c_true < c_none - 100.0, f"true h3 chi2 {c_true:.1f} vs symmetric {c_none:.1f}"
 
 
+@pytest.mark.slow
 def test_closed_loop_h3_joint_fit_leaves_orbit_unbiased():
     """The D38 gate: h3 anchors free against injected asymmetry — the orbit holds.
 

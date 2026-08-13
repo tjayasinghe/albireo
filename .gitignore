@@ -223,5 +223,15 @@ uv.lock
 # Claude Code
 .claude/
 
-# Downloaded observational data (see scripts/download_hr6819.py)
+# Downloaded observational data (see scripts/download_hr6819.py).
+# Note this does not match src/albireo/data_files/, which holds the packaged example
+# dataset and is part of the distribution.
 data/
+
+# Output written by the example scripts into the working directory.
+*_spectra*.png
+*_spectra*.txt
+*_residuals.png
+quickstart_map.npz
+sb2_*.png
+k2_*.png

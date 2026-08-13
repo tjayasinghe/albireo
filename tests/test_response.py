@@ -20,6 +20,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import numpyro.distributions as dist
+import pytest
 
 import albireo as ab
 from albireo.data import Dataset, EpochData
@@ -295,6 +296,7 @@ def test_theta_site_matches_the_direct_route():
     np.testing.assert_allclose(via_site, direct, rtol=1e-12)
 
 
+@pytest.mark.slow
 def test_closed_loop_recovers_per_epoch_response_and_orbit():
     """The D33 gate: injected per-epoch response perturbations are inferred jointly.
 

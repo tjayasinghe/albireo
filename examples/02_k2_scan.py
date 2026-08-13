@@ -174,17 +174,13 @@ def plot_detection(injected: ab.K2ScanResult, null: ab.K2ScanResult, path: str) 
     import matplotlib.pyplot as plt
 
     fig, axes = plt.subplots(2, 1, figsize=(7.2, 6.0), sharex=True, constrained_layout=True)
-    axes[0].plot(injected.k2_grid, injected.detection, "o-", color="C0", ms=3)
-    axes[0].axvline(K2_TRUE, color="k", ls="--", lw=1.0, label=f"injected $K_2$ = {K2_TRUE:g} km/s")
-    axes[0].set_ylabel("$D(K_2)$")
+    ab.plot_detection(injected, injected_k2=K2_TRUE, ax=axes[0])
     axes[0].set_title("Companion injected at $K_2$ = 38 km/s, $\\ell_2$ = 0.1")
-    axes[0].legend(fontsize=8)
 
-    axes[1].plot(null.k2_grid, null.detection, "o-", color="C3", ms=3)
-    axes[1].axhline(0.0, color="k", ls=":", lw=1.0)
-    axes[1].set_ylabel("$D(K_2)$")
-    axes[1].set_xlabel("trial $K_2$ [km/s]")
+    ab.plot_detection(null, ax=axes[1])
     axes[1].set_title("No companion: the Occam term keeps $D$ below zero everywhere")
+    for ax in axes[:-1]:
+        ax.set_xlabel("")
     fig.savefig(path, dpi=150)
     plt.close(fig)
 

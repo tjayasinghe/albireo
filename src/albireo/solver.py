@@ -382,11 +382,7 @@ def selected_inverse_cotangent(chol: BlockCholesky, d_blocks, u_blocks, g_logdet
         t = s_next @ w  # = -Sigma[k+1, k]
         s_k = inv_lk.T @ inv_lk + w.T @ t
         diag_k = g_logdet * s_k - g_quad * outer(dk, dk) - outer(uk, dk)
-        sub_k = (
-            -2.0 * g_logdet * t
-            - 2.0 * g_quad * outer(dn, dk)
-            - (outer(un, dk) + outer(dn, uk))
-        )
+        sub_k = -2.0 * g_logdet * t - 2.0 * g_quad * outer(dn, dk) - (outer(un, dk) + outer(dn, uk))
         return s_k, (diag_k, sub_k)
 
     _, (diags, subs) = jax.lax.scan(

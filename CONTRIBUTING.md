@@ -28,15 +28,30 @@ first; the GPU is an accelerator, never a separate code path.
 ## Running the tests
 
 ```bash
-pytest                       # whole suite
+pytest                       # whole suite, including the acceptance gates (~14 min)
+pytest --no-slow             # everything except the gates (~6 min)
 pytest tests/test_grids.py   # one module, seconds
 ```
 
 Most of the suite is fast, but the inference tests are not: the NUTS acceptance test does real
-sampling and takes a few minutes, and several M4 closed-loop tests run MAP fits of 30–80 seconds
-each. CI allows 45 minutes for the suite. The injection–coverage study
-(`scripts/m3_coverage.py`, ~100 minutes) is deliberately *not* part of the suite — run it by hand
-when you touch the sampler, the marginal likelihood, or the hyperparameter treatment.
+sampling and takes a few minutes, and several M4 closed-loop tests run MAP fits of 20–50 seconds
+each. Those are marked `slow`, and `--no-slow` deselects them — which skips the expensive
+*fixtures* too, not just the assertions on them. There are also `network` and `gpu` markers with
+matching `--no-network` and `--no-gpu` flags.
+
+A bare `pytest` deliberately still runs everything. The gates are the reason the closed-loop
+tolerances can be trusted, and a default that quietly skipped them would be a default that
+quietly stopped checking. CI splits the difference: the OS/Python matrix runs `--no-slow`, and
+one job runs the full suite with coverage.
+
+The injection–coverage study (`scripts/m3_coverage.py`, ~100 minutes) is deliberately *not* part
+of the suite — run it by hand when you touch the sampler, the marginal likelihood, or the
+hyperparameter treatment.
+
+New test modules can use the shared fixtures in `tests/conftest.py` (`rng`, `small_grid`,
+`small_simulation`, `small_dataset`). The existing modules build their own datasets and are
+left alone on purpose: they encode specific scales that their closed-loop tolerances are tuned
+to, and moving them onto shared fixtures would put those tolerances at risk for no gain.
 
 Tests are deterministic (fixed seeds). A test that only passes sometimes is a bug in the test.
 

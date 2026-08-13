@@ -46,7 +46,8 @@ class K2ScanResult:
     ``companion``, and their pointwise standard deviations) are the conditional
     posterior at the *peak* trial ``K_2``, on the model grid. ``model`` is the
     two-component :class:`MarginalOrbitModel`, reusable for follow-up (e.g. a joint
-    NUTS run seeded at the peak).
+    NUTS run seeded at the peak); it is None on a result read back from disk by
+    :func:`albireo.results.load_fit`, which stores the numbers and not the machinery.
     """
 
     k2_grid: np.ndarray
@@ -58,7 +59,7 @@ class K2ScanResult:
     primary_std: np.ndarray
     companion: np.ndarray
     companion_std: np.ndarray
-    model: MarginalOrbitModel
+    model: MarginalOrbitModel | None = None
 
     @property
     def peak_index(self) -> int:

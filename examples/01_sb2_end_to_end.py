@@ -160,34 +160,9 @@ def plot_rv_curve(samples: dict, truth, bjd: np.ndarray, path: str) -> None:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    period = float(np.asarray(samples["period"]).mean())
-    t_conj = float(np.asarray(samples["t_conj"]).mean())
-    phase = np.linspace(0.0, 1.0, 400)
-    t_dense = t_conj + phase * period
-
-    n_post = int(np.asarray(samples["period"]).shape[0])
-    idx = np.linspace(0, n_post - 1, min(60, n_post)).astype(int)
-    sites = ("period", "t_conj", "secosw", "sesinw", "k")
-
-    fig, ax = plt.subplots(figsize=(7.2, 4.4), constrained_layout=True)
-    for i in idx:
-        theta = {s: jnp.asarray(np.asarray(samples[s])[i]) for s in sites}
-        vel = np.asarray(ab.orbit_velocities(theta, t_dense))
-        ax.plot(phase, vel[0], color="C0", alpha=0.10, lw=0.9)
-        ax.plot(phase, vel[1], color="C3", alpha=0.10, lw=0.9)
-    vel_true = truth.orbit.component_velocities(t_dense)
-    ax.plot(phase, vel_true[0], "k--", lw=1.3, label="truth, component 1")
-    ax.plot(phase, vel_true[1], "k:", lw=1.3, label="truth, component 2")
-    ax.plot([], [], color="C0", lw=2, label="posterior draws, component 1")
-    ax.plot([], [], color="C3", lw=2, label="posterior draws, component 2")
-
-    ep_phase = ((bjd - t_conj) / period) % 1.0
-    ymin = float(min(vel_true.min(), -1.0))
-    ax.plot(ep_phase, np.full_like(ep_phase, ymin), "|", color="0.3", ms=12, label="epochs")
-    ax.set_xlabel("phase from conjunction of component 1")
-    ax.set_ylabel("radial velocity [km/s]")
+    fig, ax = ab.plot_rv_curve(samples, bjd, truth=truth)
     ax.set_title("SB2 orbit: posterior vs truth (no per-epoch RVs were ever measured)")
-    ax.legend(fontsize=8, loc="best")
+    fig.set_layout_engine("constrained")
     fig.savefig(path, dpi=150)
     plt.close(fig)
 
@@ -199,29 +174,11 @@ def plot_spectra(draws, truth, path: str) -> None:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    draws = np.asarray(draws)
-    mean, sd = draws.mean(axis=0), draws.std(axis=0)
-    wave = GRID.wave
-    fig, axes = plt.subplots(2, 1, figsize=(9.0, 6.0), sharex=True, constrained_layout=True)
-    for i, ax in enumerate(axes):
-        color = f"C{0 if i == 0 else 3}"
-        ax.fill_between(
-            wave,
-            mean[i] - 2 * sd[i],
-            mean[i] + 2 * sd[i],
-            color=color,
-            alpha=0.35,
-            lw=0,
-            label="posterior +/- 2 sd",
-        )
-        ax.plot(wave, mean[i], color=color, lw=1.0, label="posterior mean")
-        ax.plot(wave, truth.components[i], "k--", lw=0.8, label="truth")
-        ax.set_ylabel(f"$d_{i + 1}$")
-        ax.legend(fontsize=8, loc="lower right", ncol=3)
+    fig, axes = ab.plot_spectra(GRID, draws, truth=truth.components)
     axes[0].set_title(
         "Disentangled deviation spectra (the smooth envelope is prior-set: math.md 5.1)"
     )
-    axes[-1].set_xlabel("wavelength [A]")
+    fig.set_layout_engine("constrained")
     fig.savefig(path, dpi=150)
     plt.close(fig)
 

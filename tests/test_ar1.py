@@ -314,6 +314,7 @@ PHI_TRUE = 0.45
 ALPHA_TRUE = 1.5  # the supplied ivar will overstate precision by this factor
 
 
+@pytest.mark.slow
 def test_closed_loop_recovers_phi_alpha_and_orbit():
     """The D34 gate: injected correlation and scale error inferred jointly with the orbit."""
     rng = np.random.default_rng(42)
