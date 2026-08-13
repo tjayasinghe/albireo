@@ -1157,3 +1157,57 @@ diagnostics (chain sd/lag-1 0.997/+0.041, diagonal lag-1 +0.797) identical.
 K<sub>Be</sub> reads 2.420 vs 2.446 — the direction both runs were still sliding
 along at step 150, i.e. the flattest axis of the surface, not a path discrepancy.
 The wider window stops being a budget question.
+
+## D36 — one wide window: 4120–4600 Å, Hγ masked (2026-08-12)
+
+The last lever recorded against this dataset (D30 asked for it; D33 repeated the
+request), runnable only because of D35: `scripts/hr6819_wide_run.py` joins windows A
+and B into a single fit — 22,169 model px and ~765k good native pixels, 2.26× window
+A — including the 25 Å strip 4355–4380 that has never been in a fit. Hγ's core
+(4325–4355 Å) is masked by `preprocess.mask_ranges`: ivar = 0 keeps the sampling
+regular, the AR(1) chain restarts across the hole (a masked gap beyond
+`ar1_max_gap`), the bandwidth is untouched, and the broad absorption wings — static
+stellar features — stay in. Noise model and procedure are the D34 configuration
+exactly. 200 L-BFGS steps, **2,447 s at 12.2 s/step** — linear-in-pixels from the
+window A refit (5.8 s/step at 0.44× the size); the probe path would have priced this
+at roughly 7 hours against a ~50 GB gradient, which this machine does not have.
+
+| | A: AR(1) | B: AR(1) | **wide: AR(1)** | Klement et al. 2025 |
+|---|---|---|---|---|
+| period [d] | 40.37115 | 40.36956 | **40.36750** | 40.3261 ± 0.0013 |
+| K<sub>pre-sd</sub> [km/s] | 63.242 | 63.518 | **63.396** | 61.15 ± 0.88 |
+| K<sub>Be</sub> [km/s] | 2.446 | 3.756 | **3.482** | 3.90 ± 0.27 |
+| eccentricity | 0.0273 | 0.0228 | **0.0261** | 0.0289 ± 0.0058 |
+| φ̂ | +0.801 | +0.694 | **+0.737** | — |
+| α̂ range (median) | 1.55–1.93 (1.66) | 1.27–1.58 (1.40) | 1.46–1.86 (1.61) | — |
+| whitened residual sd, lag-1 | 0.997, +0.041 | 0.997, +0.012 | **0.997, +0.019** | 1, 0 |
+| … diagonal whitener, lag-1 | +0.797 | +0.688 | +0.731 | — |
+
+Four readings:
+
+* **The noise model closes at 2.3× the data.** sd 0.997 with lag-1 +0.019, and the
+  self-consistency check lands a third time: the diagonal whitener reads +0.731
+  against φ̂ = +0.737. φ̂ and the α̂ range sit between the two single-window values —
+  what a pipeline property that varies mildly with wavelength should do.
+* **K<sub>Be</sub> firms up toward the literature.** 3.48 against 3.90 ± 0.27
+  (1.5σ), where window A alone said 2.42. The ~1/50-linewidth reflex is the
+  data-starved direction (math.md §5.1), and it responded exactly to what it was
+  starved of — more lines in one joint constraint.
+* **The eccentricity stays put** — 0.0261, 0.5σ from the published 0.0289 ± 0.0058.
+* **The period lands *below* both single-window optima** — 40.3675 against
+  40.3711/40.3696 — not inside their interval: a joint fit is not an average of
+  window MAPs (the cross-window coupling and new pixels are genuine information),
+  and the standing multimodality lesson applies to any single optimum. It moves
+  *toward* the literature and remains 0.041 d away.
+
+**The literature period offset has now survived its fourth configuration.** Across
+two independent windows, three noise models, and one joint wide fit: P ∈ [40.3675,
+40.3712] — internally consistent to 0.004 d — against a published 40.3261 ± 0.0013,
+with K<sub>pre-sd</sub> at 63.2–63.5, consistently 3.7–4% above the CCF value, in
+the direction deblending predicts. Whatever separates this analysis from the
+published orbit, it is measured to be none of: the continuum (D33), the noise scale
+(D31), the pixel correlation (D34), or the window choice (D36). The surviving
+suspects are the Gaussian stand-in for FEROS's real LSF — the next lever, and a v2
+seam by design (D8: a tabulated LSF is a banded-operator swap) — the Be disc's
+variability, and the published CCF analysis itself, which blends the components this
+model separates.
