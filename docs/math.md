@@ -172,6 +172,25 @@ variation only at second order (a symmetric kernel moves no centroid). The first
 channel is wavelength-dependent *asymmetry*, whose epoch-coupled part enters as an
 apparent velocity perturbation $\propto \lambda\, c'(\lambda)\, v(t)/c$.
 
+The asymmetry channel is parameterized (D38): per-anchor Gauss–Hermite $h_3$
+(`operators.gauss_hermite_kernel_traced`; van der Marel & Franx 1993 truncated at the
+first asymmetric term, $|h_3| \le 0.2$), imprinting a centroid-warp field
+$c(\lambda) \approx \sqrt{3}\, h_3(\lambda)\, \sigma$. Its identifiability is *worse*
+than the width's, and measurably so: a free spectrum can represent any static warp
+outright — the closed loop injected an $h_3$ ramp of $\mp 0.12$ and the joint fit
+returned it flat (fitted $|h_3| \lesssim 0.03$) with the orbit unbiased — so the
+data-identified remainder is only the epoch-coupled sampling of the warp's gradient,
+$\Delta c \approx c'(\lambda)\,\lambda\,(v(t) - v_\mathrm{bary}(t))/c$. Magnitude at
+the HR 6819 configuration: $|h_3| \sim 0.1$ varying on the echelle-order scale
+(~40 Å) gives $c' \sim 0.025$ km/s/Å and shifts of $\pm 1.3$ Å, i.e. **~30 m/s** of
+epoch-coupled apparent-velocity modulation — two orders below the ~4 km/s of
+accumulated RV signature a 0.04 d period offset represents over that baseline. This
+estimate is why the *instrument-frame per-epoch* kernel realization (the pipeline's
+barycentric correction makes the true kernel epoch-dependent in the analysis frame,
+which a shared bank cannot express) is recorded but not built: the channel it would
+add is bounded at the tens-of-m/s level. Fitted $h_3$ profiles are diagnostics; the
+orbit's response is the readout.
+
 **Light fractions.** $\ell_{ij} \ge 0$ with $\sum_i \ell_{ij} = 1$ over the stellar components
 (continuum-normalized data), telluric fixed at $\ell = 1$. Constant per component by default;
 per-epoch (eclipse) mode is first-class (§5.2 explains why).
@@ -924,7 +943,10 @@ become strict per-entry upper bounds: a realized $\sigma$ above them would be si
 truncated by the fixed radius, so the model rejects it with a $-\infty$ factor (the same
 guard-not-silent-corruption pattern as the bandwidth budget, §7.1). Identifiability is
 §5.4's caveat sharpened by §1.3: anchor one reference instrument for absolute widths,
-and read fitted per-anchor profiles as diagnostics, not measurements.
+and read fitted per-anchor profiles as diagnostics, not measurements. The asymmetry
+site ``lsf_h3`` (D38) follows the same pattern — per-anchor Gauss–Hermite $h_3$ for
+anchored instruments only, the static radius untouched, clipped and guarded at
+$|h_3| \le 0.2$ — with the still-sharper identifiability caveat of §1.3.
 
 **Per-epoch response (D33, post-M5).** The multiplicative response enters the
 likelihood in three places — the target, $z_j = y_j - r_j \odot (\mathbf{R}\mathbf{1})$;

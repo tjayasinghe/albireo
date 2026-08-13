@@ -1277,3 +1277,61 @@ velocity perturbation ∝ λc′(λ)v(t)/c (math.md §1.3) — for which the ope
 already accepts arbitrary banks; only a θ-parameterization (e.g. per-anchor
 Gauss–Hermite h₃) would be new. Beyond the LSF: disc variability, and the published
 CCF blending itself.
+
+## D38 — the asymmetry lever, and the LSF exonerated in full (2026-08-13)
+
+D37 left one LSF channel standing: profile *asymmetry*, the first-order centroid
+effect a symmetric kernel cannot produce. D38 parameterizes it — per-anchor
+Gauss–Hermite h₃ (`operators.gauss_hermite_kernel_traced`, |h₃| ≤ 0.2, h₃ = 0
+bit-identical to the Gaussian machinery) behind an `lsf_h3` site — and closes it.
+
+**The closed loop measured the identifiability first, and it is sharper than the
+width case**: an injected h₃ ramp of ∓0.12 came back *flat* (fitted |h₃| ≤ 0.03)
+with the orbit recovered to 1% — a free spectrum represents any static
+centroid-warp field c(λ) ≈ √3·h₃(λ)·σ outright, so the data-identified remainder
+is only the epoch-coupled sampling of the warp's gradient,
+Δc ≈ c′(λ)·λ·(v − v_bary)/c ≈ **30 m/s** at this configuration (math.md §1.3) —
+two orders below the ~4 km/s of accumulated RV signature the 0.041 d offset
+represents. That estimate is also why the instrument-frame per-epoch kernel
+realization is bounded out rather than built. The fixed-spectra data term *does*
+prefer the injected profile (the injection is real and seen); band == probe ==
+dense with h₃ anchors under diagonal and AR(1) noise; gradients in h₃ to 1e-9.
+329 tests.
+
+**HR 6819** (`scripts/hr6819_h3_run.py`): the D37 configuration plus 13 free h₃
+anchors — 26 LSF parameters joint with the orbit and the D34 noise model. 300
+L-BFGS steps (|grad| 44 at the end, better converged than D37's 200-step run),
+10,789 s at 36.0 s/step.
+
+| | D36 (fixed LSF) | D37 (fitted σ(λ)) | **D38 (fitted σ, h₃)** | Klement et al. 2025 |
+|---|---|---|---|---|
+| period [d] | 40.36750 | 40.36769 | **40.36719** | 40.3261 ± 0.0013 |
+| K<sub>pre-sd</sub> [km/s] | 63.396 | 63.395 | **63.391** | 61.15 ± 0.88 |
+| eccentricity | 0.0261 | 0.0262 | **0.0261** | 0.0289 ± 0.0058 |
+| φ̂ | +0.737 | +0.737 | **+0.737** | — |
+| whitened residual sd, lag-1 | 0.997, +0.019 | 0.998, +0.019 | **0.998, +0.020** | 1, 0 |
+| log-likelihood | 3,388,604.2 | 3,388,694.7 | **3,388,721.3** | — |
+
+ĥ₃(λ) at the anchors: interior anchors at the |h₃| ≤ 0.02 level, the largest
+values 0.042–0.052 at three anchors including the data-starved blue edge — implied
+centroid shifts of −0.13 to +0.31 km/s, a 0.53 km/s spread, all diagnostics by the
+closed-loop measurement. +26.6 nats over D37 for 13 parameters (an order below the
+widths' +90.5 — asymmetry has far less to absorb once the spectra are free, exactly
+as the absorption argument predicts). K<sub>Be</sub> again did not settle on its
+flat axis (2.73 at |grad| 44, inside the 1.3–4.2 band the D37 run wandered);
+every tabulated quantity above was pinned.
+
+**The reading: the LSF is exonerated in full, and the offset survives its sixth
+configuration.** P moved −0.0005 d from D37 — inside the fit's own trajectory
+wobble — and K₁, e, φ̂, α̂, and both residual moments are unchanged to the last
+digit. Every instrumental channel this model can express has now been given a
+θ-site and measured against the orbit: the continuum (D33, +4.1k nats), the noise
+scale (D31), the pixel correlation (D34, +1.7e5 nats), the window choice (D36),
+the LSF width (D37, +90.5 nats), the LSF asymmetry (D38, +26.6 nats) — **none
+moved the period**. Across all six configurations P ∈ [40.3672, 40.3712],
+internally consistent to 0.004 d, against a published 40.3261 ± 0.0013. The
+surviving suspects are no longer instrumental: the Be disc's variability (a
+time-variable component this static-spectrum model cannot express — and the lit
+analysis's own systematic too), and the published CCF blending itself, which
+measures velocities on composite line profiles this model separates. The
+instrumental-systematics campaign on this dataset is complete.
