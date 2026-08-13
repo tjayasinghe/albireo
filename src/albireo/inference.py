@@ -22,6 +22,11 @@ The nonlinear parameter vector ``theta`` is a dict of JAX arrays with sites
   D37), one entry per un-anchored instrument, concatenated in instrument order; the
   construction-time ``lsf_sigma_v`` values act as per-entry upper bounds (they fix
   the kernel radii)
+- ``lsf_h3`` (optional) — Gauss-Hermite LSF skewness (D38): one entry per LSF
+  anchor of each *anchored* instrument (un-anchored instruments have no slot — a
+  stationary asymmetric LSF is absorbed by the free spectra, math.md §1.3),
+  concatenated in instrument order; ``|h3| <= 0.2``. May appear with or without
+  ``lsf_sigma`` (without, the widths stay at the build values)
 - ``response`` (optional) — multiplicative per-epoch Chebyshev response coefficients,
   ``(n_coef,)`` shared or ``(n_epochs, n_coef)`` per-epoch
   (:func:`albireo.forward.with_response`, D7/D33; ``r = 1 + sum_m c_m T_m``, so
@@ -100,6 +105,9 @@ __all__ = [
 ]
 
 _ECC_MAX_DEFAULT = 0.95  # the Kepler solver is verified up to e = 0.95
+# Gauss-Hermite skewness bound: beyond ~0.2 the truncated series dips measurably
+# negative in the tail, and real instrument profiles sit well below it (D38).
+_H3_MAX = 0.2
 _OUTER_SITES = ("period_out", "t_conj_out", "secosw_out", "sesinw_out", "k_out")
 _THETA_SITES = (
     "period",
@@ -110,6 +118,7 @@ _THETA_SITES = (
     *_OUTER_SITES,
     "light",
     "lsf_sigma",
+    "lsf_h3",
     "response",
     "log_jitter",
     "ar1_phi",
@@ -313,6 +322,7 @@ class MarginalOrbitModel:
             maxima.append(np.full(n_a, sig[0]) if sig.size == 1 else sig)
             sizes.append(n_a)
         self._lsf_sizes = tuple(sizes)
+        self._lsf_anchored = tuple(len(anchors.get(name, ())) > 0 for name in self.instruments)
         self._lsf_sigma_max = jnp.asarray(np.concatenate(maxima))
         # The problem is passed as a jit *argument* (Problem is a registered
         # pytree): its arrays enter the graph as runtime parameters. Capturing
@@ -351,23 +361,47 @@ class MarginalOrbitModel:
             if ell.ndim == 2:  # per-epoch, Dirichlet layout (n_epochs, n_stellar)
                 ell = ell.T
             problem = with_light_fractions(problem, ell)
-        if "lsf_sigma" in theta:
-            sig = jnp.atleast_1d(jnp.asarray(theta["lsf_sigma"]))
-            if sig.shape != self._lsf_sigma_max.shape:
-                raise ValueError(
-                    f"lsf_sigma must have {self._lsf_sigma_max.shape[0]} entries — one per "
-                    f"LSF anchor of an anchored instrument, one per un-anchored instrument "
-                    f"(instruments {self.instruments}, sizes {self._lsf_sizes}); "
-                    f"got shape {sig.shape}"
-                )
-            # Clip into the kernel-radius-valid range so the likelihood stays finite
-            # (and rejectable, via the model's lsf_bound guard) outside it.
-            sig = jnp.clip(sig, 1e-3 * self._lsf_sigma_max, self._lsf_sigma_max)
+        if "lsf_sigma" in theta or "lsf_h3" in theta:
+            if "lsf_sigma" in theta:
+                sig = jnp.atleast_1d(jnp.asarray(theta["lsf_sigma"]))
+                if sig.shape != self._lsf_sigma_max.shape:
+                    raise ValueError(
+                        f"lsf_sigma must have {self._lsf_sigma_max.shape[0]} entries — one per "
+                        f"LSF anchor of an anchored instrument, one per un-anchored instrument "
+                        f"(instruments {self.instruments}, sizes {self._lsf_sizes}); "
+                        f"got shape {sig.shape}"
+                    )
+                # Clip into the kernel-radius-valid range so the likelihood stays finite
+                # (and rejectable, via the model's lsf_bound guard) outside it.
+                sig = jnp.clip(sig, 1e-3 * self._lsf_sigma_max, self._lsf_sigma_max)
+            else:
+                sig = self._lsf_sigma_max  # h3 alone: widths stay the build values
             parts, start = {}, 0
             for name, n_a in zip(self.instruments, self._lsf_sizes, strict=True):
                 parts[name] = sig[start] if n_a == 1 else sig[start : start + n_a]
                 start += n_a
-            problem = with_lsf(problem, parts)
+            h3_parts = None
+            if "lsf_h3" in theta:
+                h3 = jnp.atleast_1d(jnp.asarray(theta["lsf_h3"]))
+                n_h3 = sum(n for n, a in zip(self._lsf_sizes, self._lsf_anchored, strict=True) if a)
+                if h3.shape != (n_h3,):
+                    raise ValueError(
+                        f"lsf_h3 must have {n_h3} entries — one per LSF anchor of an "
+                        f"anchored instrument, skipping un-anchored instruments "
+                        f"(instruments {self.instruments}, sizes {self._lsf_sizes}, "
+                        f"anchored {self._lsf_anchored}); got shape {h3.shape}"
+                    )
+                # Clip into the truncated-series-valid range; the model's
+                # lsf_h3_bound guard rejects outside it.
+                h3 = jnp.clip(h3, -_H3_MAX, _H3_MAX)
+                h3_parts, start = {}, 0
+                for name, n_a, anchored in zip(
+                    self.instruments, self._lsf_sizes, self._lsf_anchored, strict=True
+                ):
+                    if anchored:
+                        h3_parts[name] = h3[start : start + n_a]
+                        start += n_a
+            problem = with_lsf(problem, parts, h3_parts)
         if "response" in theta:
             problem = with_response(problem, jnp.asarray(theta["response"]))
         if "log_jitter" in theta:
@@ -496,6 +530,14 @@ class MarginalOrbitModel:
                 numpyro.factor(
                     "lsf_bound",
                     jnp.where(jnp.all(sig <= self._lsf_sigma_max), 0.0, -jnp.inf),
+                )
+            if "lsf_h3" in theta:
+                h3 = jnp.atleast_1d(theta["lsf_h3"])
+                # Beyond the bound the truncated Gauss-Hermite series is no longer a
+                # credible line-spread profile (see _H3_MAX); clipped + rejected.
+                numpyro.factor(
+                    "lsf_h3_bound",
+                    jnp.where(jnp.all(jnp.abs(h3) <= _H3_MAX), 0.0, -jnp.inf),
                 )
             if "ar1_phi" in theta:
                 phi = jnp.atleast_1d(theta["ar1_phi"])

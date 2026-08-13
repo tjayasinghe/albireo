@@ -29,6 +29,7 @@ __all__ = [
     "convolve_spectrum",
     "convolve_varying",
     "convolve_varying_adjoint",
+    "gauss_hermite_kernel_traced",
     "gaussian_kernel",
     "gaussian_kernel_traced",
     "gaussian_lsf_profiles",
@@ -145,6 +146,30 @@ def gaussian_kernel_traced(sigma_px, radius: int):
     return kernel / jnp.sum(kernel)
 
 
+def gauss_hermite_kernel_traced(sigma_px, h3, radius: int):
+    """Normalized Gauss-Hermite kernel: a Gaussian with traced skewness ``h3`` (D38).
+
+    The van der Marel & Franx (1993) series truncated at the first asymmetric term,
+
+    ``psi(u) = exp(-u^2/2) * (1 + h3 * H3(u))``,
+    ``H3(u) = (2*sqrt(2)*u^3 - 3*sqrt(2)*u) / sqrt(6)``,   ``u = offset / sigma_px``,
+
+    normalized to unit sum. ``h3 = 0`` reproduces :func:`gaussian_kernel_traced`
+    exactly. Positive ``h3`` skews the profile redward: the kernel's first moment
+    (the centroid shift an unmodeled asymmetry imprints on every line) is
+    ``~ sqrt(3) * h3 * sigma`` for small ``h3``. Keep ``|h3|`` modest (the inference
+    model clips at 0.2): the series goes slightly negative in the far tail beyond
+    that, and real instrument profiles sit well below it. Radius contract as in
+    :func:`gaussian_kernel_traced` (fixed by the build-time width bound; ``h3``
+    does not change the support).
+    """
+    offsets = jnp.arange(-radius, radius + 1, dtype=jnp.float64)
+    u = offsets / sigma_px
+    h3_poly = (2.0 * jnp.sqrt(2.0) * u**3 - 3.0 * jnp.sqrt(2.0) * u) / jnp.sqrt(6.0)
+    kernel = jnp.exp(-0.5 * u**2) * (1.0 + h3 * h3_poly)
+    return kernel / jnp.sum(kernel)
+
+
 def convolve_spectrum(flux, kernel):
     """Zero-padded 'same' convolution (stationary LSF on the uniform grid).
 
@@ -204,7 +229,7 @@ def convolve_varying_adjoint(flux, profiles):
     return out
 
 
-def gaussian_lsf_profiles(sigma_px, anchor_wave, grid_wave):
+def gaussian_lsf_profiles(sigma_px, anchor_wave, grid_wave, h3=None):
     """Per-pixel LSF profiles from per-anchor Gaussian widths (build time, NumPy).
 
     Builds one normalized Gaussian kernel per anchor — the radius follows the
@@ -212,7 +237,9 @@ def gaussian_lsf_profiles(sigma_px, anchor_wave, grid_wave):
     interpolates them onto the grid through :func:`lsf_anchor_tables`. Rows are convex
     combinations of unit-sum kernels, so every row sums to exactly 1. Shape
     ``(len(grid_wave), 2 * radius + 1)``, ready for :func:`convolve_varying`.
-    ``sigma_px`` must supply one positive width per anchor.
+    ``sigma_px`` must supply one positive width per anchor. Optional ``h3`` (one
+    skewness per anchor) makes each anchor kernel the Gauss-Hermite profile of
+    :func:`gauss_hermite_kernel_traced` (D38); None or all-zero is exactly Gaussian.
     """
     sigma_px = np.atleast_1d(np.asarray(sigma_px, dtype=np.float64))
     idx, t = lsf_anchor_tables(anchor_wave, grid_wave)
@@ -222,7 +249,14 @@ def gaussian_lsf_profiles(sigma_px, anchor_wave, grid_wave):
         raise ValueError("sigma_px must be positive")
     radius = max(1, int(np.ceil(4.0 * float(np.max(sigma_px)))))
     off = np.arange(-radius, radius + 1, dtype=np.float64)
-    bank = np.exp(-0.5 * (off[None, :] / sigma_px[:, None]) ** 2)
+    u = off[None, :] / sigma_px[:, None]
+    bank = np.exp(-0.5 * u**2)
+    if h3 is not None:
+        h3 = np.atleast_1d(np.asarray(h3, dtype=np.float64))
+        if h3.shape != (len(anchor_wave),):
+            raise ValueError(f"need one h3 per anchor; got {h3.shape} for {len(anchor_wave)}")
+        h3_poly = (2.0 * np.sqrt(2.0) * u**3 - 3.0 * np.sqrt(2.0) * u) / np.sqrt(6.0)
+        bank = bank * (1.0 + h3[:, None] * h3_poly)
     bank /= bank.sum(axis=1, keepdims=True)
     return (1.0 - t)[:, None] * bank[idx] + t[:, None] * bank[idx + 1]
 

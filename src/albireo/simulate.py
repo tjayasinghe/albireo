@@ -62,12 +62,16 @@ class InstrumentSpec:
     lsf_anchors_angstrom
         Optional anchor wavelengths (strictly increasing, >= 2) for a
         wavelength-dependent LSF; None keeps the stationary one.
+    lsf_h3
+        Optional Gauss-Hermite skewness (D38): a scalar or one value per anchor,
+        anchored instruments only; None keeps pure Gaussian profiles.
     """
 
     wave: np.ndarray
     sigma_v_lsf: float | Sequence[float]
     snr: float
     lsf_anchors_angstrom: tuple[float, ...] | None = None
+    lsf_h3: float | Sequence[float] | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -316,14 +320,23 @@ def simulate_dataset(
             sig = np.atleast_1d(np.asarray(spec.sigma_v_lsf, dtype=np.float64))
             if sig.size == 1:
                 sig = np.full(len(spec.lsf_anchors_angstrom), sig[0])
+            h3_arr = None
+            if spec.lsf_h3 is not None:
+                h3_arr = np.atleast_1d(np.asarray(spec.lsf_h3, dtype=np.float64))
+                if h3_arr.size == 1:
+                    h3_arr = np.full(len(spec.lsf_anchors_angstrom), h3_arr[0])
             kernels[name] = jnp.asarray(
-                gaussian_lsf_profiles(sig / grid.dv_kms, spec.lsf_anchors_angstrom, grid.wave)
+                gaussian_lsf_profiles(
+                    sig / grid.dv_kms, spec.lsf_anchors_angstrom, grid.wave, h3=h3_arr
+                )
             )
         else:
             if not isinstance(spec.sigma_v_lsf, (int, float)):
                 raise ValueError(
                     f"instrument {name!r}: per-anchor LSF widths need lsf_anchors_angstrom"
                 )
+            if spec.lsf_h3 is not None:
+                raise ValueError(f"instrument {name!r}: lsf_h3 needs lsf_anchors_angstrom")
             kernels[name] = gaussian_kernel(spec.sigma_v_lsf / grid.dv_kms)
 
     if telluric is not None:

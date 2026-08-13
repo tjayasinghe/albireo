@@ -34,6 +34,7 @@ from albireo.operators import (
     RebinOperator,
     convolve_varying,
     convolve_varying_adjoint,
+    gauss_hermite_kernel_traced,
     gaussian_kernel,
     gaussian_kernel_traced,
     gaussian_lsf_profiles,
@@ -422,24 +423,33 @@ def _epoch_groups(dataset: Dataset) -> list[tuple[str, list[int]]]:
     return order
 
 
-def _lsf_bank(instrument, lsf_sigma_v, lsf_anchors_angstrom, grid):
+def _lsf_bank(instrument, lsf_sigma_v, lsf_anchors_angstrom, lsf_h3, grid):
     """Realized LSF profile bank for one instrument (build time, NumPy).
 
     Returns ``(bank, anchor_wave)``: a ``(1, 2r+1)`` stationary kernel and ``()``
     without anchors, else the ``(grid.n, 2r+1)`` per-model-pixel profiles from
-    per-anchor Gaussians through the static interpolation tables. The radius follows
+    per-anchor Gauss-Hermite kernels (pure Gaussians when ``lsf_h3`` carries nothing
+    for this instrument) through the static interpolation tables. The radius follows
     the *largest* width (truncate at 4 sigma, as :func:`albireo.operators.gaussian_kernel`),
-    so every later :func:`with_lsf` swap bounded by the build widths stays untruncated.
+    so every later :func:`with_lsf` swap bounded by the build widths stays untruncated;
+    ``h3`` does not change the support.
     """
     sig = np.atleast_1d(np.asarray(lsf_sigma_v[instrument], dtype=np.float64))
     if sig.ndim != 1 or np.any(sig <= 0):
         raise ValueError(f"instrument {instrument!r}: LSF widths must be positive scalars")
     anchors = None if lsf_anchors_angstrom is None else lsf_anchors_angstrom.get(instrument)
+    h3 = None if lsf_h3 is None else lsf_h3.get(instrument)
     if anchors is None:
         if sig.size != 1:
             raise ValueError(
                 f"instrument {instrument!r}: {sig.size} LSF widths supplied but no "
                 "anchors — per-anchor widths need lsf_anchors_angstrom for this instrument."
+            )
+        if h3 is not None:
+            raise ValueError(
+                f"instrument {instrument!r}: lsf_h3 needs lsf_anchors_angstrom — a "
+                "stationary asymmetric LSF is absorbed by the free spectra "
+                "(docs/math.md §1.3); only its wavelength variation is identified."
             )
         return jnp.asarray(gaussian_kernel(float(sig[0]) / grid.dv_kms))[None, :], ()
     anchor_wave = tuple(float(x) for x in anchors)
@@ -450,7 +460,16 @@ def _lsf_bank(instrument, lsf_sigma_v, lsf_anchors_angstrom, grid):
             f"instrument {instrument!r}: {sig.size} LSF widths for "
             f"{len(anchor_wave)} anchors — supply one per anchor (or one scalar)."
         )
-    profiles = gaussian_lsf_profiles(sig / grid.dv_kms, anchor_wave, grid.wave)
+    if h3 is not None:
+        h3 = np.atleast_1d(np.asarray(h3, dtype=np.float64))
+        if h3.size == 1:
+            h3 = np.full(len(anchor_wave), h3[0])
+        if h3.size != len(anchor_wave):
+            raise ValueError(
+                f"instrument {instrument!r}: {h3.size} h3 values for "
+                f"{len(anchor_wave)} anchors — supply one per anchor (or one scalar)."
+            )
+    profiles = gaussian_lsf_profiles(sig / grid.dv_kms, anchor_wave, grid.wave, h3=h3)
     return jnp.asarray(profiles), anchor_wave
 
 
@@ -462,6 +481,7 @@ def build_problem(
     light_fractions,
     lsf_sigma_v: Mapping[str, float | Sequence[float]],
     lsf_anchors_angstrom: Mapping[str, Sequence[float]] | None = None,
+    lsf_h3: Mapping[str, float | Sequence[float]] | None = None,
     response_coeffs: Sequence[np.ndarray] | None = None,
     telluric: bool = False,
     ar1_max_gap: int = 4,
@@ -493,6 +513,12 @@ def build_problem(
         anchors) into a per-model-pixel profile bank applied by
         :func:`albireo.operators.convolve_varying` — the tabulated-LSF slot of
         design.md D8. Instruments absent from the mapping stay stationary.
+    lsf_h3
+        Optional per-instrument Gauss-Hermite skewness (D38): a scalar or one value
+        per anchor, requiring ``lsf_anchors_angstrom`` for that instrument (a
+        *stationary* asymmetric LSF is absorbed by the free spectra — only the
+        wavelength variation of the asymmetry is identified, docs/math.md §1.3).
+        Absent instruments (or None) keep pure Gaussian anchors.
     response_coeffs
         Optional per-epoch Chebyshev response coefficients (empty/None = unit response).
     telluric
@@ -567,7 +593,7 @@ def build_problem(
         _warn_if_row_support_is_an_artifact(instrument, wave_native, per_row, row_support)
         _warn_if_data_extends_past_grid(instrument, dataset, idx, covered)
 
-        kernel, anchor_wave = _lsf_bank(instrument, lsf_sigma_v, lsf_anchors_angstrom, grid)
+        kernel, anchor_wave = _lsf_bank(instrument, lsf_sigma_v, lsf_anchors_angstrom, lsf_h3, grid)
         base = np.asarray(rebin(jnp.ones(grid.n)))  # R 1 (= coverage)
 
         z_rows, w_rows, r_rows, gap_rows = [], [], [], []
@@ -1033,7 +1059,7 @@ def with_response(problem: Problem, response_coeffs) -> Problem:
     return replace(problem, groups=tuple(groups))
 
 
-def with_lsf(problem: Problem, lsf_sigma_v: Mapping) -> Problem:
+def with_lsf(problem: Problem, lsf_sigma_v: Mapping, lsf_h3: Mapping | None = None) -> Problem:
     """Return ``problem`` with the Gaussian LSF widths replaced (differentiable).
 
     The θ-dependent path for LSF inference: each group's kernel *values* are
@@ -1054,7 +1080,13 @@ def with_lsf(problem: Problem, lsf_sigma_v: Mapping) -> Problem:
         re-interpolated into the per-pixel profiles through the same static tables
         the build used — or a scalar, which broadcasts to every anchor. A group
         built without anchors takes a scalar only.
+    lsf_h3
+        Optional per-instrument Gauss-Hermite skewness (traced values allowed;
+        D38): one value per anchor or a scalar, anchored instruments only —
+        instruments absent from the mapping keep pure Gaussian anchors. Keep
+        ``|h3|`` within the inference bound (0.2); the kernel radius is unchanged.
     """
+    lsf_h3 = lsf_h3 or {}
     groups = []
     for g in problem.groups:
         if g.instrument not in lsf_sigma_v:
@@ -1067,6 +1099,12 @@ def with_lsf(problem: Problem, lsf_sigma_v: Mapping) -> Problem:
                     f"instrument {g.instrument!r} was built without LSF anchors — "
                     "with_lsf takes a scalar width for it."
                 )
+            if g.instrument in lsf_h3:
+                raise ValueError(
+                    f"instrument {g.instrument!r}: lsf_h3 needs LSF anchors — a "
+                    "stationary asymmetric LSF is absorbed by the free spectra "
+                    "(docs/math.md §1.3)."
+                )
             kernel = gaussian_kernel_traced(sigma_px[0], radius)
             groups.append(replace(g, kernel=kernel[None, :]))
             continue
@@ -1078,7 +1116,18 @@ def with_lsf(problem: Problem, lsf_sigma_v: Mapping) -> Problem:
                 f"instrument {g.instrument!r}: {sigma_px.shape[0]} LSF widths for "
                 f"{n_anchor} anchors — supply one per anchor (or one scalar)."
             )
-        bank = jax.vmap(partial(gaussian_kernel_traced, radius=radius))(sigma_px)
+        if g.instrument in lsf_h3:
+            h3 = jnp.atleast_1d(jnp.asarray(lsf_h3[g.instrument]))
+            if h3.shape[0] == 1:
+                h3 = jnp.broadcast_to(h3, (n_anchor,))
+            if h3.shape[0] != n_anchor:
+                raise ValueError(
+                    f"instrument {g.instrument!r}: {h3.shape[0]} h3 values for "
+                    f"{n_anchor} anchors — supply one per anchor (or one scalar)."
+                )
+            bank = jax.vmap(partial(gauss_hermite_kernel_traced, radius=radius))(sigma_px, h3)
+        else:
+            bank = jax.vmap(partial(gaussian_kernel_traced, radius=radius))(sigma_px)
         idx, t = lsf_anchor_tables(g.lsf_anchor_wave, problem.grid.wave)
         profiles = (1.0 - t)[:, None] * bank[idx] + t[:, None] * bank[idx + 1]
         groups.append(replace(g, kernel=profiles))
