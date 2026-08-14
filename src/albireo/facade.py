@@ -89,6 +89,10 @@ _V_BARY_MAX = 30.0
 # here would be double counting, and it is not free: the solver's bandwidth grows with the
 # budget and the solve cost grows with the bandwidth.
 _BUDGET_SLACK = 1.05
+# How much room a `velocities=` declaration leaves the free table to move. A convention,
+# not a measurement: the declared velocities are a starting point, and the fit must be
+# able to travel without hitting the bandwidth guard. Reported as its own budget term.
+_FREE_VELOCITY_HEADROOM = 2.0
 
 
 # -- parameter specifications -------------------------------------------------
@@ -480,22 +484,43 @@ class VelocityBudget:
         return f"velocity budget (km/s)\n{rows}\n    {'total':<34s} {self.total:8.1f}"
 
 
-def _velocity_budget(orbit: Orbit, components, frame: str, explicit: float | None):
-    """Bound the relative velocity from the declared priors, and explain every term."""
-    specs = _k_specs(orbit, sum(isinstance(c, Star) for c in components))
+def _velocity_budget(orbit: Orbit | None, velocities, components, frame: str, explicit):
+    """Bound the relative velocity from the declaration, and explain every term.
+
+    Two sources, one contract: the number has to bound the largest relative velocity
+    between any two model components at any epoch, over everything the *prior* allows —
+    not over what the answer turns out to be.
+
+    From an :class:`Orbit` that is the semi-amplitude priors' own support. From a
+    ``velocities=`` declaration it is the measured table, centred per component (see
+    :func:`_centred_velocities` — the absolute level is unidentified and must not be paid
+    for in bandwidth), with an explicit factor of two of headroom because the table is
+    what the fit is free to move.
+    """
+    n_stellar = sum(isinstance(c, Star) for c in components)
     terms: list[tuple[str, float]] = []
-    reach = sum(spec.upper() for spec in specs)
-    terms.append(("sum of stellar |K| bounds", reach))
 
-    ecc_max = 0.95
-    if isinstance(orbit.ecc, Between):
-        ecc_max = float(np.max(np.asarray(orbit.ecc.hi, dtype=float)))
-    elif isinstance(orbit.ecc, Fixed):
-        ecc_max = float(np.max(np.abs(np.asarray(orbit.ecc.value, dtype=float))))
-    total = reach * (1.0 + ecc_max)
-    terms.append((f"x (1 + e_max = {1.0 + ecc_max:.2f})", total))
+    if orbit is None:
+        centred = _centred_velocities(velocities)
+        reach = float(np.sum(np.max(np.abs(centred), axis=1)))
+        terms.append(("sum of declared per-star |v| excursions", reach))
+        total = reach * _FREE_VELOCITY_HEADROOM
+        terms.append((f"x {_FREE_VELOCITY_HEADROOM:g} headroom (the table is free)", total))
+        ecc_max = 0.0
+    else:
+        specs = _k_specs(orbit, n_stellar)
+        reach = sum(spec.upper() for spec in specs)
+        terms.append(("sum of stellar |K| bounds", reach))
 
-    if orbit.outer is not None:
+        ecc_max = 0.95
+        if isinstance(orbit.ecc, Between):
+            ecc_max = float(np.max(np.asarray(orbit.ecc.hi, dtype=float)))
+        elif isinstance(orbit.ecc, Fixed):
+            ecc_max = float(np.max(np.abs(np.asarray(orbit.ecc.value, dtype=float))))
+        total = reach * (1.0 + ecc_max)
+        terms.append((f"x (1 + e_max = {1.0 + ecc_max:.2f})", total))
+
+    if orbit is not None and orbit.outer is not None:
         outer = sum(spec.upper() for spec in _k_specs(orbit.outer, 2)) * (1.0 + ecc_max)
         total += outer
         terms.append(("outer orbit", outer))
@@ -524,6 +549,90 @@ def _velocity_budget(orbit: Orbit, components, frame: str, explicit: float | Non
         terms.append(("caller's override", float(explicit)))
         total = float(explicit)
     return VelocityBudget(tuple(terms), float(total))
+
+
+def _centred_velocities(velocities) -> np.ndarray:
+    """Declared velocities with each component's own mean removed, ``(n_stellar, n_ep)``.
+
+    Only the centred table is identified, and it is the only part that reaches the model:
+    :func:`albireo.inference.relative_velocities` removes one zero point *per component*,
+    because with no orbit tying the stars together each free spectrum absorbs a constant
+    added to its own shifts. So the declared absolute level — the systemic velocity, +150
+    km/s for the SMC — costs the solver nothing and must not be paid for in bandwidth.
+
+    Centred here in velocity space rather than in pixel space. The model does it exactly,
+    in pixels, where ``xi = artanh(v/c)`` makes the offset a translation; this is only a
+    *bound*, and the two differ by ``O(v^2/c^2)`` — 1e-8 at stellar velocities, against
+    the factor-of-two headroom the budget adds on top.
+    """
+    v = np.asarray(velocities, dtype=float)
+    return v - v.mean(axis=1, keepdims=True)
+
+
+def _place_hyperparameters(dis, priors: dict, init: dict) -> None:
+    """The sites every declaration carries, whichever velocity model it uses.
+
+    Smoothness is always fitted by ML-II: a fixed ``(tau, eta)`` pair is not something any
+    part of this package does on real data, and defensible centres span five orders of
+    magnitude between a sharp-lined and a rotationally broadened star. The nebular
+    amplitudes come along for the same reason they do in
+    :meth:`Fit._velocity_priors` — leaving them out would pin the component static at
+    amplitude 1 without saying so.
+    """
+    ordered = dis.ordered_components
+    centres = np.array([_smoothness_of(c).tau0 for c in ordered], dtype=float)
+    etas = np.array([_smoothness_of(c).eta0 for c in ordered], dtype=float)
+    widths = np.array([_smoothness_of(c).sigma for c in ordered], dtype=float)
+    priors["log_tau"] = dist.Normal(jnp.log(jnp.asarray(centres)), jnp.asarray(widths))
+    priors["log_eta"] = dist.Normal(jnp.log(jnp.asarray(etas)), jnp.asarray(widths))
+    init["log_tau"] = jnp.log(jnp.asarray(centres))
+    init["log_eta"] = jnp.log(jnp.asarray(etas))
+
+    if any(isinstance(c, Nebular) for c in dis.components):
+        n_epochs = dis.dataset.n_epochs
+        priors["log_nebular_amp"] = dist.Normal(jnp.zeros(n_epochs), 0.3).to_event(1)
+        init["log_nebular_amp"] = jnp.zeros(n_epochs)
+
+
+def _check_velocities(dis, stars) -> np.ndarray:
+    """Validate a ``velocities=`` declaration, and refuse the one that cannot work."""
+    v = np.atleast_2d(np.asarray(dis.velocities, dtype=float))
+    want = (len(stars), dis.dataset.n_epochs)
+    if v.shape != want:
+        raise ValueError(
+            f"velocities must have shape {want} — one row per star, one column per epoch, "
+            f"in the dataset's own epoch order; got {v.shape}"
+        )
+    if not np.all(np.isfinite(v)):
+        raise ValueError("velocities must all be finite")
+
+    # The cold start, refused rather than discovered. With every component at the same
+    # velocity at every epoch the two stars are indistinguishable, and the fit does not
+    # merely converge slowly — it lands 122,000 nats worse (D42). A declaration that says
+    # nothing about their separation is that start with extra steps.
+    separation = float(np.max(np.ptp(v, axis=0))) if v.shape[0] > 1 else float(np.ptp(v))
+    if separation <= 0.0:
+        raise ValueError(
+            "these velocities never separate the components: every star has the same "
+            "velocity at every epoch, which is exactly the cold start the free-velocity "
+            "mode is measured to fail from (122,000 nats worse than a warm one, "
+            "docs/design.md D42). Supply the per-epoch velocities you actually measured "
+            "— cross-correlation lags, or line splitting read off the two most separated "
+            "epochs — rather than a placeholder."
+        )
+    widest = max(_coerce_lsf(value, key).max_sigma_kms for key, value in dis.lsf.items())
+    if separation < widest:
+        warnings.warn(
+            f"the declared velocities separate the components by at most "
+            f"{separation:.2f} km/s, which is below the widest LSF sigma "
+            f"({widest:.2f} km/s) — at no epoch are the two resolved. The free-velocity "
+            "fit is warm-started from these, and a warm start inside the unresolved "
+            "regime is close to the cold one that D42 measured failing. Check the sign "
+            "convention and the epoch ordering before trusting the result.",
+            RuntimeWarning,
+            stacklevel=4,
+        )
+    return v
 
 
 def _k_specs(orbit: Orbit, n: int) -> list[Spec]:
@@ -598,7 +707,26 @@ class Disentangler:
         :class:`Nebular`. Order is the order the model uses; the names are how you get at
         the results afterwards.
     orbit
-        An :class:`Orbit`.
+        An :class:`Orbit`. Exactly one of ``orbit`` and ``velocities`` is required.
+    velocities
+        The alternative declaration, for a binary whose orbit is **not known**: measured
+        per-epoch velocities, ``(n_stellar, n_epochs)`` in km/s, from cross-correlation,
+        a shift-and-add pipeline, or line splitting measured by hand. The fit is then the
+        free per-epoch RV table (``docs/math.md`` §7.6) rather than a Keplerian — no
+        orbital elements are sampled, and :meth:`fit` returns a velocity-mode
+        :class:`Fit` whose table you can run a periodogram on.
+
+        This exists because the ordering an unsolved system forces cannot be met the
+        other way round. The free table needs a warm start — a cold one is measured at
+        122,000 nats worse (``docs/design.md`` D42) — but the only warm start the façade
+        used to offer was :meth:`Fit.free_velocities`, which needs a Keplerian fit, which
+        needs a period. For a system with no published period that is a circle, and this
+        breaks it: bring the velocities you have, get the table, get the period, then
+        declare an :class:`Orbit`.
+
+        These are a *starting point*, not a constraint: the per-component zero point is
+        unidentified either way, so what they have to be right about is the epoch-to-epoch
+        *pattern*, not the absolute scale.
     lsf
         Per-instrument :class:`LSF`, or a bare sigma in km/s. Every instrument in the
         dataset must appear.
@@ -622,12 +750,24 @@ class Disentangler:
     ...     lsf={"DEMO": 6.5},
     ... )
     >>> fit = dis.fit()  # doctest: +SKIP
+
+    With no known orbit, declare what you measured instead:
+
+    >>> dis = ab.Disentangler(  # doctest: +SKIP
+    ...     dataset,
+    ...     components=[ab.Star("A", light=0.6), ab.Star("B", light=0.4)],
+    ...     velocities=ccf_velocities,   # (2, n_epochs) km/s
+    ...     lsf={"GIRAFFE": ab.LSF.from_resolution(6300)},
+    ... )
+    >>> table = dis.fit()               # a free-velocity Fit  # doctest: +SKIP
+    >>> table.velocities(), table.velocity_errors()  # doctest: +SKIP
     """
 
     dataset: Dataset
     components: Sequence[Component]
-    orbit: Orbit
-    lsf: Mapping[str, Any]
+    orbit: Orbit | None = None
+    velocities: Any = None
+    lsf: Mapping[str, Any] = field(default_factory=dict)
     dv_kms: float | None = None
     velocity_budget_kms: float | None = None
     ecc_max: float = 0.95
@@ -665,7 +805,16 @@ class Disentangler:
                 "fractions the likelihood sees only l_i * d_i, so every recovered depth "
                 "scales as 1/l_i."
             )
-        if self.orbit.outer is not None:
+        if (self.orbit is None) == (self.velocities is None):
+            raise ValueError(
+                "declare exactly one of orbit= (a Keplerian to fit) and velocities= (the "
+                "per-epoch velocities you measured, for a system whose orbit is not known "
+                "yet). They are alternatives: a free velocity table replaces the orbit "
+                "entirely, and the model rejects Keplerian sites alongside it."
+            )
+        if self.velocities is not None:
+            object.__setattr__(self, "velocities", _check_velocities(self, stars))
+        if self.orbit is not None and self.orbit.outer is not None:
             raise NotImplementedError(
                 "hierarchical triples are not in the façade's v1 vocabulary. The model "
                 "supports them (the period_out/t_conj_out/k_out sites), so build one "
@@ -734,6 +883,8 @@ class Disentangler:
         declaration is decoration and the fit returns an eccentricity above it.
         """
         declared = self.ecc_max
+        if self.orbit is None:  # a free-velocity declaration has no eccentricity at all
+            return float(declared)
         if isinstance(self.orbit.ecc, Between):
             declared = min(declared, float(np.asarray(self.orbit.ecc.hi, dtype=float)))
         return float(declared)
@@ -790,7 +941,11 @@ class Disentangler:
 
     def _make_budget(self) -> VelocityBudget:
         return _velocity_budget(
-            self.orbit, self.components, self.dataset.frame, self.velocity_budget_kms
+            self.orbit,
+            self.velocities,
+            self.components,
+            self.dataset.frame,
+            self.velocity_budget_kms,
         )
 
     def _widest_lsf(self) -> float:
@@ -896,6 +1051,19 @@ class Disentangler:
                 priors[name] = distribution
                 init[name] = spec.start()
 
+        if self.orbit is None:
+            # No orbital sites at all: `velocity` replaces them, and the model refuses
+            # the two together. The prior is centred on zero rather than on the declared
+            # table because the absolute level is unidentified either way — what the
+            # declaration supplies is the *start*, which is the part that matters.
+            sigma = self.velocity_budget.total / 2.0
+            priors["velocity"] = (
+                dist.Normal(0.0, sigma).expand(list(self.velocities.shape)).to_event(2)
+            )
+            init["velocity"] = jnp.asarray(self.velocities)
+            _place_hyperparameters(self, priors, init)
+            return priors, init, fixed
+
         place("period", _coerce_spec(self.orbit.period, "orbit.period"))
         if self.orbit.t_conj == "scan":
             # Replaced by the scan's answer in fit(); the site is always sampled, so a
@@ -941,21 +1109,7 @@ class Disentangler:
             for name, spec in _ecc_sites(self.orbit.outer, self.ecc_max, suffix="_out"):
                 place(name, spec)
 
-        # Smoothness is always fitted by ML-II: a fixed (tau, eta) pair is not something
-        # any part of this package does on real data, and defensible centres span five
-        # orders of magnitude between a sharp-lined and a rotationally broadened star.
-        centres = np.array([_smoothness_of(c).tau0 for c in self.ordered_components], dtype=float)
-        etas = np.array([_smoothness_of(c).eta0 for c in self.ordered_components], dtype=float)
-        widths = np.array([_smoothness_of(c).sigma for c in self.ordered_components], dtype=float)
-        priors["log_tau"] = dist.Normal(jnp.log(jnp.asarray(centres)), jnp.asarray(widths))
-        priors["log_eta"] = dist.Normal(jnp.log(jnp.asarray(etas)), jnp.asarray(widths))
-        init["log_tau"] = jnp.log(jnp.asarray(centres))
-        init["log_eta"] = jnp.log(jnp.asarray(etas))
-
-        if any(isinstance(c, Nebular) for c in self.components):
-            n_epochs = self.dataset.n_epochs
-            priors["log_nebular_amp"] = dist.Normal(jnp.zeros(n_epochs), 0.3).to_event(1)
-            init["log_nebular_amp"] = jnp.zeros(n_epochs)
+        _place_hyperparameters(self, priors, init)
         return priors, init, fixed
 
     # -- inspection -----------------------------------------------------------
@@ -1028,6 +1182,18 @@ class Disentangler:
             f"  light fractions    {lights}\n"
             "      only l_i * d_i is observable, so every recovered depth scales as 1/l_i."
         )
+        if self.orbit is None:
+            centred = _centred_velocities(self.velocities)
+            rows.append(
+                "  declared velocities  "
+                + "  ".join(
+                    f"{s.name}: +/-{float(np.max(np.abs(row))):.1f} km/s"
+                    for s, row in zip(self.stars, centred, strict=True)
+                )
+                + "\n      a warm start, not a constraint. The per-component zero point is "
+                "unidentified,\n      so what these have to be right about is the "
+                "epoch-to-epoch pattern, not the level."
+            )
         nebular = next((c for c in self.components if isinstance(c, Nebular)), None)
         if nebular is not None:
             rows.append(
@@ -1056,6 +1222,13 @@ class Disentangler:
         the ML-II step. The fitted hyperparameters come back on :attr:`Fit.hyper`, keyed
         by component name, and :meth:`Fit.sample` freezes them.
 
+        On a ``velocities=`` declaration there is no orbit and therefore no phase to
+        locate: the scan is skipped and this fits the free per-epoch table directly,
+        warm-started from the velocities you declared, returning a :class:`Fit` in
+        ``"velocity"`` mode. Read it with :meth:`Fit.velocities` and
+        :meth:`Fit.velocity_errors`, and take the period it implies into a second
+        declaration carrying an :class:`Orbit`.
+
         Parameters
         ----------
         max_steps
@@ -1074,13 +1247,17 @@ class Disentangler:
         """
         priors, init = dict(self.priors), dict(self.init)
         scan = None
-        self._warn_if_the_period_prior_is_a_search()
-        if self.orbit.t_conj == "scan":
-            scan = self._scan_phase(init)
-            init["t_conj"] = scan.best
-            priors["t_conj"] = dist.Uniform(
-                scan.best - 0.5 * scan.period, scan.best + 0.5 * scan.period
-            )
+        # A free-velocity declaration has no phase to locate — there is no orbit, which is
+        # the whole reason for that mode — so the scan and the period warning are skipped
+        # rather than made to cope with a missing Orbit.
+        if self.orbit is not None:
+            self._warn_if_the_period_prior_is_a_search()
+            if self.orbit.t_conj == "scan":
+                scan = self._scan_phase(init)
+                init["t_conj"] = scan.best
+                priors["t_conj"] = dist.Uniform(
+                    scan.best - 0.5 * scan.period, scan.best + 0.5 * scan.period
+                )
         if tol is None:
             # The potential's scale grows with the number of good pixels, so a fixed
             # threshold is unreachable on a large dataset however good the fit is.
@@ -1096,7 +1273,14 @@ class Disentangler:
             model_args=(self.model.problem,),
         )
         hyper = _hyper_of(result.params, self.component_names)
-        return Fit(dis=self, result=result, hyper=hyper, phase_scan=scan, priors_used=priors)
+        return Fit(
+            dis=self,
+            result=result,
+            hyper=hyper,
+            phase_scan=scan,
+            mode="keplerian" if self.orbit is not None else "velocity",
+            priors_used=priors,
+        )
 
     def _warn_if_the_period_prior_is_a_search(self) -> None:
         """A phase scan resolves phase at *one* period. It is not a period search.
@@ -1106,6 +1290,8 @@ class Disentangler:
         cross the same multimodal structure the scan exists to avoid. There is no threshold
         at which this becomes an error — it degrades — so it warns and names the fix.
         """
+        if self.orbit is None:  # no period prior at all — nothing here can be a search
+            return
         spec = _coerce_spec(self.orbit.period, "orbit.period")
         if not isinstance(spec, Between):
             return
@@ -1140,9 +1326,10 @@ class Disentangler:
 
     def _scan_orbit(self) -> dict:
         """The fixed SB1 orbit the scan holds, from the declared specs."""
+        orbit = self._require_orbit()
         missing = []
         for name in ("period", "t_conj"):
-            declared = getattr(self.orbit, name)
+            declared = getattr(orbit, name)
             # t_conj defaults to the string "scan", which is a phase search rather than a
             # value, and a scan holds the primary's orbit fixed by definition.
             if isinstance(declared, str) or not isinstance(_coerce_spec(declared, name), Fixed):
@@ -1153,22 +1340,42 @@ class Disentangler:
                 "Fixed(...). The scan asks 'is there a companion at this K2', which is only "
                 "meaningful at one orbit; fit the SB1 first, then scan at its solution."
             )
-        orbit = {
-            "period": float(np.asarray(_coerce_spec(self.orbit.period, "period").start())),
-            "t_conj": float(np.asarray(_coerce_spec(self.orbit.t_conj, "t_conj").start())),
+        values = {
+            "period": float(np.asarray(_coerce_spec(orbit.period, "period").start())),
+            "t_conj": float(np.asarray(_coerce_spec(orbit.t_conj, "t_conj").start())),
         }
-        for name, spec in _ecc_sites(self.orbit, self.ecc_max):
+        for name, spec in _ecc_sites(orbit, self.ecc_max):
             if not isinstance(spec, Fixed):
                 raise ValueError(
                     "a K2 scan needs a fixed eccentricity: pass ecc=ab.Fixed(e) with "
                     "omega=ab.Fixed(w), or ecc=ab.Fixed(0.0) for a circular orbit."
                 )
-            orbit[name] = float(np.asarray(spec.start()))
-        return orbit
+            values[name] = float(np.asarray(spec.start()))
+        return values
+
+    def _require_orbit(self) -> Orbit:
+        """The declared :class:`Orbit`, or the refusal — for the paths that need one.
+
+        Shared by the scan entry points so the message is written once, and so the
+        narrowing is visible to a type checker rather than implied by call order.
+        """
+        if self.orbit is None:
+            raise ValueError(
+                "a K2 scan searches over a companion's semi-amplitude within a *known* "
+                "SB1 orbit, so it needs orbit=Orbit(period=..., k=(Fixed(k1), "
+                "Scanned(grid))). This declaration supplied velocities= instead, which "
+                "replaces the orbit rather than constraining it. Fit the free table "
+                "first, get a period from it, then declare the orbit and scan."
+            )
+        return self.orbit
 
     def _scan_k(self):
-        """``(k1_spec, k2_spec)`` from a two-star declaration, checked for shape."""
-        specs = _k_specs(self.orbit, self.n_stellar)
+        """``(k1_spec, k2_spec)`` from a two-star declaration, checked for shape.
+
+        The gate for both :meth:`scan` and :meth:`detection_limit`, which is why the
+        no-orbit refusal is reached here rather than in each of them.
+        """
+        specs = _k_specs(self._require_orbit(), self.n_stellar)
         if self.n_stellar != 2:
             raise ValueError(
                 f"a K2 scan is the two-component workflow; this declaration has "
@@ -1575,6 +1782,11 @@ class Fit:
         cold start does not work — measured at 122,000 nats worse than the warm-started
         answer (``docs/design.md`` D42). Warm-starting is therefore not a convenience
         here; it is the only mode that has been shown to succeed.
+
+        This is the entry point when you *have* a Keplerian and want the table as a model
+        check. When you do not — an unsolved system, where the table is what produces the
+        period in the first place — declare ``Disentangler(velocities=...)`` and call
+        :meth:`Disentangler.fit`, which warm-starts from measured velocities instead.
         """
         priors, init = self._velocity_priors(sigma_kms)
         # Whatever the declaration fixed about the *orbit* is meaningless now, and the

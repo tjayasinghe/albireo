@@ -41,6 +41,40 @@ A fifth thing is structural rather than derived: a spec such as `Between(5.5, 6.
 both its prior *and* its starting value, so `priors` and `init` cannot drift apart — in the
 low-level path they are two dicts written twice with an assertion between them.
 
+## When there is no orbit to declare
+
+Not every binary has a published period, and for the ones that matter most it is the point
+that there isn't — BLOeM's 59 double-lined systems have no orbital solutions at all. Declare
+the velocities you measured instead:
+
+```python
+dis = ab.Disentangler(
+    dataset,
+    components=[ab.Star("A", light=0.6), ab.Star("B", light=0.4)],
+    velocities=ccf_velocities,        # (n_stellar, n_epochs) km/s — instead of orbit=
+    lsf={"GIRAFFE": ab.LSF.from_resolution(6300)},
+)
+table = dis.fit()                     # a velocity-mode Fit; no orbital sites are sampled
+rv, err = table.velocities(), table.velocity_errors()
+```
+
+Exactly one of `orbit=` and `velocities=` is required. This exists because the ordering an
+unsolved system forces cannot be met the other way round: the free per-epoch table
+(`docs/math.md` §7.6) is what *produces* the period, but it needs a warm start — a cold one
+is 122,000 nats worse — and the only warm start on offer used to be `Fit.free_velocities()`,
+which needs a Keplerian fit, which needs a period.
+
+Three things to know about the declaration:
+
+- The velocities are a **starting point, not a constraint**. The per-component zero point
+  stays unidentified, so what they must be right about is the epoch-to-epoch *pattern*, not
+  the level — a systemic +150 km/s changes neither the answer nor the solver's bandwidth,
+  because the budget is derived from the centred table.
+- The one failure mode is **refused rather than discovered**. A declaration whose components
+  never separate *is* the cold start, and it raises; velocities that never resolve the pair
+  beyond the LSF width warn.
+- `scan()` and `detection_limit()` need a known SB1 orbit and say so.
+
 ## Where it refuses to be convenient
 
 Each of these is a place where a default would be a scientific claim.

@@ -231,11 +231,18 @@ Its window was advertised as sitting "between Hδ and Hγ without either core" a
 4000–4300 Å contains Hδ at 4101.7, and `nebular_windows` puts a ±300 km/s window at
 4099.7–4107.9 inside it — so the script's stated reason for not modelling the nebula was
 false. The window is now 4120–4300 Å, which contains no nebular line at all, and the docstring
-says why the blue edge is the load-bearing number. And the ordering the survey forces is worth
-recording: with no published period there is nothing to warm-start a Keplerian from, so the
-free RV table (item 3) has to come *first* and supply the periodogram — but
-`Fit.free_velocities()` warm-starts from a Keplerian fit, so for an unsolved system the expert
-path is the one that works. That is a real gap in the façade, not a documentation problem.
+says why the blue edge is the load-bearing number. And the ordering the survey forces turned
+out to be a real gap in the façade rather than a documentation problem: with no published
+period there is nothing to warm-start a Keplerian from, so the free RV table (item 3) has to
+come *first* and supply the periodogram — but `Fit.free_velocities()` warm-starts from a
+Keplerian fit, which needs a period. That circle is now broken. `Disentangler(velocities=...)`
+declares the velocities you measured — cross-correlation lags, line splitting — in place of an
+`Orbit`, and `fit()` returns the free table directly. The declaration refuses a cold table
+outright and warns when the components are never resolved, so the one failure mode the mode
+has stays loud. Measured: warm-started from velocities carrying 3 km/s of scatter *and* a
+150 km/s systemic offset the fit cannot see, the table comes back at **0.096 / 0.070 km/s** —
+the same as D42's Keplerian-warm-started 0.098 / 0.066 — with the systemic offset absent from
+both the answer and the solver's bandwidth.
 
 ### 5. The `Disentangler` façade — **done** (D46)
 

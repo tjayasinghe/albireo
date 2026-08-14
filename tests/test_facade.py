@@ -498,3 +498,132 @@ def test_sampling_freezes_the_hyperparameters_and_says_so(dataset, truth):
     assert np.isclose(post.star("secondary")["k"], truth["k"][1], atol=0.5)
     assert "plug-in approximation" in post.summary()
     assert "Assumed, not measured" in post.summary()
+
+
+# -- declaring measured velocities instead of an orbit ------------------------
+#
+# The ordering an unsolved system forces: the free table is what produces the period, so
+# it cannot require a period to reach. These cover the declaration, the budget it derives
+# from a source with no `k` priors in it, and the refusals that keep the mode honest.
+
+
+def _measured(truth, *, scatter=0.0, systemic=0.0, seed=3):
+    """Velocities as an external pipeline would report them: noisy, and zero-pointed anywhere."""
+    v = np.asarray(truth["velocities"], dtype=float)
+    if scatter:
+        v = v + np.random.default_rng(seed).normal(0.0, scatter, v.shape)
+    return v + systemic
+
+
+def test_exactly_one_of_orbit_and_velocities(dataset, truth):
+    with pytest.raises(ValueError, match="exactly one of orbit"):
+        ab.Disentangler(dataset, components=_stars(), lsf={"DEMO": 6.5})
+    with pytest.raises(ValueError, match="exactly one of orbit"):
+        _dis(dataset, velocities=_measured(truth))
+
+
+def test_declared_velocities_are_checked_for_shape_and_finiteness(dataset, truth):
+    with pytest.raises(ValueError, match=r"velocities must have shape \(2, 12\)"):
+        _dis(dataset, orbit=None, velocities=np.zeros((2, 3)))
+    with pytest.raises(ValueError, match="must all be finite"):
+        _dis(dataset, orbit=None, velocities=np.full((2, dataset.n_epochs), np.nan))
+
+
+def test_a_cold_declaration_is_refused_rather_than_discovered(dataset):
+    """Equal velocities at every epoch *is* the cold start D42 measured failing."""
+    with pytest.raises(ValueError, match="never separate the components"):
+        _dis(dataset, orbit=None, velocities=np.zeros((2, dataset.n_epochs)))
+
+
+def test_velocities_inside_the_lsf_width_warn(dataset):
+    """A warm start in the unresolved regime is close to the cold one."""
+    n = dataset.n_epochs
+    barely = np.stack([np.zeros(n), np.linspace(0.0, 1.0, n)])
+    with pytest.warns(RuntimeWarning, match="below the widest LSF sigma"):
+        _dis(dataset, orbit=None, velocities=barely)
+
+
+def test_the_budget_comes_from_the_velocities_when_there_is_no_orbit(dataset, truth):
+    """No `k` priors to read, so the bound is the declared table — centred, with headroom."""
+    v = _measured(truth, systemic=150.0)
+    dis = _dis(dataset, orbit=None, velocities=v)
+    centred = v - v.mean(axis=1, keepdims=True)
+    reach = float(np.sum(np.max(np.abs(centred), axis=1)))
+
+    names = [name for name, _ in dis.velocity_budget.terms]
+    assert any("declared per-star" in name for name in names)
+    assert not any("|K|" in name for name in names)
+    assert dis.velocity_budget.terms[0][1] == pytest.approx(reach)
+    assert dis.velocity_budget.total > reach
+
+    # The systemic offset is unidentified and removed before the model sees it, so it must
+    # not be paid for in bandwidth: +150 km/s on every velocity changes nothing.
+    plain = _dis(dataset, orbit=None, velocities=_measured(truth))
+    assert dis.velocity_budget.total == pytest.approx(plain.velocity_budget.total)
+
+
+def test_a_velocity_declaration_samples_no_orbital_sites(dataset, truth):
+    dis = _dis(dataset, orbit=None, velocities=_measured(truth))
+    assert set(dis.priors) == {"velocity", "log_tau", "log_eta"}
+    assert dis.fixed == {}
+    assert np.allclose(np.asarray(dis.init["velocity"]), _measured(truth))
+    assert "velocity" in dis.explain()
+    assert "declared velocities" in dis.assumptions()
+
+
+def test_a_velocity_declaration_still_carries_the_nebular_amplitudes(dataset, truth):
+    """Dropping them would pin the component static at amplitude 1 without saying so."""
+    epochs = [
+        ab.EpochData(
+            wave=e.wave,
+            flux=e.flux,
+            ivar=e.ivar,
+            bjd=e.bjd,
+            v_bary=e.v_bary,
+            instrument=e.instrument,
+            medium="air",
+        )
+        for e in dataset
+    ]
+    declared = ab.Dataset(tuple(epochs), frame=dataset.frame)
+    dis = ab.Disentangler(
+        declared,
+        components=[*_stars(), ab.Nebular(v_kms=0.0)],
+        velocities=_measured(truth),
+        lsf={"DEMO": 6.5},
+    )
+    assert "log_nebular_amp" in dis.priors
+    assert dis.priors["log_tau"].batch_shape[-1] == 3
+
+
+def test_a_scan_needs_an_orbit_and_says_which(dataset, truth):
+    dis = _dis(dataset, orbit=None, velocities=_measured(truth))
+    with pytest.raises(ValueError, match="needs orbit="):
+        dis.scan()
+    with pytest.raises(ValueError, match="needs orbit="):
+        dis.detection_limit()
+
+
+@pytest.mark.slow
+def test_measured_velocities_warm_start_the_table_as_well_as_a_keplerian(dataset, truth):
+    """The point of the mode: no period is needed, and the answer is not worse for it.
+
+    The declared velocities carry 3 km/s of scatter *and* a 150 km/s systemic offset the
+    fit cannot see — which is what an external pipeline actually hands you — and the
+    recovered table still has to land on the injected one and keep its zero point out of
+    the answer.
+    """
+    dis = _dis(dataset, orbit=None, velocities=_measured(truth, scatter=3.0, systemic=150.0))
+    fit = dis.fit(max_steps=120)
+    assert fit.mode == "velocity"
+
+    got = fit.velocities()
+    want = np.asarray(ab.relative_velocities(np.asarray(truth["velocities"]), dis.grid))
+    assert got.shape == want.shape
+    rms = np.sqrt(np.mean((got - want) ** 2, axis=1))
+    assert np.all(rms < 1.0), f"per-epoch RV rms {rms} km/s"
+    # The systemic offset must not reach the answer: the spans are what is identified.
+    assert np.allclose(np.ptp(got, axis=1), np.ptp(want, axis=1), rtol=0.05)
+    assert fit.velocity_errors().shape == got.shape
+    with pytest.raises(ValueError, match="no orbital elements"):
+        fit.orbit()

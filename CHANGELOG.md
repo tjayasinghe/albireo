@@ -44,6 +44,24 @@ This file records *what changed*. The reasons live elsewhere and are worth follo
   twelve spread over phase lower the RMS to 99.3 km/s and 33% and are worth 375
   (`examples/08_forecast.py`). See `docs/design.md` D47, `docs/math.md` §5.5 and
   `docs/api/forecast.md`.
+- **`Disentangler(velocities=...)` — declare the velocities you measured when there is no
+  orbit to declare.** Exactly one of `orbit=` and `velocities=` is now required. With
+  `velocities=` (an `(n_stellar, n_epochs)` km/s table from cross-correlation, shift-and-add,
+  or line splitting measured by hand) no orbital sites are sampled at all, and `fit()`
+  returns the free per-epoch RV table directly.
+  This closes a circle the façade could not previously escape: the table needs a warm start,
+  a cold one is 122,000 nats worse (D42), and the only warm start on offer was
+  `Fit.free_velocities()` — which needs a Keplerian fit, which needs a period. For an
+  unsolved system, the table is what *produces* the period.
+  The declared velocities are a starting point, not a constraint: the per-component zero
+  point stays unidentified, so a systemic offset changes neither the answer nor the solver's
+  bandwidth — the velocity budget is derived from the *centred* table, itemized in
+  `explain()`. The mode's one failure is refused rather than discovered: a declaration whose
+  components never separate raises, and one that never resolves them beyond the LSF width
+  warns. `scan()` and `detection_limit()` refuse without an orbit.
+  Measured: warm-started from velocities carrying 3 km/s of scatter *and* a 150 km/s systemic
+  offset, the recovered table lands at 0.096 / 0.070 km/s — the same as D42's
+  Keplerian-warm-started 0.098 / 0.066. See `docs/design.md` D48.
 - **A tutorial that takes a BLOeM SB2 from a survey identifier to disentangled spectra**
   (`docs/tutorials/bloem-sb2.md`) — the second gap D45 left open. It covers the ordering the
   survey forces and that none of the other tutorials needs: with no published period there

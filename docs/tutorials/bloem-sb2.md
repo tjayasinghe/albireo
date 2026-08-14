@@ -157,40 +157,36 @@ worse than no phase at all.
 
 So run the free per-epoch RV table first — the mode
 [`examples/09_rv_table.py`](https://github.com/tjayasinghe/albireo/blob/main/examples/09_rv_table.py)
-is built around — and get the period from *it*:
+is built around — and get the period from *it*. Declare the velocities you measured
+instead of an orbit:
 
 ```python
-import jax.numpy as jnp, numpyro.distributions as dist, numpy as np
-
-model = ab.MarginalOrbitModel(
-    grid, ds,
-    light_fractions=(0.6, 0.4),
-    lsf_sigma_v={"GIRAFFE": lsf.sigma_kms},
-    v_rel_max_kms=400.0,
+dis = ab.Disentangler(
+    ds,
+    components=[ab.Star("A", light=0.6), ab.Star("B", light=0.4)],
+    velocities=v_measured,          # (2, n_epochs) km/s — no orbit, no period
+    lsf={"GIRAFFE": lsf},
+    dv_kms=8.0,
 )
-n = ds.n_epochs
-fit = ab.run_map(
-    model.model({
-        "velocity": dist.Normal(0.0, 200.0).expand([2, n]).to_event(2),
-        "log_tau": dist.Normal(5.7, 1.5).expand([2]).to_event(1),
-        "log_eta": dist.Normal(1.6, 1.0).expand([2]).to_event(1),
-    }),
-    init={"velocity": jnp.asarray(v_start), "log_tau": jnp.full(2, 5.7),
-          "log_eta": jnp.full(2, 1.6)},
-    model_args=(model.problem,),
-)
-rv = np.asarray(ab.relative_velocities(fit.params["velocity"], grid))
+table = dis.fit()
+rv, err = table.velocities(), table.velocity_errors()
 ```
 
+`v_measured` is whatever you have: cross-correlation lags, a shift-and-add pipeline's
+output, or the He I 4144/4169 splitting read off the two most separated epochs. It is a
+**starting point, not a constraint** — the per-component zero point is unidentified, so
+what it has to be right about is the epoch-to-epoch *pattern*, not the level. A systemic
++150 km/s on every entry changes neither the answer nor the solver's bandwidth.
+
 !!! danger "A cold start does not work, and that is measured"
-    `v_start` may not be zeros. With every epoch initialized at the same velocity the two
-    components are indistinguishable, and the fit fails — measured at **122,000 nats worse**
-    than the warm-started answer on the D42 fixture. What makes the mode usable is that the
-    failure is loud rather than silent, so *check the potential*. Start from whatever
-    external velocities you have: cross-correlation lags, or the He I 4144/4169 splitting
-    measured by hand on the two most separated epochs. This is also the one place the
-    façade cannot help — `Fit.free_velocities()` warm-starts from a Keplerian fit, so for
-    an unsolved system the expert path above is the one that works.
+    `v_measured` may not be a placeholder. With every component at the same velocity at
+    every epoch the two stars are indistinguishable, and the fit does not converge slowly
+    — it lands **122,000 nats worse** than a warm start (D42). The declaration refuses
+    that outright, and warns if the velocities you gave never separate the components by
+    more than the LSF width. What makes the mode usable is that its failure is loud.
+
+Then run a periodogram on `rv` outside albireo (this package deliberately does not ship
+one), and take the period into the `Orbit` declaration of §5.
 
 Two properties of the resulting table are counter-intuitive and will mislead you if you
 have not read [§7.6 of the math](../math.md#76-free-per-epoch-velocities-the-rv-table):
@@ -202,11 +198,9 @@ have not read [§7.6 of the math](../math.md#76-free-per-epoch-velocities-the-rv
 * **Do not read the raw Laplace diagonal as an error bar.** Each zero point is an exactly
   flat direction, so its posterior width is the prior's and every epoch inherits it: on the
   D42 fixture the raw bars came out at `120/√10 = 37.947` km/s on *every* entry against a
-  real 0.059. Use `ab.relative_velocity_errors(cov, fit.unconstrained)`, or posterior
-  samples of the `velocity_rel` deterministic.
-
-Then run a periodogram on `rv` outside albireo (this package deliberately does not ship
-one), and take the period into a Keplerian fit.
+  real 0.059. `table.velocity_errors()` projects them out for you; at the expert level it
+  is `ab.relative_velocity_errors(cov, fit.unconstrained)`, or posterior samples of the
+  `velocity_rel` deterministic.
 
 ## 5. The Keplerian, checked against the table
 
