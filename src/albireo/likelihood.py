@@ -196,7 +196,9 @@ def marginal_loglikelihood(
     problem
         Output of :func:`albireo.forward.build_problem`.
     prior
-        Spectral prior with one (tau, eta) pair per component (including telluric).
+        Spectral prior with one (tau, eta) pair per component — including the
+        telluric and nebular components when they are enabled, in that trailing
+        order. Per-pixel profiles, if present, must match the model grid.
     block_size
         Solver block size; default = the required half-bandwidth.
     half_bandwidth
@@ -223,9 +225,20 @@ def marginal_loglikelihood(
     """
     n_comp, n_pix = problem.n_components, problem.grid.n
     if prior.n_components != n_comp:
+        extra = [
+            n for n, on in (("telluric", problem.telluric), ("nebular", problem.nebular)) if on
+        ]
         raise ValueError(
-            f"prior has {prior.n_components} components, problem has {n_comp} "
-            "(remember the telluric component if enabled)"
+            f"prior has {prior.n_components} components, problem has {n_comp}"
+            + (f" (including the {' and '.join(extra)} component(s))" if extra else "")
+            + " — one (tau, eta) pair per model component, in the order stellar,"
+            " telluric, nebular"
+        )
+    if prior.n_pixels is not None and prior.n_pixels != n_pix:
+        raise ValueError(
+            f"prior profiles cover {prior.n_pixels} pixels, the model grid has {n_pix}. "
+            "Per-pixel profiles are tied to the grid they were built on — rebuild with "
+            "albireo.priors.window_profile(grid.wave, ...)."
         )
     if assembly is None:
         assembly = "band"

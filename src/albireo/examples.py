@@ -157,7 +157,7 @@ def _read_npz(path: Path):
                     instrument=str(meta["instrument"]),
                 )
             )
-        dataset = Dataset(epochs, frame=header["frame"])
+        dataset = Dataset(tuple(epochs), frame=header["frame"])
 
         truth = None
         if header.get("has_truth"):

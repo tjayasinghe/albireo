@@ -1335,3 +1335,243 @@ time-variable component this static-spectrum model cannot express — and the li
 analysis's own systematic too), and the published CCF blending itself, which
 measures velocities on composite line profiles this model separates. The
 instrumental-systematics campaign on this dataset is complete.
+
+
+---
+
+## D40 — the nebular component, and per-pixel prior strengths (2026-08-13)
+
+The first Tier-2 roadmap item. Everything here is from `tests/test_nebular.py` and
+`examples/04_nebular.py`; the configuration is one SB2 in an H II region — 12 epochs,
+SNR 220, 540 model pixels over 4838-4886 A, K = (58, 41) km/s, light fractions
+(0.7, 0.3), both stars carrying a broad Hbeta absorption (true composite depth -0.506,
+EW 1.911 A), and a static nebular Hbeta emission line of peak 0.45 whose amplitude
+varies +-30% per epoch with a factor of ~2 between the best and worst night.
+
+### Exactness
+
+| Check | Result |
+|---|---|
+| forward model vs. the simulator's injection, barycentric **and** topocentric | atol **1e-12** |
+| `with_velocities` + `with_light_fractions` vs. a fresh `build_problem` | rtol **1e-14** (the nebular and telluric columns are carried, not rebuilt) |
+| `with_nebular_amplitudes` vs. a fresh `build_problem` | bit-identical |
+| band assembly vs. the matrix-free operator, nebular column + window profile | `validate=True`, rel err < 1e-10 |
+| band vs. probe assembly, same configuration | log-likelihood rtol **1e-11**, spectra atol 1e-9 |
+| per-pixel prior `apply` / `dense` / `prior_logdet` vs. dense NumPy | rtol **1e-12 / 1e-10** |
+| uniform profile vs. the unprofiled prior | rtol 1e-14 (`apply`, `dense`, `prior_logdet`) |
+| d(log L)/d(log_nebular_amp) vs. central differences | < 1e-4 relative; the gradient sums to zero, as centering requires |
+
+The determinant recursion is the one that could have gone wrong quietly: `prior_logdet`
+is an O(P) scalar Cholesky over the pentadiagonal prior, and generalizing `tau` and
+`eta` to per-pixel changes every one of its three diagonals. It is checked against
+`slogdet` of the dense construction with *random* profiles spanning 0.2-40 in curvature
+and 0.1-1e4 in ridge, not against a uniform special case.
+
+### What the contamination costs the spectra (orbit held at truth)
+
+Two disentanglings of the same data with identical stellar priors, differing only in
+whether the nebular component exists. The orbit is fixed at the injected values, so this
+isolates the spectral claim.
+
+| | truth | no nebular component | **with the component** |
+|---|---|---|---|
+| Hbeta core depth (light-weighted composite) | -0.506 | -0.375 (**26% shallower**) | **-0.508** |
+| mean core error | 0 | **+0.154** | **+0.0015** |
+| core RMS error | 0 | 0.155 | **0.0057** |
+| Hbeta equivalent width [A] | 1.911 | 1.690 (**-11.5%**) | **1.908 (-0.14%)** |
+| marginal log-likelihood | — | reference | **+81,424 nats** |
+
+Both log-likelihoods are marginal, with the component spectra integrated out and the
+Occam terms included, so their difference is a Bayes factor rather than a fit-quality
+score: the extra component *costs* likelihood unless coherent signal pays
+for it, and here it is paid 8.1e4 times over.
+
+**Equivalent width is the number that matters**, because equivalent width is what
+reaches the atmosphere code. An 11.5% error in a Balmer EW is a large error in log g,
+it is systematic rather than random, and nothing in the current literature propagates
+it — the disentangled spectra arrive at the next stage of the pipeline without an
+uncertainty at all (roadmap.md, "where albireo sits").
+
+`examples/04_nebular.py` adds the third treatment the literature actually uses,
+**masking** the contaminated pixels (`ivar = 0` over +-150 km/s). It is honest and it is
+not free: with the core deleted there is nothing behind those pixels but the prior, so
+the composite comes back flat there and the product is incomplete exactly where a Balmer
+gravity diagnostic is read. The single most useful figure on this page is that
+three-way comparison, and it costs 9 seconds to produce.
+
+### What the contamination costs the *orbit* (joint MAP, cold start)
+
+The sharper result, and the one that was not expected going in. Same data, same priors,
+same starting point, 300 L-BFGS steps of ML-II MAP over the orbit and the
+hyperparameters (plus the 12 log-amplitudes when the component exists).
+
+| | truth | nebular-blind fit | **with the component** |
+|---|---|---|---|
+| K<sub>1</sub> [km/s] | 58.0 | 57.38 (-1.1%) | **57.91 (-0.15%)** |
+| K<sub>2</sub> [km/s] | 41.0 | **16.77 (-59.1%)** | **40.88 (-0.29%)** |
+| period [d] | 5.70000 | **5.87115 (+0.171)** | **5.69986 (-0.00014)** |
+| eccentricity | 0 | **0.950 — the solver's clip** | **0.0022** |
+| potential at the end | — | +30,629 | **-19,220** |
+| gradient norm at the end | — | 2.9e4 (still wandering) | 8.3 (settled) |
+| wall time | — | 177 s | 49 s |
+
+A static line is a component with K = 0, so a model with nowhere else to put it uses
+whichever stellar component can be made to move least: the secondary's semi-amplitude
+collapses by 59%, and the period and eccentricity go with it — a circular orbit reported
+at *e* = 0.95, which is the eccentricity clip, not a fit. Only K<sub>1</sub> survives,
+because 70% of the light pins it. The blind fit is also still wandering at 300 steps
+where the modelled one has settled, and takes 3.6x the wall time to do it. (Neither sets
+`MAPResult.converged`: that flag tests an absolute gradient-norm tolerance which, as D30
+recorded, is unreachable at these pixel counts. The three orders of magnitude between
+them is the readable statement.)
+
+The per-epoch amplitudes come back with **correlation 0.99930** against the injected
+ones and **0.0066 rms in log** — against an injected spread of 0.78x to 1.50x. They are
+compared after centering, because only `a_j * d_neb` is observable and the geometric
+mean is a convention (math.md §1.3); ML-II independently keeps the nebular component
+less smooth than the stellar ones (log tau 7.9 against 11.4), which is the prior
+discovering the shape it was told nothing about.
+
+**The window profile is not cosmetic, and this is where that was measured.** The same
+joint fit with the nebular component free across the whole grid — identical in every
+other respect — lands K<sub>2</sub> at **+2.6%** instead of -0.29%, and the potential
+250 nats worse. The freedom the profile removes was being spent absorbing stellar signal
+at wavelengths where a nebula has no lines, which is the failure mode the component
+exists to prevent, reappearing one level up. Measuring it also surfaced a defect that
+would otherwise have been invisible: `MarginalOrbitModel` rebuilt the prior from the
+sampled `log_tau`/`log_eta` and **dropped the profiles**, so a windowed component was
+silently un-confined the moment ML-II was switched on. The profiles are structure, the
+scalars are hyperparameters, and the merge now respects that (math.md §2).
+
+### Readings
+
+**The failure mode is worse than the literature describes, and the fix is cheap.** The
+published concern is line-profile narrowing and biased atmospheric parameters, which is
+real (-11.5% in EW). The orbit result says the contamination also propagates into the
+*dynamical* answer — masses — through a 59% error in K<sub>2</sub>. Both are removed by
+one extra component and twelve extra parameters, at 41 s against the blind fit's 120 s.
+
+**Nothing downstream had to change.** The nebular column is one more column of A with a
+different velocity law and a free amplitude, so the band assembly, the AR(1) link tables,
+the chunking policy, the custom-VJP solve, and the D28 bandwidth contract are all
+untouched; the per-pixel prior generalizes three diagonals and keeps the same O(P)
+determinant recursion. That is the linear-Gaussian family paying for itself, and it is
+the same reason Tier 3's time-variable component — of which this is the rank-one case —
+can be a change of basis rather than a change of method.
+
+**Two degeneracies were closed by convention rather than by data, and are recorded as
+such** (math.md §5.4): the amplitude scale, pinned by centering the log-amplitudes, and
+the nebular velocity, which decides where the component's lines land on the model grid
+and is not a measurement. Neither is a defect; pretending either was inferred would be.
+
+
+
+---
+
+## D41 — calibrated faint-companion detection (2026-08-13)
+
+The second Tier-2 roadmap item, in three pieces: vectorize the scan, marginalize K₁, and
+calibrate the statistic by injection and recovery. Everything below is from
+`tests/test_calibrate.py` and `examples/05_detection_limit.py`. The configuration is one
+SB1/SB2 pair — 14 epochs, SNR 200, 717 model pixels over 5000-5060 A (520 native pixels),
+K = (55, 40) km/s, light fractions (0.93, 0.07), P = 7.3 d, e = 0.12 — scanned on a
+20-point K₂ grid from 14 to 71 km/s.
+
+### The vectorized sweep
+
+One batched `lax.map` over the trial grid, against the Python loop it replaces (one
+jitted call and one device synchronization per point). Best of three, shared machine.
+
+| model pixels | native | epochs | half-bandwidth | loop / point | sweep / point | speedup | relative agreement |
+|---|---|---|---|---|---|---|---|
+| 201 | 100 | 8 | 46 | 3.71 ms | 1.33 ms | **2.8x** | 1.1e-12 |
+| 717 | 520 | 14 | 55 | 17.34 ms | 8.66 ms | **2.0x** | 1.4e-13 |
+| 2,652 | 2,150 | 20 | 66 | 97.41 ms | 43.91 ms | **2.2x** | 1.8e-16 |
+
+The factor is near-flat in problem size, which says it is the batching that pays rather
+than the removal of per-point dispatch — the opposite of what a dispatch-overhead story
+would predict, and the reason the acceptance gate asserts only 1.5x. It is not
+bit-identical to the loop: batching re-associates the linear algebra, and the
+log-likelihoods move in the last few digits. **What the factor buys is the two features
+built on top of it:** a 7x20 (K₁, K₂) grid costs 0.88 s where the loop would need ~1.41 s,
+and the 450-scan calibration below — 9,450 marginal solves — costs 53 s.
+
+### Marginalizing K₁ against assuming a wrong one
+
+The literature reports that a small error in the assumed primary semi-amplitude puts
+spurious features in the recovered secondary spectrum. It does. What is not reported, and
+is the more dangerous half, is the effect on the detection statistic.
+
+| K₁ treatment | K₂ peak [km/s] | companion line-pattern correlation | D at the peak |
+|---|---|---|---|
+| correct, fixed | 41 | **0.961** | 40,609 |
+| 5% high (57.75), fixed | 38 — one grid step low | 0.720 | **66,837** |
+| 5% high, marginalized (σ = 5%) | **41** | **0.955** | 40,455 |
+| 10% high (60.5), fixed | 41 | **0.486** | **135,410** |
+| 10% high, marginalized (σ = 10%) | **41** | **0.931** | 41,310 |
+
+**A wrong K₁ makes the detection look stronger while the answer gets worse.** Unremoved
+primary signal is coherent across epochs; the companion's free spectrum is the only thing
+that can absorb it, so it does, and D more than triples on the way to a recovered
+spectrum that correlates 0.49 with truth. Marginalizing over a Gauss-Hermite rule on
+N(μ₁, σ₁²) — applied to the companion *and* the no-companion model, so D stays a ratio of
+two marginal likelihoods — recovers 0.93-0.96 and puts D back where the correct K₁ has it.
+Correlations are offset-removed: at ℓ₂ = 0.07 the companion's smooth envelope is
+prior-dominated (math.md §5.1-5.2), so the line pattern is what carries the information.
+
+The 7-node rule costs about 30% more wall time than the fixed scan (2.2 s against 1.7 s),
+not 7x, because the trials share one compiled graph.
+
+### The calibrated limit
+
+200 companion-free trials for the null distribution, 50 trials at each of six injected
+light fractions for completeness, all resimulated through the observed dataset's own
+operators. 450 full scans in **71 s**.
+
+| | |
+|---|---|
+| null peak D | min -776.6, median -730.1, max **-676.7** |
+| threshold at 1% false alarm | **-692.2** |
+| realized null exceedance | 0.0050 (budget 0.01) |
+| resolution floor, 1/(N+1) | 0.0050 |
+| the real SB2's peak | D = 40,609 at K₂ = 41, FAP at the floor |
+
+| injected ℓ₂ | 0.05% | 0.10% | 0.15% | 0.20% | 0.30% | 0.50% |
+|---|---|---|---|---|---|---|
+| detected | 0.00 | 0.10 | 0.18 | 0.36 | 0.96 | 1.00 |
+| median D | -730.8 | -723.1 | -714.9 | -705.5 | -653.1 | -508.7 |
+
+> Any companion contributing more than **0.30%** of the light would have been detected at
+> 95% confidence, against a detection threshold D > -692.2 set at a 1% false-alarm
+> probability from 200 companion-free trials.
+
+**The null peaks are strictly negative**, because the marginal likelihood charges an Occam
+term for the companion's free spectrum and, with nothing to find, nothing pays for it. So
+"D > 0" would have been a *conservative* test on this dataset — on another it might not
+be, which is the whole argument for measuring the threshold instead of assuming one.
+
+Two properties are enforced rather than hoped for. The threshold is defined through the
+false-alarm estimator (1 + #{null >= D})/(N+1) rather than as a sample quantile:
+`np.quantile` interpolates between order statistics and was measured leaving **8.3% of the
+null above a nominal 5% threshold** on a 24-trial run — caught by a test, and
+anti-conservative in exactly the direction that matters for a detection claim. And no FAP
+below 1/(N+1) is reported; below that the rule degrades to "must exceed every null trial".
+
+### One expected dependence that is not there
+
+| injected K₂ [km/s] | 20 | 40 | 65 |
+|---|---|---|---|
+| limit on ℓ₂ | 0.292% | 0.296% | 0.297% |
+
+The limit is flat in K₂. In an SB2 the components move in *antiphase*, so their relative
+velocity never falls below about K₁, and at K₁ = 55 km/s the pair is well separated at
+every trial K₂. A real K₂ dependence should appear only when K₁ is small enough that the
+pair is barely resolved at any phase. Worth knowing before spending compute on a grid that
+does not vary.
+
+**What none of this checks is the model.** The null trials are drawn at the same K₁, orbit
+and light fractions the scan assumes, so the threshold is self-consistent with those
+assumptions and blind to their being wrong — the K₁ table above is exactly that failure,
+and no calibrated threshold would have flagged it. The limit is likewise conditional on
+the assumed companion template, since the observable is ℓ₂·d₂ and a featureless companion
+is invisible at any light fraction. Both are stated wherever the numbers are.

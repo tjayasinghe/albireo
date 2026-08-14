@@ -191,4 +191,6 @@ jobs:
         run: |
           uv run --no-sync python examples/00_quickstart.py
           uv run --no-sync python examples/02_k2_scan.py
+          uv run --no-sync python examples/04_nebular.py
+          uv run --no-sync python examples/05_detection_limit.py
           uv run --no-sync python examples/01_sb2_end_to_end.py

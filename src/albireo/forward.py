@@ -63,6 +63,7 @@ __all__ = [
     "with_jitter",
     "with_light_fractions",
     "with_lsf",
+    "with_nebular_amplitudes",
     "with_response",
     "with_velocities",
 ]
@@ -235,6 +236,7 @@ class Problem:
     # The assembly reads it to include the chain's link terms and widen the
     # bandwidth — a *structural* decision, so it cannot depend on traced values.
     correlated: bool = False
+    nebular: bool = False
 
     def tree_flatten(self):
         return (self.groups,), (
@@ -243,11 +245,12 @@ class Problem:
             self.frame,
             self.telluric,
             self.correlated,
+            self.nebular,
         )
 
     @classmethod
     def tree_unflatten(cls, aux, children):
-        grid, n_components, frame, telluric, correlated = aux
+        grid, n_components, frame, telluric, correlated, nebular = aux
         return cls(
             grid=grid,
             n_components=n_components,
@@ -255,6 +258,7 @@ class Problem:
             frame=frame,
             telluric=telluric,
             correlated=correlated,
+            nebular=nebular,
         )
 
     @property
@@ -264,7 +268,9 @@ class Problem:
 
     @property
     def n_stellar(self) -> int:
-        return self.n_components - (1 if self.telluric else 0)
+        """Stellar components — the ones an orbit moves (component order is stellar,
+        telluric, nebular, so the non-stellar columns are always the trailing ones)."""
+        return self.n_components - (1 if self.telluric else 0) - (1 if self.nebular else 0)
 
     @property
     def n_epochs(self) -> int:
@@ -311,12 +317,16 @@ class Problem:
         ``v_rel_max_kms`` must bound the largest *relative* radial velocity between any
         two model components at any epoch — for an SB2, ``(K_1 + K_2)(1 + e)`` plus, if
         a telluric component is present, the stellar velocity relative to the telluric
-        frame (which includes the barycentric motion, up to ~30 km/s). Because the
-        bound is static (independent of the velocity values), it can be passed to
-        :func:`albireo.likelihood.marginal_loglikelihood` as ``half_bandwidth`` inside
-        ``jax.jit`` with traced velocities. The ``+ 1`` pixel of slack in the bandwidth
-        formula also absorbs the (< 1e-5 relative at 1000 km/s) curvature of the
-        relativistic velocity-to-shift mapping.
+        frame (which includes the barycentric motion, up to ~30 km/s). A nebular
+        component (D40) adds ``|nebular_v_kms| + max K`` against the stars, and — since
+        the two sit in opposite frames — the barycentric motion again against the
+        telluric column.
+
+        Because the bound is static (independent of the velocity values), it can be
+        passed to :func:`albireo.likelihood.marginal_loglikelihood` as
+        ``half_bandwidth`` inside ``jax.jit`` with traced velocities. The ``+ 1`` pixel
+        of slack in the bandwidth formula also absorbs the (< 1e-5 relative at
+        1000 km/s) curvature of the relativistic velocity-to-shift mapping.
         """
         shift = abs(float(self.grid.velocity_to_pixels(float(v_rel_max_kms))))
         support = max(g.row_support for g in self.groups)
@@ -484,6 +494,9 @@ def build_problem(
     lsf_h3: Mapping[str, float | Sequence[float]] | None = None,
     response_coeffs: Sequence[np.ndarray] | None = None,
     telluric: bool = False,
+    nebular: bool = False,
+    nebular_v_kms: float = 0.0,
+    nebular_amplitudes=None,
     ar1_max_gap: int = 4,
 ) -> Problem:
     """Assemble a :class:`Problem` from a dataset and fixed nonlinear parameters.
@@ -525,6 +538,38 @@ def build_problem(
         If True, append a telluric component (light fraction 1) whose velocity law is
         the topocentric one — static for topocentric-frame data, ``+v_bary`` for
         barycentric-frame data.
+    nebular
+        If True, append a nebular component (D40): static in the *barycentric* frame —
+        the opposite convention from the telluric one — with a **free per-epoch
+        amplitude** rather than a light fraction. Component order is stellar,
+        telluric, nebular, so enabling it adds one trailing column and one more entry
+        to the spectral prior.
+
+        The physics it encodes: nebular emission is added on top of the total stellar
+        continuum and takes no light from the stars, so its amplitude is outside the
+        simplex the light fractions live on, and its night-to-night variation (seeing,
+        slit losses, sky subtraction) is a scale on one fixed shape. Leaving it in the
+        data instead is not neutral — a static emission feature sitting on a moving
+        absorption line is absorbed by the stellar components as a spurious core-fill,
+        narrowing the disentangled profile and biasing every temperature and gravity
+        derived from it.
+    nebular_v_kms
+        Velocity of the nebula, in the frame the stellar velocities are measured in
+        (km/s). It is **not identified by the data**: the shift is the same at every
+        epoch (barycentric-frame data) or differs only by ``v_bary`` (topocentric),
+        and a constant shift of a *free* spectrum is a reparameterization
+        ``d -> T(delta) d``, exactly as the systemic velocity is for the stellar
+        components (D14). What it decides is where the component's lines land on the
+        model grid — which matters as soon as the prior confines it to windows
+        (:func:`albireo.priors.window_profile`), since the windows and the shift must
+        agree. Pass the same value to :func:`albireo.priors.nebular_windows`.
+    nebular_amplitudes
+        Per-epoch amplitudes ``(n_epochs,)`` for the nebular component (default: all
+        ones). Only the product ``amplitude * spectrum`` is observable, so the overall
+        scale is degenerate with the component spectrum and is fixed by convention —
+        :func:`albireo.inference.nebular_amplitudes` normalizes the geometric mean to
+        1. Must be positive here; the traced swap
+        (:func:`with_nebular_amplitudes`) cannot check.
     ar1_max_gap
         Longest masked gap (in native pixels) an AR(1) noise link may span
         (:func:`with_ar1`). Links between good pixels ``gap`` apart carry correlation
@@ -557,8 +602,30 @@ def build_problem(
     else:
         tell_pix = bary_pix
 
-    shifts = np.vstack([star_pix, tell_pix[None, :]]) if telluric else star_pix
-    light = np.vstack([ell, np.ones((1, n_ep))]) if telluric else ell
+    shift_rows = [star_pix]
+    light_rows = [ell]
+    if telluric:
+        shift_rows.append(tell_pix[None, :])
+        light_rows.append(np.ones((1, n_ep)))
+    if nebular:
+        # Static in the barycentric frame: the mirror image of the telluric law, so it
+        # is the *topocentric*-frame data that carry the per-epoch -v_bary term.
+        neb_pix = float(np.asarray(grid.velocity_to_pixels(float(nebular_v_kms))))
+        neb_row = np.full(n_ep, neb_pix)
+        if dataset.frame == "topocentric":
+            neb_row = neb_row - bary_pix
+        if nebular_amplitudes is None:
+            amp = np.ones(n_ep)
+        else:
+            amp = np.atleast_1d(np.asarray(nebular_amplitudes, dtype=np.float64))
+        if amp.shape != (n_ep,):
+            raise ValueError(f"nebular_amplitudes must have shape ({n_ep},); got {amp.shape}")
+        if np.any(amp <= 0) or not np.all(np.isfinite(amp)):
+            raise ValueError("nebular_amplitudes must be positive and finite")
+        shift_rows.append(neb_row[None, :])
+        light_rows.append(amp[None, :])
+    shifts = np.vstack(shift_rows)
+    light = np.vstack(light_rows)
     n_comp = shifts.shape[0]
 
     if response_coeffs is None:
@@ -681,7 +748,53 @@ def build_problem(
         groups=tuple(groups),
         frame=dataset.frame,
         telluric=telluric,
+        nebular=nebular,
     )
+
+
+def with_data(problem: Problem, z_per_group) -> Problem:
+    """Return ``problem`` with the data term ``z`` replaced, everything else untouched.
+
+    ``z = y - r (R 1)`` is the only place the *observed fluxes* enter the problem, so
+    swapping it re-points the whole operator stack at a different realization of the
+    same experiment. That is what makes a parametric bootstrap cheap: the rebin
+    operators, pair tables, LSF bank, weights, masks and response are all built once and
+    reused, and each trial costs one forward apply instead of a fresh
+    :func:`build_problem`. :func:`albireo.simulate.resimulate` draws the replacement,
+    and :mod:`albireo.calibrate` runs the loop.
+
+    What must *not* change is anything the structure was built from: the native
+    wavelength grids, the masks (``w == 0`` pattern), and the AR(1) link tables derived
+    from them. Those are all static here, so this is a swap of numbers into a fixed
+    graph — which is exactly its value, and exactly its constraint. Passing data with a
+    different mask silently reuses the old one.
+
+    Parameters
+    ----------
+    problem
+        Output of :func:`build_problem`.
+    z_per_group
+        One ``(n_epochs, n_native)`` array per group, in ``problem.groups`` order —
+        the layout :func:`apply_model` returns and :attr:`EpochGroup.z` stores.
+
+    Returns
+    -------
+    Problem
+    """
+    groups, new = [], list(z_per_group)
+    if len(new) != len(problem.groups):
+        raise ValueError(f"expected {len(problem.groups)} z arrays, got {len(new)}")
+    for g, z in zip(problem.groups, new, strict=True):
+        z = jnp.asarray(z)
+        if z.shape != g.z.shape:
+            raise ValueError(
+                f"group {g.instrument!r}: z must have shape {g.z.shape}; got {z.shape}"
+            )
+        # Masked pixels are allowed to hold anything upstream (albireo.data), and every
+        # consumer multiplies z by w — but 0 * nan is nan, so zero them here as
+        # build_problem does rather than trust the caller.
+        groups.append(replace(g, z=jnp.where(g.w > 0.0, z, 0.0)))
+    return replace(problem, groups=tuple(groups))
 
 
 def with_velocities(problem: Problem, velocities) -> Problem:
@@ -699,8 +812,10 @@ def with_velocities(problem: Problem, velocities) -> Problem:
         Output of :func:`build_problem` (any velocities).
     velocities
         Stellar radial velocities in the barycentric frame, shape
-        ``(n_stellar, n_epochs)`` (km/s). The telluric column, if present, is
-        reconstructed from the stored barycentric shifts.
+        ``(n_stellar, n_epochs)`` (km/s). The telluric and nebular columns, if
+        present, are carried over unchanged: their velocity laws depend only on the
+        frame and each epoch's ``v_bary``, both fixed at build time, so there is
+        nothing in them for a stellar velocity to change.
     """
     vel = jnp.atleast_2d(jnp.asarray(velocities))
     if vel.shape != (problem.n_stellar, problem.n_epochs):
@@ -714,11 +829,7 @@ def with_velocities(problem: Problem, velocities) -> Problem:
         sp = star_pix[:, idx].T  # (n_epochs_group, n_stellar)
         if problem.frame == "topocentric":
             sp = sp - g.bary_pix[:, None]
-            tell_col = jnp.zeros((len(idx), 1))
-        else:
-            tell_col = g.bary_pix[:, None]
-        if problem.telluric:
-            sp = jnp.concatenate([sp, tell_col], axis=1)
+        sp = jnp.concatenate([sp, g.shifts[:, problem.n_stellar :]], axis=1)
         groups.append(replace(g, shifts=sp))
     return replace(problem, groups=tuple(groups))
 
@@ -726,11 +837,14 @@ def with_velocities(problem: Problem, velocities) -> Problem:
 def with_light_fractions(problem: Problem, light_fractions) -> Problem:
     """Return ``problem`` with the stellar light fractions replaced (differentiable).
 
-    The θ-dependent path for light-fraction inference: only the per-epoch light
-    columns are swapped; the telluric column (if present) keeps light fraction 1.
-    Safe inside ``jax.jit`` with traced values. The simplex constraint (non-negative,
-    sum to 1 per epoch) cannot be checked on traced input — it is the caller's
-    responsibility (in the numpyro model it is guaranteed by a Dirichlet prior).
+    The θ-dependent path for light-fraction inference: only the *stellar* light
+    columns are swapped. The telluric column (if present) keeps light fraction 1 and
+    the nebular column keeps whatever amplitudes it carries — the nebular amplitude is
+    outside the simplex by construction and has its own swap
+    (:func:`with_nebular_amplitudes`). Safe inside ``jax.jit`` with traced values. The
+    simplex constraint (non-negative, sum to 1 per epoch) cannot be checked on traced
+    input — it is the caller's responsibility (in the numpyro model it is guaranteed
+    by a Dirichlet prior).
 
     Parameters
     ----------
@@ -751,9 +865,55 @@ def with_light_fractions(problem: Problem, light_fractions) -> Problem:
     for g in problem.groups:
         idx = list(g.epoch_indices)
         le = ell[:, idx].T  # (n_epochs_group, n_stellar)
-        if problem.telluric:
-            le = jnp.concatenate([le, jnp.ones((len(idx), 1))], axis=1)
+        le = jnp.concatenate([le, g.light[:, problem.n_stellar :]], axis=1)
         groups.append(replace(g, light=le))
+    return replace(problem, groups=tuple(groups))
+
+
+def with_nebular_amplitudes(problem: Problem, amplitudes) -> Problem:
+    """Return ``problem`` with the nebular component's per-epoch amplitudes replaced.
+
+    The θ-dependent path for the D40 nebular component: only its light column moves,
+    and the stellar simplex and the telluric column are untouched. Differentiable and
+    safe inside ``jax.jit`` with traced values.
+
+    **The scale is a convention, not a measurement.** The model sees only the products
+    ``a_j * d_neb``, so ``(c a_j, d_neb / c)`` is the same fit for any ``c > 0`` — the
+    amplitudes carry the epoch-to-epoch *variation* and the spectrum carries the level.
+    The prior on ``d_neb`` breaks the tie weakly rather than not at all, which is worse
+    than either extreme for sampling, so pin the scale explicitly:
+    :func:`albireo.inference.nebular_amplitudes` normalizes the geometric mean to 1,
+    and that is what the ``log_nebular_amp`` site feeds through here.
+
+    Positivity is likewise not enforced (a traced value cannot be checked, and the sign
+    is degenerate with the spectrum's); sample ``exp`` of an unconstrained parameter.
+
+    Parameters
+    ----------
+    problem
+        Output of :func:`build_problem` with ``nebular=True``.
+    amplitudes
+        Scalar (one amplitude shared by every epoch — i.e. a *static* nebular
+        contribution) or ``(n_epochs,)``.
+    """
+    if not problem.nebular:
+        raise ValueError(
+            "this problem has no nebular component — rebuild it with "
+            "build_problem(..., nebular=True). Enabling it adds a component, so it "
+            "changes the linear system's size and the spectral prior's length; it "
+            "cannot be a traced swap."
+        )
+    amp = jnp.asarray(amplitudes)
+    if amp.ndim == 0:
+        amp = jnp.broadcast_to(amp, (problem.n_epochs,))
+    if amp.shape != (problem.n_epochs,):
+        raise ValueError(
+            f"amplitudes must be a scalar or have shape ({problem.n_epochs},); got {amp.shape}"
+        )
+    groups = []
+    for g in problem.groups:
+        col = amp[np.asarray(g.epoch_indices, dtype=np.int64)]
+        groups.append(replace(g, light=g.light.at[:, -1].set(col)))
     return replace(problem, groups=tuple(groups))
 
 

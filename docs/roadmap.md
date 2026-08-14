@@ -80,7 +80,7 @@ a real archival example is the second step, once the ESO loader below exists.
 Each of these is aimed at a specific group of people with a specific unmet need, ordered so that
 earlier items unblock later ones.
 
-### 1. A nebular component with a free per-epoch amplitude
+### 1. A nebular component with a free per-epoch amplitude — **done** (D40)
 
 Massive stars are born in H II regions, so their spectra carry nebular emission lines that do not
 move with either star and vary in strength from night to night with seeing and slit losses. Left in,
@@ -93,26 +93,58 @@ hand; a 2026 paper in the same series masks the contaminated pixels by setting t
 In albireo this is a static component whose per-epoch amplitude is a free parameter — structurally
 the telluric component with a traced amplitude instead of a fixed one, and physically correct, since
 nebular flux is added on top of the total continuum and takes no light from the stars. Two details
-carry the work: the nebular component is static in the *barycentric* frame, which is the opposite
-convention from the telluric one, and confining it to the Balmer, He I and forbidden-line windows
-needs the smoothness prior's regularization strength to become per-pixel. Highest impact per line of
-code on this page.
+carried the work, both as predicted: the nebular component is static in the *barycentric* frame,
+which is the opposite convention from the telluric one, and confining it to the Balmer, He I and
+forbidden-line windows needed the smoothness prior's regularization strength to become per-pixel
+(`SmoothnessPrior(tau_profile=, eta_profile=)`, built by `priors.window_profile`).
 
-### 2. Calibrated faint-companion detection
+It was the highest impact per line of code on this page, and the closed loop says by how much: an
+SB2 whose Hβ absorption carries a static nebular line disentangles to a core **26% too shallow** and
+an equivalent width **11.5% low** without the component, against 0.14% with it. Equivalent width is
+what reaches the atmosphere code, so that is a systematic error in log *g* — of the kind nothing in
+the current literature propagates. The orbit is worse and was not expected: a static line is a
+component with *K* = 0, so a nebula-blind joint fit hands the emission to whichever star can be
+made to move least, returning K₂ **59% low**, a period long by 0.171 d, and a circular orbit at
+*e* = 0.95 (the solver's clip). The contamination reaches the masses, not only the atmospheres. Two degeneracies came with the component and are closed by
+convention rather than by data (the amplitude scale, pinned by centering the log-amplitudes; the
+nebular velocity, which is a placement convention for the window profile and not a measurement);
+both are recorded in [the math](math.md#13-lsf-light-fractions-response).
 
-The K₂ scan already answers "is there a companion, and at what velocity semi-amplitude" — the
-question at the center of every dormant-black-hole candidate. What it does not yet do is say how
-often noise alone would produce the peak it found. The current state of the art in the literature is
+### 2. Calibrated faint-companion detection — **done** (D41)
+
+The K₂ scan already answered "is there a companion, and at what velocity semi-amplitude" — the
+question at the center of every dormant-black-hole candidate. What it did not do is say how
+often noise alone would produce the peak it found. The state of the art in the literature is
 a bare χ² map with no false-alarm probability attached, and the papers are explicit about the
 resulting fragility: small deviations in the assumed primary semi-amplitude produce spurious
-features in the recovered secondary spectrum. Marginalizing over K₁ removes that failure mode
-outright.
+features in the recovered secondary spectrum.
 
-The work is: vectorize the scan (it is currently a Python loop over the grid), then add an
-injection–recovery calibration that turns the detection statistic into a false-alarm rate and a
-limit of the form "any companion contributing more than *X*% of the light would have been detected
-at 95% confidence." This is what the Gaia BH and stripped-star communities actually need to quote,
-and the [HR 6819 campaign](benchmarks.md) is a ready-made validation set.
+All three pieces are built. The scan is **vectorized** — `MarginalOrbitModel.log_likelihood_sweep`
+runs the trial grid as one batched `lax.map` instead of a Python loop with a device
+synchronization per point. **K₁ is marginalizable** (`k2_scan(k1_sigma=)`) over a Gauss–Hermite
+rule applied to both the companion and the no-companion model, so `D` stays a ratio of two
+marginal likelihoods. And `albireo.calibrate.detection_limit` runs the **injection–recovery
+calibration**, resimulating through the observed data's own operators
+(`forward.with_data`, `simulate.resimulate`) so that a few hundred scans cost under a minute.
+
+The K₁ result was sharper than expected and reframes why marginalization matters: a K₁ 10% high
+did not merely blur the answer, it took the recovered companion's line pattern from **0.96
+correlation with truth to 0.49 while more than tripling `D`** — the artifact reads as a *stronger*
+detection. A calibrated threshold cannot catch that, because the null trials are drawn under the
+same wrong assumption; only the marginalization can. The two are complementary, which is now
+stated wherever either is documented. The calibration itself delivers the quotable sentence —
+"any companion contributing more than *X*% of the light would have been detected at 95%
+confidence" — with a threshold that is conservative by construction and a false-alarm probability
+that never claims finer resolution than `1/(n_null + 1)`.
+
+One expected dependence turned out not to be there, which is worth knowing before anyone spends
+compute on it: the limit is nearly **flat in K₂** (0.292 / 0.296 / 0.297% at K₂ = 20 / 40 / 65
+km/s). In an SB2 the two components move in antiphase, so their relative velocity never drops
+below about K₁, and with K₁ = 55 km/s the pair is well separated at every trial. A real K₂
+dependence should appear only when K₁ is itself small. The dependence that *does* remain is on
+the assumed companion template — the observable is ℓ₂·d₂, so a featureless companion is
+invisible at any light fraction — and that assumption is required to be quoted with the number.
+The [HR 6819 campaign](benchmarks.md) remains a ready-made validation set.
 
 ### 3. A per-epoch radial-velocity table
 

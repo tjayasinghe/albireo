@@ -4,7 +4,8 @@ Milestone M1 (``docs/design.md`` §8). Composite epochs are generated through th
 operator stack the inference code uses — shift → LSF convolution → rebin-to-native →
 multiplicative response — so closed-loop tests exercise the real pipeline, including
 every advertised pathology: chip gaps, cosmic hits, mixed instruments/resolutions,
-tellurics, barycentric frames, and per-epoch light fractions.
+tellurics, nebular emission with a per-epoch amplitude, barycentric frames, and
+per-epoch light fractions.
 
 Component spectra are *deviation* spectra ``d = s - 1`` on the model :class:`~albireo.grids.LogGrid`
 (zero in the continuum, negative dips for absorption). Frame conventions follow
@@ -16,8 +17,11 @@ stellar shift is ``xi(v_star)`` and tellurics move by ``+xi(v_bary)``.
 from __future__ import annotations
 
 import dataclasses
+import functools
 from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -33,13 +37,18 @@ from albireo.operators import (
     shift_spectrum,
 )
 
+if TYPE_CHECKING:  # albireo.forward imports chebyshev_response from here, so the
+    from albireo.forward import Problem  # runtime import in resimulate must be local
+
 __all__ = [
     "InstrumentSpec",
     "OrbitParams",
     "SimulationTruth",
     "chebyshev_response",
+    "resimulate",
     "simulate_dataset",
     "synthetic_deviation_spectrum",
+    "synthetic_nebular_spectrum",
     "synthetic_telluric_spectrum",
 ]
 
@@ -121,6 +130,9 @@ class SimulationTruth:
     noiseless_flux: tuple[np.ndarray, ...]  # per-epoch native-grid flux, pre-noise
     epoch_instruments: tuple[str, ...]
     ar1_phi: float = 0.0  # AR(1) correlation of the injected noise (0 = white)
+    nebular: np.ndarray | None = None  # injected nebular deviation spectrum
+    nebular_amplitudes: np.ndarray | None = None  # (n_ep,) as injected, un-normalized
+    nebular_v_kms: float = 0.0
 
 
 def synthetic_deviation_spectrum(
@@ -175,6 +187,77 @@ def synthetic_telluric_spectrum(
     return np.maximum(d, -0.95)
 
 
+def synthetic_nebular_spectrum(
+    grid: LogGrid,
+    *,
+    lines: Sequence[float] | None = None,
+    amplitude_range: tuple[float, float] = (0.1, 0.8),
+    sigma_v_kms: float = 12.0,
+    v_kms: float = 0.0,
+    margin: float = 0.02,
+    seed: int = 2,
+) -> np.ndarray:
+    """Nebular-like *emission* deviation spectrum: narrow positive lines at fixed wavelengths.
+
+    Unlike the stellar and telluric generators, the line positions here are physical
+    rather than random — a nebular component is only interesting insofar as its lines
+    coincide with the stellar features it contaminates (Balmer, He I), which is exactly
+    what a randomly placed line would miss.
+
+    Parameters
+    ----------
+    grid
+        Model grid; lines outside it (or within ``margin`` of an edge) are dropped.
+    lines
+        Rest wavelengths in air angstrom; default :data:`albireo.priors.NEBULAR_LINES`.
+    amplitude_range
+        Uniform range for each line's peak deviation (positive = emission).
+    sigma_v_kms
+        Intrinsic Gaussian width. Nebular lines are thermally narrow — ~10 km/s at
+        10⁴ K including turbulence — and the observed width is set by the instrument,
+        which the simulator applies downstream.
+    v_kms
+        Velocity of the nebula in the model grid's frame; must match the
+        ``nebular_v_kms`` the fit is built with.
+    margin
+        Fraction of the grid kept clear at each edge.
+    seed
+        Seed for the line amplitudes.
+
+    Returns
+    -------
+    numpy.ndarray
+        ``(grid.n,)`` non-negative deviation spectrum.
+    """
+    from albireo.grids import C_KMS
+    from albireo.priors import NEBULAR_LINES
+
+    if lines is None:
+        lines = list(NEBULAR_LINES.values())
+    rng = np.random.default_rng(seed)
+    px = np.arange(grid.n, dtype=np.float64)
+    lo, hi = margin * grid.n, (1.0 - margin) * grid.n
+    wave = np.asarray(grid.wave, dtype=np.float64)
+    sigma_px = float(sigma_v_kms) / grid.dv_kms
+    d = np.zeros(grid.n)
+    used = 0
+    for lam in sorted(float(x) for x in lines):
+        lam_obs = lam * (1.0 + float(v_kms) / C_KMS)
+        if not (wave[0] <= lam_obs <= wave[-1]):
+            continue
+        center = float(np.interp(lam_obs, wave, px))
+        if not (lo <= center <= hi):
+            continue
+        d += rng.uniform(*amplitude_range) * np.exp(-0.5 * ((px - center) / sigma_px) ** 2)
+        used += 1
+    if used == 0:
+        raise ValueError(
+            f"none of the {len(list(lines))} nebular lines fall inside the model grid "
+            f"({wave[0]:.2f}-{wave[-1]:.2f} A) with a {margin:.0%} edge margin"
+        )
+    return d
+
+
 def chebyshev_response(wave: np.ndarray, coeffs: np.ndarray) -> np.ndarray:
     """Multiplicative response ``r = 1 + sum_m c_m T_m(x)``, ``x`` scaled to [-1, 1]."""
     wave = np.asarray(wave, dtype=np.float64)
@@ -213,6 +296,9 @@ def simulate_dataset(
     v_bary: np.ndarray | None = None,
     frame: str = "topocentric",
     telluric: np.ndarray | None = None,
+    nebular: np.ndarray | None = None,
+    nebular_amplitudes=None,
+    nebular_v_kms: float = 0.0,
     response_order: int = 0,
     response_amplitude: float = 0.0,
     ar1_phi: float = 0.0,
@@ -249,6 +335,18 @@ def simulate_dataset(
         wavelength grids, with shift conventions from ``docs/math.md`` §1.2.
     telluric
         Optional telluric deviation spectrum on ``grid`` (light fraction 1, additive).
+    nebular
+        Optional nebular deviation spectrum on ``grid``
+        (:func:`synthetic_nebular_spectrum`): additive, static in the *barycentric*
+        frame, and scaled per epoch by ``nebular_amplitudes`` — the D40 component.
+    nebular_amplitudes
+        Per-epoch amplitude of the nebular component, ``(n_ep,)`` or a scalar
+        (default 1). This is the seeing/slit-loss variation the component exists to
+        absorb; the recovered amplitudes are only comparable to these up to one
+        overall scale (see :func:`albireo.forward.with_nebular_amplitudes`).
+    nebular_v_kms
+        Velocity of the nebula in the model grid's frame, matching
+        :func:`albireo.forward.build_problem`.
     response_order, response_amplitude
         Per-epoch multiplicative Chebyshev response ``1 + sum_{m<=order} c_m T_m`` with
         ``c_m ~ N(0, response_amplitude^2)``. Amplitude 0 disables it (r = 1).
@@ -344,11 +442,31 @@ def simulate_dataset(
         if telluric.shape != (grid.n,):
             raise ValueError(f"telluric must have shape ({grid.n},); got {telluric.shape}")
 
+    neb_amp = None
+    if nebular is not None:
+        nebular = np.asarray(nebular, dtype=np.float64)
+        if nebular.shape != (grid.n,):
+            raise ValueError(f"nebular must have shape ({grid.n},); got {nebular.shape}")
+        if nebular_amplitudes is None:
+            neb_amp = np.ones(n_ep)
+        else:
+            neb_amp = np.atleast_1d(np.asarray(nebular_amplitudes, dtype=np.float64))
+            if neb_amp.size == 1:
+                neb_amp = np.full(n_ep, float(neb_amp[0]))
+        if neb_amp.shape != (n_ep,):
+            raise ValueError(
+                f"nebular_amplitudes must be a scalar or have shape ({n_ep},); got {neb_amp.shape}"
+            )
+    elif nebular_amplitudes is not None:
+        raise ValueError("nebular_amplitudes given without a nebular spectrum")
+
     bary_pix = np.asarray(grid.velocity_to_pixels(v_bary))
     star_pix = np.asarray(grid.velocity_to_pixels(vel))  # (n_comp, n_ep)
+    neb_pix = np.full(n_ep, float(np.asarray(grid.velocity_to_pixels(float(nebular_v_kms)))))
     if frame == "topocentric":
         star_pix = star_pix - bary_pix[None, :]
         tell_pix = np.zeros(n_ep)
+        neb_pix = neb_pix - bary_pix  # static in the barycentric frame, so it moves here
     else:
         tell_pix = bary_pix
 
@@ -365,6 +483,8 @@ def simulate_dataset(
             d_total = d_total + ell[i, j] * shift_spectrum(components[i], star_pix[i, j])
         if telluric is not None:
             d_total = d_total + shift_spectrum(telluric, tell_pix[j])
+        if nebular is not None and neb_amp is not None:
+            d_total = d_total + neb_amp[j] * shift_spectrum(nebular, neb_pix[j])
         kern = kernels[epoch_instruments[j]]
         d_total = (
             convolve_varying(d_total, kern) if kern.ndim == 2 else convolve_spectrum(d_total, kern)
@@ -429,5 +549,105 @@ def simulate_dataset(
         noiseless_flux=tuple(noiseless_fluxes),
         epoch_instruments=epoch_instruments,
         ar1_phi=float(ar1_phi),
+        nebular=nebular,
+        nebular_amplitudes=neb_amp,
+        nebular_v_kms=float(nebular_v_kms),
     )
     return Dataset(epochs=tuple(epochs), frame=frame), truth
+
+
+@functools.cache
+def _model_applier():
+    """Jitted :func:`albireo.forward.apply_model`, built once and reused.
+
+    ``resimulate`` is called once per bootstrap trial with the same problem structure
+    every time, so the forward apply wants to be one compiled graph rather than a few
+    hundred eagerly dispatched ops per call. Cached at module level because a fresh
+    ``jax.jit`` wrapper per call would recompile every trial. Imported lazily: see the
+    ``TYPE_CHECKING`` note at the top of this module.
+    """
+    from albireo.forward import apply_model
+
+    return jax.jit(apply_model)
+
+
+def _ar1_noise(rng, n: int, phi: float) -> np.ndarray:
+    """Stationary AR(1) process with unit marginal standard deviation."""
+    eps = rng.normal(0.0, 1.0, size=n)
+    if phi == 0.0:
+        return eps
+    out = np.empty(n)
+    out[0] = eps[0]
+    innov = np.sqrt(1.0 - phi**2)
+    for i in range(1, n):
+        out[i] = phi * out[i - 1] + innov * eps[i]
+    return out
+
+
+def resimulate(problem: Problem, d_stack, *, seed: int = 0) -> Problem:
+    """Redraw ``problem``'s data from its own forward model — a parametric bootstrap.
+
+    The observed dataset fixes an enormous amount of structure that a from-scratch
+    simulation has to guess at: which epochs exist and when, each one's barycentric
+    velocity and signal-to-noise, where the chip gaps and cosmics fell, the native
+    wavelength solutions, the response. All of that already lives in ``problem``, so a
+    *matched* trial dataset is one forward apply plus a noise draw:
+
+        ``z' = r (R B sum_i l_ij T(delta_ij) d_i) + n,   n ~ N(0, W^-1)``
+
+    with the same weights, the same masks, and the same operators — only the noise and
+    the injected spectra differ. This is what :mod:`albireo.calibrate` runs in its inner
+    loop, and it is why an injection-recovery calibration on real data costs scan time
+    rather than build time (:func:`albireo.forward.with_data`).
+
+    The velocities, light fractions, LSF and response are read from ``problem`` as it is
+    handed over, so inject at the *truth* by passing a problem already evaluated there
+    (:meth:`albireo.inference.MarginalOrbitModel.problem_at`) — the returned problem
+    keeps those same velocities, and it is the caller's job to move the data onto
+    whatever base problem the analysis then uses.
+
+    Noise follows the problem's own model: standard deviation ``1/sqrt(w/alpha^2)`` per
+    good pixel (so a fitted jitter is honored), and, where ``ar_phi`` is nonzero, an
+    AR(1) process on the *standardized* noise — the model of
+    :func:`albireo.forward.with_ar1`, run over all native pixels so that the observed
+    subset carries ``phi**gap`` correlations across masked gaps. Masked pixels come back
+    exactly zero.
+
+    Parameters
+    ----------
+    problem
+        The problem to draw from. Only its data term is replaced.
+    d_stack
+        Injected deviation spectra, ``(n_components, grid.n)`` — the same layout
+        :attr:`albireo.likelihood.MarginalResult.d_hat` returns, so a fit can be
+        bootstrapped from its own solution. Zero a row to leave that component out.
+    seed
+        Seed for the noise draw.
+
+    Returns
+    -------
+    Problem
+        ``problem`` with the redrawn data.
+
+    Examples
+    --------
+    >>> base = model.problem_at({**orbit, "k": k_true})  # doctest: +SKIP
+    >>> trial = resimulate(base, d_true, seed=7)  # doctest: +SKIP
+    """
+    from albireo.forward import with_data  # local: see TYPE_CHECKING above
+
+    rng = np.random.default_rng(seed)
+    d_stack = jnp.asarray(d_stack)
+    if d_stack.shape != (problem.n_components, problem.grid.n):
+        raise ValueError(
+            f"d_stack must have shape ({problem.n_components}, {problem.grid.n}); "
+            f"got {tuple(d_stack.shape)}"
+        )
+    z_new = []
+    for g, model_dev in zip(problem.groups, _model_applier()(problem, d_stack), strict=True):
+        w = np.asarray(g.effective_w)
+        sigma = np.where(w > 0.0, 1.0 / np.sqrt(np.where(w > 0.0, w, 1.0)), 0.0)
+        phi = np.asarray(g.ar_phi)
+        noise = np.stack([_ar1_noise(rng, w.shape[1], float(phi[e])) for e in range(w.shape[0])])
+        z_new.append(np.asarray(g.r) * np.asarray(model_dev) + sigma * noise)
+    return with_data(problem, z_new)

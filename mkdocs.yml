@@ -49,6 +49,7 @@ nav:
       - Likelihood and priors: api/likelihood.md
       - Inference: api/inference.md
       - Companion scan: api/scan.md
+      - Detection limits: api/calibrate.md
       - Results and plotting: api/results.md
       - Simulator: api/simulate.md
       - Operators: api/operators.md

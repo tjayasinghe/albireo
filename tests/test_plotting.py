@@ -236,6 +236,58 @@ def test_plot_detection_marks_the_injection_and_the_threshold():
     assert "calibrated threshold" in labels
 
 
+def _limit(*, completeness, bracketed=True, ell2_limit=0.02):
+    from albireo.calibrate import DetectionLimit
+
+    completeness = np.asarray(completeness, dtype=float)
+    return DetectionLimit(
+        ell2_grid=np.array([0.01, 0.02, 0.04]),
+        null_peaks=np.linspace(-600.0, -500.0, 40),
+        signal_peaks=np.zeros((3, 12)),
+        threshold=-510.0,
+        false_alarm=0.05,
+        fap_floor=1.0 / 41.0,
+        completeness=completeness,
+        confidence=0.95,
+        ell2_limit=ell2_limit,
+        k2_true=38.0,
+        k2_grid=np.arange(10.0, 60.0, 5.0),
+        k1_marginalized=False,
+        limit_is_bracketed=bracketed,
+    )
+
+
+def test_plot_detection_limit_draws_the_null_and_the_completeness_curve():
+    limit = _limit(completeness=[0.3, 0.97, 1.0])
+    _, (ax_null, ax_comp) = plotting.plot_detection_limit(limit, observed=-550.0)
+
+    assert "null distribution" in ax_null.get_title()
+    labels = [t.get_text() for t in ax_null.get_legend().get_texts()]
+    assert any("threshold" in label for label in labels)
+    # An observed peak *inside* the null range is drawn, not annotated.
+    assert any("observed" in label for label in labels)
+    assert ax_comp.get_ylim()[1] > 1.0
+    assert "completeness" in ax_comp.get_title()
+
+
+def test_plot_detection_limit_annotates_an_off_scale_detection():
+    """A real companion sits orders of magnitude above the null; the axis must not chase it."""
+    limit = _limit(completeness=[0.3, 0.97, 1.0])
+    _, (ax_null, _) = plotting.plot_detection_limit(limit, observed=4.0e4)
+
+    labels = [t.get_text() for t in ax_null.get_legend().get_texts()]
+    assert not any("observed" in label for label in labels)
+    texts = [t.get_text() for t in ax_null.texts]
+    assert any("observed peak" in t and "trial-count floor" in t for t in texts)
+    assert ax_null.get_xlim()[1] < 1.0e4
+
+
+def test_plot_detection_limit_says_when_the_limit_is_not_bracketed():
+    limit = _limit(completeness=[1.0, 1.0, 1.0], bracketed=False, ell2_limit=0.01)
+    _, (_, ax_comp) = plotting.plot_detection_limit(limit)
+    assert any("not bracketed" in t.get_text() for t in ax_comp.texts)
+
+
 # ---------------------------------------------------------------------------
 # posterior
 # ---------------------------------------------------------------------------

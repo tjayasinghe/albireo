@@ -56,7 +56,22 @@ directly, with the component spectra marginalized out in closed form. Run
   optax for MAP optimization.
 - **SB1 faint-companion detection**, via a K2 scan: profile the marginal likelihood over the
   secondary velocity semi-amplitude to search for companions that never show up as a second set of
-  lines.
+  lines. K₁ can be integrated out rather than assumed — the fix for the failure mode the
+  literature reports, where an error in the primary's semi-amplitude puts spurious features in
+  the recovered secondary *and* inflates the detection statistic while doing so.
+- **Detection limits with a false-alarm rate attached**, not just a peak. `ab.detection_limit`
+  resimulates the observed dataset through its own operators, scans hundreds of companion-free
+  draws for the null distribution, and injects a ladder of light fractions for completeness —
+  producing the sentence a referee asks for: *any companion contributing more than X% of the
+  light would have been detected at 95% confidence*
+  ([`examples/05_detection_limit.py`](examples/05_detection_limit.py)).
+- **Nebular emission modelled, not masked** — massive stars sit in H II regions, and the emission
+  lines that come with them fill the disentangled line cores. albireo fits them as a component at
+  rest in the barycentric frame with a free per-epoch amplitude, so the stellar spectra come back
+  uncontaminated *and* complete. On a simulated SB2, leaving the line in costs 11.5% of the Hβ
+  equivalent width and — because a static line is a component with *K* = 0 — 59% of K₂;
+  modelling it costs 0.14% and 0.3%
+  ([`examples/04_nebular.py`](examples/04_nebular.py)).
 - **Reads archival spectra directly** — `albireo.io` turns a directory of ESO Phase-3 or
   IRAF-style FITS into a `Dataset`, and `albireo.preprocess` supplies the things reduced
   spectra are missing: a continuum, an inverse variance, masks, and one shared wavelength grid.
@@ -93,7 +108,9 @@ hierarchical SB3 triples (`period_out`/…/`k_out` sites), per-epoch light-fract
 inference (`light` site, Dirichlet priors — the eclipse breaker, inferred),
 multi-instrument LSF-width inference (`lsf_sigma` site; anchor one reference
 instrument), per-epoch noise rescaling (`log_jitter` site — read
-[the benchmarks](docs/benchmarks.md) before trusting one on real data), and the SB1
+[the benchmarks](docs/benchmarks.md) before trusting one on real data), nebular
+emission components (`nebular=True` plus the `log_nebular_amp` site, with per-pixel
+prior profiles to confine them to their lines), and the SB1
 faint-companion K₂ scan (`ab.k2_scan`). A friendlier
 `Disentangler` façade with light-ratio policies is planned; the core below is the
 supported surface for now.
@@ -161,26 +178,34 @@ mcmc = ab.run_nuts(
 spectra = ab.posterior_spectra(model, mcmc.get_samples(), key, extra=hyper)
 
 # SB1 + faint companion: marginalized K2 detection scan (docs/math.md §6)
-scan = ab.k2_scan(
-    grid,
-    ds,
+search = dict(
     orbit=sb1_solution,
     k1=12.0,
+    k1_sigma=0.4,  # integrate K_1 out rather than condition on it (§6.1)
     k2_grid=jnp.arange(10.0, 150.0, 2.0),
     light_fractions=(0.95, 0.05),  # explicit — see the light-ratio policy
     lsf_sigma_v={"HERMES": 4.0},
     prior=spec_prior,
     v_rel_max_kms=250.0,
 )
+scan = ab.k2_scan(grid, ds, **search)
 scan.k2_peak, scan.detection_peak, scan.companion  # + std, null loglike, ...
+
+# ...and what that peak is worth: a measured false-alarm rate and a limit (§6.2)
+limit = ab.detection_limit(
+    grid, ds, k2_true=scan.k2_peak, ell2_grid=np.array([0.005, 0.01, 0.02, 0.04]), **search
+)
+print(limit.summary())
+print(limit.false_alarm_probability(scan.detection_peak))
 ```
 
 ## Documentation
 
 - [`docs/quickstart.md`](docs/quickstart.md) — the five-minute version, on packaged data.
-- [`examples/`](examples/) — executable tutorials (quickstart, SB2 end-to-end, K₂ scan, and
-  HR 6819 on real archival FEROS spectra); the first three run in CI. Narrative versions in
-  [`docs/tutorials/`](docs/tutorials/).
+- [`examples/`](examples/) — executable tutorials (quickstart, SB2 end-to-end, K₂ scan,
+  detection limits, nebular contamination, and HR 6819 on real archival FEROS spectra);
+  everything but the
+  HR 6819 script runs in CI. Narrative versions in [`docs/tutorials/`](docs/tutorials/).
 - [`docs/design.md`](docs/design.md) — architecture, data model, and the shape of the inference
   problem.
 - [`docs/math.md`](docs/math.md) — the disentangling likelihood, analytic marginalization of the

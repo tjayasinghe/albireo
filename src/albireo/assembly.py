@@ -347,18 +347,30 @@ def _epoch_band_scan(
 
 
 def _prior_diagonals(prior: SmoothnessPrior, n_pix: int):
-    """Analytic diagonals of ``tau * D2^T D2 + eta * I`` per component: (d0, d1, d2).
+    """Analytic diagonals of ``D2^T diag(t) D2 + diag(e)`` per component: (d0, d1, d2).
 
-    ``D2^T D2`` is pentadiagonal Toeplitz with additive boundary corrections
-    (main diagonal 6 with ends 1, 5; first diagonal -4 with ends -2; second
-    diagonal 1). Verified against :meth:`SmoothnessPrior.dense` in the tests.
+    With row weights ``t_k`` (row ``k`` of ``D2`` spans pixels ``k, k+1, k+2``) the
+    pentadiagonal entries are
+
+        ``d0_a = t_a + 4 t_{a-1} + t_{a-2}``,
+        ``d1_a = -2 (t_a + t_{a-1})``,
+        ``d2_a = t_a``,
+
+    with ``t`` read as zero outside ``[0, n_pix - 3]`` — which is where the boundary
+    corrections come from. Uniform weights recover the Toeplitz form (main diagonal 6
+    with ends 1, 5; first diagonal -4 with ends -2; second diagonal 1). The per-pixel
+    profiles of D40 enter entirely through ``t`` and ``e``
+    (:meth:`SmoothnessPrior.curvature_weights` / :meth:`~SmoothnessPrior.ridge_weights`),
+    so nothing downstream changes. Verified against :meth:`SmoothnessPrior.dense` in
+    the tests.
     """
-    d0 = jnp.full(n_pix, 6.0).at[0].add(-5.0).at[1].add(-1.0).at[-1].add(-5.0).at[-2].add(-1.0)
-    d1 = jnp.full(n_pix - 1, -4.0).at[0].add(2.0).at[-1].add(2.0)
-    d2 = jnp.ones(n_pix - 2)
-    tau = prior.tau[:, None]
-    eta = prior.eta[:, None]
-    return tau * d0[None, :] + eta, tau * d1[None, :], tau * d2[None, :]
+    t = prior.curvature_weights(n_pix)  # (nc, n_pix - 2)
+    # Pad by 2 on each side so the three shifted reads below are plain slices: with
+    # p = pad(t, 2), p[2 + a] is t_a and p[2 + a - s] is t_{a-s}, zero out of range.
+    p = jnp.pad(t, ((0, 0), (2, 2)))
+    d0 = p[:, 2 : 2 + n_pix] + 4.0 * p[:, 1 : 1 + n_pix] + p[:, 0:n_pix]
+    d1 = -2.0 * (p[:, 2 : 1 + n_pix] + p[:, 1:n_pix])
+    return d0 + prior.ridge_weights(n_pix), d1, t
 
 
 def _add_prior_band(band, prior: SmoothnessPrior, n_pix: int, p: int, nc: int):

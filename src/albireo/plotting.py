@@ -14,8 +14,9 @@ The set is chosen to cover the questions that actually come up after a fit: did 
 converge somewhere sensible (:func:`plot_rv_curve`, :func:`plot_corner`), do the recovered
 spectra mean anything where they look interesting (:func:`plot_spectra` — read the
 uncertainty band, not the mean), does the noise model fit (:func:`plot_residual_zscores`),
-was a companion detected (:func:`plot_detection`), and are the nuisance parameters doing
-something surprising (:func:`plot_lsf`, :func:`plot_light_fractions`).
+was a companion detected and what its peak is worth (:func:`plot_detection`,
+:func:`plot_detection_limit`), and are the nuisance parameters doing something surprising
+(:func:`plot_lsf`, :func:`plot_light_fractions`).
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ import numpy as np
 __all__ = [
     "plot_corner",
     "plot_detection",
+    "plot_detection_limit",
     "plot_light_fractions",
     "plot_lsf",
     "plot_phase_fold",
@@ -523,6 +525,96 @@ def plot_detection(result, *, injected_k2=None, threshold=None, ax=None, label=N
     if label is not None or injected_k2 is not None or threshold is not None:
         ax.legend(fontsize=8)
     return fig, ax
+
+
+def plot_detection_limit(limit, *, observed=None, axes=None):
+    """The two halves of a calibrated search: the null distribution, and completeness.
+
+    Left, how large the detection statistic gets when there is nothing to find, with the
+    calibrated threshold on it; right, how often an injected companion of a given light
+    fraction clears that threshold, with the quoted limit marked. Read together they are
+    the claim — a peak means nothing without the left panel, and a non-detection means
+    nothing without the right one.
+
+    The two panels are usually on wildly different scales: a real companion's ``D`` can sit
+    orders of magnitude above the entire null distribution. Rather than rescale the axis
+    into uselessness, ``observed`` is annotated rather than drawn when it falls off the
+    histogram.
+
+    Parameters
+    ----------
+    limit
+        A :class:`~albireo.calibrate.DetectionLimit`.
+    observed
+        The peak ``D`` measured on the real data
+        (:attr:`~albireo.scan.K2ScanResult.detection_peak`), marked against the null.
+    axes
+        A pair of existing axes, in the order (null, completeness).
+
+    Returns
+    -------
+    (Figure, (Axes, Axes))
+    """
+    plt = _plt()
+    if axes is None:
+        fig, (ax_null, ax_comp) = plt.subplots(1, 2, figsize=(11.5, 4.2))
+    else:
+        ax_null, ax_comp = axes
+        fig = ax_null.figure
+
+    null = np.asarray(limit.null_peaks)
+    ax_null.hist(null, bins=18, color="0.75", edgecolor="0.4", label="no companion")
+    ax_null.axvline(
+        float(limit.threshold),
+        color="C3",
+        lw=2,
+        label=f"threshold (FAP {limit.false_alarm:g})",
+    )
+    ax_null.set_xlabel("peak $D$ over the $K_2$ grid")
+    ax_null.set_ylabel("trials")
+    ax_null.set_title(f"null distribution ({limit.n_null} trials)")
+    if observed is not None:
+        observed = float(observed)
+        fap = limit.false_alarm_probability(observed)
+        floor = fap <= limit.fap_floor
+        if null.min() <= observed <= null.max():
+            ax_null.axvline(observed, color="C2", lw=2, label=f"observed ($D$ = {observed:.0f})")
+        else:
+            ax_null.annotate(
+                f"observed peak: $D$ = {observed:.0f}\n"
+                + (
+                    f"(FAP $\\leq$ {limit.fap_floor:.3g}, the trial-count floor)"
+                    if floor
+                    else f"(FAP = {fap:.3g})"
+                ),
+                xy=(0.97, 0.74),
+                xycoords="axes fraction",
+                ha="right",
+                fontsize=8,
+                color="C2",
+            )
+    ax_null.legend(fontsize=8)
+
+    ell2 = 100.0 * np.asarray(limit.ell2_grid)
+    ax_comp.plot(ell2, np.asarray(limit.completeness), "o-", color="C0")
+    ax_comp.axhline(limit.confidence, color="0.5", ls="--", lw=1)
+    if np.isfinite(limit.ell2_limit):
+        pos = 100.0 * limit.ell2_limit
+        ax_comp.axvline(pos, color="C3", lw=2)
+        ax_comp.annotate(
+            (f"{pos:.2f}%" if limit.limit_is_bracketed else f"$\\leq$ {pos:.2f}% (not bracketed)"),
+            xy=(pos, 0.32),
+            xytext=(4, 0),
+            textcoords="offset points",
+            color="C3",
+            fontsize=9,
+        )
+    ax_comp.set_xlabel(r"injected companion light fraction $\ell_2$ [%]")
+    ax_comp.set_ylabel(f"fraction detected ($D$ > {limit.threshold:.0f})")
+    ax_comp.set_ylim(-0.03, 1.05)
+    ax_comp.set_title(f"completeness, {limit.signal_peaks.shape[1]} trials per rung")
+    fig.tight_layout()
+    return fig, (ax_null, ax_comp)
 
 
 _ORBIT_SITES = ("period", "t_conj", "secosw", "sesinw", "k", "ecc", "omega")

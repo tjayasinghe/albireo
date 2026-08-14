@@ -195,6 +195,58 @@ orbit's response is the readout.
 (continuum-normalized data), telluric fixed at $\ell = 1$. Constant per component by default;
 per-epoch (eclipse) mode is first-class (§5.2 explains why).
 
+**Nebular emission (D40).** Massive stars are born in H II regions, so their spectra carry
+emission lines that belong to neither star. Three properties set the structure. The lines do
+not move with either component — they are at rest in the *barycentric* frame, the mirror of
+the telluric convention. Their strength varies from exposure to exposure with seeing, slit
+losses and sky subtraction, while their *shape* does not. And nebular flux is **added on top
+of** the total stellar continuum rather than taken out of it, so its amplitude does not
+belong on the light-fraction simplex at all: with $F_\star$ the (normalized) stellar
+composite and $n(\lambda)$ the nebular line profile, the observed normalized flux is
+$F_\star + a_j n$, not a convex combination.
+
+All three are expressible without leaving the affine family: the nebular component is one
+more column of $\mathbf{A}$ with $\delta_{\mathrm{neb},j} = \xi(v_\mathrm{neb})$ (minus
+$\xi(v_{\mathrm{bary},j})$ for topocentric data) and $\ell_{\mathrm{neb},j} = a_j$ free. It
+is therefore *rank-one time variation* — a fixed shape with a free per-epoch scale — which
+is the same structure Tier 3's variable-disc component will generalize, and the reason that
+generalization stays inside the linear-Gaussian family.
+
+Two exact degeneracies come with it, and both are resolved by convention rather than by data.
+
+1. **Scale.** Only the products $a_j d_\mathrm{neb}$ are observable, so $(c\,a_j,\,
+   d_\mathrm{neb}/c)$ is the same fit for every $c > 0$. The spectral prior breaks it
+   *weakly*, which is worse for sampling than not breaking it at all — a nearly flat,
+   unbounded direction. albireo pins the geometric mean, $\prod_j a_j = 1$, by centering the
+   log-amplitude site (`inference.nebular_amplitudes`). What the data then constrain is the
+   epoch-to-epoch variation; the level lives in $d_\mathrm{neb}$.
+2. **Velocity.** The nebular shift is the same at every epoch (barycentric data) or differs
+   only by $\xi(v_\mathrm{bary})$ (topocentric), and a constant shift of a *free* spectrum is
+   the reparameterization $d \to \mathbf{T}(\delta)d$ — so $v_\mathrm{neb}$ is not identified,
+   for exactly the reason $\gamma$ is not (§5.3). It survives as a parameter only because it
+   decides *where on the model grid* the component's lines land, which matters as soon as the
+   prior confines the component to windows (§2): the windows and the shift must agree.
+
+The cost of omitting the component is not subtle, and is measured rather than asserted. In
+the closed loop of `tests/test_nebular.py` — an SB2 with $K = (58, 41)$ km/s whose H$\beta$
+absorption carries a static nebular emission line of peak 0.45 varying $\pm 30$% per epoch —
+disentangling without a nebular component raises the mean flux in the line core by $+0.154$
+against a true depth of $-0.506$ — the recovered core bottoms out at $-0.375$, 26% shallower
+— and understates the H$\beta$ equivalent width by **11.5%**. With the component the same
+numbers are $+0.0015$, $-0.508$, and 0.14%, and the marginal likelihood prefers it by
+$8.1\times10^4$ nats. An 11.5% error in a Balmer
+equivalent width is a large error in $\log g$, and it is the *systematic* kind that no
+uncertainty in the current literature reports.
+
+The orbit fares worse still, which is the part the literature does not describe. A static
+line is a component with $K = 0$, so a model with nowhere else to put it represents it with
+whichever star can be made to move least: fitting the same data jointly from a cold start
+without the component returns $K_2 = 16.8$ against an injected 41.0 (**$-59$%**), a period
+long by 0.171 d, and a circular orbit reported at $e = 0.95$ — the solver's clip, not a fit
+— while $K_1$ survives at $-1$% because 70% of the light pins it. With the component:
+$K_2 - 0.29$%, $\Delta P = -1.4\times10^{-4}$ d, $e = 0.0022$. Nebular contamination therefore
+propagates into the *dynamical* answer — masses — as well as the atmospheric one.
+
 **Response.** Per-epoch multiplicative Chebyshev polynomial on the native grid,
 $r_j(\lambda) = \sum_{m=0}^{M} c_{jm}\,\phi_m(\lambda)$ (default $M=2$), absorbing
 continuum-normalization errors. Coefficients live in $\theta$.
@@ -307,6 +359,43 @@ free, since the marginal likelihood is what we compute anyway), or sampled. The 
 $0$ in deviation space; emission-line components need no special treatment.
 
 $\log\det\boldsymbol\Lambda_i$ is cheap (banded Cholesky, bandwidth 2).
+
+**Per-pixel strengths (D40).** Both weights may carry a static per-pixel profile:
+
+$$
+\boldsymbol\Lambda_i \;=\; \mathbf{D}_2^\top
+  \operatorname{diag}\!\big(\tau_i\, p^\tau_i\big)\, \mathbf{D}_2
+\;+\; \operatorname{diag}\!\big(\eta_i\, p^\eta_i\big),
+$$
+
+with row $k$ of $\mathbf{D}_2$ (which spans pixels $k, k{+}1, k{+}2$) taking the profile
+value of its *center* pixel, so a profile is indexed like the spectrum it regularizes. The
+scalars stay separate from the profiles precisely so that ML-II is unchanged: a profile says
+*where* a component may deviate from the continuum, the scalar says *how much*. That split
+has a consequence worth stating, because getting it wrong would be invisible: an inferred
+$(\tau_i, \eta_i)$ replaces only the scalars and **keeps** the profiles the model was
+constructed with. The
+pentadiagonal entries generalize without any new structure — writing $t_k$ for the row
+weights and reading $t$ as zero outside $[0, P{-}3]$,
+
+$$
+\Lambda_{aa} = t_a + 4t_{a-1} + t_{a-2} + e_a, \qquad
+\Lambda_{a,a+1} = -2\,(t_a + t_{a-1}), \qquad
+\Lambda_{a,a+2} = t_a,
+$$
+
+which reduces to the Toeplitz form (6, $-4$, 1 with the usual boundary corrections) at
+uniform weight, and feeds the same $O(P)$ determinant recursion (§4.5) and the same band
+assembly.
+
+The motivating use is confinement. A nebular component (§1.3) has structure only at a
+handful of known lines, and $p^\eta = 10^6$ away from them states that: the prior standard
+deviation there is $10^{-3}$ of the in-window value, which is negligible against any line
+and leaves the precision better conditioned than before, not worse. It is deliberately a
+*soft* constraint — a hard zero would need different linear algebra and, more importantly,
+would remove the model's ability to report that it disagrees. Nothing about the mechanism is
+nebular-specific; interstellar bands or any component known a priori to be line-poor take
+the same treatment.
 
 ---
 
@@ -792,6 +881,8 @@ $e$, $\omega$, $P_{\rm orb}$, $T_{\rm p}$ are unaffected.
 | per-epoch constants vs. response | approx | low poly order | order $\le 2$ default, covariance reported |
 | telluric constant vs. common stellar constant | exact up to edges | ridge anchors ($\eta$) on both | measured in the telluric closed loop: the two offsets cancel in the sum to $\lesssim 10^{-3}$; report both |
 | LSF width vs. intrinsic line widths | near-exact per instrument | cross-instrument spectrum sharing | absolute widths need a *reference instrument* anchor (tight prior); only relative widths are data-identified (M4, benchmarks.md) |
+| nebular amplitude scale vs. nebular spectrum | exact ($a_j \to c\,a_j$, $d \to d/c$) | nothing — it is a convention | geometric mean pinned to 1 by centering `log_nebular_amp` (§1.3) |
+| nebular velocity vs. common shift of *its* spectrum | exact up to edges (the §5.3 argument, one component at a time) | nothing on barycentric data | `nebular_v_kms` is a *placement* choice; it must agree with the prior's line windows and is not a measurement |
 
 Two of these deserve a sentence. **Telluric constant exchange:** with $\sum_i \ell_i = 1$
 and a telluric component of light fraction 1, adding a constant $a$ to the telluric
@@ -819,12 +910,73 @@ $$
 D(K_2) = 2\left[\log p(y \,|\, K_2) - \log p(y \,|\, \text{no companion})\right]
 $$
 
-costs one linear solve per grid point (and vmaps over the grid). This is the optimal matched
+costs one linear solve per grid point. This is the optimal matched
 filter *marginalized over the unknown companion spectrum* — strictly more sensitive than CCF
 grid searches with assumed templates, and it returns the recovered companion spectrum
 $\hat d_2$ with covariance at the peak. Because $d_2$'s prior scale enters, $D$ is calibrated
 empirically by injection–recovery (same simulator as M1) rather than by an asymptotic $\chi^2$
-claim; the docs will be explicit that the null distribution is estimated, not assumed.
+claim; the null distribution is estimated, not assumed (§6.2).
+
+### 6.1 Marginalizing $K_1$
+
+Holding $K_1$ at the SB1 value conditions the whole scan on a number that has an error bar,
+and the resulting bias does not stay in $K_1$: unremoved primary signal is *coherent* across
+epochs, the companion's free spectrum is the only thing that can absorb it, and it does. The
+symptom reported throughout the literature is spurious structure in the recovered secondary;
+the symptom nobody reports is that $D$ **increases** while this happens, so the artifact
+reads as a stronger detection (measured in benchmarks.md D41: $K_1$ 10% high tripled $D$ and
+took the companion's recovered line pattern from 0.96 correlation with truth to 0.49).
+
+Integrating $K_1$ out removes the conditioning. With a Gaussian prior $K_1 \sim
+\mathcal{N}(\mu_1, \sigma_1^2)$, both models are marginalized over the *same* prior,
+
+$$
+D(K_2) = 2\left[\log \sum_a w_a\, p(y \,|\, K_1^{(a)}, K_2)
+              - \log \sum_a w_a\, p(y \,|\, K_1^{(a)}, \text{no companion})\right],
+$$
+
+with $\{K_1^{(a)}, w_a\}$ a Gauss–Hermite rule, $K_1^{(a)} = \mu_1 + \sqrt2\,\sigma_1 x_a$ and
+$w_a = \tilde w_a/\sqrt\pi$ — exact for polynomials of degree $\le 2n-1$, and the same
+quadrature family the LSF's $h_3$ already uses (§1.3). Using the same prior in numerator and
+denominator is what keeps $D$ a ratio of two marginal likelihoods rather than a comparison of
+differently-conditioned ones. The cost is a factor $n$ in solves, which is why the scan is
+evaluated as one batched `lax.map` over the $(K_1, K_2)$ grid rather than a Python loop.
+
+The recovered spectra at the peak stay *conditional* on the best node
+($\hat K_1 = \arg\max_a \log p(y | K_1^{(a)}, \hat K_2)$), a profile rather than a marginal:
+there is no closed form for the $K_1$-marginalized spectrum, and averaging the nodes'
+spectra would blur the lines instead of widening their error bars.
+
+### 6.2 Calibrating $D$
+
+$D$ has no closed-form null distribution. Wilks' theorem does not apply — the companion is a
+boundary hypothesis whose nuisance parameter is a prior-regularized *function*, so the
+effective degrees of freedom depend on $(\tau_2, \eta_2)$, on the epoch sampling, and on the
+masks. albireo therefore measures the distribution instead of assuming one, by parametric
+bootstrap through the observed data's own operators: with $z = y - r(R\mathbf 1)$ the only
+place the fluxes enter,
+
+$$
+z'_j = r_j \odot \big(R_j B_j \textstyle\sum_i \ell_{ij} T(\delta_{ij}) d_i\big) + n_j,
+\qquad n_j \sim \mathcal N(0, W_j^{-1}),
+$$
+
+reuses every operator, weight and mask and costs one forward apply per trial
+(`forward.with_data`, `simulate.resimulate`). Scanning $N$ such draws with no companion gives
+the null distribution of $\max_{K_2} D$ — the maximum, because that is the statistic a search
+actually reports. Repeating with a companion injected at a ladder of $\ell_2$ gives
+completeness, and the crossing at 95% is the quotable limit.
+
+Two properties are enforced rather than hoped for. The threshold is the smallest $D$ whose
+estimated false-alarm probability $(1 + \#\{{\rm null} \ge D\})/(N+1)$ is within budget, so
+the realized null exceedance never exceeds the nominal rate — an interpolating sample
+quantile does not have that property and errs in the anti-conservative direction. And no FAP
+below $1/(N+1)$ is ever reported: with finitely many trials, "nothing came close" is evidence
+for a small rate, not for none.
+
+What this does *not* do is check the model. The null trials are drawn at the same $K_1$,
+orbit and light fractions the scan assumes, so the threshold is self-consistent with those
+assumptions and blind to their being wrong — which is exactly why §6.1 exists alongside it.
 
 Implementation notes (M4, `albireo.scan.k2_scan`): the no-companion model is the
 single-component fit with $\ell_1 = 1$ and the primary's prior; the companion's light

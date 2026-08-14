@@ -200,4 +200,25 @@ On Windows, `$env:ALBIREO_EXAMPLE_FAST = "1"` sets the same switch. The script e
 unless the peak lands on the injected $K_2$ *and* the companion-free control stays negative
 everywhere, so it is safe to wire straight into CI.
 
+## What a peak is worth
+
+This tutorial finds a companion. It does not say how often noise alone would have produced
+the peak it found, and that is the question a referee asks next. Two things close the gap,
+both in [`examples/05_detection_limit.py`](https://github.com/tjayasinghe/albireo/blob/main/examples/05_detection_limit.py):
+
+- **Integrate $K_1$ out** rather than condition on the SB1 value, with
+  `k2_scan(k1_sigma=...)`. This is not a refinement: a $K_1$ 10% high took the recovered
+  companion's line pattern from 0.96 correlation with truth to 0.49 *while tripling* $D$
+  ([benchmarks](../benchmarks.md), D41), so the artifact reads as a stronger detection.
+- **Calibrate the statistic** with [`albireo.detection_limit`](../api/calibrate.md), which
+  resimulates this dataset through its own operators, scans hundreds of companion-free
+  draws for the null distribution of $\max_{K_2} D$, and injects a ladder of light
+  fractions for completeness. Out comes a false-alarm probability for the peak above and a
+  limit of the form *any companion contributing more than $X$% of the light would have been
+  detected at 95% confidence*.
+
+Note that a calibrated threshold and a marginalized $K_1$ do different jobs and neither
+replaces the other: the null trials are drawn under whatever $K_1$ the scan assumes, so the
+calibration is blind to that assumption being wrong.
+
 Previously: [disentangle an SB2 end to end](sb2-end-to-end.md).

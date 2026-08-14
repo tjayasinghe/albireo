@@ -13,6 +13,7 @@ if not os.environ.get("ALBIREO_DISABLE_X64"):
 
     jax.config.update("jax_enable_x64", True)
 
+from albireo.calibrate import DetectionLimit, detection_limit
 from albireo.data import Dataset, EpochData
 from albireo.examples import clear_example_cache, example_info, example_names, load_example
 from albireo.forward import (
@@ -20,9 +21,11 @@ from albireo.forward import (
     build_problem,
     data_residual_zscores,
     with_ar1,
+    with_data,
     with_jitter,
     with_light_fractions,
     with_lsf,
+    with_nebular_amplitudes,
     with_response,
     with_velocities,
 )
@@ -31,6 +34,7 @@ from albireo.inference import (
     MAPResult,
     MarginalOrbitModel,
     laplace_inverse_mass,
+    nebular_amplitudes,
     orbit_parameters,
     orbit_velocities,
     posterior_spectra,
@@ -73,15 +77,22 @@ from albireo.preprocess import (
     select_region,
     share_wavelength_grid,
 )
-from albireo.priors import SmoothnessPrior
+from albireo.priors import (
+    NEBULAR_LINES,
+    SmoothnessPrior,
+    nebular_windows,
+    window_profile,
+)
 from albireo.results import load_fit, save_fit, to_inference_data, write_ascii
 from albireo.scan import K2ScanResult, k2_scan
 from albireo.simulate import (
     InstrumentSpec,
     OrbitParams,
     SimulationTruth,
+    resimulate,
     simulate_dataset,
     synthetic_deviation_spectrum,
+    synthetic_nebular_spectrum,
     synthetic_telluric_spectrum,
 )
 
@@ -103,6 +114,7 @@ _PLOT_EXPORTS = frozenset(
     {
         "plot_corner",
         "plot_detection",
+        "plot_detection_limit",
         "plot_light_fractions",
         "plot_lsf",
         "plot_phase_fold",
@@ -131,8 +143,10 @@ def __dir__():
 
 __all__ = [
     "C_KMS",
+    "NEBULAR_LINES",
     "TELLURIC_BANDS",
     "Dataset",
+    "DetectionLimit",
     "EpochData",
     "InstrumentSpec",
     "InterpOperator",
@@ -156,6 +170,7 @@ __all__ = [
     "convolve_varying_adjoint",
     "data_residual_zscores",
     "der_snr_sigma",
+    "detection_limit",
     "draw_spectra",
     "estimate_ivar",
     "example_info",
@@ -176,6 +191,8 @@ __all__ = [
     "mask_ranges",
     "mask_spikes",
     "mask_tellurics",
+    "nebular_amplitudes",
+    "nebular_windows",
     "normalize",
     "orbit_parameters",
     "orbit_velocities",
@@ -192,6 +209,7 @@ __all__ = [
     "read_dataset",
     "read_spectrum",
     "rebin_operator",
+    "resimulate",
     "run_map",
     "run_nuts",
     "save_fit",
@@ -203,15 +221,19 @@ __all__ = [
     "solve_kepler",
     "spectra_std",
     "synthetic_deviation_spectrum",
+    "synthetic_nebular_spectrum",
     "synthetic_telluric_spectrum",
     "t_peri_from_t_conj",
     "to_epoch",
     "to_inference_data",
     "true_anomaly",
+    "window_profile",
     "with_ar1",
+    "with_data",
     "with_jitter",
     "with_light_fractions",
     "with_lsf",
+    "with_nebular_amplitudes",
     "with_response",
     "with_velocities",
     "write_ascii",

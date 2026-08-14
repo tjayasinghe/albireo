@@ -44,6 +44,18 @@ The nonlinear parameter vector ``theta`` is a dict of JAX arrays with sites
   Requires the model to be built with ``ar1=True``, because the correlated coupling
   widens the static solver bandwidth; the marginal stays on the band assembly path
   (D35). Composes with ``log_jitter``: alpha scales, phi correlates.
+- ``log_nebular_amp`` (optional) — log per-epoch amplitude of the nebular component,
+  ``(n_epochs,)`` (D40; requires ``nebular=True`` at construction). The site is
+  *centered* before use — ``a_j = exp(u_j - mean(u))`` — because only ``a_j d_neb``
+  is observable, so the overall scale is degenerate with the component spectrum and
+  the prior would otherwise have to break it. The consequence is that the prior on
+  this site is a prior on the epoch-to-epoch *variation* (a zero-mean Normal with
+  sigma 0.2 says "roughly ±20% night to night"), and that shifting every entry by a
+  constant does nothing at all. The common mode is therefore an exactly flat direction
+  of the *likelihood*, held only by the site's own prior — the posterior stays proper
+  and well conditioned (curvature 1/sigma^2 along it), but ``mean(log_nebular_amp)``
+  in the samples is the prior and nothing else. Read the ``nebular_amp`` deterministic
+  (:func:`nebular_amplitudes`) rather than the raw site.
 
 ``gamma`` is identically zero (design decision D14: a systemic velocity is exactly
 degenerate with a common shift of the component spectra). The ``(secosw, sesinw)``
@@ -85,6 +97,7 @@ from albireo.forward import (
     with_jitter,
     with_light_fractions,
     with_lsf,
+    with_nebular_amplitudes,
     with_response,
     with_velocities,
 )
@@ -97,6 +110,7 @@ __all__ = [
     "MAPResult",
     "MarginalOrbitModel",
     "laplace_inverse_mass",
+    "nebular_amplitudes",
     "orbit_parameters",
     "orbit_velocities",
     "posterior_spectra",
@@ -105,6 +119,10 @@ __all__ = [
 ]
 
 _ECC_MAX_DEFAULT = 0.95  # the Kepler solver is verified up to e = 0.95
+# Live-bytes budget for one vmapped batch of a log_likelihood_sweep. The sweep is
+# forward-only (no tape), so the constraint is the batch's own working set rather than
+# assembly.py's gradient budget, and it can be a good deal more generous.
+_SWEEP_BATCH_BYTES = 1 << 30
 # Gauss-Hermite skewness bound: beyond ~0.2 the truncated series dips measurably
 # negative in the tail, and real instrument profiles sit well below it (D38).
 _H3_MAX = 0.2
@@ -122,9 +140,25 @@ _THETA_SITES = (
     "response",
     "log_jitter",
     "ar1_phi",
+    "log_nebular_amp",
     "log_tau",
     "log_eta",
 )
+
+
+def _sweep_batch_default(n_trials: int, n: int, bandwidth: int) -> int:
+    """Trials per vmapped batch of :meth:`MarginalOrbitModel.log_likelihood_sweep`.
+
+    Same two-regime shape as :func:`albireo.assembly._epoch_chunk_default`: run the whole
+    sweep as one batch while that stays under ``_SWEEP_BATCH_BYTES``, otherwise cut it to
+    fit. The estimate is the handful of ``(n, bandwidth)`` float64 arrays a marginal
+    solve keeps live — the band tensor and the block-tridiagonal factor dominate, and
+    everything smaller rides along inside the constant.
+    """
+    per_trial = 48 * max(n, 1) * max(bandwidth, 1)
+    if n_trials * per_trial <= _SWEEP_BATCH_BYTES:
+        return max(1, n_trials)
+    return max(1, min(n_trials, _SWEEP_BATCH_BYTES // per_trial))
 
 
 def _has_outer_orbit(theta: Mapping) -> bool:
@@ -211,6 +245,32 @@ def orbit_velocities(theta: Mapping, bjd, *, ecc_max: float = _ECC_MAX_DEFAULT):
     return jnp.stack(rows)
 
 
+def nebular_amplitudes(theta: Mapping):
+    """Per-epoch nebular amplitudes from ``theta['log_nebular_amp']`` (differentiable).
+
+    ``a_j = exp(u_j - mean(u))``: the geometric mean is pinned to 1, which is a
+    *convention*, not an inference. The model sees only the products ``a_j d_neb``, so
+    without a pinned scale the pair ``(c a_j, d_neb / c)`` is the same fit for every
+    ``c > 0`` and the only thing separating them is the spectral prior — a direction
+    that is nearly flat, unbounded in one coordinate, and would dominate the sampler's
+    step size for no return. Centering removes it exactly and costs one degree of
+    freedom, the one that was never identified.
+
+    Two consequences to keep in mind when reading a fit. The recovered ``d_neb`` is on
+    the scale of a *typical* epoch, so its line strengths are comparable to injected or
+    published ones only up to that convention; and the posterior for ``a`` describes
+    relative variation, so "epoch 7 is 1.4x" is a statement the data support while
+    "the nebular emission was 1.4 units strong" is not.
+
+    Returns
+    -------
+    jax.Array
+        ``(n_epochs,)`` positive amplitudes with geometric mean 1.
+    """
+    u = jnp.atleast_1d(jnp.asarray(theta["log_nebular_amp"]))
+    return jnp.exp(u - jnp.mean(u))
+
+
 class MarginalOrbitModel:
     """The marginal posterior over orbital parameters for one dataset.
 
@@ -227,7 +287,7 @@ class MarginalOrbitModel:
 
     Parameters
     ----------
-    grid, dataset, light_fractions, lsf_sigma_v, lsf_anchors_angstrom, response_coeffs, telluric
+    grid, dataset, light_fractions, lsf_sigma_v, lsf_anchors_angstrom, response_coeffs
         As in :func:`albireo.forward.build_problem`. ``light_fractions`` and
         ``lsf_sigma_v`` are the build-time values, used whenever θ carries no
         ``light`` / ``lsf_sigma`` site; when those sites *are* inferred, the
@@ -239,6 +299,12 @@ class MarginalOrbitModel:
         in total. ``response_coeffs`` likewise is the fixed response used whenever
         θ carries no ``response`` site, and is replaced outright when it does
         (:func:`albireo.forward.with_response`).
+    telluric, nebular, nebular_v_kms
+        Extra non-stellar components, as in :func:`albireo.forward.build_problem`.
+        Each one enabled adds a trailing row to the recovered spectra and a trailing
+        entry to ``prior`` (order: stellar, telluric, nebular), and must be paid for
+        in ``v_rel_max_kms``. ``nebular=True`` also enables the ``log_nebular_amp``
+        θ site; without the site the amplitudes stay at 1 and the component is static.
     v_rel_max_kms
         Bound on the largest relative velocity between any two model components at
         any epoch (for an SB2: ``(K_1 + K_2)(1 + e)``; for an SB3 add the outer
@@ -248,7 +314,10 @@ class MarginalOrbitModel:
     prior
         Fixed :class:`SmoothnessPrior`, used whenever ``theta`` carries no
         ``log_tau``/``log_eta`` sites. Optional if the hyperparameters are always in
-        ``theta``.
+        ``theta`` — with one exception: its **per-pixel profiles are kept even when
+        the scalars are inferred** (D40), because a profile is structure rather than a
+        hyperparameter. A windowed component therefore needs its prior passed here
+        even in a pure ML-II run.
     ecc_max
         Eccentricity clip/constraint (default 0.95, the solver's verified range).
     block_size
@@ -272,6 +341,8 @@ class MarginalOrbitModel:
         lsf_anchors_angstrom: Mapping[str, Sequence[float]] | None = None,
         response_coeffs=None,
         telluric: bool = False,
+        nebular: bool = False,
+        nebular_v_kms: float = 0.0,
         prior: SmoothnessPrior | None = None,
         ecc_max: float = _ECC_MAX_DEFAULT,
         block_size: int | None = None,
@@ -288,6 +359,8 @@ class MarginalOrbitModel:
             lsf_anchors_angstrom=lsf_anchors_angstrom,
             response_coeffs=response_coeffs,
             telluric=telluric,
+            nebular=nebular,
+            nebular_v_kms=nebular_v_kms,
         )
         self.bjd = jnp.asarray(dataset.bjd)
         hb = self.problem.half_bandwidth_bound(v_rel_max_kms)
@@ -329,6 +402,7 @@ class MarginalOrbitModel:
         # them as closure constants instead triggers XLA constant folding that
         # allocates tens of GB at survey scale.
         self._marginal_jit = jax.jit(self._marginal_at)
+        self._sweep_jit = jax.jit(self._sweep_at, static_argnums=3)
 
     @property
     def n_stellar(self) -> int:
@@ -338,7 +412,19 @@ class MarginalOrbitModel:
         if "log_tau" in theta or "log_eta" in theta:
             if "log_tau" not in theta or "log_eta" not in theta:
                 raise ValueError("theta must carry both log_tau and log_eta, or neither")
-            return SmoothnessPrior(jnp.exp(theta["log_tau"]), jnp.exp(theta["log_eta"]))
+            # The per-pixel profiles are *structure*, not hyperparameters (D40): they say
+            # where a component may deviate from the continuum, the sampled scalars say
+            # how much. So an inferred (tau, eta) replaces the scalars and keeps the
+            # construction-time profiles — dropping them here would silently un-confine a
+            # windowed component the moment ML-II was switched on, which is exactly the
+            # kind of quiet wrongness the guards elsewhere exist to prevent.
+            base = self.fixed_prior
+            return SmoothnessPrior(
+                jnp.exp(theta["log_tau"]),
+                jnp.exp(theta["log_eta"]),
+                None if base is None else base.tau_profile,
+                None if base is None else base.eta_profile,
+            )
         if self.fixed_prior is None:
             raise ValueError(
                 "no spectral prior: pass prior= at construction or include log_tau/log_eta in theta"
@@ -404,6 +490,16 @@ class MarginalOrbitModel:
             problem = with_lsf(problem, parts, h3_parts)
         if "response" in theta:
             problem = with_response(problem, jnp.asarray(theta["response"]))
+        if "log_nebular_amp" in theta:
+            if not problem.nebular:
+                raise ValueError(
+                    "theta carries a log_nebular_amp site but the model was built "
+                    "without nebular=True. The nebular component changes the size of "
+                    "the linear system and the length of the spectral prior, so it "
+                    "cannot be switched on by a θ site — rebuild the "
+                    "MarginalOrbitModel with nebular=True (and one more (tau, eta))."
+                )
+            problem = with_nebular_amplitudes(problem, nebular_amplitudes(theta))
         if "log_jitter" in theta:
             problem = with_jitter(problem, jnp.exp(jnp.asarray(theta["log_jitter"])))
         if "ar1_phi" in theta:
@@ -469,6 +565,85 @@ class MarginalOrbitModel:
     def log_likelihood(self, theta: Mapping):
         """Jit-compiled marginal log-likelihood at θ (differentiable)."""
         return self.marginal(theta).log_likelihood
+
+    def _sweep_at(self, base, theta: Mapping, sweep: Mapping, batch_size: int):
+        def one(sw):
+            return self._marginal_at(base, {**theta, **sw}).log_likelihood
+
+        return jax.lax.map(one, sweep, batch_size=batch_size)
+
+    def log_likelihood_sweep(
+        self,
+        theta: Mapping,
+        sweep: Mapping,
+        *,
+        batch_size: int | None = None,
+        problem=None,
+    ):
+        """Marginal log-likelihood over a grid of θ values — one graph, no host round-trip.
+
+        A scan over trial parameters is not inference: nothing is being sampled, the
+        points are independent, and the answer is one number each. Done as a Python loop
+        over :meth:`log_likelihood` it still pays a device synchronization per point,
+        and every point's linear algebra is dispatched alone; done here it is a single
+        ``lax.map``, so the trials share one compiled graph and batch into the same
+        kernels. That is what makes a 2-D ``(K_1, K_2)`` grid — and the thousands of
+        scans an injection-recovery calibration runs on top of it
+        (:mod:`albireo.calibrate`) — affordable rather than merely possible.
+
+        Parameters
+        ----------
+        theta
+            The fixed part of the parameter dict, exactly as :meth:`log_likelihood`
+            takes it.
+        sweep
+            The varying part: a mapping from θ site name to an array whose *leading*
+            axis is the trial axis. Every entry must share that leading length, and each
+            trailing shape must be what the site takes at a single θ (so sweeping ``k``
+            on a two-component model wants ``(n_trials, 2)``). Entries override ``theta``.
+        batch_size
+            Trials per vmapped batch. ``None`` (default) applies the size-adaptive
+            policy of :func:`_sweep_batch_default`; 1 is a pure sequential scan (least
+            memory); ``n_trials`` forces one wide batch (fastest, most memory).
+        problem
+            Alternative base :class:`~albireo.forward.Problem` — same structure, other
+            numbers. The one use is a resimulated dataset
+            (:func:`albireo.simulate.resimulate`), which is why it exists: it lets a
+            bootstrap reuse this model's operators instead of rebuilding them per trial.
+
+        Returns
+        -------
+        jax.Array
+            ``(n_trials,)`` marginal log-likelihoods, in ``sweep`` order.
+
+        Examples
+        --------
+        >>> k = jnp.stack([jnp.full_like(k2s, 60.0), k2s], axis=1)  # doctest: +SKIP
+        >>> ll = model.log_likelihood_sweep(orbit, {"k": k})  # doctest: +SKIP
+        """
+        sweep = dict(sweep)
+        if not sweep:
+            raise ValueError("sweep is empty — pass at least one site to vary")
+        unknown = [s for s in sweep if s not in _THETA_SITES]
+        if unknown:
+            raise ValueError(f"unknown sites in sweep: {unknown} (expected {_THETA_SITES})")
+        sweep = {name: jnp.asarray(v) for name, v in sweep.items()}
+        lengths = {name: v.shape[0] for name, v in sweep.items() if v.ndim > 0}
+        if len(lengths) != len(sweep):
+            flat = [n for n, v in sweep.items() if v.ndim == 0]
+            raise ValueError(f"sweep entries need a leading trial axis; {flat} are scalars")
+        if len(set(lengths.values())) != 1:
+            raise ValueError(f"sweep entries disagree on the trial-axis length: {lengths}")
+        n_trials = next(iter(lengths.values()))
+        if n_trials == 0:
+            raise ValueError("sweep has no trials")
+        if batch_size is None:
+            batch_size = _sweep_batch_default(
+                n_trials, self.problem.n_components * self.problem.grid.n, self.half_bandwidth
+            )
+        batch_size = max(1, min(int(batch_size), n_trials))
+        base = self.problem if problem is None else problem
+        return self._sweep_jit(base, dict(theta), sweep, batch_size)
 
     def model(self, priors: Mapping[str, dist.Distribution], *, fixed: Mapping | None = None):
         """Build a numpyro model: sample ``priors``, add the marginal likelihood.
@@ -544,6 +719,11 @@ class MarginalOrbitModel:
                 # with_ar1 clips at +-0.999 so the likelihood stays finite (and
                 # rejectable, via this factor) outside the stationary region.
                 numpyro.factor("ar1_bound", jnp.where(jnp.all(jnp.abs(phi) < 1.0), 0.0, -jnp.inf))
+            if "log_nebular_amp" in theta:
+                # Record the amplitudes the model actually applied: the site itself is
+                # only identified up to an additive constant (nebular_amplitudes
+                # centers it), so reading the raw samples would mislead.
+                numpyro.deterministic("nebular_amp", nebular_amplitudes(theta))
             problem = self._theta_problem(theta, base=base)
             # Reject configurations whose relative shifts exceed the static bandwidth
             # (the probed marginal likelihood would be silently wrong out there).

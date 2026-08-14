@@ -134,7 +134,10 @@ def save_fit(result, path, *, precision: bool = False, compress: bool = True) ->
     arrays[_HEADER_KEY] = np.array(json.dumps(header))
     path.parent.mkdir(parents=True, exist_ok=True)
     save = np.savez_compressed if compress else np.savez
-    save(path, **arrays)
+    # numpy's stubs give these a second positional parameter `allow_pickle: bool`, so a
+    # `**kwargs` splat of arrays is not expressible in the signature even though it is
+    # exactly the documented calling convention (each keyword names an array).
+    save(path, **arrays)  # type: ignore[arg-type]
     return path
 
 
@@ -206,15 +209,28 @@ _K2_ARRAYS = (
     "companion",
     "companion_std",
 )
+# The K_1 quadrature (scan.k2_scan(k1_sigma=...)). Optional on read so that a file
+# written before the marginalization existed still loads; always written.
+_K2_OPTIONAL_ARRAYS = (
+    "k1_grid",
+    "k1_log_weights",
+    "log_likelihood_grid",
+    "log_likelihood_null_grid",
+)
 
 
 def _save_k2(result, header, arrays, **_):
     header["scalars"] = {
         "log_likelihood_null": float(result.log_likelihood_null),
         "k2_peak": float(result.k2_peak),
+        "k1_peak": float(result.k1_peak),
     }
     for name in _K2_ARRAYS:
         arrays[name] = _as_numpy(getattr(result, name))
+    for name in _K2_OPTIONAL_ARRAYS:
+        value = getattr(result, name)
+        if value is not None:
+            arrays[name] = _as_numpy(value)
 
 
 def _load_k2(header, arrays):
@@ -222,6 +238,7 @@ def _load_k2(header, arrays):
 
     return K2ScanResult(
         **{name: arrays[name] for name in _K2_ARRAYS},
+        **{name: arrays[name] for name in _K2_OPTIONAL_ARRAYS if name in arrays},
         **header["scalars"],
         model=None,
     )

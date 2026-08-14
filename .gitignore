@@ -235,3 +235,5 @@ data/
 quickstart_map.npz
 sb2_*.png
 k2_*.png
+nebular_*.png
+detection_limit.png
