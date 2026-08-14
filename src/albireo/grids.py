@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import jax.numpy as jnp
 import numpy as np
 
-__all__ = ["C_KMS", "LogGrid", "log_doppler_shift"]
+__all__ = ["C_KMS", "LogGrid", "air_to_vacuum", "log_doppler_shift", "vacuum_to_air"]
 
 C_KMS: float = 299_792.458
 """Speed of light in km/s."""
@@ -44,6 +44,67 @@ def log_doppler_shift(v_kms, *, relativistic: bool = True):
     if relativistic:
         return jnp.arctanh(beta)
     return jnp.log1p(beta)
+
+
+def _iau_n_minus_one(sigma2):
+    """Edlen (1966) / Birch & Downs (1994) refractivity, as adopted by the IAU.
+
+    ``sigma2`` is the squared vacuum wavenumber in um^-2. This is the form Morton (2000)
+    tabulates and the one SDSS, VALD and the NIST tables use, so line lists converted
+    with it agree to well below a m/s.
+    """
+    return 1e-8 * (8342.13 + 2406030.0 / (130.0 - sigma2) + 15997.0 / (38.9 - sigma2))
+
+
+def vacuum_to_air(wave_vacuum):
+    """Convert vacuum wavelengths [Angstrom] to standard air.
+
+    Air wavelengths are what most optical spectrographs report and what most optical line
+    lists are tabulated in; vacuum is what the UV, the IR, ESPRESSO and Gaia RVS use. The
+    difference is 0.87 Angstrom at 3000 A rising to 2.74 A at 10000 A — but the number
+    that matters here is the *velocity*, which is nearly constant at **83 km/s** across
+    the whole optical (87.4 at 3000 A, 82.8 at Halpha, 82.2 at 10000 A). That is the same
+    order as the orbital semi-amplitudes albireo exists to measure, so mixing the two
+    scales is not a rounding error but a first-order mistake, and it does not average out.
+
+    Uses the IAU-adopted Edlen (1966) refractivity in the Birch & Downs (1994)
+    parameterization, evaluated at the *vacuum* wavenumber, which is the convention
+    Morton (2000) tabulates and therefore what published air line lists agree with.
+
+    Parameters
+    ----------
+    wave_vacuum
+        Vacuum wavelengths in Angstrom. Any shape; differentiable under JAX.
+
+    Returns
+    -------
+    jax.Array
+        Air wavelengths, same shape.
+
+    See Also
+    --------
+    air_to_vacuum : the inverse.
+    albireo.data.EpochData : declares which scale an epoch is on.
+    """
+    wave = jnp.asarray(wave_vacuum, dtype=float)
+    sigma2 = (1e4 / wave) ** 2
+    return wave / (1.0 + _iau_n_minus_one(sigma2))
+
+
+def air_to_vacuum(wave_air):
+    """Convert standard-air wavelengths [Angstrom] to vacuum — the inverse of :func:`vacuum_to_air`.
+
+    The refractivity is defined at the vacuum wavenumber, so inverting it is not a closed
+    form. Two fixed-point iterations are used, which is not a compromise: the refractivity
+    changes by ~1e-8 over the 0.03% the wavelength moves, so the first iteration is already
+    correct to ~1e-11 Angstrom and the second is there to make the round trip exact to
+    float64. Verified in the suite to 1e-10 Angstrom over 3000-10000 Angstrom.
+    """
+    wave = jnp.asarray(wave_air, dtype=float)
+    vac = wave * (1.0 + _iau_n_minus_one((1e4 / wave) ** 2))
+    for _ in range(2):
+        vac = wave * (1.0 + _iau_n_minus_one((1e4 / vac) ** 2))
+    return vac
 
 
 @dataclass(frozen=True)

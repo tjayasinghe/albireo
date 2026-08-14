@@ -226,9 +226,12 @@ than a disentangling dataset. The genuinely interesting DR3 demonstration is com
 ground-based epochs — which albireo handles natively, since multi-instrument data with different
 line-spread functions is the case it was built for.
 
-This also forces a small correctness fix worth doing anyway: RVS wavelengths are vacuum and most
-optical spectrographs deliver air, and there is currently no field in which to declare which is
-which. Making it a declared, validated property turns a silent sub-ångström error into an exception.
+This also forced a small correctness fix worth doing anyway, and it has **already landed** (D43),
+pulled forward because item 4's archive loader needed it first: RVS wavelengths are vacuum and most
+optical spectrographs deliver air, and there was no field in which to declare which is which.
+`EpochData(medium=...)` is now that field, `Dataset` refuses a mixture, and `air_to_vacuum` /
+`vacuum_to_air` convert. Calling it "sub-ångström" undersold it: the offset is 0.87-2.74 Å, but as a
+velocity it is a nearly constant **83 km/s**, the same order as the orbits being measured.
 
 ### 8. Downstream handoff
 

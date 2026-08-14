@@ -30,7 +30,7 @@ from albireo.forward import (
     with_shifts,
     with_velocities,
 )
-from albireo.grids import C_KMS, LogGrid, log_doppler_shift
+from albireo.grids import C_KMS, LogGrid, air_to_vacuum, log_doppler_shift, vacuum_to_air
 from albireo.inference import (
     MAPResult,
     MarginalOrbitModel,
@@ -166,6 +166,7 @@ __all__ = [
     "SimulationTruth",
     "SmoothnessPrior",
     "__version__",
+    "air_to_vacuum",
     "bin_edges_from_centers",
     "build_problem",
     "clear_example_cache",
@@ -234,6 +235,7 @@ __all__ = [
     "to_epoch",
     "to_inference_data",
     "true_anomaly",
+    "vacuum_to_air",
     "window_profile",
     "with_ar1",
     "with_data",

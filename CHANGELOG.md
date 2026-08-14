@@ -13,6 +13,17 @@ This file records *what changed*. The reasons live elsewhere and are worth follo
 
 ### Added
 
+- **Air vs vacuum is now a declared, validated property** — `EpochData(medium=...)`
+  accepts `"air"`, `"vacuum"` or `None` (undeclared, the default and what every epoch
+  built before this field existed means), and `Dataset` **refuses a mixture** rather than
+  picking one. The offset is a nearly constant 83 km/s across the optical — the same
+  order as the semi-amplitudes albireo measures, and it does not average out. Mixing
+  declared with undeclared raises too: "unknown" cannot be checked against "air".
+- `albireo.air_to_vacuum` / `albireo.vacuum_to_air` — the IAU-adopted Edlen (1966) /
+  Birch & Downs (1994) refractivity, evaluated at the vacuum wavenumber so that converted
+  line lists agree with published air values. The round trip closes to float64.
+- `LogGrid` gained no new state: the conversions are free functions, because which scale
+  a *spectrum* is on is a property of the observation, not of the model grid.
 - **A free per-epoch radial-velocity table** — theta site `velocity`
   `(n_stellar, n_epochs)`, which *replaces* the Keplerian rather than supplementing it
   (mixing the two raises). `albireo.relative_velocities` reports the identified table,

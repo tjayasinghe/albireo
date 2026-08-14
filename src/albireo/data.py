@@ -49,6 +49,7 @@ import numpy as np
 __all__ = ["Dataset", "EpochData"]
 
 _FRAMES: tuple[str, ...] = ("topocentric", "barycentric")
+_MEDIA: tuple[str, ...] = ("air", "vacuum")
 
 
 def _as_float64_1d(value: object, name: str) -> np.ndarray:
@@ -102,6 +103,24 @@ class EpochData:
     mask : array_like of bool or None, optional
         Optional quality flag, shape ``(n,)``, where ``True`` means GOOD. Folded into the
         weights by :attr:`effective_ivar` and nowhere else. Default ``None``.
+    medium : {"air", "vacuum"} or None, optional
+        Which wavelength scale ``wave`` is on. Default ``None`` — *undeclared*, which is
+        accepted (it is what every epoch built before this field existed means) but is not
+        the same as "air": nothing may assume a value for it.
+
+        The distinction is worth a field because it is worth a nearly constant **83 km/s**
+        across the optical (0.87 Angstrom at 3000 A, 2.74 A at 10000 A) — the same order as
+        the semi-amplitudes albireo measures — and because real archives mix the two.
+        ESO Phase 3 spectra declare it
+        per file in ``TUCD1`` (``em.wl;obs.atmos`` is air, ``em.wl`` is vacuum), and the
+        mix is not academic: FEROS, HARPS, UVES and GIRAFFE deliver air while ESPRESSO
+        and XQ-100 deliver vacuum. A :class:`Dataset` combining them without conversion
+        would put the same physical line at two different model pixels.
+
+        :class:`Dataset` therefore requires every epoch to agree, and refuses a mixture
+        rather than silently picking one (:func:`albireo.air_to_vacuum` and
+        :func:`albireo.vacuum_to_air` convert). Undeclared epochs may be combined only
+        with other undeclared epochs — "unknown" cannot be checked against "air".
 
     Raises
     ------
@@ -135,6 +154,7 @@ class EpochData:
     v_bary: float = 0.0
     instrument: str = "default"
     mask: np.ndarray | None = None
+    medium: str | None = None
 
     def __post_init__(self) -> None:
         wave = _as_float64_1d(self.wave, "wave")
@@ -186,6 +206,11 @@ class EpochData:
 
         bjd = _as_finite_float(self.bjd, "bjd")
         v_bary = _as_finite_float(self.v_bary, "v_bary")
+
+        if self.medium is not None and self.medium not in _MEDIA:
+            raise ValueError(
+                f"medium must be one of {_MEDIA} or None (undeclared), got {self.medium!r}"
+            )
 
         mask: np.ndarray | None = None
         if self.mask is not None:
@@ -303,6 +328,32 @@ class Dataset:
 
         if self.frame not in _FRAMES:
             raise ValueError(f"frame must be one of {_FRAMES}, got {self.frame!r}")
+
+        # Every epoch must be on the same wavelength scale. Air and vacuum differ by a
+        # nearly constant 83 km/s across the optical — the same order as the orbits
+        # albireo measures — so a mixture puts one physical line at two model pixels and
+        # biases every velocity that depends on the offending epochs. Real
+        # archives mix them (ESO delivers air from FEROS/HARPS/UVES/GIRAFFE and vacuum
+        # from ESPRESSO), which is exactly why this is checked rather than assumed.
+        media = {epoch.medium for epoch in epochs}
+        if len(media) > 1:
+            where: dict[str | None, list[object]] = {}
+            for k, epoch in enumerate(epochs):
+                where.setdefault(epoch.medium, []).append(k)
+            summary = "; ".join(
+                f"{name if name is not None else 'undeclared'}: epochs "
+                f"{indices if len(indices) <= 4 else [*indices[:4], '...']}"
+                for name, indices in sorted(where.items(), key=lambda kv: str(kv[0]))
+            )
+            raise ValueError(
+                f"the epochs disagree about their wavelength scale ({summary}). Air and "
+                "vacuum wavelengths differ by a nearly constant 83 km/s across the "
+                "optical, so combining them without conversion would put the same line "
+                "at different model pixels. Convert with albireo.air_to_vacuum or "
+                "albireo.vacuum_to_air and set medium= on every epoch. An undeclared "
+                "epoch cannot be combined with a declared one: 'unknown' is not a value "
+                "this can be checked against."
+            )
 
         object.__setattr__(self, "epochs", epochs)
 
