@@ -13,6 +13,33 @@ This file records *what changed*. The reasons live elsewhere and are worth follo
 
 ### Added
 
+- **BLOeM targets resolve by name** — `albireo.resolve_bloem("1-002")`,
+  `albireo.bloem_catalogue(binary_class="SB2")` (the 59 published double-lined systems),
+  and `albireo.bloem_spectra(star)` for that star's epochs, ready for `download`. The
+  archive does not know the survey's names: BLOeM spectra sit under
+  `obs_collection='GIRAFFE'` with `target_name` set to the *Gaia DR3 source id*, so the
+  cross-match is fetched from VizieR — the same TAP dialect, hence still no new dependency.
+  Gaia ids are kept as strings because 809 of the 929 do not survive a float64 round trip.
+  Defaults to survey programme `112.25R7`: the same 929 stars are also observed by
+  `115.28A9` at *R* = 17000 and 23000 in two other windows, and pooling those with LR02
+  under one line-spread function would be wrong. See `docs/design.md` D45.
+- **The FITS reader dispatches on IVOA utypes (`TUTYPn`), not column names** — so every ESO
+  collection reads with the right column, the right unit and the right wavelength scale.
+  Names remain a last-resort fallback for non-ESO files. Keying on UCDs instead would have
+  been actively unsafe: UVES gives its sky-background column the same UCD HARPS gives its
+  flux column. `RawSpectrum` gained `quality`, `specsys`, `v_bary_source`, `err_source`,
+  `columns` and `bad_pixels`, so what the reader chose and why is inspectable.
+- **Quality columns are honoured, and so is a zero uncertainty** — a flagged pixel, a
+  non-finite flux, or a non-positive error now gets `ivar = 0` rather than full weight. A
+  zero error is how these pipelines write "nothing here", not a measurement of infinite
+  precision. Flagged pixels are also excluded from the continuum fit. A flag column whose
+  convention cannot be read is **ignored rather than guessed at**: one in which zero never
+  appears is not using "zero is good" (UVES_SQUAD's `STATUS` runs `{-5, 1}`, and taken at
+  face value it condemns every pixel of all 467 products in that collection), and columns
+  named only `MASK`/`FLAG` are not read at all, since those names carry no agreed polarity.
+  Losing a mask is recoverable; inverting one keeps exactly the pixels the file rejected.
+- `read_dataset(medium=...)`, matching the existing `frame=` override, and a refusal to
+  combine files that disagree about air vs vacuum.
 - **`albireo.archive`** — an ESO Science Archive client: `spectra_query` builds the
   ADQL, `query` runs it, `download` fetches resumably with a manifest. One query language
   for FEROS, HARPS, UVES, X-shooter, GIRAFFE and ESPRESSO. Stdlib only, so finding data
@@ -160,6 +187,51 @@ This file records *what changed*. The reasons live elsewhere and are worth follo
 
 ### Fixed
 
+- **`EpochData.medium` never reached an epoch read from a file.** `to_epoch` built the
+  `EpochData` without it, and `preprocess._replace` — which every trimming and masking
+  helper goes through — omitted it, so even a hand-set value was dropped by the first
+  `select_region`. D43's guard against combining air with vacuum therefore could not fire
+  on the path that matters, and the offset it exists to catch is 83 km/s.
+- `ESO TEL TARG ALPHA` / `DELTA` are packed sexagesimal (`HHMMSS.sss`, `±DDMMSS.sss`) and
+  were read as degrees. `SkyCoord` accepts any real number as a right ascension, so the
+  position wrapped modulo 360 to somewhere plausible and the barycentric corrections were
+  wrong by minutes and by km/s, silently. Only reached when `RA`/`DEC` are absent.
+- `MJD-OBS + EXPTIME/2` was used as the mid-exposure time for coadded products, where it
+  can be a week early. `MJD-END` is now preferred, and the `EXPTIME` fallback is refused
+  when `TELAPSE` says the product spans more than one exposure. A product with
+  `M_EPOCH=True` warns that it has no single epoch at all.
+- A fabricated `v_bary = 0.0` (no keyword, too little header to compute one) now warns.
+  Zero is a legitimate value here, which is exactly why inventing it silently was wrong.
+- An all-NaN `ERR` column — FEROS and HARPS ship one — now warns that the weights have
+  become albireo's assumption rather than the archive's, instead of being dropped in
+  silence.
+- `read_spectrum` no longer requires a time keyword when `bjd=` is supplied, which is what
+  the error message for a missing one already told the caller to do. Among other things this
+  lets albireo read back the component spectra it writes.
+- The spectrum HDU is chosen by utype and `EXTNAME` before column names, so a short
+  calibration table earlier in the file can no longer win over the real spectrum.
+- Dropped `"R"` from the resolving-power keywords: a one-character card collides with
+  anything, and `R = 3.7` implied a 34,000 km/s line-spread function without complaint.
+- `read_dataset` on a directory also picks up `.fit` and `.fits.gz`, and no longer passes
+  `instrument=`/`frame=` twice when they appear in `read_kwargs`.
+- A spectral axis declaring itself `em.freq` or `em.energy` is refused rather than read as
+  Angstrom — `SpectralAxis` names those axes too, and the result would be a strictly
+  increasing, entirely wrong wavelength grid.
+- A table that declares itself the spectrum but has no identifiable flux column now says so,
+  instead of falling through to the image reader and returning something else in the same
+  file as the science spectrum.
+- The all-bad-pixel guard is evaluated on the pixels that survive the final trim rather than
+  on the wider slice used for the continuum fit; a dead region beside a live pad previously
+  produced a zero-weight epoch that the solver accepts in silence.
+- An error column sharing neither the namespace nor the unit of the chosen flux is rejected
+  with a warning: it is the error on the file's *other* flux column.
+- `HELICORR` and `ESO QC VRAD HELICOR` are recognized as heliocentric. Neither spells out
+  `HELIO`, so both were being trusted as barycentric without the warning.
+- Passing `frame=` suppresses the warnings that exist only to advise passing `frame=`, and a
+  `SPECSYS` albireo does not model (`LSRK`, `GEOCENT`) is now reported as such and preserved
+  on `RawSpectrum.specsys`, rather than being erased and described as a missing keyword.
+- A TAP service's ADQL error is reported with the message from the VOTable body it returns,
+  instead of a bare `HTTP Error 400`.
 - `pytest` (the console script) failed to collect `tests/test_ar1.py`,
   `tests/test_lsf_h3.py`, and `tests/test_lsf_varying.py`: they import shared helpers via
   `from tests.test_likelihood import ...`, which only resolves when the repository root is

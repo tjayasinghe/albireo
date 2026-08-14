@@ -75,6 +75,16 @@ directly, with the component spectra marginalized out in closed form. Run
 - **Reads archival spectra directly** — `albireo.io` turns a directory of ESO Phase-3 or
   IRAF-style FITS into a `Dataset`, and `albireo.preprocess` supplies the things reduced
   spectra are missing: a continuum, an inverse variance, masks, and one shared wavelength grid.
+  Columns are identified by their IVOA utypes rather than their names, because across seven
+  instruments no two ESO collections agree on the names, the units, the extension or the
+  wavelength scale — and the obvious shortcut is a trap: UVES labels its *sky-background*
+  column with the same UCD HARPS puts on its *flux*.
+- **Fetches the data too, by name.** `albireo.archive` queries the ESO archive and downloads
+  resumably, stdlib-only. For BLOeM — 929 SMC stars, ~25 epochs each, 59 published SB2s whose
+  disentangling is still listed as future work — `ab.bloem_catalogue(binary_class="SB2")` gives
+  the targets and `ab.bloem_spectra("1-037")` gives one star's epochs, resolving the survey
+  identifier through VizieR because the archive files these under their Gaia DR3 source ids
+  ([`examples/06_bloem.py`](examples/06_bloem.py)).
 
 ## Installation
 

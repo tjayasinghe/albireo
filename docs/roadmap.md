@@ -177,20 +177,50 @@ the mode fails, as it must, but at a potential 122,000 nats worse, so the failur
 Not yet written: a worked example script. The tutorial-level material is in
 [the math](math.md#76-free-per-epoch-velocities-the-rv-table) and `tests/test_velocity_table.py`.
 
-### 4. An ESO archive loader, and BLOeM in one line
+### 4. An ESO archive loader, and BLOeM in one line — **done** (D44, D45)
 
-`scripts/download_hr6819.py` is already a working ObsCore/TAP client with retries and atomic
-downloads. Promoted into the package, one loader covers FEROS, HARPS, UVES, X-shooter, GIRAFFE and
-ESPRESSO — a single query language, a single file layout, and a one-year proprietary period after
-which everything is public.
+The reason to do it was BLOeM: ~929 targets in the Small Magellanic Cloud with roughly 25 epochs
+each, an intrinsic binary fraction above 70%, and 59 published double-lined systems — all public,
+and the survey team's own disentangling of them still listed as future work in their July 2026
+review. A short fetch of a real BLOeM target, disentangled with posteriors, is simultaneously the
+tutorial, the evidence of research use that software journals ask for, and a paper. It was sequenced
+after the nebular component deliberately: BLOeM's targets sit in nebulosity, so the demo needs that
+component to be honest.
 
-The reason to do it is BLOeM. The survey has ~929 targets in the Small Magellanic Cloud with roughly
-25 epochs each, an intrinsic binary fraction above 70%, and something like 70 double-lined systems —
-all of it public, and the survey team's own disentangling of those systems is still listed as future
-work. A one-line fetch of a real BLOeM target, disentangled with posteriors, is simultaneously the
-tutorial, the evidence of research use that software journals now ask for, and a paper. It is
-sequenced after the nebular component deliberately: BLOeM's targets sit in nebulosity, so the demo
-needs that component to be honest.
+**Both halves are built.** `albireo.archive` (D44) is the ObsCore/TAP client and resumable
+downloader; `albireo.io` (D45) now reads what it fetches by dispatching on the **IVOA utypes**
+rather than on column names, and `resolve_bloem` / `bloem_catalogue` / `bloem_spectra` turn a
+survey identifier into that star's epochs. `ab.bloem_catalogue(binary_class="SB2")` returns the 59
+double-lined targets; `examples/06_bloem.py` takes one from name to fitted spectra.
+
+**"A single file layout" was wrong, and that is the useful part.** Thirteen real Phase 3 spectra
+across seven instruments were read column by column, and no two collections agree on anything except
+the utypes — flux is `FLUX`, `FLUX_REDUCED`, or both at once; the extension is `SPECTRUM` except
+Gaia-ESO's `phase3spectrum`; units are angstrom, Angstrom or nm. The obvious fix, keying on UCDs, is
+worse than the disease: UVES gives its **sky-background** column the same UCD HARPS gives its
+**flux** column, so a UCD-keyed reader silently fits the sky. Only the utype role tells them apart.
+
+**The second surprise reframed the work.** All thirteen files already *read*. What was wrong was the
+metadata and the weights: `medium` was computed and then dropped before it reached `EpochData`, so
+D43's 83 km/s guard could never fire; quality flags were ignored; a zero uncertainty was treated as
+infinite precision; an all-NaN error array was swallowed rather than announced. "Make it read" would
+have produced a rewrite that fixed nothing a user could see.
+
+**Measured:** a BLOeM epoch is ~178 kB and one star ~5 MB; `112.25R7` holds 23,651 spectra over 929
+targets, of which 21,716 were public on 2026-08-13 and every target has at least one public epoch.
+A third programme's worth of extra data turned up unplanned — `115.28A9` re-observes the same stars
+at *R* = 17000 and 23000 in two other windows, which is 1,827 more spectra that must **not** be
+pooled with LR02 under one line-spread function, so the resolver defaults to the survey programme.
+
+**The change was then reviewed adversarially, and five defects it had introduced were caught.**
+All five had the same shape — a guess dressed as a reading. The worst: honouring quality flags
+assumed the standard's "zero is good", but UVES_SQUAD's `STATUS` runs `{-5, 1}` and never takes the
+value 0, so all 467 products in that collection read as 100% bad and raised. A flag whose convention
+cannot be read is now ignored with a warning rather than inverted, which is the same principle as
+refusing an undeclared air-vs-vacuum scale: the reader may decline to answer, but it may not guess.
+
+Not yet written: a tutorial page fitting a BLOeM SB2 end to end. The example script is the
+placeholder, and the nebular component (item 1) is what will make it honest.
 
 ### 5. The `Disentangler` façade
 

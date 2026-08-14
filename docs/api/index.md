@@ -13,6 +13,7 @@ The path from a directory of FITS files to a posterior runs through them in roug
 
 | Stage | Module | What it does |
 |---|---|---|
+| Fetch | [`albireo.archive`](archive.md) | ESO ObsCore/TAP queries and resumable downloads; BLOeM by name |
 | Read | [`albireo.io`](io.md) | FITS → `RawSpectrum` → `EpochData`, with every assumption warned about |
 | Repair | [`albireo.preprocess`](preprocess.md) | continuum, inverse variance, masks, one shared grid |
 | Hold | [`albireo.data`](data.md) | `EpochData` / `Dataset` — the pure-NumPy user boundary, plus `LogGrid` |
@@ -20,6 +21,7 @@ The path from a directory of FITS files to a posterior runs through them in roug
 | Evaluate | [`albireo.likelihood`](likelihood.md) | the marginal likelihood with the component spectra integrated out |
 | Infer | [`albireo.inference`](inference.md) | the numpyro model, MAP, Laplace mass matrix, NUTS |
 | Search | [`albireo.scan`](scan.md) | the SB1 faint-companion K₂ scan |
+| Calibrate | [`albireo.calibrate`](calibrate.md) | injection–recovery detection limits and false-alarm probabilities |
 
 [`albireo.simulate`](simulate.md) sits outside that path and feeds it: it is the oracle every
 closed-loop test is written against.

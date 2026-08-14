@@ -581,6 +581,10 @@ def _replace(epoch: EpochData, **changes) -> EpochData:
         v_bary=changes.get("v_bary", epoch.v_bary),
         instrument=changes.get("instrument", epoch.instrument),
         mask=changes.get("mask", epoch.mask),
+        # Listing every field by hand is what makes this explicit rather than magic, and it
+        # is also how a field gets silently dropped: `medium` was added to EpochData and not
+        # here, so trimming or masking an epoch quietly forgot whether it was air or vacuum.
+        medium=changes.get("medium", epoch.medium),
     )
 
 

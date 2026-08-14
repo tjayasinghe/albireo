@@ -13,7 +13,16 @@ if not os.environ.get("ALBIREO_DISABLE_X64"):
 
     jax.config.update("jax_enable_x64", True)
 
-from albireo.archive import ArchiveRecord, download, query, spectra_query
+from albireo.archive import (
+    ArchiveRecord,
+    BloemTarget,
+    bloem_catalogue,
+    bloem_spectra,
+    download,
+    query,
+    resolve_bloem,
+    spectra_query,
+)
 from albireo.calibrate import DetectionLimit, detection_limit
 from albireo.data import Dataset, EpochData
 from albireo.examples import clear_example_cache, example_info, example_names, load_example
@@ -151,6 +160,7 @@ __all__ = [
     "NEBULAR_LINES",
     "TELLURIC_BANDS",
     "ArchiveRecord",
+    "BloemTarget",
     "Dataset",
     "DetectionLimit",
     "EpochData",
@@ -170,6 +180,8 @@ __all__ = [
     "__version__",
     "air_to_vacuum",
     "bin_edges_from_centers",
+    "bloem_catalogue",
+    "bloem_spectra",
     "build_problem",
     "clear_example_cache",
     "convolve_spectrum",
@@ -222,6 +234,7 @@ __all__ = [
     "relative_velocities",
     "relative_velocity_errors",
     "resimulate",
+    "resolve_bloem",
     "run_map",
     "run_nuts",
     "save_fit",
