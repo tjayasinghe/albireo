@@ -21,7 +21,10 @@ The name comes from Albireo, the famous gold-and-blue double star in Cygnus:
   and plot the result. No data of your own, no network, about twenty seconds.
 - Tutorials: [disentangle an SB2 end to end](tutorials/sb2-end-to-end.md) and
   [find a hidden companion with the K₂ scan](tutorials/k2-scan.md) — both backed by
-  executable scripts in `examples/` that run in CI.
+  executable scripts in `examples/` that run in CI. Then
+  [bring your own spectra](tutorials/real-data.md), and
+  [disentangle a BLOeM SB2](tutorials/bloem-sb2.md) — 59 public double-lined SMC systems
+  whose disentangling is still unpublished.
 - [Design](design.md) — architecture, data model, and the shape of the inference problem.
 - [Mathematical foundations](math.md) — the disentangling likelihood, the analytic marginalization
   of the component spectra, and the orbital parameterization.

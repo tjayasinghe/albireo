@@ -42,6 +42,7 @@ from albireo.facade import (
     Star,
     Telluric,
 )
+from albireo.forecast import SensitivityForecast, plan_epochs, sensitivity_forecast
 from albireo.forward import (
     Problem,
     build_problem,
@@ -145,6 +146,7 @@ _PLOT_EXPORTS = frozenset(
         "plot_corner",
         "plot_detection",
         "plot_detection_limit",
+        "plot_forecast",
         "plot_light_fractions",
         "plot_lsf",
         "plot_phase_fold",
@@ -202,6 +204,7 @@ __all__ = [
     "RebinOperator",
     "Sampled",
     "Scanned",
+    "SensitivityForecast",
     "SimulationTruth",
     "Smoothness",
     "SmoothnessPrior",
@@ -247,8 +250,11 @@ __all__ = [
     "normalize",
     "orbit_parameters",
     "orbit_velocities",
+    "plan_epochs",
     "plot_corner",
     "plot_detection",
+    "plot_detection_limit",
+    "plot_forecast",
     "plot_light_fractions",
     "plot_lsf",
     "plot_phase_fold",
@@ -269,6 +275,7 @@ __all__ = [
     "run_nuts",
     "save_fit",
     "select_region",
+    "sensitivity_forecast",
     "share_wavelength_grid",
     "shift_spectrum",
     "shift_spectrum_adjoint",

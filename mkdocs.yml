@@ -36,6 +36,7 @@ nav:
       - Disentangle an SB2 end to end: tutorials/sb2-end-to-end.md
       - Find a hidden companion with the K2 scan: tutorials/k2-scan.md
       - Bring your own spectra (FITS to Dataset): tutorials/real-data.md
+      - Disentangle a BLOeM SB2 end to end: tutorials/bloem-sb2.md
   - Design: design.md
   - Mathematical foundations: math.md
   - Roadmap: roadmap.md
@@ -52,6 +53,7 @@ nav:
       - Inference: api/inference.md
       - Companion scan: api/scan.md
       - Detection limits: api/calibrate.md
+      - Observing forecasts: api/forecast.md
       - Results and plotting: api/results.md
       - Simulator: api/simulate.md
       - Operators: api/operators.md

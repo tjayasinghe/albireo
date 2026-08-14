@@ -65,6 +65,16 @@ directly, with the component spectra marginalized out in closed form. Run
   producing the sentence a referee asks for: *any companion contributing more than X% of the
   light would have been detected at 95% confidence*
   ([`examples/05_detection_limit.py`](examples/05_detection_limit.py)).
+- **Forecasts what the *next* epochs would buy, before they are taken.** The posterior
+  covariance of the component spectra contains no fluxes — only the epochs, their phases, the
+  weights, the LSF and the prior — so `ab.sensitivity_forecast` answers "will twelve more nights
+  at these phases separate the two stars?" from a set of planned epochs alone
+  (`ab.plan_epochs`). It reports the forecast band, the spectral patterns the design *cannot*
+  pin down, and how many degrees of freedom the data would actually constrain — each quoted
+  against the prior alone, so a design that is learning nothing says so. It is also a working
+  correction to the obvious heuristic: a cadence aliased to the orbital period maximizes the
+  spread of the differential velocity and is a *worse* design than the same nights spread over
+  phase — 243 nats against 375 ([`examples/08_forecast.py`](examples/08_forecast.py)).
 - **Nebular emission modelled, not masked** — massive stars sit in H II regions, and the emission
   lines that come with them fill the disentangled line cores. albireo fits them as a component at
   rest in the barycentric frame with a free per-epoch amplitude, so the stellar spectra come back
@@ -224,14 +234,22 @@ limit = ab.detection_limit(
 )
 print(limit.summary())
 print(limit.false_alarm_probability(scan.detection_peak))
+
+# Planning the next run: what would twelve more nights at these phases buy? (§5.5)
+design = ab.Dataset([*ds, *ab.plan_epochs(ds[0], bjd=t_new)], frame=ds.frame)
+forecast = ab.sensitivity_forecast(
+    grid, design, orbit=fitted_orbit, light_fractions=(0.6, 0.4),
+    lsf_sigma_v={"HERMES": 4.0}, prior=spec_prior, baseline=range(ds.n_epochs),
+)
+print(forecast.summary())  # no fluxes were read; the planned epochs have none
 ```
 
 ## Documentation
 
 - [`docs/quickstart.md`](docs/quickstart.md) — the five-minute version, on packaged data.
 - [`examples/`](examples/) — executable tutorials (quickstart, SB2 end-to-end, K₂ scan,
-  detection limits, nebular contamination, and HR 6819 on real archival FEROS spectra);
-  everything but the
+  detection limits, nebular contamination, observing-strategy forecasts, free per-epoch
+  velocities, and HR 6819 on real archival FEROS spectra); everything but the
   HR 6819 script runs in CI. Narrative versions in [`docs/tutorials/`](docs/tutorials/).
 - [`docs/design.md`](docs/design.md) — architecture, data model, and the shape of the inference
   problem.

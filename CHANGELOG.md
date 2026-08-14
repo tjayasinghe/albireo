@@ -13,6 +13,55 @@ This file records *what changed*. The reasons live elsewhere and are worth follo
 
 ### Added
 
+- **`albireo.sensitivity_forecast`, which answers an observing question before the
+  observation** — "will twelve more epochs at these phases separate the two stars?"
+  `albireo.plan_epochs(template, bjd=...)` builds the epochs of a night that has not
+  happened, `sensitivity_forecast(grid, design, orbit=..., baseline=...)` returns what
+  they would buy, and `albireo.plot_forecast` draws it. This works because the posterior
+  covariance of the component spectra, `(Lambda_p + A^T W A)^-1`, **has no flux in it** —
+  fluxes reach the marginal likelihood only through terms that move the posterior mean and
+  the evidence, never the covariance. The claim is structural, not asserted: the precision
+  is assembled directly and the right-hand side is never formed, and a regression test
+  replaces every flux with noise a hundred times the continuum and requires the forecast
+  back bit-identical.
+  Three summaries, each exact and each quoted against the same quantity under the prior
+  alone, so a design that is learning nothing says so: the **pointwise band**, the
+  **worst-determined modes** of the covariance (the spectral patterns the design cannot
+  pin down, by subspace iteration on the banded factor), and **`p_eff`**, the spectral
+  degrees of freedom the data would actually constrain — from one directional derivative
+  of `log det` in the noise scale rather than a stochastic trace estimator. Whole designs
+  are ranked by the expected information gain, `0.5 (logdet Lambda_t - logdet Lambda_p)`.
+  The modes are taken over the pixels the design actually weights, because a model grid is
+  deliberately wider than its data and those margin pixels — prior-only by construction —
+  are otherwise the worst-determined direction of every real problem.
+  It deliberately does **not** forecast the orbit: the Fisher information for a velocity
+  runs through the derivative of the component spectrum, so an error bar on `K_2` needs the
+  line depths, which is what has not been measured yet.
+  One measured result corrects `docs/math.md` §5.1's own reading: the RMS differential
+  velocity is the small-*k* expansion, not the objective. A cadence aliased to the period
+  maximizes it and is the *worst* of three plans — twelve nights at *P*/2 hold the RMS at
+  117.8 km/s, stay blind over 58% of the scale range and are worth 243 nats, while the same
+  twelve spread over phase lower the RMS to 99.3 km/s and 33% and are worth 375
+  (`examples/08_forecast.py`). See `docs/design.md` D47, `docs/math.md` §5.5 and
+  `docs/api/forecast.md`.
+- **A tutorial that takes a BLOeM SB2 from a survey identifier to disentangled spectra**
+  (`docs/tutorials/bloem-sb2.md`) — the second gap D45 left open. It covers the ordering the
+  survey forces and that none of the other tutorials needs: with no published period there
+  is nothing to warm-start a Keplerian from, so the free RV table comes *first* and supplies
+  the periodogram. Writing it found a real error in `examples/06_bloem.py`: its window was
+  documented as sitting "between Hδ and Hγ without either core" and did not — 4000–4300 Å
+  contains Hδ at 4101.7, and `nebular_windows` places a ±300 km/s window at 4099.7–4107.9
+  inside it, so the script's stated reason for not modelling the nebula was false. The window
+  is now **4120–4300 Å**, which contains no nebular line at all.
+- **A worked example for the free per-epoch RV table** (`examples/09_rv_table.py`), the one
+  gap D42 left open. It is built around the two properties of the mode that are
+  counter-intuitive rather than around the API: it shifts one star's velocities by 50 km/s
+  and shows the log-likelihood does not move (exactly 0 nats for the relativistic shift
+  against 8.7e-6 for the ordinary one, which is only its first-order approximation — the
+  reason the centering lives in pixel space), and it prints the raw Laplace error bars
+  beside the projected ones, 37.947 km/s on *every* entry because that is `120/√10`, the
+  prior, against a measured 0.056–0.065. It also shows the mode's real failure rather than
+  describing it: a cold start lands 122,000 nats worse than the warm one.
 - **`albireo.Disentangler`, a declarative front end** — *experimental*, because a
   vocabulary is expensive to change once people depend on it. Declare the system
   (`Star(name, light=...)`, `Telluric()`, `Nebular()`, `Orbit(period=..., k=...)`,
@@ -214,6 +263,13 @@ This file records *what changed*. The reasons live elsewhere and are worth follo
 
 ### Fixed
 
+- **`examples/06_bloem.py` used a window it documented as avoiding.** Its region was
+  described as sitting "between Hδ (4102) and Hγ (4340) without either core", but
+  4000–4300 Å contains Hδ at 4101.7 — and `nebular_windows` puts a ±300 km/s window at
+  4099.7–4107.9 inside it. Since the script's stated reason for not modelling the nebula
+  was that it avoided the Balmer cores, the claim was load-bearing and false. The region
+  is now 4120–4300 Å (`nebular_windows` returns nothing there) and the docstring explains
+  why the blue edge cannot move rather than asserting the outcome.
 - **`EpochData.medium` never reached an epoch read from a file.** `to_epoch` built the
   `EpochData` without it, and `preprocess._replace` — which every trimming and masking
   helper goes through — omitted it, so even a hand-set value was dropped by the first

@@ -833,8 +833,10 @@ of the problem, excited by noise. Consequences baked into the design:
 1. The prior (§2) makes these directions proper and *sets their scale explicitly* ($\eta_i$).
 2. The posterior covariance of §3.3 *reports* the inflation instead of hiding it.
 3. $\operatorname{Var}_j(\Delta)$ is an **observing-strategy diagnostic**: albireo exposes
-   $\lambda_-(k)$ forecasts from planned epochs (`sensitivity_forecast`), telling observers
-   which phase sampling actually pays for separation quality.
+   $\lambda_-(k)$ forecasts from planned epochs (`sensitivity_forecast`, §5.5), telling
+   observers which phase sampling actually pays for separation quality. §5.5 also records
+   where $\operatorname{Var}_j(\Delta)$ on its own gets the ranking *wrong*, which is why
+   the exact covariance is computed alongside it rather than replaced by it.
 4. Per-epoch response polynomials deliberately absorb the per-epoch near-constant modes;
    their order is kept low (default 2) so they cannot eat genuine broad features, and the
    response–low-$k$ covariance is visible in the posterior.
@@ -875,7 +877,7 @@ $e$, $\omega$, $P_{\rm orb}$, $T_{\rm p}$ are unaffected.
 
 | Degeneracy | Exact/approx | Broken by | albireo policy |
 |---|---|---|---|
-| low-$k$ mode exchange between components | exact at $k=0$, $\propto 1/k$ | phase coverage ($\operatorname{Var}\Delta$), priors | proper priors; covariance reported; forecast tool |
+| low-$k$ mode exchange between components | exact at $k=0$, $\propto 1/k$ | phase coverage ($\operatorname{Var}\Delta$), priors | proper priors; covariance reported; forecast tool (§5.5) returns it as the leading eigenvector, at ~1× the prior for *every* design |
 | $\ell_i$ vs. line depth | exact (constant $\ell$) | eclipses, photometry, saturation floor, assumption | explicit `light_ratio=` choice required |
 | $\gamma$ vs. common shift | exact up to edges | external rest-frame info | $\gamma \equiv 0$ default, post-hoc measurement |
 | per-epoch constants vs. response | approx | low poly order | order $\le 2$ default, covariance reported |
@@ -895,6 +897,87 @@ model cannot measure an absolute LSF width; empirically, ML-II with all widths f
 inflates them by tens of percent while leaving the orbit untouched. Multiple
 instruments *sharing the same spectra* identify the width differences; the absolute
 scale must come from one instrument whose LSF is known.
+
+### 5.5 Forecasting a design (D47)
+
+§5.1 is a statement about the *design*, not about the data, and that generalizes exactly.
+The posterior precision of the stacked spectra,
+
+$$
+\tilde{\boldsymbol\Lambda} \;=\; \boldsymbol\Lambda_p \;+\; \mathbf{A}^\top \mathbf{W} \mathbf{A},
+$$
+
+is built from the epoch times (through the velocities, hence the shifts $\delta_{ij}$), the
+per-pixel weights, the masks, the LSF kernels, the light fractions, the response and the
+prior. **No flux appears in it.** The fluxes enter the marginal likelihood only through
+$b = \mathbf{A}^\top\mathbf{W}z$ and $z^\top\mathbf{W}z$, which move the posterior *mean*
+and the evidence, not the covariance $\boldsymbol\Sigma = \tilde{\boldsymbol\Lambda}^{-1}$.
+So $\boldsymbol\Sigma$ is computable for observations that have not happened, given only
+their times, their instrument, and an assumed orbit. `albireo.forecast.sensitivity_forecast`
+is that computation; `plan_epochs` builds the epochs to hand it.
+
+Three summaries, each an exact quantity rather than an estimate.
+
+**Pointwise band.** $\sqrt{\operatorname{diag}\boldsymbol\Sigma}$, by the same Takahashi
+selected-inversion sweep as §3.3, quoted against
+$\sqrt{\operatorname{diag}\boldsymbol\Lambda_p^{-1}}$. Reporting the second is not decoration:
+a band that has relaxed back onto the prior looks exactly like one the data earned.
+
+**Worst-determined modes.** The largest eigenpairs of $\boldsymbol\Sigma$, by subspace
+iteration on the banded factor — the end of the spectrum a factorization does not hand you.
+The leading eigenvector is §5.1's degeneracy in its exact, non-asymptotic form, and it is
+worth plotting: it says which *shape* of error the disentangled spectra will carry. Two
+coordinate sets are projected out first, and both matter. The solver's pad block is the
+identity, so its coordinates are eigenvectors with eigenvalue exactly 1. And the model grid
+is deliberately wider than the data (§1.1, the shift-plus-kernel margin), so its margin
+pixels are prior-only and are the largest eigenvalue on essentially every real problem —
+left in, the "worst-determined mode" would report how much margin the grid was given.
+
+**Constrained degrees of freedom.** $p_{\rm eff} = \operatorname{tr}[\boldsymbol\Sigma\,
+\mathbf{A}^\top\mathbf{W}\mathbf{A}]$, the same quantity §3.2a profiles the jitter against.
+It comes from one directional derivative rather than a stochastic trace estimator: scaling
+every epoch's noise by $\alpha \to \alpha e^{t}$ sends $\mathbf{A}^\top\mathbf{W}\mathbf{A}
+\to e^{-2t}\mathbf{A}^\top\mathbf{W}\mathbf{A}$ and leaves $\boldsymbol\Lambda_p$ alone, so
+
+$$
+\left.\frac{\mathrm{d}}{\mathrm{d}t}\log\det\!\left(\boldsymbol\Lambda_p + e^{-2t}\mathbf{A}^\top\mathbf{W}\mathbf{A}\right)\right|_{t=0}
+\;=\; -2\,p_{\rm eff}.
+$$
+
+For ranking whole designs the scalar is the expected information gain. For a linear-Gaussian
+model the prior-predictive expectation of $\mathrm{KL}(p(d|y)\,\|\,p(d))$ is exactly
+
+$$
+\mathbb{E}\,\mathrm{KL} \;=\; \tfrac12\left(\log\det\tilde{\boldsymbol\Lambda} - \log\det\boldsymbol\Lambda_p\right),
+$$
+
+the data-free half of §3.1's marginal likelihood, and the Bayesian D-optimality criterion.
+
+**The idealized diagnostic, and how it misleads.** §5.1's closed form costs no linear algebra
+and is therefore what screens a hundred candidate cadences: with $J$ epochs and differential
+log-shifts $\Delta_j$, separating the pair is noisier than measuring their sum by
+$\sqrt{(J + |g(k)|)/(J - |g(k)|)}$ with $g(k) = \sum_j e^{\mathrm{i}k\Delta_j}$. But
+$\operatorname{Var}_j(\Delta)$ is only the small-$k$ expansion of that, and maximizing it is
+not the same as maximizing the design. A cadence aliased to the orbital period visits the two
+*extreme* values of $\Delta$ over and over: it maximizes the variance, and it leaves
+$|g(k)| = J|\cos(k\,\Delta_{\rm sep}/2)|$, which returns to $J$ at a whole comb of scales.
+Measured in `examples/08_forecast.py` on a 13.7 d circular SB2 with eight epochs in hand and
+twelve to plan:
+
+| twelve planned nights | RMS $\Delta v$ | blind fraction | 2nd mode $\sigma$ | information gain |
+|---|---|---|---|---|
+| at $P/2$ (aliased) | 117.8 km/s | 58% | 0.518 | 243 nats |
+| continuing the existing cadence | 115.7 km/s | 56% | 0.106 | 295 nats |
+| spread over phase | **99.3 km/s** | **33%** | **0.071** | **375 nats** |
+
+The aliased plan wins the column §5.1 would have had you maximize and loses every other one.
+The exact numbers are the answer; the closed form is the explanation and the screen.
+
+**What is not forecastable.** The covariance of the *orbit*. Its Fisher information runs
+through $\partial(\text{model})/\partial v \propto \ell_i d_i'$ — the derivative of the
+component spectrum — so an error bar on $K_2$ requires the line depths, which is exactly what
+has not been measured. albireo forecasts the spectra and declines the orbit rather than
+forecasting it against an assumed template and presenting the assumption as a result.
 
 ---
 

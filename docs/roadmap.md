@@ -174,8 +174,14 @@ Measured: warm-started from a Keplerian 30% wrong in both semi-amplitudes, per-e
 **0.098 / 0.066 km/s** — 1/60th of a model pixel — and the Wilson slope to 0.4%. From a cold start
 the mode fails, as it must, but at a potential 122,000 nats worse, so the failure is visible.
 
-Not yet written: a worked example script. The tutorial-level material is in
-[the math](math.md#76-free-per-epoch-velocities-the-rv-table) and `tests/test_velocity_table.py`.
+`examples/09_rv_table.py` is the worked script, and it is built around the two properties that
+are genuinely counter-intuitive rather than around the API: it demonstrates the per-component
+zero point by shifting one star's velocities by 50 km/s and watching the log-likelihood not
+move (0 nats for the relativistic shift, 8.7e-6 for the ordinary one that is only its
+first-order approximation), and it prints the raw Laplace bars beside the projected ones —
+37.947 km/s on every entry, which is `120/√10`, the prior, against 0.056-0.065 measured. The
+narrative material is in [the math](math.md#76-free-per-epoch-velocities-the-rv-table) and
+`tests/test_velocity_table.py`.
 
 ### 4. An ESO archive loader, and BLOeM in one line — **done** (D44, D45)
 
@@ -219,8 +225,17 @@ value 0, so all 467 products in that collection read as 100% bad and raised. A f
 cannot be read is now ignored with a warning rather than inverted, which is the same principle as
 refusing an undeclared air-vs-vacuum scale: the reader may decline to answer, but it may not guess.
 
-Not yet written: a tutorial page fitting a BLOeM SB2 end to end. The example script is the
-placeholder, and the nebular component (item 1) is what will make it honest.
+[The tutorial](tutorials/bloem-sb2.md) now takes one from a survey identifier to disentangled
+spectra with a band. Writing it turned up two things the example had wrong or left implicit.
+Its window was advertised as sitting "between Hδ and Hγ without either core" and did not:
+4000–4300 Å contains Hδ at 4101.7, and `nebular_windows` puts a ±300 km/s window at
+4099.7–4107.9 inside it — so the script's stated reason for not modelling the nebula was
+false. The window is now 4120–4300 Å, which contains no nebular line at all, and the docstring
+says why the blue edge is the load-bearing number. And the ordering the survey forces is worth
+recording: with no published period there is nothing to warm-start a Keplerian from, so the
+free RV table (item 3) has to come *first* and supply the periodogram — but
+`Fit.free_velocities()` warm-starts from a Keplerian fit, so for an unsolved system the expert
+path is the one that works. That is a real gap in the façade, not a documentation problem.
 
 ### 5. The `Disentangler` façade — **done** (D46)
 
@@ -277,13 +292,53 @@ The honest risk is recorded in [the ledger](design.md#2-decisions-recorded-defau
 module's own docstring: `Star(light=0.62)` sits beside `period=Known(40.335, 0.5)` and is formatted
 identically, but one is a choice and the other a measurement.
 
-### 6. `sensitivity_forecast()`
+### 6. `sensitivity_forecast()` — **done** (D47)
 
 "Will twelve more epochs at these phases break the degeneracy?" is a question about the posterior
 covariance of the component spectra, and the posterior covariance does not depend on the flux
 values — only on the epochs, the phases, the weights, and the prior. So it can be computed for
-observations that have not been taken. Every piece needed already exists; nobody else can answer the
-question at all. Worth its two days on the strength of that asymmetry alone.
+observations that have not been taken. Every piece needed already existed; nobody else can answer
+the question at all. It was worth its two days on the strength of that asymmetry alone.
+
+`albireo.forecast` is the module: `plan_epochs` builds the epochs of an observation that has not
+happened, `sensitivity_forecast` returns what they would buy, and `baseline=` names the ones
+already in hand so the answer is a difference rather than an absolute. The flux-independence is
+structural rather than promised — the precision is assembled directly and the right-hand side is
+never formed — and the regression test overwrites every flux with noise a hundred times the
+continuum and requires the forecast back **bit-identical**. Everything is reported against the same
+quantity under the prior alone, which is the D42 lesson made routine: a band that has relaxed onto
+the prior looks exactly as convincing as one the data earned.
+
+**The premise on this page was half wrong, and finding out was the main result.** §5.1 names
+Var(Δ) — the spread of the differential shift — as the observing-strategy diagnostic, and it is
+the right *quantity* but the wrong *objective*. A cadence aliased to the orbital period visits the
+two extreme values of Δ over and over: it **maximizes** the variance and is a poor design, because
+two values leave |g(k)| recurring to *J* at a whole comb of scales. Measured in
+[`examples/08_forecast.py`](https://github.com/tjayasinghe/albireo/blob/main/examples/08_forecast.py)
+on a 13.7 d circular SB2 with eight epochs in hand and twelve to plan:
+
+| twelve planned nights | RMS Δ*v* | blind fraction | 2nd mode σ | information gain |
+|---|---|---|---|---|
+| at P/2 (aliased) | 117.8 km/s | 58% | 0.518 | 243 nats |
+| continuing the existing cadence | 115.7 km/s | 56% | 0.106 | 295 nats |
+| spread over phase | **99.3 km/s** | **33%** | **0.071** | **375 nats** |
+
+The aliased plan wins the one column §5.1 would have had you maximize and loses every other one.
+The closed form is the screen and the explanation; the assembled covariance is the answer.
+
+**The second surprise was where the worst-determined mode actually lives.** The first working
+version reported it at exactly the prior width — because the model grid is deliberately wider than
+the data, so its margin pixels are prior-only and are the largest eigenvalue of Σ on essentially
+every real problem. It was measuring how much margin the grid had been given. Restricted to the
+coordinates the design actually weights, the leading mode is what the theory says: a delocalized
+see-saw across the components at *k* = 0, sitting at ~1× the prior **for every design**, since
+nothing about phase sampling can constrain it. That is worth stating in the output rather than
+hiding, and what distinguishes designs is how fast the rest of the ladder falls away from it.
+
+Deliberately **not** forecast: the orbit. The Fisher information for a velocity runs through
+∂(model)/∂v ∝ ℓᵢdᵢ′, so an error bar on *K*₂ needs the line depths — exactly what has not been
+measured yet. Forecasting it against an assumed template would present the assumption as a result,
+which is the failure mode the rest of this page exists to avoid.
 
 ### 7. A Gaia RVS loader, before December
 

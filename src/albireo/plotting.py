@@ -16,7 +16,9 @@ spectra mean anything where they look interesting (:func:`plot_spectra` — read
 uncertainty band, not the mean), does the noise model fit (:func:`plot_residual_zscores`),
 was a companion detected and what its peak is worth (:func:`plot_detection`,
 :func:`plot_detection_limit`), and are the nuisance parameters doing something surprising
-(:func:`plot_lsf`, :func:`plot_light_fractions`).
+(:func:`plot_lsf`, :func:`plot_light_fractions`). One of them comes up *before* a fit
+rather than after: :func:`plot_forecast`, which is what a proposal for more nights argues
+from.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ __all__ = [
     "plot_corner",
     "plot_detection",
     "plot_detection_limit",
+    "plot_forecast",
     "plot_light_fractions",
     "plot_lsf",
     "plot_phase_fold",
@@ -615,6 +618,96 @@ def plot_detection_limit(limit, *, observed=None, axes=None):
     ax_comp.set_title(f"completeness, {limit.signal_peaks.shape[1]} trials per rung")
     fig.tight_layout()
     return fig, (ax_null, ax_comp)
+
+
+def plot_forecast(forecast, *, axes=None):
+    """What an observing design buys: the band, the worst mode, and the mode ladder.
+
+    Three panels, answering the three forms of "will more epochs help".
+
+    Left, the **pointwise band** each component would come back with, against the prior
+    alone. The prior line is the one to read first: wherever the forecast band touches
+    it, the design is learning nothing there and no exposure time changes that — it is
+    the D42 lesson drawn as a figure. The shaded span marks the region the summaries are
+    taken over; outside it the band climbs to the prior because the model grid is wider
+    than the data, which is expected rather than alarming.
+
+    Middle, the **worst-determined mode** — the spectral pattern the design cannot pin
+    down. For two components it is the ``k = 0`` exchange of ``docs/math.md`` §5.1:
+    equal and opposite low-frequency structure, degenerate for every design. Seeing it
+    is worth more than its eigenvalue, because it says which *shape* of error the
+    disentangled spectra will carry.
+
+    Right, the **mode ladder** on a log axis. This is the panel that ranks designs: the
+    leading mode barely moves, and what a good cadence does is drag the rest of the
+    ladder down. With a baseline present both ladders are drawn, so the gap between them
+    is the value of the planned epochs.
+
+    Parameters
+    ----------
+    forecast
+        A :class:`~albireo.forecast.SensitivityForecast`.
+    axes
+        Three existing axes, in the order (band, mode, ladder).
+
+    Returns
+    -------
+    (Figure, ndarray of Axes)
+    """
+    plt = _plt()
+    if axes is None:
+        fig, axes = plt.subplots(1, 3, figsize=(14.5, 4.2))
+    else:
+        axes = np.atleast_1d(axes)
+        fig = axes[0].figure
+    ax_band, ax_mode, ax_ladder = axes[0], axes[1], axes[2]
+
+    wave = np.asarray(forecast.grid.wave)
+    base = forecast.baseline
+    for i, name in enumerate(forecast.component_labels):
+        color = _color(i)
+        if base is not None:
+            ax_band.plot(
+                wave, base.component_std[i], color=color, lw=0.9, ls=":", label=f"{name}, in hand"
+            )
+        ax_band.plot(wave, forecast.component_std[i], color=color, lw=1.2, label=name)
+        ax_band.plot(wave, forecast.prior_std[i], color=color, lw=0.8, alpha=0.4)
+    inside = np.flatnonzero(forecast.region.any(axis=0))
+    if inside.size:
+        ax_band.axvspan(wave[inside[0]], wave[inside[-1]], color="0.85", alpha=0.4, zorder=0)
+    ax_band.set_yscale("log")
+    ax_band.set_xlabel("wavelength [Å]")
+    ax_band.set_ylabel(r"forecast $\sigma$ on $d_i$")
+    ax_band.set_title("pointwise band (faint = prior alone)")
+    ax_band.legend(fontsize=7, ncol=2)
+
+    if forecast.mode_std.size:
+        mode = forecast.mode_vectors[0]
+        for i, name in enumerate(forecast.component_labels):
+            ax_mode.plot(wave, mode[i], color=_color(i), lw=1.0, label=name)
+        ax_mode.axhline(0.0, color="0.6", lw=0.8)
+        ax_mode.set_xlabel("wavelength [Å]")
+        ax_mode.set_ylabel("mode amplitude")
+        ax_mode.set_title(rf"worst-determined mode, $\sigma$ = {forecast.worst_mode_std:.3g}")
+        ax_mode.legend(fontsize=8)
+
+        rungs = np.arange(1, forecast.mode_std.size + 1)
+        if base is not None:
+            ax_ladder.plot(rungs, base.mode_std, "o:", color="0.45", label="in hand")
+            ax_ladder.plot(
+                rungs, forecast.mode_std, "o-", color="C0", label=f"+{forecast.n_planned} planned"
+            )
+        else:
+            ax_ladder.plot(rungs, forecast.mode_std, "o-", color="C0", label="this design")
+        ax_ladder.plot(rungs, forecast.prior_mode_std, "s--", color="C3", label="prior alone")
+        ax_ladder.set_yscale("log")
+        ax_ladder.set_xticks(rungs)
+        ax_ladder.set_xlabel("mode (worst first)")
+        ax_ladder.set_ylabel(r"$\sigma$ of the mode")
+        ax_ladder.set_title("what the epochs move")
+        ax_ladder.legend(fontsize=8)
+    fig.tight_layout()
+    return fig, axes
 
 
 _ORBIT_SITES = ("period", "t_conj", "secosw", "sesinw", "k", "ecc", "omega")

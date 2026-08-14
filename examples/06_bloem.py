@@ -41,9 +41,16 @@ Balmer cores for exactly that reason.
 
 The window
 ----------
-4000-4300 A, inside LR02's 3960-4571 A. He I 4009/4026/4144/4169, Si IV 4089/4116,
-He II 4200, plus the Si III and He I blends around 4128-4130. It sits between H-delta
-(4102) and H-gamma (4340) without either core, and it is well away from the order edges.
+4120-4300 A, inside LR02's 3960-4571 A: Si III 4128/4130, He I 4144, He I 4169,
+He II 4200. It sits strictly between H-delta (4101.7) and H-gamma (4340.5) — **neither
+line nor its wings is inside** — and well away from the order edges.
+
+That bound is the whole reason for the window and it is tighter than it looks. A wider
+blue edge would reach H-delta, and in an H II region H-delta carries nebular emission
+that this script does not model; ``albireo.nebular_windows`` puts a +/-300 km/s window
+around it, so anything below ~4096 A is contaminated. Widen this region only together
+with the nebular component of example 04 — an unmodelled static emission line does not
+merely dent the spectra, it hands the orbit a component with K = 0 (D40: K_2 59% low).
 
 Environment
 -----------
@@ -67,7 +74,8 @@ import numpy as np
 import albireo as ab
 
 DEFAULT_TARGET = "1-037"
-REGION = (4000.0, 4300.0)
+# Strictly between H-delta and H-gamma; see "The window" above before widening it.
+REGION = (4120.0, 4300.0)
 # LR02 delivers R = 6300, so the resolution element is c/R = 47.6 km/s FWHM.
 LSF_SIGMA = 47.6 / (2.0 * np.sqrt(2.0 * np.log(2.0)))
 DV_KMS = 8.0

@@ -289,6 +289,73 @@ def test_plot_detection_limit_says_when_the_limit_is_not_bracketed():
 
 
 # ---------------------------------------------------------------------------
+# forecast
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def small_forecast(small_grid, small_dataset):
+    """A forecast of the packaged small design plus two planned epochs."""
+    from albireo.simulate import OrbitParams
+
+    orbit = OrbitParams(period=6.0, t_peri=0.0, ecc=0.0, omega=0.0, k=(40.0, 60.0))
+    design = ab.Dataset(
+        [*small_dataset, *ab.plan_epochs(small_dataset[0], bjd=[1.4, 3.6])],
+        frame=small_dataset.frame,
+    )
+    return ab.sensitivity_forecast(
+        small_grid,
+        design,
+        orbit=orbit,
+        light_fractions=(0.6, 0.4),
+        lsf_sigma_v={"A": 8.25},
+        prior=SmoothnessPrior(tau=np.array([300.0, 300.0]), eta=np.array([5.0, 5.0])),
+        baseline=range(len(list(small_dataset))),
+        n_modes=3,
+    )
+
+
+def test_plot_forecast_draws_the_band_the_mode_and_the_ladder(small_forecast, small_grid):
+    _, axes = plotting.plot_forecast(small_forecast)
+    ax_band, ax_mode, ax_ladder = axes
+
+    assert "band" in ax_band.get_title()
+    assert ax_band.get_yscale() == "log"
+    # Two components, each with a forecast line, a baseline line and a prior line, plus
+    # the shaded region span.
+    assert len(ax_band.lines) == 6
+    assert ax_band.patches, "the summarized region should be shaded"
+
+    assert "worst-determined mode" in ax_mode.get_title()
+    plotted = np.asarray(ax_mode.lines[0].get_ydata())
+    assert np.allclose(plotted, small_forecast.mode_vectors[0][0])
+
+    # The ladder shows in-hand, planned and prior, and the prior is above both.
+    assert len(ax_ladder.lines) == 3
+    assert ax_ladder.get_yscale() == "log"
+    labels = [t.get_text() for t in ax_ladder.get_legend().get_texts()]
+    assert any("planned" in label for label in labels)
+    assert any("prior" in label for label in labels)
+
+
+def test_plot_forecast_without_a_baseline_drops_the_comparison(small_grid, small_dataset):
+    from albireo.simulate import OrbitParams
+
+    fc = ab.sensitivity_forecast(
+        small_grid,
+        small_dataset,
+        orbit=OrbitParams(period=6.0, t_peri=0.0, ecc=0.0, omega=0.0, k=(40.0, 60.0)),
+        light_fractions=(0.6, 0.4),
+        lsf_sigma_v={"A": 8.25},
+        prior=SmoothnessPrior(tau=np.array([300.0, 300.0]), eta=np.array([5.0, 5.0])),
+        n_modes=2,
+    )
+    _, (ax_band, _, ax_ladder) = plotting.plot_forecast(fc)
+    assert len(ax_band.lines) == 4  # two components, forecast and prior only
+    assert len(ax_ladder.lines) == 2  # this design and the prior
+
+
+# ---------------------------------------------------------------------------
 # posterior
 # ---------------------------------------------------------------------------
 

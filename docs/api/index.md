@@ -23,6 +23,7 @@ The path from a directory of FITS files to a posterior runs through them in roug
 | Infer | [`albireo.inference`](inference.md) | the numpyro model, MAP, Laplace mass matrix, NUTS |
 | Search | [`albireo.scan`](scan.md) | the SB1 faint-companion K₂ scan |
 | Calibrate | [`albireo.calibrate`](calibrate.md) | injection–recovery detection limits and false-alarm probabilities |
+| Plan again | [`albireo.forecast`](forecast.md) | what the *next* epochs would buy — computable before they are taken |
 
 [`albireo.simulate`](simulate.md) sits outside that path and feeds it: it is the oracle every
 closed-loop test is written against.
