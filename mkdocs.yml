@@ -44,6 +44,7 @@ nav:
       - Overview: api/index.md
       - Data and grids: api/data.md
       - Reading spectra: api/io.md
+      - ESO archive: api/archive.md
       - Preprocessing: api/preprocess.md
       - Forward model: api/forward.md
       - Likelihood and priors: api/likelihood.md

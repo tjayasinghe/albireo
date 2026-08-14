@@ -13,6 +13,14 @@ This file records *what changed*. The reasons live elsewhere and are worth follo
 
 ### Added
 
+- **`albireo.archive`** — an ESO Science Archive client: `spectra_query` builds the
+  ADQL, `query` runs it, `download` fetches resumably with a manifest. One query language
+  for FEROS, HARPS, UVES, X-shooter, GIRAFFE and ESPRESSO. Stdlib only, so finding data
+  costs no dependency. `scripts/download_hr6819.py` is now a thin wrapper over it.
+  Two guards exist because the archive is silent where it matters: a query that hits
+  `MAXREC` raises (ESO's JSON carries no overflow marker, so a truncated result is
+  indistinguishable from a complete one), and a download whose byte count disagrees with
+  `Content-Length` is rejected rather than left on disk looking complete.
 - **Air vs vacuum is now a declared, validated property** — `EpochData(medium=...)`
   accepts `"air"`, `"vacuum"` or `None` (undeclared, the default and what every epoch
   built before this field existed means), and `Dataset` **refuses a mixture** rather than

@@ -13,6 +13,7 @@ if not os.environ.get("ALBIREO_DISABLE_X64"):
 
     jax.config.update("jax_enable_x64", True)
 
+from albireo.archive import ArchiveRecord, download, query, spectra_query
 from albireo.calibrate import DetectionLimit, detection_limit
 from albireo.data import Dataset, EpochData
 from albireo.examples import clear_example_cache, example_info, example_names, load_example
@@ -149,6 +150,7 @@ __all__ = [
     "C_KMS",
     "NEBULAR_LINES",
     "TELLURIC_BANDS",
+    "ArchiveRecord",
     "Dataset",
     "DetectionLimit",
     "EpochData",
@@ -176,6 +178,7 @@ __all__ = [
     "data_residual_zscores",
     "der_snr_sigma",
     "detection_limit",
+    "download",
     "draw_spectra",
     "estimate_ivar",
     "example_info",
@@ -211,6 +214,7 @@ __all__ = [
     "plot_rv_curve",
     "plot_spectra",
     "posterior_spectra",
+    "query",
     "radial_velocity",
     "read_dataset",
     "read_spectrum",
@@ -227,6 +231,7 @@ __all__ = [
     "shift_spectrum_adjoint",
     "simulate_dataset",
     "solve_kepler",
+    "spectra_query",
     "spectra_std",
     "synthetic_deviation_spectrum",
     "synthetic_nebular_spectrum",
