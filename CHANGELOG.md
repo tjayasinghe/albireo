@@ -13,6 +13,19 @@ This file records *what changed*. The reasons live elsewhere and are worth follo
 
 ### Added
 
+- **A free per-epoch radial-velocity table** — theta site `velocity`
+  `(n_stellar, n_epochs)`, which *replaces* the Keplerian rather than supplementing it
+  (mixing the two raises). `albireo.relative_velocities` reports the identified table,
+  `relative_velocity_errors` its honest per-epoch bars, and `keplerian_residuals` the
+  model check the mode exists for: fit free velocities, then ask whether a Keplerian
+  still threads them. The numpyro model records `velocity_rel` as a deterministic.
+  Warm-started from a Keplerian 30% wrong in both semi-amplitudes, per-epoch RVs recover
+  to 0.098 / 0.066 km/s — 1/60th of a model pixel — and the Wilson mass ratio to 0.4%.
+  See `docs/design.md` D42; the mode needs a warm start, and says so.
+- `albireo.forward.with_shifts` — the pixel-space core of `with_velocities`, which is now
+  a wrapper over it. Pixel shifts are where the model's shift composition is exact, so
+  anything that adds or centers shifts has to work there.
+- `LogGrid.pixels_to_velocity` — the exact inverse of `velocity_to_pixels`.
 - **`albireo.calibrate`** — `detection_limit` turns the K₂ scan's peak into a claim:
   an empirical null distribution from companion-free trials, a completeness curve from
   a ladder of injected light fractions, and the sentence they add up to

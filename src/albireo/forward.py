@@ -822,7 +822,42 @@ def with_velocities(problem: Problem, velocities) -> Problem:
         raise ValueError(
             f"velocities must have shape ({problem.n_stellar}, {problem.n_epochs}); got {vel.shape}"
         )
-    star_pix = problem.grid.velocity_to_pixels(vel)
+    return with_shifts(problem, problem.grid.velocity_to_pixels(vel))
+
+
+def with_shifts(problem: Problem, star_pix) -> Problem:
+    """Return ``problem`` with the stellar shifts replaced, in *model pixels*.
+
+    The pixel-space core of :func:`with_velocities`, which is a one-line wrapper over it.
+    Two things want this layer rather than the velocity one.
+
+    First, pixel shifts are where the model's shift *composition* is exact: with the
+    relativistic mapping ``xi = artanh(v/c)`` the log-wavelength shift turns relativistic
+    velocity addition into ordinary addition, so adding a constant here is exactly a
+    translation, while adding a constant to a velocity is not. Anything that needs to
+    add, subtract or center shifts — the free-velocity table's zero point
+    (:func:`albireo.inference.relative_velocities`) above all — has to do it here to be
+    exact rather than first-order.
+
+    Second, it is the natural entry point for a shift the caller computed some other way:
+    a template cross-correlation lag, a per-epoch offset read off a line centroid.
+
+    Parameters
+    ----------
+    problem
+        Output of :func:`build_problem` (any velocities).
+    star_pix
+        Stellar shifts in model pixels, shape ``(n_stellar, n_epochs)``, in the
+        *barycentric* frame — the frame composition (the per-epoch ``-v_bary`` term on
+        topocentric data) is applied here, exactly as :func:`build_problem` applies it.
+        Telluric and nebular columns are carried over unchanged.
+    """
+    star_pix = jnp.atleast_2d(jnp.asarray(star_pix))
+    if star_pix.shape != (problem.n_stellar, problem.n_epochs):
+        raise ValueError(
+            f"star_pix must have shape ({problem.n_stellar}, {problem.n_epochs}); "
+            f"got {star_pix.shape}"
+        )
     groups = []
     for g in problem.groups:
         idx = list(g.epoch_indices)

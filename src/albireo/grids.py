@@ -203,3 +203,22 @@ class LogGrid:
         Differentiable under JAX; this is what feeds the shift operators.
         """
         return log_doppler_shift(v_kms, relativistic=self.relativistic) / self.dx
+
+    def pixels_to_velocity(self, pixels):
+        """Radial velocity [km/s] corresponding to a shift of ``pixels`` — the exact inverse.
+
+        With the default relativistic mapping ``xi = artanh(v/c)`` the inverse is
+        ``v = c tanh(xi)``, and because ``xi`` turns relativistic velocity addition into
+        ordinary addition, *differences* of pixel shifts come back as the correct
+        relative velocities rather than as approximations of them. That is what makes a
+        per-epoch velocity table expressible as an exactly-identified quantity
+        (:func:`albireo.inference.relative_velocities`): the arbitrary zero point is
+        removed by subtraction in pixel space, and this maps the remainder back to km/s
+        with nothing lost on the way.
+
+        Differentiable under JAX.
+        """
+        xi = jnp.asarray(pixels) * self.dx
+        if self.relativistic:
+            return C_KMS * jnp.tanh(xi)
+        return C_KMS * jnp.expm1(xi)

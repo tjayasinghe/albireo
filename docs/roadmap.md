@@ -146,18 +146,36 @@ the assumed companion template — the observable is ℓ₂·d₂, so a featurel
 invisible at any light fraction — and that assumption is required to be quoted with the number.
 The [HR 6819 campaign](benchmarks.md) remains a ready-made validation set.
 
-### 3. A per-epoch radial-velocity table
+### 3. A per-epoch radial-velocity table — **done** (D42)
 
-Free per-epoch velocities — no Keplerian — is listed in the [design](design.md) as a diagnostic mode
-and has never been exposed. The low-level machinery exists and is differentiable; only the sampling
-path is missing. Two reasons it is worth more than its size: a per-epoch RV table with honest
-uncertainties is the artifact the binary-star community expects from any spectroscopic analysis, and
-it is the natural bridge for users of cross-correlation and shift-and-add codes, who can compare
-against something familiar before trusting the joint fit. It is also the model check for the
-Keplerian mode — fit free velocities, then ask whether a Keplerian threads the resulting posterior.
+Free per-epoch velocities — no Keplerian — was listed in the [design](design.md) as a diagnostic
+mode and had never been exposed. The low-level machinery existed and was differentiable; only the
+sampling path was missing. It is now a `velocity` theta site that *replaces* the orbit, with
+`relative_velocities`, `relative_velocity_errors` and `keplerian_residuals` alongside it.
 
-The honest caveat belongs in the docstring: with the systemic velocity fixed at zero, the table is
-differential, and it is the velocity *difference* that is sharply constrained.
+Two reasons it was worth more than its size, both borne out: a per-epoch RV table with honest
+uncertainties is the artifact the binary-star community expects from any spectroscopic analysis,
+and it is the natural bridge for users of cross-correlation and shift-and-add codes, who can
+compare against something familiar before trusting the joint fit. It is also the model check for
+the Keplerian mode — fit free velocities, then ask whether a Keplerian threads the resulting
+posterior.
+
+The honest caveat in the roadmap was right but understated it. The table is differential, and it
+has **one arbitrary zero point per component, not one in total**: with no orbit tying the stars
+together, each free spectrum absorbs a constant added to its own shifts. Worse, left uncentered
+that zero point is pinned by *shift-interpolation error* rather than by data — a whole-pixel
+common shift costs 4e-9 of the log-likelihood, a 0.1-pixel one costs 7.3 nats. albireo removes it
+in pixel space, where the removal is exact. The same projection turned out to be needed for the
+*uncertainties*: the raw Laplace diagonal returns the prior and nothing else (37.95 km/s = 120/√10
+on every entry, against a real per-epoch error of 0.059 km/s), which is the kind of number that
+looks equally convincing on a good dataset and a useless one.
+
+Measured: warm-started from a Keplerian 30% wrong in both semi-amplitudes, per-epoch RVs recover to
+**0.098 / 0.066 km/s** — 1/60th of a model pixel — and the Wilson slope to 0.4%. From a cold start
+the mode fails, as it must, but at a potential 122,000 nats worse, so the failure is visible.
+
+Not yet written: a worked example script. The tutorial-level material is in
+[the math](math.md#76-free-per-epoch-velocities-the-rv-table) and `tests/test_velocity_table.py`.
 
 ### 4. An ESO archive loader, and BLOeM in one line
 

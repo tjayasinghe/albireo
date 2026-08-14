@@ -15,6 +15,15 @@ The nonlinear parameter vector ``theta`` is a dict of JAX arrays with sites
   components' center of mass moves with semi-amplitude ``k_out[0]`` and argument
   ``omega_out``, and one additional tertiary component is appended moving with
   ``k_out[1]`` and ``omega_out + pi``
+- ``velocity`` (optional) — free per-epoch radial velocities [km/s],
+  ``(n_stellar, n_epochs)``, *replacing* the Keplerian entirely (D42): with this site
+  present the orbital sites must be absent, and the model is the diagnostic mode in
+  which each epoch's velocity is its own parameter. The per-component zero points are
+  removed before use, in pixel space where the removal is exact, because a table left
+  uncentered would have its absolute level pinned by shift-interpolation error rather
+  than by data. Read the ``velocity_rel`` deterministic
+  (:func:`relative_velocities`) rather than the raw site, and see
+  :func:`keplerian_residuals` for the model check this mode exists to support.
 - ``light`` (optional) — stellar light fractions, ``(n_stellar,)`` constant or
   ``(n_epochs, n_stellar)`` per-epoch, rows on the simplex (use Dirichlet priors)
 - ``lsf_sigma`` (optional) — Gaussian LSF widths [km/s]: one entry per LSF anchor
@@ -99,6 +108,7 @@ from albireo.forward import (
     with_lsf,
     with_nebular_amplitudes,
     with_response,
+    with_shifts,
     with_velocities,
 )
 from albireo.grids import LogGrid
@@ -109,11 +119,14 @@ from albireo.priors import SmoothnessPrior
 __all__ = [
     "MAPResult",
     "MarginalOrbitModel",
+    "keplerian_residuals",
     "laplace_inverse_mass",
     "nebular_amplitudes",
     "orbit_parameters",
     "orbit_velocities",
     "posterior_spectra",
+    "relative_velocities",
+    "relative_velocity_errors",
     "run_map",
     "run_nuts",
 ]
@@ -134,6 +147,7 @@ _THETA_SITES = (
     "sesinw",
     "k",
     *_OUTER_SITES,
+    "velocity",
     "light",
     "lsf_sigma",
     "lsf_h3",
@@ -243,6 +257,193 @@ def orbit_velocities(theta: Mapping, bjd, *, ecc_max: float = _ECC_MAX_DEFAULT):
         rows = [v + v_com for v in rows]
         rows.append(_block_velocity(out, bjd, component=1))
     return jnp.stack(rows)
+
+
+def _centered_shifts(velocity, grid):
+    """Per-epoch pixel shifts with each component's zero point removed.
+
+    The centering is the whole design decision behind the free-velocity table (D42), and
+    it belongs in *pixel* space rather than velocity space for a reason that is exact
+    rather than stylistic: ``xi = artanh(v/c)`` turns relativistic velocity addition into
+    ordinary addition, so subtracting a constant here is exactly a translation of the
+    component's spectrum, while subtracting a constant velocity is only a first-order
+    approximation of one.
+    """
+    pix = grid.velocity_to_pixels(jnp.atleast_2d(jnp.asarray(velocity)))
+    return pix - jnp.mean(pix, axis=1, keepdims=True)
+
+
+def relative_velocities(velocity, grid):
+    """The identified part of a free-velocity table: velocities per component, zero-pointed.
+
+    A table of free per-epoch velocities has **one arbitrary zero point per stellar
+    component**, not one in total. Each component's deviation spectrum is a free vector,
+    so translating it absorbs a constant added to that component's shifts, and the
+    likelihood cannot tell the difference — the generalization of ``gamma = 0`` (D14),
+    except that with no Keplerian tying the components together each of them gets its own.
+
+    That degeneracy is exact only for whole-pixel translations, because the model shifts
+    spectra by linear interpolation and a fractional shift blurs slightly as well as
+    moves. Measured on a 10-epoch SB2 at SNR 200: a one-pixel common shift of one
+    component costs **4e-9 of the log-likelihood in relative terms** (boundary effects
+    only), while a 0.1-pixel one costs 7.3 nats. So a table left uncentered would have its
+    absolute zero point pinned not by the data but by *interpolation error* — a number
+    that looks like a systemic velocity, moves when the model grid is resampled, and means
+    nothing. albireo removes it instead, and reports what remains.
+
+    What remains is fully identified and is what the science needs: each component's
+    velocity *variation* (hence its semi-amplitude), the epoch-to-epoch differences, and
+    the slope of component 1 against component 2 — the Wilson mass ratio, which is a slope
+    and therefore untouched by either zero point. What is *not* recoverable from this
+    table is the systemic velocity, or the absolute velocity of either star. Measure those
+    from the disentangled spectra afterwards, exactly as D14 prescribes for gamma.
+
+    Parameters
+    ----------
+    velocity
+        Free per-epoch velocities [km/s], ``(n_stellar, n_epochs)`` — the raw
+        ``velocity`` theta site, or a posterior sample of it.
+    grid
+        The model :class:`~albireo.grids.LogGrid` the shifts are taken on. The centering
+        is grid-dependent by construction, since it is done in pixel space.
+
+    Returns
+    -------
+    jax.Array
+        ``(n_stellar, n_epochs)`` velocities [km/s], each row relativistically
+        zero-pointed to that component's mean epoch. Rows sum to zero *in pixel space*,
+        so they will not sum to exactly zero in km/s — that is the nonlinearity being
+        handled correctly rather than approximated away.
+    """
+    return grid.pixels_to_velocity(_centered_shifts(velocity, grid))
+
+
+def relative_velocity_errors(covariance, unconstrained: Mapping, *, site: str = "velocity"):
+    """Per-epoch standard errors of the free-velocity table, zero points projected out.
+
+    **Reading the Laplace covariance's diagonal directly gives the prior back, not an
+    error bar.** Each component's zero point is an exactly flat direction of the
+    likelihood (:func:`relative_velocities`), so its posterior width is whatever the
+    prior said, and every epoch's marginal variance inherits it. Measured on the D42
+    fixture with a ``Normal(0, 120)`` prior over 10 epochs: every raw marginal sigma came
+    out at **37.95 km/s = 120/sqrt(10)**, identical to four digits across both components
+    and all epochs, while the honest per-epoch error is **0.059 km/s**. A factor of 640,
+    and — worse than merely wrong — completely insensitive to the data, so it would look
+    equally plausible on a good dataset and a useless one.
+
+    Projecting each component's mean out of the covariance removes exactly those
+    directions and leaves the identified ones. As a check that the count is right, the
+    projected block has exactly ``n_stellar`` zero eigenvalues.
+
+    The projection is applied in velocity units, where it is the identity to
+    ``O(v^2/c^2)`` — the Jacobian of the pixel-space centering differs from unity by
+    ``~1e-8`` at stellar velocities, far below the approximation already made by using a
+    Laplace covariance at all.
+
+    Prefer posterior samples when you have them: the ``velocity_rel`` deterministic that
+    :meth:`MarginalOrbitModel.model` records is already the identified table, so
+    ``samples["velocity_rel"].std(axis=0)`` needs no projection and no Gaussian
+    assumption. This function is for the MAP + Laplace route.
+
+    Parameters
+    ----------
+    covariance
+        Full unconstrained-space covariance from :func:`laplace_inverse_mass`.
+    unconstrained
+        :attr:`MAPResult.unconstrained` from the *same* fit — it supplies both the site
+        ordering within the flattened vector and the table's shape.
+    site
+        Name of the free-velocity site.
+
+    Returns
+    -------
+    numpy.ndarray
+        ``(n_stellar, n_epochs)`` standard errors [km/s].
+
+    Notes
+    -----
+    A Laplace covariance is a local Gaussian approximation with the hyperparameters held
+    at their MAP values, so it does not carry the widening that marginalizing over
+    ``log_tau``/``log_eta`` would add. On the D42 fixture the resulting bars run about
+    1.4x optimistic against the realized errors. Treat them as a fast estimate and NUTS
+    as the answer.
+    """
+    unconstrained = dict(unconstrained)
+    if site not in unconstrained:
+        raise ValueError(f"no {site!r} site in the fit (sites: {sorted(unconstrained)})")
+    shape = jnp.shape(jnp.asarray(unconstrained[site]))
+    if len(shape) != 2:
+        raise ValueError(f"the {site!r} site must be (n_stellar, n_epochs); got shape {shape}")
+    # Locate the site's slots without assuming how ravel_pytree orders the dict: flatten
+    # a matching pytree of markers and read off where they land.
+    marks, _ = ravel_pytree(
+        {
+            name: jnp.full(jnp.shape(jnp.asarray(value)), 1.0 if name == site else 0.0)
+            for name, value in unconstrained.items()
+        }
+    )
+    sel = np.asarray(marks) > 0.5
+    cov = np.asarray(covariance)
+    if cov.shape != (sel.size, sel.size):
+        raise ValueError(
+            f"covariance is {cov.shape} but the fit has {sel.size} unconstrained "
+            "parameters — they must come from the same model"
+        )
+    block = cov[np.ix_(sel, sel)]
+    n_stellar, n_epochs = shape
+    centre = np.eye(n_epochs) - np.ones((n_epochs, n_epochs)) / n_epochs
+    projector = np.zeros((n_stellar * n_epochs, n_stellar * n_epochs))
+    for i in range(n_stellar):
+        s = slice(i * n_epochs, (i + 1) * n_epochs)
+        projector[s, s] = centre
+    projected = projector @ block @ projector.T
+    return np.sqrt(np.clip(np.diag(projected), 0.0, None)).reshape(n_stellar, n_epochs)
+
+
+def keplerian_residuals(velocity, theta: Mapping, bjd, grid, *, ecc_max: float = _ECC_MAX_DEFAULT):
+    """Per-epoch velocity residuals of a free table against a Keplerian orbit.
+
+    The model check the free-velocity mode exists for: fit per-epoch velocities with no
+    orbit imposed, then ask whether a Keplerian threads them. A period that is slightly
+    wrong, an unmodelled third body, or line-profile variability that the Keplerian
+    absorbs into ``e`` all show up here as *structured* residuals — phase-correlated,
+    or one epoch far out — where noise alone would not.
+
+    Both tables are zero-pointed the same way before subtracting, and the subtraction is
+    done in pixel space so the result is an exact relativistic velocity difference rather
+    than a first-order one. That matters because the two tables' arbitrary zero points
+    (:func:`relative_velocities`) must cancel *exactly*, or the residual would carry a
+    constant offset that means nothing.
+
+    Parameters
+    ----------
+    velocity
+        Free per-epoch velocities [km/s], ``(n_stellar, n_epochs)`` — the ``velocity``
+        site from a fit, or one posterior sample of it.
+    theta
+        Keplerian parameters (``period``, ``t_conj``, ``secosw``, ``sesinw``, ``k``, and
+        the outer-orbit sites if any), as :func:`orbit_velocities` takes them.
+    bjd
+        Epoch times, matching the columns of ``velocity``.
+    grid
+        The model :class:`~albireo.grids.LogGrid`.
+    ecc_max
+        Eccentricity clip, matching the model the Keplerian came from.
+
+    Returns
+    -------
+    jax.Array
+        ``(n_stellar, n_epochs)`` residuals [km/s]. Compare them against the per-epoch
+        uncertainties of the free table, not against zero.
+    """
+    free = _centered_shifts(velocity, grid)
+    kep = _centered_shifts(orbit_velocities(theta, bjd, ecc_max=ecc_max), grid)
+    if free.shape != kep.shape:
+        raise ValueError(
+            f"the free table is {free.shape} but the Keplerian implies {kep.shape} — "
+            "they must agree on both the component count and the epoch count"
+        )
+    return grid.pixels_to_velocity(free - kep)
 
 
 def nebular_amplitudes(theta: Mapping):
@@ -434,14 +635,33 @@ class MarginalOrbitModel:
     def _theta_problem(self, theta: Mapping, base=None):
         """Problem at θ: velocities always; light fractions / LSF widths if present."""
         base = self.problem if base is None else base
-        vel = orbit_velocities(theta, self.bjd, ecc_max=self.ecc_max)
-        if vel.shape[0] != self.n_stellar:
-            raise ValueError(
-                f"theta implies {vel.shape[0]} stellar components "
-                f"(len(k){' + tertiary' if _has_outer_orbit(theta) else ''}) but the model "
-                f"was built with {self.n_stellar} light fractions"
-            )
-        problem = with_velocities(base, vel)
+        if "velocity" in theta:
+            # Free per-epoch velocities: no Keplerian at all (D42). The zero point is
+            # removed here, in pixel space, where the removal is exact.
+            clash = [s for s in ("period", "t_conj", "secosw", "sesinw", "k", *_OUTER_SITES)]
+            present = [s for s in clash if s in theta]
+            if present:
+                raise ValueError(
+                    f"theta carries both a free-velocity site and Keplerian sites {present}. "
+                    "They are alternatives: 'velocity' replaces the orbit entirely, so a "
+                    "Keplerian site alongside it would be silently ignored. Drop one."
+                )
+            pix = _centered_shifts(jnp.asarray(theta["velocity"]), base.grid)
+            if pix.shape != (self.n_stellar, base.n_epochs):
+                raise ValueError(
+                    f"velocity must have shape ({self.n_stellar}, {base.n_epochs}) — one "
+                    f"row per stellar component, one column per epoch; got {pix.shape}"
+                )
+            problem = with_shifts(base, pix)
+        else:
+            vel = orbit_velocities(theta, self.bjd, ecc_max=self.ecc_max)
+            if vel.shape[0] != self.n_stellar:
+                raise ValueError(
+                    f"theta implies {vel.shape[0]} stellar components "
+                    f"(len(k){' + tertiary' if _has_outer_orbit(theta) else ''}) but the model "
+                    f"was built with {self.n_stellar} light fractions"
+                )
+            problem = with_velocities(base, vel)
         if "light" in theta:
             ell = jnp.asarray(theta["light"])
             if ell.ndim == 2:  # per-epoch, Dirichlet layout (n_epochs, n_stellar)
@@ -682,13 +902,40 @@ class MarginalOrbitModel:
         if overlap:
             raise ValueError(f"sites both fixed and sampled: {sorted(overlap)}")
 
+        free_velocity = "velocity" in priors or "velocity" in fixed
+        if free_velocity:
+            keplerian = [s for s in ("period", "t_conj", "secosw", "sesinw", "k", *_OUTER_SITES)]
+            clash = [s for s in keplerian if s in priors or s in fixed]
+            if clash:
+                raise ValueError(
+                    f"a free-velocity model cannot also carry Keplerian sites {clash} — "
+                    "'velocity' replaces the orbit rather than supplementing it"
+                )
+        elif not all(s in priors or s in fixed for s in ("period", "t_conj", "secosw", "sesinw")):
+            missing = [
+                s
+                for s in ("period", "t_conj", "secosw", "sesinw")
+                if s not in priors and s not in fixed
+            ]
+            raise ValueError(
+                f"missing orbital sites {missing}. Sample or fix them, or build a "
+                "free-velocity model instead by giving a 'velocity' site (D42)."
+            )
+
         def _model(base=None):
             theta = {name: numpyro.sample(name, d) for name, d in priors.items()}
             theta.update({name: jnp.asarray(v) for name, v in fixed.items()})
-            ecc_raw = theta["secosw"] ** 2 + theta["sesinw"] ** 2
-            numpyro.deterministic("ecc", jnp.minimum(ecc_raw, self.ecc_max))
-            numpyro.deterministic("omega", jnp.arctan2(theta["sesinw"], theta["secosw"]))
-            numpyro.factor("ecc_disk", jnp.where(ecc_raw <= self.ecc_max, 0.0, -jnp.inf))
+            if free_velocity:
+                # No Keplerian: record the identified table rather than the raw site,
+                # whose per-component zero points the likelihood cannot see (D42).
+                numpyro.deterministic(
+                    "velocity_rel", relative_velocities(theta["velocity"], self.problem.grid)
+                )
+            else:
+                ecc_raw = theta["secosw"] ** 2 + theta["sesinw"] ** 2
+                numpyro.deterministic("ecc", jnp.minimum(ecc_raw, self.ecc_max))
+                numpyro.deterministic("omega", jnp.arctan2(theta["sesinw"], theta["secosw"]))
+                numpyro.factor("ecc_disk", jnp.where(ecc_raw <= self.ecc_max, 0.0, -jnp.inf))
             if _has_outer_orbit(theta):
                 ecc_out_raw = theta["secosw_out"] ** 2 + theta["sesinw_out"] ** 2
                 numpyro.deterministic("ecc_out", jnp.minimum(ecc_out_raw, self.ecc_max))

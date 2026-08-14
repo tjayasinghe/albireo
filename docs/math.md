@@ -1125,6 +1125,66 @@ mode trades against the components' broad features and lands at its zero-centere
 rather than at truth. Keep the order low and the priors tight; read the common mode as
 a normalization convention, not a measurement.
 
+### 7.6 Free per-epoch velocities (the RV table)
+
+The diagnostic mode: replace the Keplerian by a `velocity` site of shape
+$(n_{\rm stellar}, n_{\rm epochs})$, so each epoch's velocity is its own parameter. It is
+the artifact the binary-star community expects, the bridge for users of cross-correlation
+codes, and — because a Keplerian is a strong constraint — the model check for §7.
+
+**Identifiability: one arbitrary zero point per component.** With no orbit tying the
+components together, component $i$'s deviation spectrum $d_i$ is free, so translating it
+absorbs a constant added to that component's shifts and the likelihood cannot tell:
+
+$$
+T(\delta_{ij} + \Delta_i)\, d_i \;=\; T(\delta_{ij})\, \big[T(\Delta_i)\, d_i\big].
+$$
+
+This is $\gamma$ (§5.3, D14) once per star rather than once in total. The equality is
+exact for whole-pixel $\Delta_i$; for fractional ones the linear-interpolation shift
+operator blurs slightly as well as translating, so the likelihood is left with a weak
+preference that is a property of the *operator*, not of the data. Measured: a one-pixel
+common shift of one component costs $4\times10^{-9}$ of the log-likelihood in relative
+terms, a 0.1-pixel one costs 7.3 nats. An uncentered table would therefore have its
+absolute level set by interpolation error.
+
+albireo removes the zero points, **in pixel space**. That is where the removal is exact:
+with $\xi = \operatorname{artanh}(v/c)$ (§1.1, chosen so shifts compose and invert
+exactly) a constant *pixel* offset is relativistic velocity addition, not ordinary
+addition, so
+
+$$
+\tilde\delta_{ij} = \frac{\xi(v_{ij})}{\Delta x}
+  - \frac{1}{N}\sum_{j'} \frac{\xi(v_{ij'})}{\Delta x},
+\qquad
+v^{\rm rel}_{ij} = c \tanh\!\big(\tilde\delta_{ij}\,\Delta x\big)
+$$
+
+is exactly invariant under $v_{ij} \mapsto v_{ij} \oplus u_i$, while centering the
+velocities would be right only to $O(v^2/c^2)$.
+
+**What survives, and what does not.** Each component's velocity *variation* — hence its
+semi-amplitude — and every epoch-to-epoch difference are identified, as is the slope of
+$v_2$ against $v_1$, which is $-K_2/K_1$: the Wilson mass ratio is a slope and so immune
+to both zero points. The systemic velocity and either star's absolute velocity are not,
+and must be measured afterwards from the disentangled spectra exactly as §5.3 prescribes.
+
+**Uncertainties need the same projection.** Each zero point is an exactly flat likelihood
+direction, so its posterior width is the prior width and every epoch's marginal variance
+inherits it: on the D42 fixture the raw Laplace diagonal returns $120/\sqrt{10} = 37.95$
+km/s on every entry, against an honest per-epoch error of 0.059 km/s. Projecting each
+component's mean out of the covariance leaves exactly $n_{\rm stellar}$ null directions
+and gives the identified errors. Posterior samples of the `velocity_rel` deterministic
+need no projection at all.
+
+**The mode needs a warm start.** From a cold start with every epoch at one velocity the
+components are indistinguishable, and the optimizer lands in a wrong basin — but at a
+potential enormously worse than the warm-started one, so the failure is detectable rather
+than silent. The intended workflow is to fit a Keplerian first, then free the velocities
+and difference the two tables (both centered, differenced in pixel space so the zero
+points cancel exactly): structured residuals — phase-correlated, or one epoch far out —
+are what a wrong period, an unseen third body, or line-profile variability look like.
+
 ---
 
 ## 8. What the tests assert (traceability)

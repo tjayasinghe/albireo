@@ -1575,3 +1575,97 @@ assumptions and blind to their being wrong — the K₁ table above is exactly t
 and no calibrated threshold would have flagged it. The limit is likewise conditional on
 the assumed companion template, since the observable is ℓ₂·d₂ and a featureless companion
 is invisible at any light fraction. Both are stated wherever the numbers are.
+
+---
+
+## D42 — the free per-epoch radial-velocity table (2026-08-13)
+
+Tier-2 roadmap item 3: no Keplerian, every epoch's velocity its own parameter. From
+`tests/test_velocity_table.py`. One SB2 — 10 epochs, SNR 200, 400 model pixels at
+dv = 6.00 km/s over 5000-5040 A (284 native pixels), K = (30, 55) km/s, light fractions
+(0.6, 0.4), P = 6.31 d, e = 0.15.
+
+### The zero point, and why it is removed
+
+A free table has one arbitrary zero point **per component**: with no orbit tying the
+stars together, each free spectrum absorbs a constant added to its own shifts. The
+equality `T(d + D) x = T(d) [T(D) x]` is exact only for whole-pixel `D`, because the
+model shifts by linear interpolation and a fractional shift blurs as well as translating.
+
+| common shift applied to one component | change in log-likelihood |
+|---|---|
+| 1.00 model pixel | **4e-9 relative** (boundary effects only) |
+| 0.10 model pixel | -7.3 nats |
+| 0.01 model pixel | -0.11 nats |
+
+So an uncentered table's absolute level is pinned by *interpolation error*, not by data —
+a number that would look like a systemic velocity, move when the grid is resampled, and
+mean nothing. albireo centers the pixel shifts per component, which makes the likelihood
+exactly invariant:
+
+| offset added to one component (relativistic addition) | change in log-likelihood |
+|---|---|
+| 5 / 50 / 200 km/s | **0.000e+00**, exactly |
+| 0.5 km/s | -9.3e-10 (relative 9.8e-14, float64 round-off) |
+
+Centering in *velocity* space instead is right only to `O(v^2/c^2)` and leaves a residual
+four to six orders of magnitude larger (-9.9e-8 at 0.5 km/s, +8.7e-6 at 50 km/s). The
+distinction is measured in the suite rather than asserted.
+
+### Recovery, by starting point
+
+250 L-BFGS steps of ML-II MAP over the 20 velocities and the four hyperparameters.
+
+| start | per-epoch RV rms [km/s] | Wilson slope | potential |
+|---|---|---|---|
+| the Keplerian truth | 0.098 / 0.066 | -1.8255 | -9627.1 |
+| K wrong by 10% | 0.106 / 0.063 | -1.8300 | -9627.6 |
+| **K wrong by 30%** | **0.098 / 0.066** | **-1.8255** | **-9627.1** |
+| truth + 15 km/s noise | 0.098 / 0.066 | -1.8255 | -9627.1 |
+| cold start (every epoch at 0) | **12.94 / 28.70** | **+0.5916** | **+112,692** |
+
+Truth is -1.8333 = -K2/K1, so the recovered mass ratio is **0.4%** off. An rms of
+0.098 km/s is **1/60th of a model pixel**. Every warm start reaches the same optimum to
+four decimals, including one 30% wrong in both semi-amplitudes.
+
+**The cold start fails, and that is not a defect being hidden.** With every epoch at one
+velocity the two components are indistinguishable, and the mode is documented as needing a
+warm start. What matters is that the failure is *visible*: 122,000 nats worse, with a
+Wilson slope of the wrong sign. A user comparing two runs cannot mistake it for a fit.
+
+### Uncertainties — and the trap in reading them
+
+| | mean sigma [km/s] | rms error [km/s] | error / sigma |
+|---|---|---|---|
+| raw Laplace diagonal | **37.95** | 0.098 / 0.066 | 0.002-0.26 |
+| zero points projected out | **0.059** | 0.098 / 0.066 | 1.44 |
+
+The raw number is `120/sqrt(10)` — the `Normal(0, 120)` prior divided by the epoch count —
+**identical to four digits across both components and all ten epochs**. That is the
+signature of reading a flat direction: the zero point's posterior width is the prior's, and
+every epoch's marginal variance inherits it. It is 640x too large, and it would look
+exactly as convincing on a useless dataset. `relative_velocity_errors` projects each
+component's mean out; the projected block then has **exactly 2 zero eigenvalues** — one per
+component, the identifiability claim confirmed numerically rather than argued.
+
+The projected bars run ~1.4x optimistic against the realized errors, which is what a
+Laplace approximation with the hyperparameters pinned at their MAP values should do.
+Posterior samples of the `velocity_rel` deterministic need no projection and no Gaussian
+assumption; that is the route the docs steer to, and this one is the fast estimate.
+
+Per-epoch precision of 0.059 km/s is **1/102 of a model pixel**.
+
+### The model check
+
+`keplerian_residuals` centers both tables the same way and differences them in pixel
+space, so the two arbitrary zero points cancel exactly (verified: offsetting the recovered
+table by +77 and -31 km/s moves the residuals by < 1e-9).
+
+| Keplerian tested against the recovered table | max abs residual | in units of the per-epoch sigma |
+|---|---|---|
+| the orbit that generated the data | 0.164 km/s | 2.8 |
+| period wrong by 0.5% | 2.979 km/s | 50 |
+| K_2 wrong by 5% | 2.581 km/s | 44 |
+
+This is the mode's purpose: a Keplerian is a strong constraint, and a table fitted without
+one says whether it was earned.
