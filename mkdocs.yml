@@ -42,6 +42,7 @@ nav:
   - Benchmarks: benchmarks.md
   - API reference:
       - Overview: api/index.md
+      - Disentangler (experimental): api/facade.md
       - Data and grids: api/data.md
       - Reading spectra: api/io.md
       - ESO archive: api/archive.md

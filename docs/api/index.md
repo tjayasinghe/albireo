@@ -13,6 +13,7 @@ The path from a directory of FITS files to a posterior runs through them in roug
 
 | Stage | Module | What it does |
 |---|---|---|
+| Declare | [`albireo.facade`](facade.md) | `Disentangler` — the experimental front end that compiles a declaration into everything below |
 | Fetch | [`albireo.archive`](archive.md) | ESO ObsCore/TAP queries and resumable downloads; BLOeM by name |
 | Read | [`albireo.io`](io.md) | FITS → `RawSpectrum` → `EpochData`, with every assumption warned about |
 | Repair | [`albireo.preprocess`](preprocess.md) | continuum, inverse variance, masks, one shared grid |

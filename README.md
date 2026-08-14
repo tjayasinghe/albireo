@@ -121,9 +121,26 @@ instrument), per-epoch noise rescaling (`log_jitter` site — read
 [the benchmarks](docs/benchmarks.md) before trusting one on real data), nebular
 emission components (`nebular=True` plus the `log_nebular_amp` site, with per-pixel
 prior profiles to confine them to their lines), and the SB1
-faint-companion K₂ scan (`ab.k2_scan`). A friendlier
-`Disentangler` façade with light-ratio policies is planned; the core below is the
-supported surface for now.
+faint-companion K₂ scan (`ab.k2_scan`).
+
+`ab.Disentangler` is a declarative front end over all of it — **experimental**, because a
+vocabulary is expensive to change once people depend on it. It derives the four things the
+low-level path makes you get right yourself (the solver's velocity budget, the grid margin,
+the conjunction phase, and the smoothness hyperparameters by empirical Bayes), and refuses
+to derive the ones where a default would be a scientific claim. It is a compiler rather
+than a wall: `dis.explain()` prints every derivation and `dis.expert()` hands back the
+`(model, priors, init)` triple, so the core below stays the supported surface.
+
+```python
+dis = ab.Disentangler(
+    dataset,
+    components=[ab.Star("primary", light=0.62), ab.Star("secondary", light=0.38)],
+    orbit=ab.Orbit(period=ab.Between(5.5, 6.5), k=ab.Between([10.0, 10.0], [90.0, 90.0])),
+    lsf={"DEMO": 6.5},
+)
+fit = dis.fit()          # phase scan -> MAP + ML-II -> residual check
+post = fit.sample(seed=0)  # Laplace mass matrix -> NUTS
+```
 
 ### From a directory of FITS files
 

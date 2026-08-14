@@ -222,17 +222,60 @@ refusing an undeclared air-vs-vacuum scale: the reader may decline to answer, bu
 Not yet written: a tutorial page fitting a BLOeM SB2 end to end. The example script is the
 placeholder, and the nebular component (item 1) is what will make it honest.
 
-### 5. The `Disentangler` façade
+### 5. The `Disentangler` façade — **done** (D46)
 
-The [design](design.md#6-api-sketch-target-user-code) sketches a friendlier API and the README
-promises it. The current path asks a new user to hand-build a dictionary of numpyro distributions, call three
-functions in the right order, extract two hyperparameters for empirical Bayes, and rebuild the model
-— which is a fine expert interface and a poor first impression.
+The [design](design.md#6-api-sketch-target-user-code) sketched a friendlier API and the README
+promised it. The path before this asked a new user to hand-build a dictionary of numpyro
+distributions, call three functions in the right order, extract two hyperparameters for empirical
+Bayes, and rebuild the model — a fine expert interface and a poor first impression.
 
 It is sequenced *after* the nebular component and the RV mode on purpose. A façade is a vocabulary,
 and a vocabulary is expensive to change once people are using it; the components and modes it names
-should exist before it names them. It ships marked experimental, with the low-level API documented
-and supported in parallel.
+should exist before it names them. It ships marked **experimental**, with the low-level API
+documented and supported in parallel.
+
+**The framing that made it tractable is that it is a compiler, not a shortcut.** You declare the
+system — components, light fractions, instrument, what is known about the orbit — and it emits the
+expert path. `dis.explain()` prints every derivation and `dis.expert()` hands back the exact
+`(model, priors, init)` triple, so "supported in parallel" is structural rather than a promise.
+Four things are derived, each of them something the low-level path makes you get right yourself:
+the velocity budget (from the `k` priors' own support), the grid margin, the conjunction phase (by
+a scan — 10⁵ nats between the best and worst phase on the packaged example), and the smoothness
+hyperparameters by ML-II, reported with a **drift flag** on any that did not move from its start.
+
+**The rejected names mattered as much as the accepted ones.** Six of the sketch's twelve had gone
+stale in ways that would have shipped a lie: `Keplerian(t_peri=, ecc=, omega=, k1=, k2=)` names
+five sites that no longer exist under those names; `GaussianLSF` is neither Gaussian-only (D38) nor
+one number per instrument (D37); `light_ratio=` is the wrong word for a per-epoch simplex over N
+components; `PerEpoch(eclipse model)` would have named a model that does not exist, which is
+exactly what the ordering rule above exists to prevent. And `dis.replace(orbit=FreeVelocities())`
+is the usage D42 measured failing at 122,000 nats worse — so the free-velocity mode hangs off a
+completed fit instead, where it is unconstructible without its warm start.
+
+**Measured** on the packaged example: 12 façade lines against 59 expert lines, MAP *K* = 41.978 and
+62.978 against an injected 42 and 63, *e* = 0.1512 against 0.15, residual z-RMS 0.997, and NUTS
+*K*₂ = 62.988 ± 0.081 with zero divergences.
+
+Deliberately **not** in v1: jitter, AR(1), inferred light fractions and inferred LSF widths. Each is
+a one-line site at the low level and a scientific claim rather than a convenience; a `jitter=True`
+keyword would offer the first as the second. `fit.z_rms` is printed unconditionally so the need is
+visible, and `expert()` is how it is met.
+
+**An adversarial review of the finished module confirmed 38 defects, and the split is the lesson:
+the vocabulary survived unchallenged, the wiring did not.** Not one accepted name was disputed.
+What failed was every place a declaration had to be *translated* into the model's own conventions —
+and that layer is exactly where nothing downstream can check the result. The smoothness rows were
+assembled in declaration order while the model orders them stars-telluric-nebular, so a permuted
+declaration regularized the wrong component, worth 9,900 nats and passing every existing guard
+because the vectors were still the right length. And `ecc=Between(lo, hi)` was not the prior that
+was fitted: the box corner reached `e = 2·hi`, and `lo` was validated then ignored. Both are fixed
+and both now have regression tests; three declarations the façade could not honour — hierarchical
+triples, Gauss-Hermite `h3`, and an eccentricity lower bound — are refusals rather than
+approximations.
+
+The honest risk is recorded in [the ledger](design.md#2-decisions-recorded-defaults) and in the
+module's own docstring: `Star(light=0.62)` sits beside `period=Known(40.335, 0.5)` and is formatted
+identically, but one is a choice and the other a measurement.
 
 ### 6. `sensitivity_forecast()`
 

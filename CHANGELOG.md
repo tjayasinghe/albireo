@@ -13,6 +13,33 @@ This file records *what changed*. The reasons live elsewhere and are worth follo
 
 ### Added
 
+- **`albireo.Disentangler`, a declarative front end** — *experimental*, because a
+  vocabulary is expensive to change once people depend on it. Declare the system
+  (`Star(name, light=...)`, `Telluric()`, `Nebular()`, `Orbit(period=..., k=...)`,
+  `LSF.from_resolution(R)`) and it emits the expert path. Twelve lines against
+  fifty-nine on the packaged example, recovering the same answer.
+  It is a **compiler, not a shortcut**: `dis.explain()` prints every derivation and
+  `dis.expert()` returns the exact `(model, priors, init)` triple, so the low-level API
+  stays the supported surface and dropping down costs three lines.
+  Four things are derived rather than typed — the solver's **velocity budget** (from the
+  `k` priors' own support, since it must bound what the *prior* allows, not what the answer
+  turns out to be), the **grid margin**, the **conjunction phase** (by a scan, because the
+  likelihood is sharply multimodal in phase), and the **smoothness hyperparameters** by
+  empirical Bayes, reported per component with a flag on any that did not move from its
+  start. A fifth is structural: a spec such as `Between(5.5, 6.5)` carries both its prior
+  and its starting value, so `priors` and `init` cannot drift apart.
+  It **refuses** to derive five things where a default would be a scientific claim: light
+  fractions (required per star, must sum to 1, and repeated in an `Assumed, not measured`
+  block on every summary), a period *search*, an undeclared air/vacuum scale when a nebular
+  or telluric component makes it an 83 km/s question, a velocity budget smaller than the
+  priors reach, and the `e = 0` singularity — a free eccentricity never starts at the
+  origin and `ecc=Fixed(0.0)` is exact, because those sites are not sampled at all.
+  Not in v1, deliberately: jitter, AR(1), inferred light fractions and inferred LSF widths.
+  Also absent because they could not be delivered honestly, each raising rather than
+  approximating: hierarchical triples (`Orbit(outer=...)`), Gauss-Hermite `h3` (it reaches
+  the kernel through `build_problem`, not through the model the façade builds), and a
+  lower bound on eccentricity (an annulus in the sampled parameterization, not a box).
+  See `docs/design.md` D46 and `docs/api/facade.md`.
 - **BLOeM targets resolve by name** — `albireo.resolve_bloem("1-002")`,
   `albireo.bloem_catalogue(binary_class="SB2")` (the 59 published double-lined systems),
   and `albireo.bloem_spectra(star)` for that star's epochs, ready for `download`. The
