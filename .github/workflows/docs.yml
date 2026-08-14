@@ -1,5 +1,14 @@
 name: Docs
 
+# Two jobs, both cheap, and deliberately *not* filtered by path: mkdocstrings imports the
+# package to read its docstrings, so a source-only change can break `--strict` just as
+# easily as a docs one. This is the workflow that still runs when `ci.yml` skips a
+# docs-only push.
+#
+# The deploy job needs Pages set to "GitHub Actions" in the repository settings, and Pages
+# from a **private** repository requires GitHub Pro — on the free tier it only works once
+# the repository is public. See docs/releasing.md step 2.
+
 on:
   push:
     branches: [main]

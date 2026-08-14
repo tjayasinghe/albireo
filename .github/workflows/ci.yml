@@ -1,52 +1,42 @@
 name: CI
 
+# The routine loop: one job, one runner, one Python. It exists to catch the things that
+# break on every commit — a lint slip, a broken import, a failing fast test — and it is
+# deliberately *not* the whole test plan. The matrix, the acceptance gates and the example
+# scripts live in `full.yml`, which is run on demand.
+#
+# The reason is billing. Actions minutes are free and unlimited on public repositories, but
+# metered on private ones (2,000/month on the free tier), where Windows runners bill at 2x
+# and macOS at 10x. The previous shape of this file was eight jobs including a four-way
+# matrix — about 120 billed minutes per push, or sixteen pushes a month. This is one job,
+# on Linux, at about a seventh of that.
+#
+# Linux specifically, because the developer works on Windows: local runs already are the
+# Windows signal, and what CI adds is the platform nobody is testing by hand — which is
+# also the one most users will install on.
+
 on:
   push:
     branches: [main]
+    # A README or docs-only edit cannot break the test suite, and the Docs workflow still
+    # runs on these to catch a broken link or an unresolvable docstring reference. Note
+    # for later: if `check` ever becomes a required status check, a skipped run counts as
+    # pending, so branch protection and this filter need deciding together.
+    paths-ignore: ["**.md", "docs/**", "paper/**"]
   pull_request:
     branches: [main]
+    paths-ignore: ["**.md", "docs/**", "paper/**"]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  lint:
-    name: Lint
+  check:
+    name: Lint, guards, fast tests
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v9
-        with:
-          enable-cache: true
-
-      - name: Install Python
-        run: uv python install 3.12
-
-      - name: Create virtual environment and install package
-        run: |
-          uv venv --python 3.12
-          uv pip install -e ".[dev]"
-
-      - name: Ruff check
-        run: uv run --no-sync ruff check .
-
-      - name: Ruff format check
-        run: uv run --no-sync ruff format --check .
-
-      # Not gating yet: the codebase has never been type-checked end to end and JAX
-      # annotations will produce a backlog. Visible now, enforced once the backlog is
-      # cleared.
-      - name: Mypy (advisory)
-        continue-on-error: true
-        run: uv run --no-sync mypy src/albireo
-
-  bare-install:
-    name: Bare install (no extras)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
 
@@ -58,21 +48,39 @@ jobs:
       - name: Install Python
         run: uv python install 3.13
 
-      # Installs *without* any extra, so astropy and matplotlib are absent. This is the
-      # job that proves the optional-dependency guards are real: `import albireo` must
-      # work, and the optional surfaces must raise an actionable error rather than an
-      # ImportError traceback from somewhere deep in the package.
       - name: Create virtual environment and install package
         run: |
           uv venv --python 3.13
-          uv pip install -e .
+          uv pip install -e ".[dev]"
 
-      - name: Import, load the packaged example, and check the guards
+      # Lint first: it is seconds, and a formatting failure should not wait behind ten
+      # minutes of tests to be reported.
+      - name: Ruff
         run: |
-          uv run --no-sync python - <<'PY'
+          uv run --no-sync ruff check .
+          uv run --no-sync ruff format --check .
+
+      # Not gating yet: the codebase has never been type-checked end to end and JAX
+      # annotations will produce a backlog. Visible now, enforced once the backlog is
+      # cleared.
+      - name: Mypy (advisory)
+        continue-on-error: true
+        run: uv run --no-sync mypy src/albireo
+
+      # A second environment with *no* extras, so astropy and matplotlib are absent. This
+      # is what proves the optional-dependency guards are real: `import albireo` must work,
+      # and the optional surfaces must raise an actionable error naming the extra rather
+      # than an ImportError from somewhere deep inside a figure or a FITS writer. It is a
+      # separate venv but not a separate job — the checkout and the uv setup are already
+      # paid for here.
+      - name: Bare install (no extras)
+        run: |
+          uv venv --python 3.13 /tmp/bare
+          VIRTUAL_ENV=/tmp/bare uv pip install -e .
+          /tmp/bare/bin/python - <<'PY'
           import importlib.util as u
-          assert u.find_spec("astropy") is None, "this job must run without astropy"
-          assert u.find_spec("matplotlib") is None, "this job must run without matplotlib"
+          assert u.find_spec("astropy") is None, "this step must run without astropy"
+          assert u.find_spec("matplotlib") is None, "this step must run without matplotlib"
 
           import numpy as np
           import albireo as ab
@@ -86,8 +94,6 @@ jobs:
           grid = ab.LogGrid.from_wavelength_range(5000.0, 5010.0, dv_kms=5.0)
           spectra = np.zeros((1, grid.n))
 
-          # Optional surfaces must fail with an actionable message naming the extra,
-          # not with an ImportError from somewhere inside a figure or a FITS writer.
           for call, needle in (
               (lambda: ab.plot_spectra(grid, spectra), "albireo[plots]"),
               (lambda: ab.write_spectra("x.fits", grid, spectra), "albireo[io]"),
@@ -104,95 +110,7 @@ jobs:
           print("bare install OK")
           PY
 
-  test:
-    name: Test (${{ matrix.os }}, py${{ matrix.python-version }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-        python-version: ["3.12", "3.13"]
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v9
-        with:
-          enable-cache: true
-
-      - name: Install Python
-        run: uv python install ${{ matrix.python-version }}
-
-      - name: Create virtual environment and install package
-        run: |
-          uv venv --python ${{ matrix.python-version }}
-          uv pip install -e ".[dev]"
-
-      # The acceptance gates (real NUTS sampling, the multi-minute closed-loop fits) run
-      # once, in the `gates` job below, rather than four times across the matrix.
-      - name: Run tests
+      # The acceptance gates (real NUTS sampling, the multi-minute closed-loop fits) and
+      # the example scripts are in `full.yml`.
+      - name: Fast tests
         run: uv run --no-sync pytest --no-slow --no-network
-
-  gates:
-    name: Acceptance gates (slow)
-    runs-on: ubuntu-latest
-    # The M3 NUTS gate test is a few minutes of real sampling; a hung chain (e.g. a
-    # mass-matrix regression driving trees to the depth cap) must fail, not idle.
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v9
-        with:
-          enable-cache: true
-
-      - name: Install Python
-        run: uv python install 3.13
-
-      - name: Create virtual environment and install package
-        run: |
-          uv venv --python 3.13
-          uv pip install -e ".[dev]"
-
-      - name: Run the full suite with coverage
-        run: uv run --no-sync pytest --no-network --cov=albireo --cov-report=xml
-
-      - name: Upload coverage
-        uses: codecov/codecov-action@v5
-        with:
-          files: coverage.xml
-          fail_ci_if_error: false
-
-  examples:
-    name: Examples (smoke)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v9
-        with:
-          enable-cache: true
-
-      - name: Install Python
-        run: uv python install 3.13
-
-      - name: Create virtual environment and install package
-        run: |
-          uv venv --python 3.13
-          uv pip install -e ".[dev]"
-
-      - name: Run examples
-        env:
-          ALBIREO_EXAMPLE_FAST: "1"
-        run: |
-          uv run --no-sync python examples/00_quickstart.py
-          uv run --no-sync python examples/02_k2_scan.py
-          uv run --no-sync python examples/04_nebular.py
-          uv run --no-sync python examples/05_detection_limit.py
-          uv run --no-sync python examples/08_forecast.py
-          uv run --no-sync python examples/09_rv_table.py
-          uv run --no-sync python examples/01_sb2_end_to_end.py

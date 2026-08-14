@@ -23,7 +23,9 @@ correct, a published PyPI version number can never be reused.
 - [ ] Decide whether the first tag is `0.1.0` or stays `0.1.0.dev0`. A dev version can be
       uploaded to PyPI but is not installed by a bare `pip install albireo`, which makes it
       a good rehearsal and a bad launch.
-- [ ] `pytest` — the whole suite, gates included.
+- [ ] `pytest` — the whole suite, gates included. This is the local stand-in for the `Full`
+      workflow, and it matters because `release.yml` builds and publishes without running
+      any tests: nothing between a tag and PyPI checks the science.
 - [ ] `ruff check . && ruff format --check .`
 - [ ] `mkdocs build --strict`
 - [ ] Re-check that the name `albireo` is still free on PyPI. It was verified free on
@@ -32,13 +34,26 @@ correct, a published PyPI version number can never be reused.
 ### 2. Push, and let CI run for the first time
 
 - [ ] `git push -u origin main`
-- [ ] Watch the four workflows: `lint`, `bare-install`, `test` (4-way matrix), `gates`, and
-      `Docs`. **Expect something to fail** — CI has never executed, so this is the first
-      real evidence any of it works. In particular the Windows legs and the bare-install
-      job have never run anywhere but this machine.
+- [ ] Watch `CI` (one job: lint, the bare-install guards, the fast suite) and `Docs`.
+      **Expect something to fail** — CI has never executed, so this is the first real
+      evidence any of it works.
+- [ ] Then run the `Full` workflow by hand from the Actions tab. It carries everything
+      `CI` leaves out — the OS/Python matrix, the slow acceptance gates with coverage, the
+      example scripts — and none of it has run anywhere but this machine. The Windows legs
+      are the least-evidenced part, since local runs *are* Windows and CI's routine job is
+      Linux.
 - [ ] In the repository settings, set **Pages** to deploy from GitHub Actions, so the
-      `Docs` workflow's deploy job has somewhere to publish.
+      `Docs` workflow's deploy job has somewhere to publish. Note that Pages from a
+      **private** repository needs GitHub Pro; on the free tier the deploy job only works
+      once the repository is public.
 - [ ] Enable **Discussions**.
+
+!!! note "Going public is also the Actions-minutes fix"
+    Actions minutes are free and unlimited on public repositories and metered on private
+    ones — 2,000/month on the free tier, with Windows billing at 2x and macOS at 10x. That
+    is why `CI` is one Linux job and everything expensive is manual (`full.yml`). While the
+    repository is private, budget roughly 15 billed minutes per push and ~100 per manual
+    `Full` run; once it is public, neither number is charged against anything.
 
 ### 3. Zenodo, *before* the first tag
 
