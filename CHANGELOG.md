@@ -13,6 +13,32 @@ This file records *what changed*. The reasons live elsewhere and are worth follo
 
 ### Added
 
+- **`albireo.handoff`: the files the atmosphere codes read, and the draws that carry the
+  uncertainty into them.** `write_gssp`, `write_ispec` and `export_draws`, with
+  [a tutorial](docs/tutorials/downstream.md) and `examples/10_downstream.py`.
+  The formats are the hard part and both traps are silent. iSpec does no unit conversion on
+  its text path — its whole internal scale, atomic line lists included, is **nanometres**, so
+  an ångström value lands a factor of ten outside every model grid and still fits something.
+  And GSSP infers its synthetic step from the file you hand it ("the step width in wavelength
+  that will be used for the calculation of synthetic spectra is computed from the
+  observations"), so a log-wavelength grid must be resampled onto an equidistant one rather
+  than dumped. Both are regression-tested.
+  **GSSP has no per-pixel error column at all** — no error path, no S/N entry and no weighting
+  entry anywhere in its configuration — so the posterior band cannot reach an effective
+  temperature through the file. It can only get there by fitting *N* spectra, which is what
+  `export_draws` is for: `draw_spectra` returns `d_hat + L^-T z` on the vector stacked over
+  *all* components, so draws are correlated across wavelength and across the two stars, and
+  draw *i* of component A is the same posterior sample as draw *i* of component B.
+  That jointness is the whole point, and it is measured rather than asserted. Against the
+  established recipe — independent per-pixel noise at the band's amplitude (Kiran et al. 2016,
+  §3.5) — the joint draws give an equivalent-width spread **1.80× and 3.38× larger** on the
+  packaged example's two components: white noise understates any *integrated* quantity, and
+  every atmospheric parameter integrates the spectrum. The sharper result was unlooked-for:
+  the two components' equivalent widths are correlated at **−0.992** across draws, against
+  −0.052 under independent noise — D47's *k* = 0 exchange mode arriving in a derived quantity,
+  so the two stars' *difference* is far better determined than either alone and independent
+  error bars misstate both. See `docs/roadmap.md` Tier 2 item 8 and `docs/api/handoff.md`.
+
 - **`albireo.sensitivity_forecast`, which answers an observing question before the
   observation** — "will twelve more epochs at these phases separate the two stars?"
   `albireo.plan_epochs(template, bjd=...)` builds the epochs of a night that has not

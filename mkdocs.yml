@@ -37,6 +37,7 @@ nav:
       - Find a hidden companion with the K2 scan: tutorials/k2-scan.md
       - Bring your own spectra (FITS to Dataset): tutorials/real-data.md
       - Disentangle a BLOeM SB2 end to end: tutorials/bloem-sb2.md
+      - Propagate into Teff and log g: tutorials/downstream.md
   - Design: design.md
   - Mathematical foundations: math.md
   - Roadmap: roadmap.md
@@ -55,6 +56,7 @@ nav:
       - Detection limits: api/calibrate.md
       - Observing forecasts: api/forecast.md
       - Results and plotting: api/results.md
+      - Downstream handoff: api/handoff.md
       - Simulator: api/simulate.md
       - Operators: api/operators.md
       - Kepler solver: api/kepler.md

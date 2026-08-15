@@ -423,19 +423,63 @@ optical spectrographs deliver air, and there was no field in which to declare wh
 `vacuum_to_air` convert. Calling it "sub-ångström" undersold it: the offset is 0.87-2.74 Å, but as a
 velocity it is a nearly constant **83 km/s**, the same order as the orbits being measured.
 
-### 8. Downstream handoff
+### 8. Downstream handoff — **done**
 
 The current workflow in the literature is a relay race: measure velocities, fit an eclipsing-binary
 model, disentangle in one code, renormalize by hand against an external light ratio, then fit
 atmospheres in another. Five tools, five format conversions, and the uncertainty is dropped at the
 disentangling joint because the disentangling code never produced one.
 
-albireo should be the front half of that pipeline and should not attempt to be the back half —
-GSSP, iSpec, Korg.jl and PySME are good at what they do. What it should ship is clean writers for
-the formats they ingest, and a tutorial whose punchline is the thing only a posterior makes
-possible: export *N* draws from the component-spectrum posterior, fit all *N*, and read the spread
-in temperature and gravity. That converts a dropped uncertainty into a propagated one at the cost of
-disk space.
+albireo is the front half of that pipeline and does not attempt to be the back half — GSSP, iSpec,
+Korg.jl and PySME are good at what they do. `albireo.handoff` ships the writers: `write_gssp`,
+`write_ispec`, and `export_draws`, with [a tutorial](tutorials/downstream.md) and
+`examples/10_downstream.py`.
+
+**The formats turned out to be the hard part, and both traps are silent.** iSpec does no unit
+conversion on its text path — its whole internal scale, line lists included, is **nanometres**, so
+an ångström value lands a factor of ten outside every model grid and still fits *something*. And
+GSSP *infers its synthetic step from your file*: "the step width in wavelength that will be used for
+the calculation of synthetic spectra is computed from the observations" (Tkachenko 2015, Appendix B
+— which is the entire manual; there is no separate document and no source repository). albireo
+solves on a log-wavelength grid, whose linear spacing drifts 1.32% across the packaged example's
+window, so `write_gssp` resamples onto an equidistant grid rather than dumping one GSSP would
+mis-step. Both are regression-tested.
+
+**GSSP has nowhere to put a per-pixel uncertainty — and that is what makes the draws the feature
+rather than a convenience.** Its configuration files contain no error path, no S/N entry and no
+weighting entry; its own error bars come from χ² on the fit residuals. So the posterior band cannot
+reach a temperature through the file at all. It can only get there by fitting *N* spectra and taking
+the spread, which is what `export_draws` is for.
+
+**The loop is old and the draws are new, and the difference is measured rather than argued.** Kiran
+et al. (2016, §3.5) added "artificial Gaussian noise with sigma = sigma_c" to a disentangled profile
+and refitted 500 times — cite them. But that assumes the error is white, and disentangling error is
+not: it has a genuine low-frequency null space, which is exactly what moves a continuum and through
+it a surface gravity. `draw_spectra` returns `d_hat + L⁻ᵀz` on the vector stacked over *all*
+components, so draws are correlated across wavelength and across the two stars. Measured on the
+packaged example, using equivalent width as the stand-in for the atmosphere code (the right stand-in,
+since D40 established EW is what reaches it and that an 11.5% EW error is a systematic in log *g*):
+
+| | EW (Å) | joint draws | independent per-pixel noise | ratio |
+|---|---|---|---|---|
+| component 1 | 0.2568 | 0.01873 | 0.01041 | **1.80×** |
+| component 2 | 0.0417 | 0.02974 | 0.00881 | **3.38×** |
+
+White noise understates the integrated uncertainty **two- to three-fold**. For a pointwise question
+the band is fine; every atmospheric parameter integrates the spectrum.
+
+**The sharper result was not the one being looked for.** The correlation between the two components'
+equivalent widths across draws is **−0.992**, against −0.052 for the same statistic under independent
+noise. That is D47's *k* = 0 exchange mode — the delocalized see-saw sitting at ~1× the prior for
+every observing design — arriving in a derived quantity: the two stars trade line depth almost
+exactly, so their *difference* is far better determined than either alone, and fitting the components
+separately with independent error bars misstates the answer in both directions at once. It is also
+the cleanest argument yet for why the draw index belongs in the exported filename.
+
+Deliberately **not** claimed: the atmosphere code's own model error is outside this posterior, and so
+is the light ratio, which albireo conditions on rather than marginalizes — precisely the systematic
+Pavlovski & Hensberge (2011) call dominant. Both are in the tutorial's caveat list rather than its
+headline.
 
 ### 9. A benchmark page against the incumbents
 

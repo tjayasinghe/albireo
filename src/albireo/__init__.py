@@ -58,6 +58,7 @@ from albireo.forward import (
     with_velocities,
 )
 from albireo.grids import C_KMS, LogGrid, air_to_vacuum, log_doppler_shift, vacuum_to_air
+from albireo.handoff import export_draws, write_gssp, write_ispec
 from albireo.inference import (
     MAPResult,
     MarginalOrbitModel,
@@ -228,6 +229,7 @@ __all__ = [
     "estimate_ivar",
     "example_info",
     "example_names",
+    "export_draws",
     "fit_continuum",
     "gauss_hermite_kernel_traced",
     "gaussian_kernel",
@@ -302,5 +304,7 @@ __all__ = [
     "with_shifts",
     "with_velocities",
     "write_ascii",
+    "write_gssp",
+    "write_ispec",
     "write_spectra",
 ]
