@@ -230,10 +230,13 @@ back individually at the 0.01 level with ℓ(t) recovered to 0.003.
 
 ## M5 — scale, benchmarks, release readiness (2026-08-11)
 
-Machine: same Windows 11 laptop (32 GB RAM), CPU only, float64. The M5 scale gate
-("2×10⁵ px / 50 epochs samples in minutes on one GPU") is *projected* from CPU
-measurements here — no GPU on this machine; the actual GPU run is the one open
-item, flagged for hardware the maintainer controls.
+Machine: same Windows 11 laptop (32 GB RAM), CPU, float64. The M5 scale gate
+("2×10⁵ px / 50 epochs samples in minutes on one GPU") was *projected* from these CPU
+measurements. It has since been run on a real GPU (below, 2026-08-14): the CUDA path
+works and scales as predicted, but the gate does **not** close on the consumer card
+available here, for two measured reasons — 16 GB against a gradient that needs 18.24 GB,
+and fp64 at 1/50 of fp32. The gate stays open, now with a specific hardware requirement
+rather than an open-ended one.
 
 ### Three scale pathologies, found and fixed (D27)
 
@@ -305,6 +308,57 @@ and tens of minutes at moderate bandwidths** (p ~ 200: flops drop ~6×). The
 `probe_chunk` knob (raise on GPU) and `remat=False` (80 GB HBM fits the stored
 backward) are the tuning levers. These projections close only with a real GPU
 run — deliberately left open in this record.
+
+### First real GPU run (2026-08-14): the path works, the gate does not close
+
+Hardware: NVIDIA GeForce RTX 5070 Ti, 16 GB, driver 595.97, under WSL2 Ubuntu with
+`jax 0.11.0` on the `cuda12` backend (`jax.default_backend()` → `gpu`,
+`[CudaDevice(id=0)]`). Blackwell needs no special handling. Same
+`scripts/m5_scale_bench.py` graph as the CPU ladder above.
+
+**What works.** The CUDA path runs and is linear in *n*, exactly as the flop count says:
+
+| n (model px) | native px/epoch | eval | ∇ eval |
+|---|---|---|---|
+| 4,877 | 1,702 | 0.232 s | 0.236 s |
+| 9,526 | 3,457 | 0.447 s | 0.461 s |
+| 18,221 | 6,965 | 0.915 s | 0.871 s |
+| 31,734 | 13,062 | **out of memory** | — |
+
+**Why the gate stays open, in two independent numbers.** Neither is a bug, and neither is
+fixed by waiting.
+
+*Memory.* The run dies at 31,734 model px — **one sixth of the design target** — on a
+single 7.42 GiB request, with 13.8 GiB free and preallocation disabled. That is not a
+surprise in hindsight: the D29 table below already measured the gradient needing
+**18.24 GB** at the design target, which no 16 GB card has. Worth recording that the GPU
+asks for ~2.5× the *CPU* peak at the same size in one contiguous buffer, so the CPU
+figures are a floor for GPU sizing, not an estimate of it.
+
+*Arithmetic.* A GeForce card runs double precision at a fraction of its single-precision
+rate, and albireo's solver contract is float64. Measured here on a 4096³ matmul:
+
+| | GFLOP/s |
+|---|---|
+| float32 | 39,023 |
+| float64 | **783** |
+
+**A 50× penalty.** 783 GFLOP/s of fp64 is a good desktop CPU, not an accelerator — which
+is why the eval times above beat this laptop's CPU by only about 2×, rather than the order
+of magnitude the projection assumed. The projection was not wrong about the *graph*; it
+assumed A100-class fp64, and consumer silicon does not have it.
+
+**So the acceptance gate is now open for a stated reason rather than for want of
+hardware, and the requirement is specific.** "One GPU" is not the spec. The spec is
+**≥ 24–40 GB of device memory and a 1:2 fp64 ratio** — A100 or H100 class. On that
+hardware both blockers lift at once: 80 GB clears the 18.24 GB gradient with room to
+switch `remat=False`, and ~10–20 TFLOP/s of vector fp64 is 12–25× the card measured here.
+The 1–2 hour projection above is therefore still the projection to beat; nothing measured
+today contradicts it, and nothing measured today confirms it either.
+
+What this does close is the *portability* question, which was never separated out before:
+albireo's graph compiles and runs correctly under CUDA with no code change, on a consumer
+card, on Windows via WSL2. That is worth knowing independently of the throughput gate.
 
 ### The hand-set light-ratio systematic, quantified (`scripts/m5_light_ratio_demo.py`)
 
