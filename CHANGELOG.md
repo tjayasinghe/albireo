@@ -11,6 +11,24 @@ This file records *what changed*. The reasons live elsewhere and are worth follo
 
 ## [Unreleased]
 
+### Fixed
+
+- **A detector gap is no longer weighted like data.** `albireo.mask_flux_gaps` zero-weights
+  contiguous runs of non-positive flux and warns with the wavelength range; `to_epoch` calls
+  it before the spike clip, since a flat run of zeros has no local scatter for a running
+  median to catch.
+  Found on real HARPS spectra of AI Phoenicis, where the two CCDs leave **32.9 Å of exact
+  zeros at 5304.67–5337.61 Å**. Nothing marked them: the pixels are finite, there is no
+  quality column, and because HARPS ships no error array the inverse variance was estimated
+  from the local scatter — which across a flat run of zeros is *small*. They arrived with
+  median ivar 6398 against 6231 for real pixels, and an analysis window that was 33% detector
+  gap disentangled to component spectra with **negative flux**.
+  The rule is deliberately about *runs*, not about any non-positive pixel:
+  `RawSpectrum.bad_pixels` declines to treat zero flux as missing and is right to, because one
+  zero can be a saturated core or a clipped cosmic ray. Eight in a row cannot be. Same shape
+  as D45's zero-errors-read-as-infinite-precision, one level up, and the same principle — the
+  reader may decline to answer, but it may not guess.
+
 ### Added
 
 - **`albireo.handoff`: the files the atmosphere codes read, and the draws that carry the

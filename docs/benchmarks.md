@@ -532,8 +532,99 @@ extension of it. `tests/test_shift_and_add.py` exercises exactly that — zeroin
 weight removes a ruined epoch. What the method genuinely cannot do is produce an uncertainty,
 and that is the honest comparison to draw.
 
-Still outstanding: the AI Phoenicis run, where the eclipse makes the light ratio externally
-known and removes the one genuinely free choice in disentangling.
+### AI Phoenicis: real spectra, and an orbit known better than any code can measure it
+(2026-08-15)
+
+The simulated benchmark compares three codes against a truth nobody disputes because it was
+injected. AI Phe is the harder case: 36 archival HARPS spectra (ESO, *R* = 115,000,
+3782–6913 Å, SNR 41–129, all ten phase bins filled, fetched with `albireo.archive`), where
+there is no truth spectrum at all — but where the *orbit* is published to a precision no
+disentangling code approaches:
+
+> K₁ = 51.164 ± 0.007 km/s,  K₂ = 49.106 ± 0.010 km/s,  P = 24.5924 d,
+> e = 0.1878 ± 0.0006,  ω = 110.30 ± 0.06°,  T₀ = BJD_TDB 2458362.82847
+> — Maxted et al. (2020), MNRAS 498, 332
+
+That is 0.014% and 0.020%, from several independent studies agreeing to 0.1%. So the ground
+truth here is the orbit, not the spectra. `scripts/aiphe_bench.py` runs it.
+
+**The eccentricity is recovered from spectra alone, and it is right.** Starting the optimizer
+15% off the published eccentricity vector and 8% off both semi-amplitudes:
+
+| | albireo | published | |
+|---|---|---|---|
+| e | **0.1879** | 0.1878 ± 0.0006 | +0.0001 |
+
+0.05% agreement between a TESS light curve and 36 HARPS spectra by completely independent
+routes. That is the cross-validation the page was after.
+
+**The semi-amplitudes carry a reproducible ~1% systematic, and the useful part is what it is
+not.** Two *disjoint* windows, chosen to share no lines:
+
+| | 5150–5250 Å | 5340–5440 Å | published |
+|---|---|---|---|
+| K₁ | 50.452 (−1.39%) | 50.440 (−1.42%) | 51.164 ± 0.007 |
+| K₂ | 49.495 (+0.79%) | 49.479 (+0.76%) | 49.106 ± 0.010 |
+| *q* = K₁/K₂ | 1.0193 | 1.0194 | 1.0419 |
+
+The two windows agree with each other to **0.02% in K₁ and 0.01% in the mass ratio**, and both
+sit the same distance from the published values. Three explanations are therefore ruled out
+rather than suspected:
+
+* **Not the optimizer.** Converged, `|grad| = 9e-03`, and the answer is unchanged between a
+  250-step run that hit its cap and 444 steps that did not.
+* **Not line selection or the window.** Two disjoint windows, 0.02% apart.
+* **Not the light ratio.** Sweeping the assumed ℓ₂ from 0.38 to 0.53 moves the likelihood
+  difference between albireo's K and the published K by 9 nats out of 53,306.
+
+What remains is a genuine ~1% systematic in the *disentangling* of this system, biasing the
+mass ratio 2.2% toward unity — the direction expected when two similar stars' line signals
+are partly confused. **It is reported here as an open lead, not as a measurement**, and
+certainly not as a correction to the literature: a value good to 0.02% from several
+independent cross-correlation studies of full échelle spectra is the better number.
+
+The reason the formal statistics cannot arbitrate is worth stating. albireo's optimum sits
+**53,306 nats** above the published K — which sounds decisive and is not, because 358,265
+high-SNR pixels make a one-pixel systematic velocity offset worth exactly that. The formal
+precision is far finer than the systematic, which is the condition under which likelihood
+ratios stop being informative. Relatedly, the residual **z-RMS is 2.64** rather than 1: HARPS
+ships no error array, so the weights are albireo's own scatter estimate, and any formal error
+bar from this fit is ~2.6× too tight until they are rescaled.
+
+**On the spectra, albireo and the clean-room shift-and-add agree** on real data — mean-aligned
+RMS 0.029 and 0.037 in the line cores of the 5340–5440 Å window, against line depths near 0.8.
+Two independent methods, real spectra, no truth: agreement at that level is the sanity check.
+Shift-and-add again took 0.07 s against albireo's 11 s.
+
+### The bug real data found, which no simulation would have
+
+Choosing the second window badly is what turned it up. 5300–5400 Å straddles the gap between
+HARPS's two CCDs — **5304.67–5337.61 Å, 32.9 Å of exact zeros** — and those pixels arrived
+*weighted like data*: finite, no quality column, and because HARPS ships no error array their
+inverse variance was estimated from the local scatter, which across a flat run of zeros is
+small. Median ivar **6398 across the gap against 6231 for real pixels**, `mask` empty. A
+window that was 33% detector gap disentangled to component spectra with **negative flux**.
+
+`albireo.mask_flux_gaps` now zero-weights contiguous runs of non-positive flux and warns with
+the wavelength range, and `to_epoch` calls it before the spike clip — a flat run has no local
+scatter for a running median to catch. The rule is deliberately about *runs*:
+`RawSpectrum.bad_pixels` declines to treat zero flux as missing and is right to, since one
+zero can be a saturated core or a clipped cosmic ray. Eight in a row cannot be. Same shape as
+D45's zero-error-means-infinite-precision, one level up, and the same principle: the reader
+may decline to answer, but it may not guess.
+
+### A correction to why this system was chosen
+
+The roadmap picked AI Phe because "it eclipses, so the light ratio is externally known and the
+one genuinely free choice in disentangling stops being a confound". That is half right, and
+the half that is wrong matters. The eclipse pins the fractional radii, the inclination and the
+surface-brightness ratio **in the photometric band** — TESS, centred near 7860 Å. The light
+ratio at an optical spectroscopic window is a different number that has to be computed from
+the radii and the two temperatures, and it is strongly wavelength dependent: for AI Phe's
+6310 K + 5010 K pair at R₂/R₁ = 1.624, a blackbody estimate gives ℓ₂ = 0.375 at 4000 Å and
+0.510 at 6500 Å. Far better constrained than for a non-eclipsing system — but not handed to
+you, and using the TESS-band value at 5200 Å would be a ~10% error in the one quantity every
+recovered line depth scales by.
 
 ### Tutorials, examples, CI
 

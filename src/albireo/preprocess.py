@@ -44,6 +44,7 @@ __all__ = [
     "der_snr_sigma",
     "estimate_ivar",
     "fit_continuum",
+    "mask_flux_gaps",
     "mask_ranges",
     "mask_spikes",
     "mask_tellurics",
@@ -780,6 +781,78 @@ def mask_spikes(
     ivar = np.where(bad, 0.0, epoch.ivar)
     if not np.any(ivar > 0):
         raise ValueError("spike rejection removed every pixel of this epoch")
+    return _replace(epoch, ivar=ivar)
+
+
+def mask_flux_gaps(epoch: EpochData, *, min_run: int = 8, warn: bool = True) -> EpochData:
+    """Zero the inverse variance across contiguous runs of non-positive flux.
+
+    A detector gap is not a measurement of zero flux, but nothing in a Phase 3 product says
+    so: the pixels arrive finite, unflagged, and — for the many pipelines that ship no error
+    array — with an inverse variance estimated from the local scatter, which across a flat
+    run of zeros is *small*, so the gap ends up weighted like good data. Found on real HARPS
+    spectra, whose two CCDs leave a 32.9 A hole at 5304.7-5337.6 A: a 100 A window placed
+    across it arrived 33% zeros at full weight, and disentangling it produced component
+    spectra with negative flux.
+
+    **Why a run and not simply any non-positive pixel.** :attr:`RawSpectrum.bad_pixels`
+    deliberately does not treat zero flux as missing, and that is right: one zero can be a
+    saturated core, a clipped cosmic ray, or a genuine measurement, and no generic rule
+    separates those from a gap. A *contiguous run* is different in kind — real spectra do not
+    hold exactly zero for eight consecutive pixels — so this looks only at runs and leaves
+    the isolated case alone. Same principle as the quality-flag policy in D45: the reader may
+    decline to answer, but it may not guess.
+
+    Parameters
+    ----------
+    epoch : EpochData
+        The epoch to clean. Already-masked pixels stay masked.
+    min_run : int, optional
+        Shortest run of non-positive flux treated as a gap. Default 8.
+    warn : bool, optional
+        Emit a :class:`RuntimeWarning` naming the wavelength ranges removed. Default True —
+        losing a third of a window should never be silent.
+
+    Returns
+    -------
+    EpochData
+        A new epoch with the gaps zero-weighted, or ``epoch`` unchanged if there are none.
+    """
+    if int(min_run) < 2:
+        raise ValueError(f"min_run must be at least 2 pixels; got {min_run}")
+    flux = np.asarray(epoch.flux)
+    nonpositive = np.isfinite(flux) & (flux <= 0.0)
+    if not nonpositive.any():
+        return epoch
+
+    # Contiguous-run labelling without scipy: the cumulative count of "run starts".
+    starts = np.flatnonzero(nonpositive & ~np.r_[False, nonpositive[:-1]])
+    ends = np.flatnonzero(nonpositive & ~np.r_[nonpositive[1:], False])
+    keep = (ends - starts + 1) >= int(min_run)
+    if not keep.any():
+        return epoch
+
+    wave = np.asarray(epoch.wave)
+    gap = np.zeros_like(nonpositive)
+    ranges = []
+    for lo, hi in zip(starts[keep], ends[keep], strict=True):
+        gap[lo : hi + 1] = True
+        ranges.append((float(wave[lo]), float(wave[hi])))
+
+    ivar = np.where(gap, 0.0, epoch.ivar)
+    if not np.any(ivar > 0):
+        raise ValueError("every pixel of this epoch lies inside a zero-flux gap")
+    if warn:
+        where = ", ".join(f"{lo:.2f}-{hi:.2f} A" for lo, hi in ranges[:4])
+        if len(ranges) > 4:
+            where += f", and {len(ranges) - 4} more"
+        warnings.warn(
+            f"{gap.sum()} pixels ({gap.mean():.1%} of this epoch) lie in contiguous runs of "
+            f"non-positive flux and have been zero-weighted: {where}. These are detector or "
+            "order gaps, not measurements of zero flux; left in they are weighted like data.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     return _replace(epoch, ivar=ivar)
 
 

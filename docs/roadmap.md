@@ -481,11 +481,25 @@ is the light ratio, which albireo conditions on rather than marginalizes — pre
 Pavlovski & Hensberge (2011) call dominant. Both are in the tutorial's caveat list rather than its
 headline.
 
-### 9. A benchmark page against the incumbents
+### 9. A benchmark page against the incumbents — **done**
 
-New codes are trusted after they reproduce old ones, not before. **Both comparison codes are now
-built and run**, and the numbers are in [the benchmark record](benchmarks.md); what remains is the
-AI Phoenicis run.
+New codes are trusted after they reproduce old ones, not before. **Both comparison codes are built
+and run, and so is AI Phoenicis**; the numbers are in [the benchmark record](benchmarks.md).
+
+**AI Phe delivered the cross-validation and one thing better.** From 36 archival HARPS spectra,
+started 15% off, the eccentricity comes back at **0.1879 against a published 0.1878 ± 0.0006** — a
+TESS light curve and a spectroscopic disentangling agreeing to 0.05% by wholly independent routes.
+The semi-amplitudes carry a reproducible ~1% systematic (K₁ −1.4%, K₂ +0.8%, mass ratio 2.2% toward
+unity) that is **not** the optimizer, **not** line selection (two disjoint windows agree to 0.02%)
+and **not** the light ratio (9 nats out of 53,306). It is recorded as an open lead, not as a
+correction to a 0.02% literature value.
+
+**And the run found a real defect that no simulation would have.** A badly chosen window straddled
+the gap between HARPS's two CCDs — 32.9 Å of exact zeros at 5304.67–5337.61 Å — which arrived
+*weighted like data*, because the pixels are finite, carry no quality flag, and HARPS ships no error
+array so their inverse variance was estimated from the (small) scatter of a flat run of zeros. The
+result disentangled to component spectra with negative flux. `albireo.mask_flux_gaps` now catches
+contiguous runs of non-positive flux and says so. That is D45's failure shape one level up.
 
 `scripts/shift_and_add.py` is the clean-room implementation, written from González & Levato (2006)
 §2.1–2.3 and Quintero et al. (2020) and from no source code — the incumbent implementation carries

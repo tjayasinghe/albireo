@@ -56,6 +56,7 @@ import numpy as np
 from albireo.data import Dataset, EpochData
 from albireo.preprocess import (
     estimate_ivar,
+    mask_flux_gaps,
     mask_ranges,
     mask_spikes,
     mask_tellurics,
@@ -1224,6 +1225,9 @@ def to_epoch(
     )
     if region is not None:
         epoch = select_region(epoch, float(region[0]), float(region[1]))
+    # Before the spike clip, because a run of zeros has no local scatter for the running
+    # median to work against and would otherwise pass straight through it.
+    epoch = mask_flux_gaps(epoch)
     if spike_threshold is not None:
         epoch = mask_spikes(epoch, threshold=float(spike_threshold))
     if tellurics:
