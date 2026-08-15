@@ -98,6 +98,14 @@ _ERR_COLUMNS = (
     "ERROR",
     "SIGMA",
     "FLUX_ERR",
+    # FLUX_ERROR is not a redundant spelling of FLUX_ERR: `_find_column` matches the whole
+    # uppercased name, so the two are simply different columns as far as it is concerned.
+    # Gaia's RVS products name theirs FLUX_ERROR, and without this entry the reader finds no
+    # error column, says so, and estimates the weights from the scatter instead — replacing
+    # the archive's own per-pixel uncertainties with an assumption, quietly. Same failure
+    # shape as D45's zero-error-means-infinite-precision, found the same way: by checking the
+    # table against a collection it was not developed on.
+    "FLUX_ERROR",
     "ERR_FLUX",
     "ERR_REDUCED",
     "STAT_ERR",

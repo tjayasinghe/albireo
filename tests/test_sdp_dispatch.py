@@ -237,6 +237,28 @@ def test_the_error_column_is_matched_to_the_flux_it_weights(tmp_path):
     )
 
 
+def test_a_flux_error_column_is_found_by_name_when_no_utype_says_so(tmp_path):
+    """FLUX_ERROR spelled out, with no utype to dispatch on — the Gaia RVS shape.
+
+    Products outside the ESO Phase 3 world carry no IVOA utypes at all, so the whole
+    dispatch falls through to the name table, and there `FLUX_ERROR` is a different string
+    from `FLUX_ERR`. Missing it is not a missing feature: the reader would report no error
+    column and weight the epoch by the scatter it estimates itself, which looks exactly
+    like a spectrum whose archive supplied no uncertainties.
+    """
+    nameless = [
+        ("WAVE", "", "", "angstrom", "wave"),
+        ("FLUX", "", "", "", "flux"),
+        ("FLUX_ERROR", "", "", "", "err"),
+    ]
+    raw = read_spectrum(write_sdp(tmp_path / "gaia_like.fits", nameless))
+    assert raw.columns["err"] == "FLUX_ERROR", (
+        "a spelled-out FLUX_ERROR must be recognized; falling through to scatter-estimated "
+        "weights would silently replace the archive's uncertainties with an assumption"
+    )
+    assert raw.err is not None
+
+
 def test_esos_misspelled_utype_still_names_the_quality_column(tmp_path):
     """ESPRESSO and GIRAFFE write Accurancy where X-shooter writes Accuracy."""
     raw = read_spectrum(write_sdp(tmp_path / "bloem.fits", BLOEM))
