@@ -394,8 +394,69 @@ inputs, runs the albireo side, and compares component spectra (raw and
 mean-aligned — both codes carry a k≈0 freedom) and wall time. The fd3 side needs
 the binary (~1.9 MB source tarball, GSL, builds on Linux/WSL; **no license is
 stated** on the fd3 page — v2 was GPL, v3's GPL statement was removed — so the
-author should be contacted before any redistribution). Head-to-head numbers
-pending that build.
+author should be contacted before any redistribution).
+
+### fd3, head to head (2026-08-14)
+
+fd3 is now built and the numbers are measured. The tarball ships a prebuilt binary that is
+**32-bit i386** and will not run on a modern x86-64 host, so it was rebuilt from source
+against conda-forge GCC and GSL under WSL2 Ubuntu. It is **not** vendored into this
+repository, and should not be: the distribution states no license.
+
+**The build was validated against the author's own shipped outputs before it was used for
+anything.** The tarball includes `.mod` / `.res` / `.rvs` for four worked examples, so
+reproducing them is a real regression test across a different compiler, a different
+architecture and a different GSL:
+
+| example | fd3 wall | max abs. difference from the shipped `.mod` |
+|---|---|---|
+| `art_single` | 0.14 s | **0** (exact) |
+| `art_double` | 2.52 s | 1.3 × 10⁻⁶ (the files are written to ~6 dp) |
+| `art_triple` | 3.58 s | 1.0 × 10⁻⁹ |
+| **`V453_Cyg`** (1344 px, a real published system) | 62.6 s | **0** (exact) |
+
+**The comparison**, on the harness's seeded SB2 — 20 epochs, SNR 100, a common ln-λ grid so
+neither code resamples, no gaps and no masks so neither is handicapped, and the orbit fixed
+at truth for both:
+
+| | comp 1 RMS | comp 2 RMS | steady-state wall |
+|---|---|---|---|
+| **albireo** | 0.0118 | 0.0165 | 0.182 s |
+| **fd3** | 0.1767 | 0.2597 | **0.111 s** |
+| albireo, mean-aligned | **0.0093** | **0.0116** | |
+| fd3, mean-aligned | 0.0198 | 0.0223 | |
+
+Three things, and the first is not in albireo's favour.
+
+**fd3 is faster: 1.64× in steady state, 5.7× from cold** (0.630 s including JAX
+compilation). It is a small C program that starts, solves and exits, and against a
+1200-pixel two-component separation that is exactly the regime where a compiled direct
+method should win. What is worth saying is that albireo is in the same class rather than an
+order of magnitude behind — the harness's original "3.93 s" figure was its un-jitted
+single-solve path, and quoting it would have overstated the gap by 20×. Timings are min of
+five repeats, both codes on CPU.
+
+**fd3's raw error is ~15× larger, and about nine tenths of that is a constant.**
+Mean-aligning collapses comp 1 from 0.1767 to 0.0198. That is the *k* = 0 freedom both codes
+carry and neither can determine from constant-light data — the same null space that
+[§5.1](math.md#51-the-low-frequency-degeneracy-the-undulations-theorem) is about, and the
+reason the literature's workflow includes a hand renormalization against an external light
+ratio. albireo's smoothness prior pins the offset to something usable; fd3 leaves it to the
+user. Neither is wrong. The difference is where the assumption is written down.
+
+**On shape, once that offset is removed, albireo is about 2× more accurate** (0.0093 /
+0.0116 against 0.0198 / 0.0223) — from the prior doing real work at low *k*, which is the
+whole design.
+
+And the difference that no handicap can equalize: fd3 returns a point estimate. It has no
+uncertainty on the component spectra at all, which is the gap
+[the roadmap](roadmap.md) exists to close and what
+[the handoff tutorial](tutorials/downstream.md) turns into an error bar on log *g*.
+
+Still outstanding for a complete benchmark page: a clean-room shift-and-add implementation
+from the published algorithm (the existing code carries no license either), and a run on
+AI Phoenicis, where the eclipse makes the light ratio externally known and removes the one
+genuinely free choice in disentangling.
 
 ### Tutorials, examples, CI
 

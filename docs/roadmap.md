@@ -484,8 +484,25 @@ headline.
 ### 9. A benchmark page against the incumbents
 
 New codes are trusted after they reproduce old ones, not before. `scripts/fd3_bench.py` already
-contains a format-verified fd3 exporter; what is missing is a built fd3 binary, a shift-and-add
-reference implementation, and a system to run them on.
+contained a format-verified fd3 exporter; **the fd3 half is now done** and the numbers are in
+[the benchmark record](benchmarks.md). What remains is the shift-and-add reference implementation
+and the AI Phoenicis run.
+
+**Building fd3 was itself a finding.** The tarball's prebuilt binary is 32-bit i386 and will not
+run on a modern host, so it had to be rebuilt from source; and before being used for anything it
+was validated against the author's own shipped outputs, reproducing the real published example
+(V453 Cyg, 1344 px) **exactly** across a different compiler, architecture and GSL. It is not
+vendored here — the distribution still states no license.
+
+**The result is honest in both directions, which is the point.** fd3 is **1.64× faster** in steady
+state on a 1200-pixel SB2 separation; a small compiled C program should win that regime, and the
+useful correction is that albireo is in the same class rather than an order of magnitude behind —
+the harness's own un-jitted figure would have overstated the gap by 20×. fd3's raw RMS is ~15×
+larger, but nine tenths of that is a *constant*: mean-aligning collapses it, because the *k* = 0
+offset is the null space neither code can determine from constant-light data and fd3 leaves it to
+the user's hand renormalization while albireo's prior pins it. On shape, with that offset removed,
+albireo is about **2× more accurate**. And fd3 returns no uncertainty at all, which is the gap this
+whole page is organized around.
 
 Three notes on doing this fairly. The comparison system should be AI Phoenicis, not HR 6819: it
 eclipses, so the light ratio is externally known and the one genuinely free choice in disentangling
