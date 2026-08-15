@@ -149,6 +149,36 @@ def run_albireo(ds, truth):
     return d_hat, wall
 
 
+def run_shift_and_add(ds, truth, truth_d, n_iter: int = 7):
+    """The third code: the clean-room shift-and-add of `scripts/shift_and_add.py`.
+
+    Run on the same data, with the same velocities, and — deliberately — with the same
+    linear shift operator albireo uses, so what is being compared is the algorithm rather
+    than two interpolators.
+    """
+    from shift_and_add import disentangle  # local module, not part of the package
+
+    # The observations live on the model grid's interior, so a velocity is a pure pixel
+    # shift: xi(v) / dx on a uniform ln-lambda grid.
+    shifts_pix = np.asarray(
+        [[float(ab.log_doppler_shift(v) / GRID.dx) for v in truth.velocities[i]] for i in range(2)]
+    )
+    obs = np.stack([np.asarray(ep.flux) - 1.0 for ep in ds])
+
+    t0 = time.time()
+    rec = disentangle(obs, shifts_pix, n_iter=n_iter)
+    wall = time.time() - t0
+
+    print(f"\nshift-and-add (clean-room, {n_iter} sweeps):")
+    for i in range(2):
+        # The iteration's fixed point is the LIGHT-WEIGHTED l_i * d_i, because that is what
+        # the composite contains. Undilute before comparing with the undiluted truth.
+        comp = rec[i] / ELL[i]
+        spectrum_metrics(comp, truth_d[i], f"shift-and-add comp {i + 1}")
+    print(f"  shift-and-add wall: {wall:.3f} s")
+    return rec, wall
+
+
 def spectrum_metrics(recovered: np.ndarray, truth_d: np.ndarray, label: str):
     """RMS in line cores, raw and mean-aligned (both codes have a k~0 freedom)."""
     core = truth_d < -0.15
@@ -205,6 +235,7 @@ def main():
     with open(control_fixed) as fin, open(f"{root_fixed}.out", "w") as fout:
         subprocess.run([fd3_bin], stdin=fin, stdout=fout, cwd=outdir, check=True)
     wall_fd3 = time.time() - t0
+    run_shift_and_add(ds, truth, truth_d)
     mod = read_fd3_matrix(Path(f"{root_fixed}.mod"))
     # fd3 components are normalized flux; ours are deviations. Interpolate fd3's
     # output (its ln-lambda column) onto the interior pixel grid for comparison.

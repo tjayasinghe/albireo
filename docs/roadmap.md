@@ -483,10 +483,34 @@ headline.
 
 ### 9. A benchmark page against the incumbents
 
-New codes are trusted after they reproduce old ones, not before. `scripts/fd3_bench.py` already
-contained a format-verified fd3 exporter; **the fd3 half is now done** and the numbers are in
-[the benchmark record](benchmarks.md). What remains is the shift-and-add reference implementation
-and the AI Phoenicis run.
+New codes are trusted after they reproduce old ones, not before. **Both comparison codes are now
+built and run**, and the numbers are in [the benchmark record](benchmarks.md); what remains is the
+AI Phoenicis run.
+
+`scripts/shift_and_add.py` is the clean-room implementation, written from González & Levato (2006)
+§2.1–2.3 and Quintero et al. (2020) and from no source code — the incumbent implementation carries
+no license, so it was never opened. It is validated against the paper's *own theory* rather than
+against itself: §2.3 derives that the residual is diffused rather than annihilated, by a Gaussian
+of `√(2m)·σ_d` after *m* sweeps, and seeding a delta-function error reproduces that law.
+
+**Head to head, all three on identical data** (aligned RMS, and wall time):
+
+| | comp 1 | comp 2 | wall | uncertainty? |
+|---|---|---|---|---|
+| **albireo** | **0.0093** | **0.0116** | 0.182 s | **yes** |
+| fd3 | 0.0198 | 0.0223 | 0.111 s | no |
+| shift-and-add | 0.0248 | 0.0302 | **0.018 s** | no |
+
+albireo is ~2× more accurate and the slowest of the three. Shift-and-add is 10× faster than
+albireo and 6× faster than fd3, which for a 1200-pixel separation is simply the right answer —
+it is a handful of array shifts and means. The accuracy margin is not a stopping artifact: at 50
+sweeps instead of the published 7, shift-and-add improves by 11% and is still 2.4× behind.
+
+**The most reusable result is that all three fail the same way.** fd3's raw error is nine tenths a
+constant; shift-and-add's blows up on the *fainter* component because `B = 0` leaves its continuum
+to the initialization. Both are the *k* = 0 null space, and the shift-and-add theory says it
+exactly — the per-mode convergence factor has modulus **1 at zero frequency**, a fixed point no
+number of sweeps can touch. Three independent methods, one degeneracy.
 
 **Building fd3 was itself a finding.** The tarball's prebuilt binary is 32-bit i386 and will not
 run on a modern host, so it had to be rebuilt from source; and before being used for anything it
@@ -513,8 +537,15 @@ Where results differ, the page reports a diagnosis, not a verdict; a fair compar
 handicap albireo down to fd3's conditions (common grid, uniform weights) before showing the
 unhandicapped case separately.
 
-The single most useful figure on that page is the cheapest: an SB2 with a nebular line, disentangled
-by a method that can mask the contaminated pixels and by methods that structurally cannot.
+~~The single most useful figure on that page is the cheapest: an SB2 with a nebular line,
+disentangled by a method that can mask the contaminated pixels and by methods that structurally
+cannot.~~ **Withdrawn — it was unfair, and finding out was worth more than the figure.** González &
+Levato explicitly permit "any combination algorithm... weights or some rejection algorithm", so
+masking is *inside* the published shift-and-add method rather than an extension of it, and
+`tests/test_shift_and_add.py` demonstrates a zero-weighted epoch being excluded. Proposing a figure
+whose punchline is a capability the comparison code actually has would have been exactly the
+"the old code is wrong" framing this section forbids. What the incumbents genuinely cannot do is
+report an uncertainty, and that is the comparison the page draws instead.
 
 ## Tier 3 — later, and why later
 

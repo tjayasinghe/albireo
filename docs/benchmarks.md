@@ -453,10 +453,87 @@ uncertainty on the component spectra at all, which is the gap
 [the roadmap](roadmap.md) exists to close and what
 [the handoff tutorial](tutorials/downstream.md) turns into an error bar on log *g*.
 
-Still outstanding for a complete benchmark page: a clean-room shift-and-add implementation
-from the published algorithm (the existing code carries no license either), and a run on
-AI Phoenicis, where the eclipse makes the light ratio externally known and removes the one
-genuinely free choice in disentangling.
+### Shift-and-add, clean room (2026-08-15)
+
+The third code is the one most of the field actually uses. `scripts/shift_and_add.py` is a
+**clean-room** implementation written from González & Levato (2006) §2.1 Eqs. (1)–(2) and
+§2.3 — with the identical recurrence restated independently by Quintero et al. (2020) — and
+from no source code at all. The widely used existing implementation, the one behind the LB-1
+and HR 6819 companion identifications, carries no license file, so it was never opened.
+
+Two details of the published method are load-bearing and easy to get wrong. The iteration is
+**Gauss–Seidel**: the *B* update consumes the *A* produced in the same sweep, and the Jacobi
+variant is a different algorithm with a different convergence rate. And the initialization is
+**B = 0 with A not seeded at all**, so the first primary estimate falls out as the plain
+rest-frame co-add rather than being supplied.
+
+**The implementation is validated against the paper's own theory, not against itself.** §2.3
+derives that the residual is not annihilated but *diffused* — each sweep convolves it with
+`f(x) = n⁻² Σ δ(x − dᵢ + d_k)`, so after *m* sweeps it has been smeared by a Gaussian of
+`σ = √(2m)·σ_d`. Seeding a delta-function error and measuring the width that comes back
+reproduces that law (`tests/test_shift_and_add.py`), which is the strongest available
+evidence that the recurrence coded here is the recurrence in the paper.
+
+**Sweeps.** The paper says "rarely more than 5–7". Measured on the benchmark's own data, it
+is right — and the comparison does not depend on the choice:
+
+| sweeps | comp 1 aligned | comp 2 aligned | wall |
+|---|---|---|---|
+| 1 | 0.0431 | 0.0458 | 0.003 s |
+| **7** (published figure) | **0.0248** | **0.0302** | **0.018 s** |
+| 50 | 0.0221 | 0.0239 | 0.128 s |
+
+Seven sweeps is essentially converged; fifty buys 11% for seven times the cost, and is still
+worse than albireo by a factor of 2.4. Nobody is being handicapped by stopping early.
+
+### All three, on identical data
+
+Same seeded SB2 — 20 epochs, SNR 100, a common ln-λ grid so nothing resamples, no gaps or
+masks, and the orbit fixed at truth for every code. Shift-and-add deliberately uses albireo's
+own linear shift operator, so what is compared is the algorithm rather than two interpolators.
+
+| | comp 1 raw | comp 1 aligned | comp 2 raw | comp 2 aligned | wall | uncertainty? |
+|---|---|---|---|---|---|---|
+| **albireo** | **0.0118** | **0.0093** | **0.0165** | **0.0116** | 0.182 s | **yes, a posterior** |
+| fd3 | 0.1767 | 0.0198 | 0.2597 | 0.0223 | 0.111 s | no |
+| shift-and-add | 0.0317 | 0.0248 | 0.0849 | 0.0302 | **0.018 s** | no |
+
+Read it in that order and it says three separate things.
+
+**On speed, albireo loses to both.** Shift-and-add is 10× faster than albireo's steady state
+and 6× faster than fd3 — it is a handful of array shifts and means, and nothing else. For a
+1200-pixel two-component separation that is the right answer, and any claim that a Bayesian
+marginal method is *faster* than seven sweeps of arithmetic would be false.
+
+**On accuracy albireo wins by about 2×, and the margin is real rather than a stopping
+artifact** (see the sweep table). The ordering aligned is albireo 0.0093 / 0.0116, fd3
+0.0198 / 0.0223, shift-and-add 0.0248 / 0.0302.
+
+**On raw error the two incumbents fail differently, and both failures are the same
+degeneracy.** fd3's raw RMS is 15× albireo's and nine tenths of it is a constant.
+Shift-and-add's raw error is much smaller than fd3's but blows up on the *fainter* component
+— 0.0849 raw against 0.0302 aligned — because `B = 0` leaves the secondary's continuum level
+set by the initialization rather than by data. Both are the *k* = 0 null space, and the
+theory says so exactly: the per-mode convergence factor of the shift-and-add recursion has
+modulus **exactly 1 at zero frequency**, so that mode is a fixed point which no number of
+sweeps can touch. Three independent methods, one degeneracy — which is
+[§5.1](math.md#51-the-low-frequency-degeneracy-the-undulations-theorem) arriving from three
+directions. albireo's smoothness prior pins it; the other two hand it to the user, which is
+what the literature's hand renormalization against an external light ratio is *for*.
+
+And the column no handicap equalizes is the last one.
+
+**One correction to this page's own plan.** The roadmap proposed, as the cheapest useful
+figure, "an SB2 with a nebular line, disentangled by a method that can mask the contaminated
+pixels and by methods that structurally cannot". That framing is **unfair to shift-and-add
+and should not be used**: González & Levato explicitly permit "any combination algorithm...
+weights or some rejection algorithm", so masking is *inside* the published method, not an
+extension of it. `tests/test_shift_and_add.py` exercises exactly that — zeroing an epoch's
+weight removes a ruined epoch. What the method genuinely cannot do is produce an uncertainty,
+and that is the honest comparison to draw.
+
+Still outstanding: the AI Phoenicis run, where the eclipse makes the light ratio externally
+known and removes the one genuinely free choice in disentangling.
 
 ### Tutorials, examples, CI
 
