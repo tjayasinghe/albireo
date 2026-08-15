@@ -198,6 +198,12 @@ def test_download_skips_what_is_already_there(tmp_path, monkeypatch):
 
 def test_a_truncated_transfer_is_not_accepted(tmp_path, monkeypatch):
     """A transfer cut cleanly in the middle is still a valid HTTP response."""
+    # The truncation guard raises ConnectionError, which is deliberately in `_TRANSIENT`
+    # — a real truncated transfer usually *is* worth retrying. So this test walks the full
+    # backoff ladder (2 + 4 + 8 + 16 s) before the failure it is asserting on surfaces.
+    # Stubbing the sleep keeps the retry *logic* under test and returns 30 s of wall clock
+    # to every run of the suite, local and CI alike.
+    monkeypatch.setattr(archive.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(
         urllib.request,
         "urlopen",

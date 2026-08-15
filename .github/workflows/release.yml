@@ -24,8 +24,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # A point release, not a major alias: setup-uv's floating major-version tags stop at
+      # `v7`, so `@v10` would not resolve even though `v10.0.1` exists. See ci.yml.
       - name: Install uv
-        uses: astral-sh/setup-uv@v9
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
 
@@ -38,16 +40,26 @@ jobs:
       # Read the version off the built wheel rather than re-parsing the source: the wheel
       # is what actually gets published, and its name is where hatchling recorded the
       # version it resolved from src/albireo/__init__.py.
+      #
+      # CITATION.cff is checked here too, and not only by tests/test_metadata.py, because
+      # this workflow runs no tests at all — so a citation file left at the previous
+      # version would sail past every guard and be the version Zenodo archives and ASCL
+      # indexes. That is unrecoverable in the same way a published wheel is.
       - name: Verify the tag matches the package version
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           wheel=$(ls dist/*.whl)
           version=$(basename "$wheel" | cut -d- -f2)
+          citation=$(sed -n 's/^version: *//p' CITATION.cff)
           tag="${GITHUB_REF_NAME#v}"
           echo "built wheel: $(basename "$wheel")"
-          echo "version: $version   tag: $tag"
+          echo "version: $version   CITATION.cff: $citation   tag: $tag"
           if [ "$version" != "$tag" ]; then
             echo "::error::tag $GITHUB_REF_NAME does not match package version $version"
+            exit 1
+          fi
+          if [ "$citation" != "$tag" ]; then
+            echo "::error::CITATION.cff records version $citation but the tag is $tag"
             exit 1
           fi
 

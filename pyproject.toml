@@ -59,11 +59,28 @@ dev = [
     "astropy>=6",
     "matplotlib>=3.8",
     "arviz>=0.18",
+    # The netCDF engine xarray falls back to when netCDF4 is absent. It gates exactly one
+    # test — tests/test_results.py::test_inference_data_round_trips_through_netcdf — which
+    # is the only coverage of the arviz export surface, `to_inference_data(...).to_netcdf()`.
+    # Without it that test `importorskip`s away and the bridge's on-disk format is exercised
+    # nowhere. Unrelated to `save_fit`/`load_fit`, which are `.npz` and need nothing extra.
+    #
+    # h5py is not redundant: h5netcdf is a pure-Python *interface* and raises ImportError at
+    # call time without an HDF5 backend. Listing h5netcdf alone converts that skip into a
+    # failure, which is strictly worse than the skip it was meant to remove.
+    "h5netcdf",
+    "h5py",
 ]
 docs = [
     "mkdocs-material>=9.5",
     "mkdocstrings[python]",
     "mkdocs-jupyter",
+    # Not a linter here. mkdocstrings-python line-wraps a `separate_signature:` signature
+    # only if Black or Ruff is importable, and otherwise silently emits it on one line
+    # (`_get_formatter` falls back to the identity function). The dev venv has ruff, so
+    # without this the site built locally and the site deployed from CI differ, and
+    # --strict does not notice.
+    "ruff>=0.8",
 ]
 
 [project.urls]

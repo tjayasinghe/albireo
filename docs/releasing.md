@@ -46,14 +46,23 @@ correct, a published PyPI version number can never be reused.
       `Docs` workflow's deploy job has somewhere to publish. Note that Pages from a
       **private** repository needs GitHub Pro; on the free tier the deploy job only works
       once the repository is public.
+- [ ] *Then* switch the deploy job on: `gh variable set PAGES_ENABLED --body true`. It is
+      gated behind that variable precisely because `deploy-pages` cannot be made to
+      succeed before the two settings above exist — it calls the Pages API and 404s — and
+      a workflow that is red for a reason you already know about is a workflow you stop
+      reading. The `Docs` **build** job runs from the first push regardless, so a broken
+      docs build is still caught; only the publish step waits.
 - [ ] Enable **Discussions**.
 
 !!! note "Going public is also the Actions-minutes fix"
     Actions minutes are free and unlimited on public repositories and metered on private
     ones — 2,000/month on the free tier, with Windows billing at 2x and macOS at 10x. That
     is why `CI` is one Linux job and everything expensive is manual (`full.yml`). While the
-    repository is private, budget roughly 15 billed minutes per push and ~100 per manual
-    `Full` run; once it is public, neither number is charged against anything.
+    repository is private, budget roughly 25-30 billed minutes per push (the fast suite
+    measures 12-16 minutes locally, and the runner is slower per core) and 150+ per manual
+    `Full` run, where the Windows legs bill at 2x. Once it is public, neither number is
+    charged against anything — which is the strongest practical argument for not staying
+    private long.
 
 ### 3. Zenodo, *before* the first tag
 
@@ -68,6 +77,13 @@ first and the first release is not archived, so the DOI story starts a release l
 - [ ] Set up trusted publishing at
       [pypi.org/manage/account/publishing](https://pypi.org/manage/account/publishing/) for
       the project `albireo`, workflow `release.yml`, environment `pypi`.
+- [ ] Set up a **second** publisher at
+      [test.pypi.org/manage/account/publishing](https://test.pypi.org/manage/account/publishing/),
+      same project and workflow but environment `testpypi`. Trusted publishing is per-index
+      and the OIDC claim PyPI validates includes the environment name, so the pypi.org
+      publisher above does not authorize the rehearsal below — without this the rehearsal
+      fails at the upload with an OIDC error, which reads like a broken workflow rather
+      than a missing registration.
 - [ ] Rehearse: run the `Release` workflow manually with **Publish to TestPyPI** checked,
       and install the result into a scratch environment.
 - [ ] Update `CHANGELOG.md` — move `Unreleased` to the version and date.
