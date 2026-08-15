@@ -31,7 +31,7 @@ from albireo.likelihood import marginal_loglikelihood
 from albireo.priors import SmoothnessPrior
 from albireo.simulate import InstrumentSpec, OrbitParams, simulate_dataset
 from albireo.simulate import synthetic_deviation_spectrum as synth
-from tests.test_likelihood import dense_design_matrix
+from tests.test_likelihood import BAND_PROBE_RTOL, dense_design_matrix
 
 SMALL_GRID = ab.LogGrid.from_wavelength_range(5000.0, 5003.0, dv_kms=3.0)
 SMALL_VEL = np.array([[9.0, -12.0, 3.0], [-14.0, 18.0, -5.0]])
@@ -161,7 +161,10 @@ def test_zero_phi_reproduces_the_diagonal_model():
     _, _, problem, prior = small_problem()
     base = marginal_loglikelihood(problem, prior, assembly="probe")
     same = marginal_loglikelihood(with_ar1(problem, 0.0), prior)
-    np.testing.assert_allclose(float(same.log_likelihood), float(base.log_likelihood), rtol=1e-12)
+    # Cross-path too, for the reason the d_hat comment below already gives.
+    np.testing.assert_allclose(
+        float(same.log_likelihood), float(base.log_likelihood), rtol=BAND_PROBE_RTOL
+    )
     # Since D35 this is also a cross-path comparison (the correlated problem runs the
     # band assembly at a widened bandwidth, the base runs probing), so d_hat carries
     # float-reordering noise amplified by solver conditioning — same tolerance story
@@ -178,7 +181,9 @@ def test_band_assembly_matches_probe_and_is_the_default():
     band = marginal_loglikelihood(correlated, prior, assembly="band")
     probe = marginal_loglikelihood(correlated, prior, assembly="probe")
     auto = marginal_loglikelihood(correlated, prior)
-    np.testing.assert_allclose(float(band.log_likelihood), float(probe.log_likelihood), rtol=1e-12)
+    np.testing.assert_allclose(
+        float(band.log_likelihood), float(probe.log_likelihood), rtol=BAND_PROBE_RTOL
+    )
     assert float(auto.log_likelihood) == float(band.log_likelihood)
     assert correlated.natural_half_bandwidth >= problem.natural_half_bandwidth
 

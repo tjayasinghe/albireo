@@ -36,7 +36,7 @@ from albireo.operators import (
 from albireo.priors import SmoothnessPrior
 from albireo.simulate import InstrumentSpec, simulate_dataset
 from albireo.simulate import synthetic_deviation_spectrum as synth
-from tests.test_likelihood import dense_marginal
+from tests.test_likelihood import BAND_PROBE_RTOL, dense_marginal
 
 RNG = np.random.default_rng(7)
 
@@ -176,7 +176,9 @@ def test_band_matches_probe_and_dense_with_varying_lsf():
     band = marginal_loglikelihood(problem, PRIOR, assembly="band")
     probe = marginal_loglikelihood(problem, PRIOR, assembly="probe")
     logp, d_hat, _ = dense_marginal(problem, PRIOR)
-    np.testing.assert_allclose(float(band.log_likelihood), float(probe.log_likelihood), rtol=1e-12)
+    np.testing.assert_allclose(
+        float(band.log_likelihood), float(probe.log_likelihood), rtol=BAND_PROBE_RTOL
+    )
     np.testing.assert_allclose(float(band.log_likelihood), logp, rtol=1e-10)
     np.testing.assert_allclose(np.asarray(band.d_hat), np.asarray(probe.d_hat), atol=1e-9)
     np.testing.assert_allclose(np.asarray(band.d_hat), d_hat, rtol=1e-7, atol=1e-9)
@@ -187,7 +189,9 @@ def test_band_matches_probe_with_varying_lsf_and_ar1():
     problem = with_ar1(with_jitter(anchored_problem(), np.array([1.2, 0.9, 1.4])), 0.45)
     band = marginal_loglikelihood(problem, PRIOR, assembly="band", validate=True)
     probe = marginal_loglikelihood(problem, PRIOR, assembly="probe")
-    np.testing.assert_allclose(float(band.log_likelihood), float(probe.log_likelihood), rtol=1e-12)
+    np.testing.assert_allclose(
+        float(band.log_likelihood), float(probe.log_likelihood), rtol=BAND_PROBE_RTOL
+    )
     np.testing.assert_allclose(np.asarray(band.d_hat), np.asarray(probe.d_hat), atol=1e-9)
 
 
@@ -230,7 +234,7 @@ def test_arbitrary_asymmetric_bank_band_matches_probe(correlated):
         np.testing.assert_allclose(
             float(band.log_likelihood),
             float(probe.log_likelihood),
-            rtol=1e-12,
+            rtol=BAND_PROBE_RTOL,
             err_msg=label,
         )
         np.testing.assert_allclose(

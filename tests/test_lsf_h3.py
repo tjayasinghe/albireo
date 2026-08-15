@@ -33,7 +33,7 @@ from albireo.operators import (
 )
 from albireo.simulate import InstrumentSpec, simulate_dataset
 from albireo.simulate import synthetic_deviation_spectrum as synth
-from tests.test_likelihood import dense_marginal
+from tests.test_likelihood import BAND_PROBE_RTOL, dense_marginal
 from tests.test_lsf_varying import (
     ANCHORS,
     ELL,
@@ -98,7 +98,9 @@ def test_band_matches_probe_and_dense_with_h3():
     band = marginal_loglikelihood(problem, PRIOR, assembly="band")
     probe = marginal_loglikelihood(problem, PRIOR, assembly="probe")
     logp, d_hat, _ = dense_marginal(problem, PRIOR)
-    np.testing.assert_allclose(float(band.log_likelihood), float(probe.log_likelihood), rtol=1e-12)
+    np.testing.assert_allclose(
+        float(band.log_likelihood), float(probe.log_likelihood), rtol=BAND_PROBE_RTOL
+    )
     np.testing.assert_allclose(float(band.log_likelihood), logp, rtol=1e-10)
     np.testing.assert_allclose(np.asarray(band.d_hat), np.asarray(probe.d_hat), atol=1e-9)
     np.testing.assert_allclose(np.asarray(band.d_hat), d_hat, rtol=1e-7, atol=1e-9)
@@ -108,7 +110,9 @@ def test_band_matches_probe_with_h3_and_ar1():
     problem = with_ar1(with_jitter(h3_problem(), np.array([1.2, 0.9, 1.4])), 0.45)
     band = marginal_loglikelihood(problem, PRIOR, assembly="band", validate=True)
     probe = marginal_loglikelihood(problem, PRIOR, assembly="probe")
-    np.testing.assert_allclose(float(band.log_likelihood), float(probe.log_likelihood), rtol=1e-12)
+    np.testing.assert_allclose(
+        float(band.log_likelihood), float(probe.log_likelihood), rtol=BAND_PROBE_RTOL
+    )
     np.testing.assert_allclose(np.asarray(band.d_hat), np.asarray(probe.d_hat), atol=1e-9)
 
 

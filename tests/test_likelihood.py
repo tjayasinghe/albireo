@@ -20,6 +20,26 @@ from albireo.simulate import synthetic_deviation_spectrum as synth
 
 RNG = np.random.default_rng(31)
 
+# Tolerance for "the band assembly and the probe assembly agree on the marginal
+# log-likelihood". These are two *different algorithms* for the same number — a banded
+# Cholesky against operator probing — so they sum the same terms in different orders and
+# the last digits are free to disagree. The bound therefore has to be a statement about
+# float64 accumulation, not about the platform it was first measured on.
+#
+# It was 1e-12, which held on the Windows development machine and failed on ubuntu-latest
+# the first time CI ran: test_arbitrary_asymmetric_bank_band_matches_probe[True] came back
+# at 1.204e-12 relative on a log-likelihood of -27.15, i.e. 20% over the line. Different
+# BLAS, different SIMD width and different XLA fusion decisions are enough to move a
+# reduction by that much, and the random-asymmetric-kernel case is deliberately the
+# worst-conditioned one in the suite.
+#
+# 1e-10 is the tolerance these same tests already use for band-against-dense, and it is
+# still ten significant figures. What the assertion exists to catch — a transposed tap, a
+# reversed kernel, a mis-ordered component block — moves the answer in the first digits,
+# not the eleventh, so nothing is given up by quoting a bound that is about arithmetic
+# rather than about a machine.
+BAND_PROBE_RTOL = 1e-10
+
 
 # ---------------------------------------------------------------------------
 # Dense brute-force reference (component-major ordering)
