@@ -350,16 +350,71 @@ which is the failure mode the rest of this page exists to avoid.
 ### 7. A Gaia RVS loader, before December
 
 Gaia DR4 is scheduled for 2 December 2026 and is the first release to publish epoch RVS spectra —
-about 6.9 billion of them, already normalized and already in the barycentric frame, alongside
-several hundred thousand spectroscopic-binary orbit solutions. A loader written against DR3's shape
-now becomes a DR4 loader on release day, and being the package that works on the day the data lands
-is a once-only opportunity.
+6,910,785,949 of them (49 TB), already normalized and already in the barycentric frame, alongside
+several hundred thousand spectroscopic-binary orbit solutions. Being the package that works on the
+day the data lands is a once-only opportunity.
 
-Two honest caveats belong on the page next to it: 24 nm around the calcium triplet is a narrow
-window for disentangling, and DR3's mean spectra are one per source, so DR3 is a loader demo rather
-than a disentangling dataset. The genuinely interesting DR3 demonstration is combining RVS with
-ground-based epochs — which albireo handles natively, since multi-instrument data with different
-line-spread functions is the case it was built for.
+**But the sentence this page used to carry — "a loader written against DR3's shape now becomes a
+DR4 loader on release day" — is false, and finding that out was worth more than the loader would
+have been.** Three things, each checked against a primary source rather than reasoned about:
+
+**DR3's mean spectra have the velocity divided out, irreversibly.** The archive data model says
+"the spectra are in the rest frame", and the shift is applied *per transit* with that transit's own
+RV before co-adding. So the orbital modulation is not an offset waiting to be undone, it is smeared
+away inside the stack — and for an SB2 the shift used a single blended cross-correlation RV that
+was wrong for both components. DR3 `rvs_mean_spectrum` is not a disentangling dataset, not a demo,
+and the loader should refuse it rather than warn.
+
+**DR3 has no hot stars at all.** `SELECT MAX(rv_template_teff) FROM gaiadr3.gaia_source WHERE
+has_rvs='true'` returns **14,500 K** over all 999,645 published spectra; above 15,000 K there are
+zero. Spectra are published only for sources with a radial velocity, and the RV template grid stops
+there. albireo's entire demonstrated science case — O and early-B stars — is outside it, and so is
+HR 6819 itself (source 6649357561810851328, G = 5.26, `has_rvs=false`).
+
+**The window is genuinely thin for early types.** 846–870 nm at *R* ≈ 11,500 gives a hot star the
+Paschen series P13–P17 plus the Ca II triplet: one species, Stark-broadened, mutually blended, just
+longward of the Paschen jump. Set against the He I / He II / Mg II / Si III of the 4380–4600 Å
+window in the [benchmarks](benchmarks.md), that is a real mismatch — for *hot* stars. Gaia's own SB2
+population is mostly cooler, where the triplet is the strongest thing in the spectrum.
+
+### What DR4 actually delivers, from the draft data model
+
+ESA pre-released a draft DR4 data model on 2026-06-26, and it answers the questions that decide the
+design. Recorded here so they are not re-derived in December:
+
+| | |
+|---|---|
+| Table | `rvs_epoch_spectrum`, DataLink only — not through the main TAP interface |
+| DataLink retrieval type | `EPOCH_SPECTRUM_RVS` |
+| Grid | **961** elements, 846–870 nm, step **0.025 nm** — *not* DR3's 2401 × 0.01 nm |
+| Frame | "shifted from the Gaia reference frame to the barycentric reference frame and are normalised" |
+| Time | `obs_time_rv`, **Barycentric JD in TCB − 2 455 197.5 d**, Roemer-corrected to the barycentre |
+| Uncertainties | `flux_error[961]`, propagated per bin; NaN where every contributing CCD was masked |
+| Per-pixel coverage | `combined_ccd_in_index`, stored only where smaller than `combined_ccds` |
+| Selection | `all_source_rvs.has_epoch_rvs` — a graded byte, not a boolean (0 = none, 1 = very weak) |
+
+Two of those are decisive. There **is** a per-transit barycentric timestamp, which was the one
+unknown that could have made the product unusable to albireo regardless of everything else. And the
+fluxes are linearly interpolated onto that fixed grid before publication, which walks straight into
+[D4](design.md#2-decisions-recorded-defaults): albireo does not resample observations onto a common
+grid *because* resampling correlates the noise and invalidates the diagonal `ivar` model. Gaia has
+already done it upstream and albireo cannot undo it, so the published `flux_error` understates the
+correlation. That is a systematic to state in the loader's docstring, and possibly a use for the
+AR(1) machinery (D34) rather than a reason not to build.
+
+**The strongest signal is one line in the schema.** Epoch spectra are produced for double-lined,
+emission-line and contaminated transits — the ones whose radial velocity the pipeline rejects — and
+`rv_assumed_sb2` marks any source where double lines were detected in at least ten transits, which
+is a ready-made SB2 target list queryable by ADQL. When that flag is set, Gaia *excludes the source
+from its own multi-transit RV solution* and publishes the spectra anyway. The data exists precisely
+where Gaia's own pipeline gives up, which is the definition of an opening.
+
+So: **build it in December, against the release, not now.** The DR4 documentation tree
+(`archive/documentation/GDR4/`) still 404s, DR3 shares neither the grid, the frame, the table nor
+the retrieval type, and this project's own D45 record is that a guess dressed as a reading is the
+expensive kind of bug. What is worth doing before then is the go/no-go query on release day: join
+the BLOeM DR3 `source_id`s that `resolve_bloem` already retrieves against DR4, and check whether
+`rv_assumed_sb2` reaches any early-type population at all.
 
 This also forced a small correctness fix worth doing anyway, and it has **already landed** (D43),
 pulled forward because item 4's archive loader needed it first: RVS wavelengths are vacuum and most
