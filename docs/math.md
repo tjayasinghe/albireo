@@ -752,6 +752,15 @@ scans rather than the custom rule; reverse-over-reverse matches central finite
 differences of the gradient to 8 digits where forward-over-reverse does not.
 `laplace_inverse_mass` uses reverse-over-reverse, fixing a defect present since M3.
 
+Since D49 there are **two** custom boundaries, not one: the band accumulate of §4.5
+carries its own `custom_vjp` (`assembly._band_accumulate`), because reverse mode
+otherwise rebuilds the entire band tensor to reproduce its own input. Everything above
+still holds — the forward rule recomputes its primal inline for the same reason, and
+`jax.hessian` still runs because the inner `jacrev` resolves both boundaries — but the
+consequence for forward mode is now package-wide rather than confined to the solve
+stage. `forecast._effective_parameters` was the last `jax.jvp` in albireo and is now a
+`jax.grad` of the same scalar-to-scalar function, returning the identical `p_eff`.
+
 ### 4.5a The tridiagonal noise sandwich: link pair tables (D35)
 
 The stage-1 sandwich above assumed $\mathbf{W}'$ diagonal. With the AR(1) chain

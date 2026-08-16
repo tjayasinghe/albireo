@@ -21,6 +21,7 @@ import pytest
 
 import albireo as ab
 from albireo.assembly import (
+    _band_accumulate,
     _prior_diagonals,
     band_block_tridiagonal,
     prior_block_tridiagonal,
@@ -707,3 +708,81 @@ def test_second_order_reverse_matches_plain_autodiff():
     assert np.max(np.abs(h_ref)) > 0.0
     np.testing.assert_allclose(h_custom, h_ref, rtol=1e-12, atol=0)
     np.testing.assert_allclose(h_custom, h_custom.T, rtol=1e-12, atol=0)  # symmetric
+
+
+def test_band_accumulate_matches_nested_slices_bit_for_bit():
+    """The closed-form band accumulate reproduces the nested-slice route exactly.
+
+    ``band + place(f)`` is the identity in ``band``, but reverse mode does not see
+    that: it transposes the ``dynamic_update_slice`` and the ``dynamic_slice``
+    separately and rebuilds the identity as
+    ``dus(out_bar, 0, idx) + dus(zeros, ds(out_bar, idx), idx)`` — three passes over
+    the whole band tensor per (i, j) block per epoch, measured at 3.5 s of a 5.9 s
+    backward at the benchmark ladder's first row (D49). The replacement must be
+    *exact*, not close, so this asserts bit equality of both the value and both
+    cotangents. The weight array makes the output cotangent non-uniform, which is
+    what makes a wrong slice offset in the reverse rule observable.
+    """
+    rng = np.random.default_rng(0)
+    n_pix, nc, n_k, w_f = 17, 2, 11, 5
+    comp, d, start = 1, 1, jnp.int32(3)
+    band0 = jnp.asarray(rng.normal(size=(n_pix, nc, n_k, nc)))
+    f0 = jnp.asarray(rng.normal(size=(n_pix, w_f)))
+    weight = jnp.asarray(rng.normal(size=(n_pix, nc, n_k, nc)))
+
+    def nested(band, f):
+        idx = (jnp.int32(0), jnp.int32(comp), start, jnp.int32(d))
+        return jax.lax.dynamic_update_slice(
+            band,
+            jax.lax.dynamic_slice(band, idx, (n_pix, 1, w_f, 1)) + f[:, None, :, None],
+            idx,
+        )
+
+    def custom(band, f):
+        return _band_accumulate(band, f, start, comp, d)
+
+    def scalar(fn):
+        return lambda band, f: jnp.sum(weight * fn(band, f) ** 2)
+
+    assert float(scalar(nested)(band0, f0)) == float(scalar(custom)(band0, f0))
+    g_ref = jax.grad(scalar(nested), argnums=(0, 1))(band0, f0)
+    g_new = jax.grad(scalar(custom), argnums=(0, 1))(band0, f0)
+    for ref, new in zip(g_ref, g_new, strict=True):
+        assert np.array_equal(np.asarray(ref), np.asarray(new))
+    # f's cotangent must be a *slice* of the output's, not the whole thing summed:
+    # a rule that ignored `start` would still pass a uniform-cotangent check.
+    assert np.count_nonzero(np.asarray(g_new[1])) > 0
+
+
+def test_column_application_is_a_contraction():
+    """``G``'s second kernel application translates columns only, so it is one GEMM.
+
+    The first application shifts rows and stays a tap loop; the second adds
+    ``kernel[s] * u`` at column offset ``2r - s``, which is a contraction against the
+    banded matrix ``Q[k', k] = kernel[k' + 2r - k]`` (D49). This pins that index
+    algebra — an off-by-one in the tap offset is otherwise invisible until the
+    assembled matrix is compared against probing, which the equivalence set above
+    does at a coarser granularity.
+
+    Agreement is to summation order, not to the bit: increasing ``k'`` is increasing
+    ``s``, so the two ideal orders coincide, but XLA is free to block a GEMM's
+    accumulation (0.5 ulp here, while the benchmark configurations happened to come
+    out bit-identical). The tolerance is one rounding step of the largest entry.
+    """
+    rng = np.random.default_rng(1)
+    n_pix, w_h, r = 23, 7, 4
+    w_u = w_h + 2 * r
+    w_g = w_u + 2 * r
+    u = jnp.asarray(rng.normal(size=(n_pix, w_u)))
+    kernel = jnp.asarray(rng.normal(size=(1, 2 * r + 1)))
+
+    loop = jnp.zeros((n_pix, w_g))
+    for d2 in range(-r, r + 1):
+        loop = loop.at[:, r - d2 : r - d2 + w_u].add(kernel[0, d2 + r] * u)
+
+    tap = jnp.arange(w_u)[:, None] + 2 * r - jnp.arange(w_g)[None, :]
+    gemm = u @ jnp.where((tap >= 0) & (tap <= 2 * r), kernel[0, jnp.clip(tap, 0, 2 * r)], 0.0)
+
+    lo, gm = np.asarray(loop), np.asarray(gemm)
+    assert np.count_nonzero(lo) == lo.size  # not a trivial all-zero match
+    np.testing.assert_allclose(gm, lo, rtol=0, atol=np.spacing(np.abs(lo).max()))

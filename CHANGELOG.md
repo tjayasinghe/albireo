@@ -11,6 +11,43 @@ This file records *what changed*. The reasons live elsewhere and are worth follo
 
 ## [Unreleased]
 
+### Changed
+
+- **Gradients are ~2x faster, and the answers are bit-identical.** Two exact changes in
+  `albireo.assembly`, both found by re-profiling — D28's recorded attribution ("92% comb
+  probing") had been stale since D28 itself removed probing from the hot path. The honest
+  split is 82% of a *gradient* in the assembly, whose backward cost 3.3x its own forward.
+  1. `_band_accumulate`, a `custom_vjp` for the per-epoch band update. The forward is
+     `band + place(f)` — the identity in `band` — but reverse mode transposes the
+     `dynamic_update_slice` and the `dynamic_slice` separately and rebuilds that identity
+     out of **three passes over the whole band tensor**, once per component pair per epoch:
+     313 GB of memory traffic to reproduce an input, at the benchmark ladder's first row.
+     The closed form (`band_bar = out_bar`, `f_bar = ds(out_bar, idx)`) is free.
+  2. The second kernel application in `G = K^T H K` translates columns only — unlike the
+     first, it has no row shift — so it is one contraction against a static banded matrix
+     instead of `2r+1` read-modify-write passes over the widest image in the assembly.
+     18x on that stage, and no extra memory: contracting *both* applications at once would
+     need a 1.9 GB neighbourhood stack, which is the intermediate D29 spent a pass removing.
+
+  Measured at 31,734 model px, SB2, 50 epochs, p = 513: evaluation 2.97 → 2.20 s, gradient
+  **10.23 → 5.19 s**. The log-likelihood and its gradient are bit-identical before and after
+  (compared as IEEE-754 hex) for stationary, AR(1) and wavelength-dependent-LSF problems;
+  the Hessian moves 4e-13 relative. Four other candidates — a blocked Cholesky, j-factoring
+  the T-sandwich, `remat=False`, and the custom-VJP band-to-block packing named on D28's own
+  ledger — were **measured and rejected**; see
+  [`docs/benchmarks.md`](docs/benchmarks.md) "D49 speedup pass" for the numbers, including
+  why XLA's fp64 `cholesky` at n = 513 running at 13 GFLOP/s against `matmul`'s 249 is not
+  in fact fixable by blocking.
+
+  **What it cost.** `custom_vjp` rejects `jax.jvp`, and `forecast._effective_parameters`
+  was the package's only forward-mode site (D47 gets `p_eff` from one directional
+  derivative of `log det` in the noise scale). Both `t` and the log-determinant are
+  scalars, so it is now a `jax.grad` returning the **bit-identical** number — 0.283 s to
+  0.532 s once per forecast, against 1.8x on a gradient run ~2,600 times per posterior.
+  albireo therefore no longer has a forward-mode path through the marginal likelihood;
+  D28 had already removed it one stage later at `_solve_stage`, and second derivatives
+  remain available through reverse-over-reverse.
+
 ### Fixed
 
 - **A detector gap is no longer weighted like data.** `albireo.mask_flux_gaps` zero-weights

@@ -1952,3 +1952,265 @@ table by +77 and -31 km/s moves the residuals by < 1e-9).
 
 This is the mode's purpose: a Keplerian is a strong constraint, and a table fitted without
 one says whether it was earned.
+
+---
+
+## D49 speedup pass — the assembly's reverse pass, and four dead ends (2026-08-15)
+
+Same harness as M5/D28/D29. Machine: **AMD Ryzen 9 9950X3D desktop**, 16 cores / 32
+threads, 32 GB, Windows 11, CPU only, float64 — measured at 66.8 GB/s streaming (triad)
+and 1188 GFLOP/s fp64 `dgemm` at n = 2000. The M5–D29 tables above are labelled "Windows
+11 laptop", so do **not** read absolute numbers across that boundary; every before/after
+pair below was measured back to back on this box, and those comparisons are sound.
+
+### The old attribution had expired
+
+D28 recorded that **92% of an evaluation was comb probing**. Probing has not been on
+the hot path since D28 itself removed it, so that sentence had been stale for two
+passes. Re-measured at the ladder's first row (31,734 model px, SB2, 50 epochs,
+p = 513), jitted, stage by stage:
+
+| stage | s | % |
+|---|---|---|
+| band assembly (incl. band to block packing) | 1.94 | 65.2 |
+| block Cholesky | 0.93 | 31.4 |
+| solves + quadratic form | 0.075 | 2.5 |
+| `A^T W z` | 0.025 | 0.8 |
+| log-determinants, weighted data terms | 0.003 | 0.1 |
+| **whole marginal (jitted)** | **2.97** | |
+| **gradient in the velocities** | **10.23** | 3.45x eval |
+
+Inside the assembly, 88% is the epoch band scan, and that splits almost exactly in
+half: **0.80 s** for the velocity-independent `G = K^T H K` pre-pass and **0.76 s** for
+the T-sandwich accumulation.
+
+### The gradient is a different problem from the evaluation
+
+NUTS runs the gradient ~2,600 times per posterior and the evaluation once, so the
+gradient is what sets wall time. Splitting it:
+
+| stage | value | gradient | backward only | ratio |
+|---|---|---|---|---|
+| band assembly | 1.91 | **8.27** | 6.37 | 4.34x |
+| solve stage (D28 custom VJP) | 0.98 | 1.68 | 0.70 | 1.71x |
+| full marginal | 3.01 | 10.15 | 7.15 | 3.38x |
+
+**82% of the gradient is assembly**, and the assembly's backward cost 3.3x its own
+forward — while the solve stage, which is what D28's custom VJP was built for, is 16%.
+Splitting once more put 5.94 s of that 6.37 s in the epoch band scan and 0.20 s in the
+band-to-block packing.
+
+### Change 1: the band accumulate is the identity, and reverse mode did not know
+
+Each epoch adds its (i, j) block into the global band tensor as
+
+    band_out = dus(band, ds(band, idx) + f, idx)
+
+which is `band + place(f, idx)` — **the identity in `band`**. Reverse mode transposes
+the `dynamic_update_slice` and the `dynamic_slice` separately and rebuilds that
+identity as
+
+    band_bar = dus(out_bar, 0, idx) + dus(zeros_like(band), ds(out_bar, idx), idx)
+
+— algebraically just `out_bar`, but three passes over the *whole* 522 MB band tensor,
+once per (i, j) block per epoch. That is 4 x 50 x 3 x 522 MB = **313 GB of memory
+traffic to reproduce an input**, and it scales with the band tensor rather than with
+the slice actually touched. `assembly._band_accumulate` is a `custom_vjp` whose reverse
+rule is the closed form: the operand cotangent *is* the output cotangent, and `f`'s is
+the slice of it. In an isolated harness at this scale:
+
+| | forward | gradient | backward |
+|---|---|---|---|
+| nested dynamic slices | 0.390 s | 5.615 s | 5.224 s |
+| closed-form `custom_vjp` | 0.370 s | **0.840 s** | **0.470 s** |
+
+with values and gradients bit-identical.
+
+The ablation that found it inverts, which is why a forward-only profile would have
+cleared this line as free: deleting the band accumulate entirely makes the *forward*
+24% **slower** (0.98 s against 0.79 s) while making the backward 2.7x faster.
+
+### Change 2: `G`'s second kernel application translates columns only
+
+`G = K^T H K` was two unrolled accumulations over the 2r+1 kernel taps. The first
+shifts *rows*, so it stays a loop. The second does not — it adds `kernel[s] * u` at
+column offset `2r - s` — which makes it a contraction against a static `(w_u, w_g)`
+banded matrix, `Q[k2, k] = kernel[k2 + 2r - k]`. The loop form re-read and rewrote the
+widest image in the assembly once per tap:
+
+| stage | s |
+|---|---|
+| first (row-shifting) loop | 0.327 |
+| second loop, as written | 0.548 |
+| second stage as one contraction | **0.030** |
+
+18x on that stage, 2.45x on the whole `G` pre-pass, and **no extra memory** — which is
+why the more obvious variant lost. The two applications compose into a single
+`((2r+1) w_h, w_g)` map, so *both* can be one contraction; that needs a 37 MB
+neighbourhood stack per epoch, 1.9 GB across a hoisted 50-epoch pre-pass — precisely
+the kind of vmapped intermediate D29 spent a pass removing — and it measured
+**0.32 s against 0.36 s**. Ten percent, for 1.9 GB. Declined.
+
+### What the two changes bought
+
+The full design-target ladder (`scripts/m5_scale_bench.py`, same seeds, same machine,
+committed code stashed and re-run for the "before" column — not carried over from the
+laptop tables):
+
+| n (model px) | eval before | eval after | | ∇ before | ∇ after | |
+|---|---|---|---|---|---|---|
+| 31,734 | 2.71 s | **2.16 s** | 1.25x | 10.07 s | **5.52 s** | **1.82x** |
+| 74,322 | 6.45 s | **5.24 s** | 1.23x | 27.98 s | **15.25 s** | **1.83x** |
+| 135,052 | 12.64 s | **10.15 s** | 1.25x | 53.02 s | **29.09 s** | **1.82x** |
+| **203,440 (design target)** | 19.11 s | **15.67 s** | 1.22x | 80.23 s | **45.88 s** | **1.75x** |
+
+The ratios are flat in problem size — 1.22–1.25x on an evaluation, 1.75–1.83x on a
+gradient — which is what both changes predict: each removes a fixed multiple of the
+per-epoch band traffic, and that traffic is linear in `n`. A design-target gradient
+lands at **46 s**, and the gradient/evaluation ratio falls from 4.2x to 2.9x.
+
+Stage by stage at row 0, for the diagnosis rather than the headline:
+
+| | before | after | |
+|---|---|---|---|
+| band assembly | 1.94 s | 1.38 s | 1.41x |
+| block Cholesky | 0.93 s | 0.72 s | — (unchanged; run-to-run spread) |
+| whole marginal evaluation | 2.97 s | 2.20 s | 1.35x |
+| gradient in the velocities | 10.23 s | 5.19 s | 1.97x |
+
+Repeat runs of the whole-marginal figure vary by about 10% on this machine, which is
+why the ladder above is the number to quote; the gradient ratio is stable.
+
+### Exactness
+
+The log-likelihood and its gradient are **bit-identical** before and after — compared
+as raw IEEE-754 hex, not to a tolerance — in all three model variants: stationary LSF,
+AR(1) correlated noise, and wavelength-dependent LSF. The Hessian moves by 4e-13
+relative, which is reassociation in the second-order path.
+
+Bit-identity is what was *measured*, not what is *guaranteed*. The contraction of
+change 2 only promises equality up to summation order, like the rest of the band
+assembly: increasing `k2` is increasing `s`, so the two ideal orders coincide, but XLA
+is free to block a GEMM's accumulation however it likes. Against a random kernel it
+differs from the loop by 0.5 ulp. The claim in the code comments is the weaker one.
+
+**D28's second-order re-entry defect recurred, and D28's own regression test caught
+it.** A `custom_vjp` whose forward rule calls the custom function itself is first-order
+exact but returns the **transpose** of the true Hessian;
+`test_second_order_reverse_matches_plain_autodiff` failed on the first attempt. The fix
+is D28's: inline the primal in the forward rule.
+
+### The three-way head-to-head is now hardware-bound, and needs re-running
+
+On the fd3 benchmark's configuration (4,444 px, 20 epochs, `b_nat` = 63) D49 takes
+albireo's steady state from **0.071 s to 0.059 s** — 1.20x, in line with the ladder.
+That is the part this pass is responsible for, and it is the only part measured on one
+machine with one change.
+
+The published comparison no longer reads the same way, and mostly *not* because of D49:
+
+| | recorded (laptop) | this machine |
+|---|---|---|
+| albireo, committed code | 0.182 s | 0.071 s |
+| albireo, with D49 | — | **0.059 s** |
+| fd3 (rebuilt binary, WSL, min of five) | 0.111 s | 0.099 s |
+| shift-and-add, 7 sweeps | 0.018 s | 0.049 s — **does not reproduce** |
+
+**fd3 moved 12% across that hardware change; albireo moved 2.6x.** fd3 is a
+single-threaded C program and albireo's XLA uses all 32 threads, so the M5 ordering is
+a statement about core count at least as much as about the two codes. On this box
+albireo is ~1.7x *faster* than fd3, where the record says 1.64x slower.
+
+This is deliberately **not** written into the M5 three-way table, for two reasons. The
+shift-and-add figure does not reproduce — 0.049 s here against 0.018 s recorded, on a
+machine where everything else got faster or stayed flat — and until that is understood,
+a partial update would be worse than no update. And a fair three-way needs all three
+codes re-run end to end under one methodology on one machine, which is a separate job
+from a speedup pass. The M5 table stands as what it was: a correct same-machine record,
+on a machine that is not this one. Accuracy is unaffected either way — the recovered
+spectra reproduce the recorded RMS exactly (0.0093 / 0.0116 mean-aligned).
+
+### Memory: unchanged, which was the requirement
+
+D29 was a memory pass, and a speedup that quietly undoes it is not a speedup. Peak
+buffer-assignment bytes (XLA `memory_analysis()`, the same instrument D29 used):
+
+| n (model px) | eval, D29 | eval, now | ∇, D29 | ∇, now |
+|---|---|---|---|---|
+| 31,734 | 2.94 GB | 2.96 GB | 4.00 GB | 4.02 GB |
+| 74,322 | 4.86 GB | 4.76 GB | 11.47 GB | **10.26 GB** |
+| 135,052 | 7.83 GB | 7.81 GB | 14.37 GB | **12.84 GB** |
+| **203,440** | 11.06 GB | 11.14 GB | 18.24 GB | 18.33 GB |
+
+Flat at the design target (+0.5%, the row that has to fit in 32 GB) and 8-11% better in
+the middle rows, where the closed-form reverse rule stops materializing whole-tensor
+temporaries.
+
+### What it cost: the package no longer has a forward-mode path
+
+`custom_vjp` rejects `jax.jvp` outright, and `forecast._effective_parameters` was the
+only place in albireo that used forward mode — D47 gets `p_eff = tr[Sigma A^T W A]` from
+one directional derivative of `log det` in the noise scale, because `with_jitter` is
+already that one-parameter family. The full suite caught it: eleven `test_forecast.py`
+failures and two in `test_plotting.py`, all `TypeError: can't apply forward-mode autodiff
+(jvp) to a custom_vjp function`.
+
+Both `t` and the log-determinant are scalars, so forward and reverse mode compute the
+same single number, and it is now a `jax.grad`:
+
+| | committed code | with D49 |
+|---|---|---|
+| forward (`jax.jvp`) | 0.283 s | **rejected** |
+| reverse (`jax.grad`) | 0.773 s | 0.532 s |
+| `p_eff` | 3979.897960 | 3979.897960 |
+
+Bit-identical (absolute difference exactly 0), and `test_p_eff_matches_dense_trace` pins
+it against a dense trace oracle at rel 1e-8 on either route. The cost is 0.283 s → 0.532 s
+on a call made **once per forecast**, in exchange for 1.8x on a gradient evaluated ~2,600
+times per posterior.
+
+Worth stating plainly rather than burying: this closes forward mode through the marginal
+likelihood entirely. D28 had already done it one stage later — `_solve_stage` is a
+`custom_vjp`, which is why `laplace_inverse_mass` uses reverse-over-reverse — so the
+capability was half gone already. It is now gone by construction, and second derivatives
+remain available (and tested) through reverse-over-reverse.
+
+### Four candidates killed by measurement
+
+Each of these looked right on paper. They are recorded because the negative results
+cost more to obtain than the two changes above, and they bound what is left.
+
+1. **A blocked Cholesky.** The block factorization is 31% of an evaluation, and XLA's
+   fp64 dense `cholesky` is far slower per flop than its `matmul` at the block size the
+   solver actually uses:
+
+   | n | `matmul` | `cholesky` | `solve_triangular` |
+   |---|---|---|---|
+   | 256 | 183 GF/s | 7 GF/s | 41 GF/s |
+   | **513** | **249** | **13** | **103** |
+   | 1026 | 390 | 26 | 164 |
+   | 2048 | 921 | 69 | 281 |
+
+   A recursive blocked factorization built out of trsm + gemm should therefore have won
+   big. It bought **1.36x** (2.39 ms against 3.26 ms at n = 513, best inner block 128),
+   because neither trsm nor the leaf factorizations parallelize at that size either.
+   Larger blocks are worse, not better: the cost is `O(n B^2)`, so doubling `B` pays 4x
+   the flops to buy about 2x the rate. The block Cholesky is at its practical ceiling
+   on this stack, and it is now the largest single item in an evaluation.
+2. **j-factoring the T-sandwich.** `f_ij = sum_ab w_i[a] w_j[b] S[i][a][1+b-a]` equals
+   `A_i + frac_j * B_i`, which builds the tent slices once per component instead of
+   once per (i, j) pair — 16 slab operations down to 10. Measured **slower** (0.81 s
+   against 0.79 s; results agree to 5e-16). XLA already fuses the four terms into one
+   pass, so the restructure only adds a materialized intermediate.
+3. **`remat=False`.** D29 chose rematerialization of the epoch body for memory. It is
+   also **faster**: 7.64 s against 9.81 s for the epoch scan's gradient. The memory
+   choice and the time choice coincide, so there is no trade to make.
+4. **A custom-VJP band-to-block packing** — named on D28's own list of remaining levers.
+   The effect is real (`_pack_band`'s gather does transpose to a scatter), but it costs
+   **0.20 s of a 10 s gradient**. It now stays unimplemented on purpose rather than by
+   omission.
+
+Rejected by arithmetic before implementing: re-laying-out the band tensor as
+`(nc, nc, n_pix, n_k)` so each epoch's slice is contiguous rather than strided by `nc`.
+The band read-modify-write is only ~0.15 s of the 0.76 s T-sandwich, and ablating it
+entirely made the forward slower — the traffic is in building `f`, not in storing it.

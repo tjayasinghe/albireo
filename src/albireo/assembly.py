@@ -27,13 +27,21 @@ Stages per epoch (all exact, all differentiable in shifts / lights / kernel / we
    tables for the tridiagonal chain terms, which widen ``H`` by the group's static
    ``ar_step`` (``operators.rebin_link_pair_tables``; the traced link weights carry
    phi, so the whole band stays differentiable in it).
-2. ``G = K^T H K`` as two unrolled diagonal-shifted accumulations (the band-image
-   form of the two convolutions; static slices only). A wavelength-dependent LSF
+2. ``G = K^T H K`` as the band-image form of the two convolutions. The first
+   application translates *rows*, so it stays an unrolled accumulation over the
+   2r + 1 taps (static slices only); the second translates columns alone, which
+   makes it a contraction of the band image against a static ``(w_u, w_g)`` banded
+   matrix — one GEMM rather than 2r + 1 more read-modify-write passes over the
+   widest image in the assembly (D49). Like the rest of this module the equality is
+   up to summation order (measured 0.5 ulp; XLA does not promise a GEMM's
+   accumulation order, even though it matched the loop's exactly on the benchmark
+   configurations). A wavelength-dependent LSF
    (``forward.build_problem(lsf_anchors_angstrom=...)``, D37) keeps the identical
    structure with the scalar kernel taps replaced by row-shifted profile columns;
-   the second application then runs against the band-transpose of the first, since
-   only *left* applications broadcast on a row-major band image and ``G`` is
-   symmetric: ``G = K^T (K^T H)^T``. ``G`` is a matrix on the model
+   there both applications translate rows, so both stay loops — the second runs
+   against the band-transpose of the first, since only *left* applications
+   broadcast on a row-major band image and ``G`` is symmetric:
+   ``G = K^T (K^T H)^T``. ``G`` is a matrix on the model
    grid, so its off-grid columns — which the kernel populates by smearing in-grid
    mass outward — are masked; the sandwich would otherwise read them whenever a
    shift places a component's support against a grid edge. Being
@@ -46,9 +54,13 @@ Stages per epoch (all exact, all differentiable in shifts / lights / kernel / we
 4. Accumulation into a global band tensor ``BAND[q, i, k, d]`` holding the interleaved
    band entry at row ``q * nc + i``, column offset ``k * nc + d`` — the per-epoch
    integer offset enters as a traced ``dynamic_update_slice`` start, so no scatter is
-   needed. The epoch loop is a ``lax.scan`` with the band tensor as carry (buffer
-   reuse; the body is rematerialized in reverse mode — recomputing one epoch's band
-   is far cheaper than storing 50 of them).
+   needed. The update is ``band + place(f)``, the identity in ``band``, but reverse
+   mode reassembles that identity out of three whole-tensor passes unless told
+   otherwise, so it goes through the closed-form :func:`_band_accumulate`
+   (D49 — 3.5 s of a 5.9 s backward at the ladder's first row). The epoch loop is a
+   ``lax.scan`` with the band tensor as carry (buffer reuse; the body is
+   rematerialized in reverse mode — recomputing one epoch's band is far cheaper than
+   storing 50 of them).
 
 The bandwidth contract is inherited from probing: entries beyond the static
 half-bandwidth ``p`` are dropped (out of contract; the inference model guards the
@@ -58,8 +70,11 @@ matrix against the matrix-free operator.
 
 from __future__ import annotations
 
+from functools import partial
+
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from albireo.forward import EpochGroup, Problem, ar1_band_weights
 from albireo.priors import SmoothnessPrior
@@ -75,6 +90,65 @@ __all__ = [
 _GP_HOIST_BYTES = 1024**3
 # Target live bytes for one batch of G once batching kicks in.
 _GP_CHUNK_BYTES = 512 * 1024**2
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(3, 4))
+def _band_accumulate(band, f, start, comp: int, d: int):
+    """``band`` with ``f`` added at ``[:, comp, start : start + f.shape[1], d]``.
+
+    Mathematically ``band + place(f)``: linear in both arguments and the *identity*
+    in ``band``. The forward is one in-place slice update either way; the reason
+    this is a ``custom_vjp`` is the reverse pass. Written as nested dynamic slices,
+    reverse mode transposes the two primitives separately and reassembles the
+    identity as
+
+        ``band_bar = dus(out_bar, 0, idx) + dus(zeros_like(band), ds(out_bar, idx), idx)``
+
+    — three passes over the *whole* band tensor to reproduce its own input, once per
+    (i, j) block per epoch. At the benchmark ladder's first row that is 4 x 50 x 3
+    passes over 522 MB = 313 GB of traffic, measured at 3.5 s of a 5.9 s backward,
+    and it grows with the band tensor rather than with the slice actually touched.
+    The closed form is exact and costs nothing: the operand cotangent *is* the
+    output cotangent, and ``f``'s is the corresponding slice of it. Values and
+    gradients are bit-identical to the nested-slice route (``test_assembly.py``).
+
+    ``comp`` and ``d`` are Python ints (the component and interleave-offset loop
+    counters), hence static; only ``start`` is traced, and being an integer it
+    takes a ``float0`` cotangent.
+    """
+    idx = (jnp.int32(0), jnp.int32(comp), start, jnp.int32(d))
+    return jax.lax.dynamic_update_slice(
+        band,
+        jax.lax.dynamic_slice(band, idx, (band.shape[0], 1, f.shape[1], 1)) + f[:, None, :, None],
+        idx,
+    )
+
+
+def _band_accumulate_fwd(band, f, start, comp: int, d: int):
+    # Recompute inline rather than calling _band_accumulate: the forward trace must
+    # hold only plain operations, so that a second reverse differentiation
+    # (jacrev-of-jacrev, as in laplace_inverse_mass) walks an ordinary graph instead
+    # of re-entering the custom boundary. Calling the custom function here is
+    # first-order exact but returns the *transpose* of the true Hessian (measured,
+    # test_second_order_reverse_matches_plain_autodiff) — the same re-entry defect
+    # D28 found in _solve_stage_fwd.
+    idx = (jnp.int32(0), jnp.int32(comp), start, jnp.int32(d))
+    out = jax.lax.dynamic_update_slice(
+        band,
+        jax.lax.dynamic_slice(band, idx, (band.shape[0], 1, f.shape[1], 1)) + f[:, None, :, None],
+        idx,
+    )
+    return out, (band.shape[0], f.shape[1], start)
+
+
+def _band_accumulate_bwd(comp: int, d: int, res, g):
+    n_pix, w_f, start = res
+    idx = (jnp.int32(0), jnp.int32(comp), start, jnp.int32(d))
+    f_bar = jax.lax.dynamic_slice(g, idx, (n_pix, 1, w_f, 1))[:, 0, :, 0]
+    return g, f_bar, np.zeros((), dtype=jax.dtypes.float0)
+
+
+_band_accumulate.defvjp(_band_accumulate_fwd, _band_accumulate_bwd)
 
 
 def _band_offsets(p: int, nc: int):
@@ -223,9 +297,20 @@ def _epoch_band_scan(
                 u = u.at[:, r + d1 : r + d1 + w_h].add(
                     kernel[0, d1 + r] * jax.lax.slice(bhp, (r + d1, 0), (r + d1 + n_pix, w_h))
                 )
-            g = jnp.zeros((n_pix, w_g))
-            for d2 in range(-r, r + 1):
-                g = g.at[:, r - d2 : r - d2 + w_u].add(kernel[0, d2 + r] * u)
+            # The second application translates *columns* only — unlike the first, it
+            # has no row shift — so it is a contraction of the band image against a
+            # static (w_u, w_g) banded matrix instead of 2r + 1 accumulate passes over
+            # the whole image. The loop form re-read and rewrote the (n_pix, w_g)
+            # output once per tap, which at survey scale is the single largest block
+            # of memory traffic in the assembly (measured 0.55 s of a 0.88 s G
+            # pre-pass at the ladder's first row, against 0.03 s here). Column k of
+            # the output collects tap s = k' + 2r - k. Equality is to summation order,
+            # as everywhere else in this module: increasing k' *is* increasing s, so
+            # the ideal orders agree, but XLA may block a GEMM's accumulation however
+            # it likes (measured 0.5 ulp against the loop on a random kernel, and
+            # bit-identical log-likelihoods on the benchmark configurations).
+            tap = jnp.arange(w_u)[:, None] + 2 * r - jnp.arange(w_g)[None, :]
+            g = u @ jnp.where((tap >= 0) & (tap <= 2 * r), kernel[0, jnp.clip(tap, 0, 2 * r)], 0.0)
         else:
             kp = jnp.pad(kernel, ((r, r), (0, 0)))
 
@@ -293,12 +378,7 @@ def _epoch_band_scan(
                 d = (j - i) % nc
                 s0 = off0 + delta - h_f + ((j - i) - d) // nc
                 start = jnp.clip(s0, 0, n_k - w_f).astype(jnp.int32)
-                idx = (jnp.int32(0), jnp.int32(i), start, jnp.int32(d))
-                band = jax.lax.dynamic_update_slice(
-                    band,
-                    jax.lax.dynamic_slice(band, idx, (n_pix, 1, w_f, 1)) + f[:, None, :, None],
-                    idx,
-                )
+                band = _band_accumulate(band, f, start, i, d)
         return band, None
 
     n_ep = group.shifts.shape[0]

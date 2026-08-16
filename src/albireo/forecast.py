@@ -299,18 +299,25 @@ def _effective_parameters(problem, prior, alpha, b_nat, block_size) -> float:
 
         ``d/dt log det(Lambda_p + e^{-2t} A^T W A)|_{t=0} = -2 tr[Sigma A^T W A]``.
 
-    One forward-mode derivative of the log-determinant therefore gives the effective
-    parameter count with no stochastic trace estimator and no selected inverse — the
-    jitter swap (:func:`albireo.forward.with_jitter`) is already exactly this
-    one-parameter family, and the assembly is already differentiable through it.
+    One derivative of the log-determinant therefore gives the effective parameter count
+    with no stochastic trace estimator and no selected inverse — the jitter swap
+    (:func:`albireo.forward.with_jitter`) is already exactly this one-parameter family,
+    and the assembly is already differentiable through it.
+
+    ``t`` is a scalar and so is the log-determinant, so forward and reverse mode return
+    the same single number; this takes it in **reverse**. The band assembly carries a
+    ``custom_vjp`` for its accumulate (D49 — reverse mode otherwise rebuilds the whole
+    band tensor to reproduce its own input), and ``custom_vjp`` rejects ``jax.jvp``
+    outright. That is the same trade D28 made one stage later at ``_solve_stage``, and
+    it is paid in the right place: this runs once per forecast, while the rule it buys
+    runs once per leapfrog step.
     """
 
     def logdet_at(t):
         scaled = with_jitter(problem, alpha * jnp.exp(t))
         return logdet(block_cholesky(band_block_tridiagonal(scaled, prior, b_nat, block_size)))
 
-    _, slope = jax.jvp(logdet_at, (jnp.asarray(0.0),), (jnp.asarray(1.0),))
-    return -0.5 * float(slope)
+    return -0.5 * float(jax.grad(logdet_at)(jnp.asarray(0.0)))
 
 
 def _prior_std(prior: SmoothnessPrior, n_pix: int, n_comp: int) -> np.ndarray:
