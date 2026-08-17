@@ -505,6 +505,13 @@ and 6× faster than fd3 — it is a handful of array shifts and means, and nothi
 1200-pixel two-component separation that is the right answer, and any claim that a Bayesian
 marginal method is *faster* than seven sweeps of arithmetic would be false.
 
+**Since re-run (D50).** That sentence is about this table's machine and its measurement
+convention, not about the codes. The "D50 re-run" section at the end of this file re-ran all
+three on a 16-core desktop under one protocol — every accuracy value below reproduced
+exactly — and found the shift-and-add wall contaminated by the harness's own in-process
+timing (on both machines), fd3 inflated by its BLAS spinning 32 threads, and the ranking
+there: shift-and-add 0.026 s, albireo 0.059 s, fd3 0.064 s pinned.
+
 **On accuracy albireo wins by about 2×, and the margin is real rather than a stopping
 artifact** (see the sweep table). The ordering aligned is albireo 0.0093 / 0.0116, fd3
 0.0198 / 0.0223, shift-and-add 0.0248 / 0.0302.
@@ -2130,6 +2137,12 @@ from a speedup pass. The M5 table stands as what it was: a correct same-machine 
 on a machine that is not this one. Accuracy is unaffected either way — the recovered
 spectra reproduce the recorded RMS exactly (0.0093 / 0.0116 mean-aligned).
 
+**Done — see "D50 re-run" at the end of this file.** The re-run reproduced all twelve
+accuracy values exactly, explained the 0.049 s — the harness's own in-process convention,
+timing shift-and-add on a heap the XLA solve had just worked over, a convention both
+recorded numbers share — caught fd3's OpenBLAS spinning 32 threads (pinned to one, fd3 is
+1.7× faster), and moved the harness to a fresh-process timing.
+
 ### Memory: unchanged, which was the requirement
 
 D29 was a memory pass, and a speedup that quietly undoes it is not a speedup. Peak
@@ -2214,3 +2227,94 @@ Rejected by arithmetic before implementing: re-laying-out the band tensor as
 `(nc, nc, n_pix, n_k)` so each epoch's slice is contiguous rather than strided by `nc`.
 The band read-modify-write is only ~0.15 s of the 0.76 s T-sandwich, and ablating it
 entirely made the forward slower — the traffic is in building `f`, not in storing it.
+
+## D50 re-run — all three codes, one machine, and the wall that would not reproduce (2026-08-16)
+
+D49 left the head-to-head honest but unfinished: hardware-bound, one wall (shift-and-add's
+0.018 s) irreproducible, and a rule that a partial update would be worse than none. This is
+the full re-run — all three codes, one protocol, one machine — and the two walls that
+misbehaved both turn out to be the environment's, not the codes'.
+
+**The machine, recorded this time with its stack** — the original tables name neither, which
+is exactly what left 0.018 s unfalsifiable: AMD Ryzen 9 9950X3D (16 cores / 32 threads),
+31.1 GiB, Windows 11 Pro build 26200, WSL2 kernel 6.18.33.2 for fd3; Python 3.13.9,
+jax 0.11.0, numpy 2.5.2.
+
+### Accuracy first: twelve values, twelve exact reproductions
+
+Each code ran once before any timing, and every recorded RMS was checked. All twelve
+reproduce to the printed precision — albireo 0.0118 / 0.0093 and 0.0165 / 0.0116, fd3
+0.1767 / 0.0198 and 0.2597 / 0.0223, shift-and-add 0.0317 / 0.0248 and 0.0849 / 0.0302 —
+with the exported fd3 inputs checksum-identical to the prior session's and fd3's output
+`.mod` byte-identical, fd3 being deterministic. The computations are fixed points. Whatever
+moved, moved in the measurement.
+
+### The walls, one protocol
+
+Two to three warmups, then nine recorded repeats per code, strictly sequential, nothing else
+running:
+
+| | recorded (earlier laptop) | min | median | convention |
+|---|---|---|---|---|
+| shift-and-add, 7 sweeps | 0.018 s | **0.0263 s** | 0.0267 s | fresh process, jax never imported |
+| albireo | 0.182 s | **0.0591 s** | 0.0625 s | jitted steady state; cold compile + first call 0.495 s |
+| fd3, `OMP_NUM_THREADS=1` | — | **0.0636 s** | 0.0640 s | full WSL process; see below |
+| fd3, environment as found | 0.111 s | 0.1042 s | 0.1113 s | full WSL process |
+
+The ranking on this box: shift-and-add first, then albireo and single-threaded fd3 at parity
+(mins 0.0591 against 0.0636, medians 0.0625 against 0.0640), then fd3 as it actually ships.
+M5's "albireo loses to both" was a statement about one laptop; the durable statements are
+that shift-and-add is fastest everywhere — a handful of array shifts and means should be —
+and that albireo's 32-thread XLA graph buys back fd3's single-thread head start on exactly
+the hardware people now buy. D49's partial recheck reproduces from here: its 0.059 s is this
+table's 0.0591, its fd3 0.099 s sits inside a later control series (minima 0.092–0.104), and
+its irreproducible 0.049 s sits inside the contaminated band below.
+
+### Where the missing milliseconds went: the harness heated the heap
+
+The wall that refused to reproduce was never shift-and-add's. It was the measurement's.
+
+The committed harness timed shift-and-add **in the same process, after the albireo solve** —
+the convention behind *both* recorded numbers, the laptop's included. Dose–response, one
+process, minimum wall per stage: numpy-only 0.0265 s → `import jax` 0.0267 → backend init
+0.0267 → a tiny jit 0.0275 → **after the big jitted solve 0.0632–0.0736 s**, and it never
+recovers — `clear_caches()` plus gc reads 0.0729, three seconds of idle 0.0787. The inner
+`_shift` goes 45.9 → 125.8 µs. Not threads and not the CPU: the code is pure NumPy, thread
+pinning is flat, and at every stage user time ≈ wall with sys = 0 and zero page faults — the
+same thread runs the same instructions ~2.7× slower, but only when it allocates.
+
+The discriminator: allocating ufuncs slow ~4× (`np.floor(a)` 0.82 → 3.46 µs, `a + b`
+0.88 → 3.42 µs) while their `out=` twins are bit-flat (0.62 → 0.64, 0.76 → 0.77 µs). And the
+penalty has the size structure of the Windows CRT heap: 8 KB requests (low-fragmentation
+heap) flat at 0.17 → 0.15 µs; 34.6 KB — the exact size of shift-and-add's full-grid
+temporaries — 0.23 → 2.14 µs; 128 KB 0.23 → 5.54; 800 KB 0.24 → 9.96. XLA's allocation storm
+leaves requests above 16 KB walking a user-mode free list for microseconds (the same address
+comes back — the walk is the cost), and `disentangle` makes ~10⁴ such allocations per call:
++20–45 ms, which is the observed band. Reproduced directly: the committed convention gives
+0.037–0.043 s here, and after fully jitted runs 0.049–0.084 s — D49's 0.049 sits inside it.
+
+The laptop's 0.018 s was taken through the same convention, with its own unknowable dose, so
+the residual clean-machine gap (0.0263 here against 0.018 there, 1.46×) decomposes no
+further: serial small-array NumPy throughput on a stack nobody recorded, plus contamination
+of a size nobody can reconstruct. `scripts/fd3_bench.py` now times shift-and-add in a fresh
+interpreter (warmup, then min of five) — the convention this table uses, and the row above
+is its first number produced under a recorded stack.
+
+### The control that would not sit still: fd3's BLAS is not single-threaded
+
+fd3 was in the protocol as the control — single-threaded C, expected flat under thread
+pinning. It was not flat: the binary as built links its GSL against OpenBLAS, and in the
+default environment it shows **1938% CPU** — 1.95 s of user time inside a 0.10 s wall,
+32 threads spinning — while `OMP_NUM_THREADS=1` gives 93% CPU and 0.0636 s, **1.7× faster**.
+fd3's own code is single-threaded; the library underneath it is not, and on a many-core box
+the spin pool costs it 60%. This also re-reads D49's "fd3 moved 12% across the hardware
+change": part real, part oversubscription inflating the desktop number. The pinned figure is
+the honest one for fd3-the-algorithm; the as-found row stays in the table because as found
+is how it gets run.
+
+### What stands
+
+The M5 tables stand as history, now labeled with what their machine was: an earlier laptop,
+stack unrecorded. The accuracy story is unchanged and is now double-confirmed by exact
+replication: ~2× on shape, the same *k* = 0 null space in all three codes, and a posterior
+from exactly one of them.

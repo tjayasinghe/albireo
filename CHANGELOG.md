@@ -48,6 +48,17 @@ This file records *what changed*. The reasons live elsewhere and are worth follo
   D28 had already removed it one stage later at `_solve_stage`, and second derivatives
   remain available through reverse-over-reverse.
 
+- **The three-way comparison was re-run on one machine, and `scripts/fd3_bench.py` now
+  times shift-and-add in a fresh process** — the old convention measured the heap, not the
+  code. Timed in-process after the XLA solve (the convention behind both previously
+  recorded walls), the identical call reads 40–80% slower: XLA's allocation storm leaves
+  the Windows CRT heap serving shift-and-add's ~35 KB temporaries through microsecond
+  free-list walks — allocating ufuncs slow ~4×, their `out=` twins bit-flat. The re-run
+  reproduced all twelve recorded RMS values exactly and re-measured the walls under one
+  protocol on a recorded stack: shift-and-add 0.026 s, albireo 0.059 s, fd3 0.064 s
+  single-threaded (0.104 s as shipped — its OpenBLAS spins 32 threads). See
+  [`docs/benchmarks.md`](docs/benchmarks.md) "D50 re-run".
+
 ### Fixed
 
 - **A detector gap is no longer weighted like data.** `albireo.mask_flux_gaps` zero-weights

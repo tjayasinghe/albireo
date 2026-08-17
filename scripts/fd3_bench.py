@@ -33,6 +33,8 @@ from __future__ import annotations
 import argparse
 import shutil
 import subprocess
+import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -149,6 +151,44 @@ def run_albireo(ds, truth):
     return d_hat, wall
 
 
+def _time_in_fresh_process(obs: np.ndarray, shifts_pix: np.ndarray, n_iter: int) -> float:
+    """Wall time for `disentangle` from a child interpreter, because this process is
+    not a fair arena.
+
+    Timed here, after the XLA solve, the identical call reads 40-80% slower: the solve's
+    allocation storm leaves the Windows CRT heap serving shift-and-add's ~35 KB
+    temporaries through microsecond free-list walks — allocating ufuncs slow ~4x while
+    their `out=` twins are unchanged (measured; docs/benchmarks.md "D50 re-run"). Both
+    previously recorded walls were taken through that convention. A child process starts
+    with a clean heap and never imports jax.
+    """
+    child = (
+        "import sys, time\n"
+        "import numpy as np\n"
+        "sys.path.insert(0, sys.argv[2])\n"
+        "from shift_and_add import disentangle\n"
+        "d = np.load(sys.argv[1])\n"
+        "obs, shifts, n_iter = d['obs'], d['shifts'], int(d['n_iter'])\n"
+        "disentangle(obs, shifts, n_iter=n_iter)\n"
+        "walls = []\n"
+        "for _ in range(5):\n"
+        "    t0 = time.perf_counter()\n"
+        "    disentangle(obs, shifts, n_iter=n_iter)\n"
+        "    walls.append(time.perf_counter() - t0)\n"
+        "print(min(walls))\n"
+    )
+    with tempfile.TemporaryDirectory() as td:
+        payload = Path(td) / "saa_timing.npz"
+        np.savez(payload, obs=obs, shifts=shifts_pix, n_iter=n_iter)
+        out = subprocess.run(
+            [sys.executable, "-c", child, str(payload), str(Path(__file__).resolve().parent)],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    return float(out.stdout.strip().splitlines()[-1])
+
+
 def run_shift_and_add(ds, truth, truth_d, n_iter: int = 7):
     """The third code: the clean-room shift-and-add of `scripts/shift_and_add.py`.
 
@@ -165,9 +205,8 @@ def run_shift_and_add(ds, truth, truth_d, n_iter: int = 7):
     )
     obs = np.stack([np.asarray(ep.flux) - 1.0 for ep in ds])
 
-    t0 = time.time()
-    rec = disentangle(obs, shifts_pix, n_iter=n_iter)
-    wall = time.time() - t0
+    rec = disentangle(obs, shifts_pix, n_iter=n_iter)  # the spectra, for the metrics
+    wall = _time_in_fresh_process(obs, shifts_pix, n_iter)
 
     print(f"\nshift-and-add (clean-room, {n_iter} sweeps):")
     for i in range(2):
@@ -175,7 +214,7 @@ def run_shift_and_add(ds, truth, truth_d, n_iter: int = 7):
         # the composite contains. Undilute before comparing with the undiluted truth.
         comp = rec[i] / ELL[i]
         spectrum_metrics(comp, truth_d[i], f"shift-and-add comp {i + 1}")
-    print(f"  shift-and-add wall: {wall:.3f} s")
+    print(f"  shift-and-add wall (fresh process, min of 5): {wall:.3f} s")
     return rec, wall
 
 

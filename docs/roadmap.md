@@ -515,18 +515,23 @@ of `√(2m)·σ_d` after *m* sweeps, and seeding a delta-function error reproduc
 | fd3 | 0.0198 | 0.0223 | 0.111 s | no |
 | shift-and-add | 0.0248 | 0.0302 | **0.018 s** | no |
 
-albireo is ~2× more accurate and the slowest of the three. Shift-and-add is 10× faster than
+albireo is ~2× more accurate and, on the machine this table was recorded on, the slowest of
+the three. Shift-and-add is 10× faster than
 albireo and 6× faster than fd3, which for a 1200-pixel separation is simply the right answer —
 it is a handful of array shifts and means. The accuracy margin is not a stopping artifact: at 50
 sweeps instead of the published 7, shift-and-add improves by 11% and is still 2.4× behind.
 
-> **The speed column is hardware-bound and has since inverted.** Re-measured on a 16-core
-> desktop, fd3 moves 12% (0.111 → 0.099 s) while albireo moves 2.6× — it is single-threaded C
-> against a 32-thread XLA graph — and D49 takes albireo to 0.059 s on top of that, so on that
-> box albireo is ~1.7× *faster* than fd3 rather than 1.64× slower. The table is **not** updated
-> here because the shift-and-add side did not reproduce (0.049 s against 0.018 s recorded), and
-> a fair three-way needs all three re-run under one methodology on one machine. Accuracy is
-> unaffected. See benchmarks.md "D49 speedup pass".
+> **Speed re-run 2026-08-16; the accuracy column is the one that replicated.** All three
+> codes re-run on one machine (a 16-core desktop) under one protocol: every RMS above
+> reproduces exactly, and the walls become shift-and-add 0.026 s, albireo 0.059 s, fd3
+> 0.064 s single-threaded — parity — and 0.104 s as it actually ships, its OpenBLAS spinning
+> 32 threads. The 0.018 s above was itself partly an artifact: the harness timed
+> shift-and-add in-process after the XLA solve, on a heap XLA leaves serving ~35 KB
+> allocations through microsecond free-list walks — a convention behind *both* recorded
+> numbers, since replaced with a fresh-process timing. So shift-and-add stays fastest
+> everywhere; "slowest of the three" was a fact about single-thread hardware; and albireo
+> remains ~2× more accurate and the only code returning a posterior. Full record:
+> benchmarks.md "D50 re-run".
 
 **The most reusable result is that all three fail the same way.** fd3's raw error is nine tenths a
 constant; shift-and-add's blows up on the *fainter* component because `B = 0` leaves its continuum
