@@ -1817,6 +1817,72 @@ class Fit:
             )
         )
 
+    def match_labels(self, stars, **kwargs):
+        """Fit Teff, log g, [M/H] and *v* sin *i* to the stellar components of this fit.
+
+        The declarative route to :func:`albireo.match_labels`: the grid, the recovered
+        spectra, their uncertainty band, the assumed light fractions, the instrument width
+        and the dataset's wavelength medium all come from this fit rather than being passed
+        again, so they cannot disagree with what was actually solved.
+
+        Only the *stellar* rows are handed over — a telluric or nebular component is not a
+        star and has no atmospheric parameters — and the light fractions travel with them,
+        because the label fit's whole dilution model is built on knowing what was assumed.
+
+        Parameters
+        ----------
+        stars
+            Mapping of star name to :class:`albireo.StarLabels`, one per stellar component
+            of this declaration. Names must match :attr:`Disentangler.stars`.
+        **kwargs
+            Passed to :func:`albireo.match_labels`.
+
+        Returns
+        -------
+        LabelMatch
+
+        Notes
+        -----
+        The dataset must declare its wavelength medium. That is not bureaucracy: matching
+        against a synthetic grid is an 83 km/s question, and there is no safe default
+        (``docs/math.md`` §9).
+        """
+        from albireo.match import match_labels
+
+        names = [component.name for component in self.dis.stars]
+        unknown = set(stars) - set(names)
+        if unknown:
+            raise ValueError(
+                f"unknown star(s) {sorted(unknown)}; this declaration has {names}. "
+                "Telluric and nebular components are not stars and have no labels."
+            )
+        if set(stars) != set(names):
+            raise ValueError(
+                f"declare labels for every star ({names}); the dilution model fits the "
+                "components jointly, so a partial declaration is not well posed."
+            )
+        medium = self.dis.dataset[0].medium
+        if medium is None:
+            raise ValueError(
+                "this dataset does not declare whether its wavelengths are air or vacuum, "
+                "so it cannot be matched against a synthetic grid: the two differ by ~83 "
+                "km/s. Set medium= on the epochs (albireo.air_to_vacuum and "
+                "albireo.vacuum_to_air convert)."
+            )
+        ordered = {name: stars[name] for name in names}
+        spectra, std = self.spectra(), self.std()
+        rows = [self.dis.component_names.index(name) for name in names]
+        kwargs.setdefault("lsf_sigma_kms", self.dis._widest_lsf())
+        return match_labels(
+            self.dis.grid,
+            spectra[rows],
+            stars=ordered,
+            medium=medium,
+            light_fractions=[component.light for component in self.dis.stars],
+            std=std[rows],
+            **kwargs,
+        )
+
     def write_spectra(self, path, **kwargs):
         """Export the component spectra and their uncertainty band. Needs astropy."""
         from albireo.io import write_spectra

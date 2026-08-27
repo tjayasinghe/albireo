@@ -13,6 +13,51 @@ This file records *what changed*. The reasons live elsewhere and are worth follo
 
 ### Added
 
+- **Stellar labels for template selection — `albireo.match` and `albireo.library` (D52, D53).**
+  A new optional mode that fits Teff, log g, [M/H] and *v* sin *i* to disentangled component
+  spectra against published synthetic grids, so a component can be rendered as a template for
+  measuring epoch radial velocities elsewhere. New names: `SpectralLibrary`,
+  `library_interpolator`, `crossval_library`, `line_core_medium`, `BoxInterpolator`,
+  `SimplexInterpolator`, `match_labels`, `refit_draws`, `LabelMatch`, `StarLabels`,
+  `RadiusRatio`, `ScalarDilution`, `FixedDilution`, plus `Fit.match_labels(...)` on the façade
+  and `rotational_kernel` / `rotational_kernel_traced` / `rotational_radius_for` in
+  `albireo.operators`. **Zero new dependencies.**
+
+  The scope is narrow on purpose and `docs/roadmap.md`'s non-goal is amended rather than
+  quietly widened: this synthesizes no spectrum, carries no line list, solves no radiative
+  transfer and fits no abundances — `albireo.handoff` remains the route to GSSP, iSpec,
+  Korg.jl and PySME. What it is for is the front-half job: choosing the right template,
+  pinning the per-component velocity zero point, and checking an assumed flux ratio.
+
+  Three things it does that a naive version gets wrong. **Dilution is fitted jointly**, through
+  one shared radius ratio with wavelength-dependent light fractions written as a softmax over
+  the grids' own continua, so they sum to one at every pixel by construction (GSSP's
+  `gssp_binary` parameterization) — an assumed light ratio that was wrong comes back as
+  dilution instead of as a temperature error, and the spectroscopic light ratio becomes a
+  result. **The nuisance is additive**, because the `k = 0` null space of `docs/math.md` §5.1
+  lives in the continuum where a multiplicative polynomial is identically zero; its zeroth term
+  *is* the unconstrained zero point, fitted and reported. **Uncertainties are quoted twice** —
+  the Laplace curvature beside the spread from refitting joint posterior draws — because formal
+  errors on correlated residuals run five to ten times optimistic, and `summary()` prints both
+  with the ratio.
+
+  Interpolation is in flux, never in model atmospheres (0.031% for a cubic against 0.19% for
+  atmospheres on BOSZ's own spacing), with Catmull-Rom on a complete axis product and
+  barycentric interpolation over a Delaunay triangulation where physics has cut the grid's
+  corners off. Both reproduce a node bit-for-bit. Whether a learned emulator would beat this on
+  a given grid is a measurement, not an argument, and `crossval_library` is the measurement.
+
+  `SpectralLibrary.medium` is **required and never defaulted**: air and vacuum differ by ~83
+  km/s, and the upstream documentation is not a safe source — BOSZ 2017 was vacuum throughout
+  and BOSZ 2024 is air above 200 nm, under the same name. `line_core_medium` measures the
+  convention from the spectra instead.
+
+  Docs: `docs/math.md` §9 (the forward model, an extension of the §5.4 degeneracy ledger, the
+  uncertainty story, and the accuracy target with citations), `docs/api/library.md`,
+  `docs/api/match.md`, `docs/tutorials/labels.md`, and `examples/11_labels.py` — an offline
+  closed loop that hands the fit deliberately wrong light fractions and asserts they come back
+  as dilution.
+
 - **`docs/tutorials/showcase.ipynb` — an executed notebook touring every headline output**
   on the packaged example: `explain()`, the fit summary, the component spectra with their
   uncertainty band, the residual diagnostics, the NUTS posterior (RV-curve draws and a

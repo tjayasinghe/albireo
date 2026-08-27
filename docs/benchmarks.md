@@ -2393,3 +2393,113 @@ published SB2s have no orbital solutions — exactly the case `Disentangler(velo
 was built for (D48). In practice the two codes are not rivals so much as stages: the
 incumbent's shift-and-add is how several of those systems were found, and albireo is aimed at
 what comes after — the orbit, the spectra, and the error bars on both.
+
+
+## D52/D53 — stellar labels from disentangled components (2026-08-27)
+
+Machine: **AMD Ryzen 9 9950X3D desktop**, 16 cores / 32 threads, 32 GB, Windows 11, CPU only,
+float64 — the same box as D49/D50, so those numbers are comparable with these and the earlier
+"Windows 11 laptop" tables are not. Harness: `scripts/label_bench.py`, which is offline and
+reproducible; the grid is a toy at BOSZ's own node density (250 K in Teff, 0.5 dex in log g,
+0.25 dex in [M/H]; 455 nodes x 2000 px) so that the interpolation numbers can be read against
+the published ones.
+
+### Interpolation, and the emulator question settled by measurement
+
+Leave-out error at **doubled** node spacing — a deliberately pessimistic proxy, since the real
+fit interpolates on the full grid — in fractional normalized flux:
+
+| method | rms | p95 | max | n tested |
+|---|---|---|---|---|
+| multilinear | 3.88e-04 | 1.74e-06 | 8.16e-03 | 371 |
+| Catmull-Rom cubic | **1.84e-04** | 2.00e-07 | 4.51e-03 | 371 |
+
+Against the literature for the same spacing on a real ATLAS9 grid (Meszaros & Allende Prieto
+2013): linear 5.1e-04, cubic-Bezier 3.1e-04, and a Payne-style network about 1e-03. Two
+conclusions, and the second is the one that decides a roadmap item.
+
+1. The cubic is worth its 4^k taps: **2.1x better than multilinear** here, 1.6x in the
+   published comparison.
+2. On a grid at this density **a learned emulator would be a downgrade**, by roughly a factor
+   of five. That is the measurement D53's plan said would decide whether to build one, and it
+   says not to — for FGK. It says nothing about the coarse, strongly non-linear OB grids, where
+   the same measurement has to be repeated before an emulator is either built or dismissed.
+   `crossval_library` is that measurement, and it ships.
+
+Node reproduction is exact bit-for-bit (`==`, not a tolerance), which is what lets the
+warm-start node scan and the continuous fit be compared on one footing.
+
+### Closed-loop recovery
+
+Two components injected at **off-node** labels, given to the fit with light fractions that are
+**wrong on purpose** (assumed 0.72/0.28 against a true 0.62/0.38), noise at the declared level:
+
+| S/N | star | dTeff [K] | dlog g | d[M/H] | dv sin i [km/s] | formal sigma(Teff) [K] | fitted light fraction |
+|---|---|---|---|---|---|---|---|
+| 100 | A | +17.9 | +0.0010 | +0.0080 | -0.887 | 11.05 | 0.621 |
+| 100 | B | +12.6 | -0.0125 | +0.0080 | +0.195 | 7.68 | 0.379 |
+| 250 | A | +7.2 | +0.0003 | +0.0033 | -0.333 | 4.36 | 0.620 |
+| 250 | B | +5.0 | -0.0048 | +0.0033 | +0.077 | 3.09 | 0.380 |
+| 500 | A | +3.7 | +0.0004 | +0.0017 | -0.169 | 2.13 | 0.620 |
+| 500 | B | +2.3 | -0.0016 | +0.0017 | +0.033 | 1.57 | 0.380 |
+
+The worst row is 0.35% in Teff against a target of 2-3% (math.md 9.6), 0.013 dex in log g
+against 0.15, and 8% in v sin i against 10%. For scale, GSSP's own simulation recovery at
+S/N 150 is +-40 K and +-0.06 dex, so this is comfortably inside the bar the mode has to clear —
+on a toy grid, which is the caveat below.
+
+**The light ratio is the headline.** It comes back as 0.621/0.379 against a truth of
+0.62/0.38, from an assumption of 0.72/0.28 — the joint radius-ratio fit put a 16% error in the
+assumed dilution where it belonged instead of laundering it into the temperatures. That is the
+single result the dilution design exists for, and `FixedDilution` on the same data is what it is
+quoted against: the example asserts the frozen fit is never closer to the truth.
+
+Chi-square is 1835.8 of 2020 pixels at **all three** signal-to-noise levels, which is correct
+rather than suspicious: the quoted sigma matches the injected noise and the seed is fixed, so
+residual/sigma is literally the same array and the reduced chi-square is scale-invariant at
+0.909. The nulls move as they should — the nearest-node null runs 7.6e3 / 3.8e4 / 1.5e5 and the
+no-template null 1.7e5 / 1.1e6 / 4.2e6, both in units of the shrinking sigma.
+
+### Wall clock
+
+| stage | seconds |
+|---|---|
+| resample the library onto the model grid | 0.05 |
+| build the interpolator | 0.00 |
+| `match_labels`: node scan + 4 x L-BFGS + Laplace | 27.8 |
+| refit 8 posterior draws | 41.1 |
+
+455 nodes x 2000 px projected onto 1010 model pixels. The draws refit is the expensive half and
+scales linearly in the draw count; it is opt-in for exactly that reason.
+
+### The formal error against the honest one — and what this run does *not* show
+
+| star | label | formal | draws | ratio |
+|---|---|---|---|---|
+| A | Teff | 4.36 | 17.60 | 4.0x |
+| A | v sin i | 0.182 | 0.339 | 1.9x |
+| B | Teff | 3.09 | 4.33 | 1.4x |
+| B | v sin i | 0.087 | 0.556 | 6.4x |
+| A | log g | 0.007 | 0.007 | 0.9x |
+| B | log g | 0.005 | 0.003 | 0.5x |
+
+**Read this table for the machinery, not for the physics.** The draws here are the data plus
+fresh *white* noise, because this harness has no disentangling behind it — so they carry none of
+the correlated structure that makes the formal error optimistic in the first place. What the
+spread is measuring is label-space non-linearity alone, and the scatter across rows (0.5x to
+6.4x) is partly the sampling error of a standard deviation taken over eight draws, which is
+about 27% on its own. The literature's 5-10x (Gebruers et al. 2022: 70 K formal against 425 K
+realistic; Czekala et al. 2015) is for **joint posterior draws of real disentangled spectra**,
+which carry the low-k exchange modes, and reproducing that number is a job for the AI Phe
+validation run, not for this one. What this run does establish is that the propagation path
+works end to end and that the two numbers are reported side by side with their ratio.
+
+### Scope of these numbers
+
+Every figure above is on a *toy* grid whose spectra are analytic Gaussian lines with each label
+driving its own set — chosen so the label-to-spectrum map is invertible, after an earlier
+version let Teff and [M/H] both scale one depth and produced a fit that drove chi-square to
+1e-26 while "failing" to recover the injected labels. Real grids have blends, saturated cores
+and a continuum that is not a smooth exponential in Teff, so the recovery figures here are an
+upper bound on how well this can go. The real-data gate is AI Phe against Maxted et al. (2020),
+which is not run here.

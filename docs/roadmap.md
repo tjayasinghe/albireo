@@ -627,8 +627,16 @@ Recorded so they stop being reconsidered.
   supported and is the right tool; exact multiplicative treatment remains the recorded v2 seam.
 - **No WEAVE- or 4MOST-specific loaders.** 4MOST's processed data is released through the ESO
   archive, so it arrives free with the loader in Tier 2.
-- **No replacement for GSSP, iSpec, Korg.jl, PHOEBE, or PySME.** Interoperate. Being the front half
-  of everyone's pipeline is a better position than being a worse version of the back half.
+- **No synthesis code and no abundance pipeline — still no replacement for GSSP, iSpec, Korg.jl,
+  PHOEBE, or PySME.** Interoperate. Being the front half of everyone's pipeline is a better
+  position than being a worse version of the back half. `albireo.match` (D52–D55) does not
+  reopen this. It fits four labels — Teff, log g, [M/H], *v* sin *i* — to a disentangled
+  component *against established public grids*, for exactly the front-half jobs: choosing the
+  right RV template, pinning the per-component velocity zero point, and checking an assumed
+  flux ratio. It synthesizes no spectrum, carries no line list, solves no radiative transfer,
+  and fits no individual abundances; its module docstring says so first, before it says what it
+  does do. The moment a question needs bespoke synthesis, abundances, microturbulence, or an
+  eclipsing-binary model, the answer remains `albireo.handoff` and the codes above.
 - **No GUI**, per the v1 non-goals.
 
 ## What would change this page

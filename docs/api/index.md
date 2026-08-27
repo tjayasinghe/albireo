@@ -24,6 +24,8 @@ The path from a directory of FITS files to a posterior runs through them in roug
 | Search | [`albireo.scan`](scan.md) | the SB1 faint-companion K₂ scan |
 | Calibrate | [`albireo.calibrate`](calibrate.md) | injection–recovery detection limits and false-alarm probabilities |
 | Plan again | [`albireo.forecast`](forecast.md) | what the *next* epochs would buy — computable before they are taken |
+| Stock | [`albireo.library`](library.md) | published synthetic grids, standardized, with the wavelength medium declared and differentiable interpolation over them |
+| Label | [`albireo.match`](match.md) | Teff / log g / [M/H] / *v* sin *i* against those grids — for choosing a template, not for an abundance table |
 
 [`albireo.simulate`](simulate.md) sits outside that path and feeds it: it is the oracle every
 closed-loop test is written against.

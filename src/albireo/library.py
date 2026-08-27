@@ -1,0 +1,671 @@
+"""Synthetic spectral libraries: standardized containers and differentiable interpolation.
+
+A *library* here is a published grid of synthetic spectra — BOSZ, POLLUX, PHOENIX — reduced
+to the four things a label fit needs: the node labels, the normalized flux at each node, the
+continuum at each node, and the wavelength scale those live on. Everything else the upstream
+distributions carry (SEDs, stratifications, ionizing fluxes) is dropped at ingest.
+
+What this module does **not** do, deliberately:
+
+- **It does not synthesize spectra.** There is no line list, no model atmosphere, and no
+  radiative transfer here. albireo reads grids other people computed and cites them; when a
+  question needs bespoke synthesis the answer is still :mod:`albireo.handoff` and GSSP,
+  iSpec, Korg.jl or PySME.
+- **It does not guess the wavelength medium.** :attr:`SpectralLibrary.medium` is required and
+  never defaulted, because air and vacuum differ by ~83 km/s across the optical — the same
+  order as the orbital semi-amplitudes albireo exists to measure. The distributions
+  themselves are not a reliable source: BOSZ 2017 was vacuum throughout and BOSZ 2024 is air
+  above 200 nm, under the same name. :func:`line_core_medium` measures the convention from
+  the spectra instead of trusting a README, and the ingest paths use it to *verify* a
+  declaration rather than to supply one.
+- **It does not interpolate model atmospheres.** Interpolation happens in flux, which is
+  measurably better: on the 250 K / 0.5 dex spacing BOSZ actually uses, Meszaros & Allende
+  Prieto (2013) measured 0.19% scatter interpolating atmospheres against 0.051% interpolating
+  fluxes linearly and 0.031% with a cubic. Those two numbers are why :func:`library_interpolator`
+  defaults to a cubic in flux space, and why an emulator is not obviously an upgrade here.
+
+Continua are stored and interpolated in the *log*: they are positive and span decades across
+the Teff range, so a log makes the interpolation accurate and the exponential guarantees the
+positivity that the light-fraction simplex depends on.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+
+from albireo.grids import LogGrid, air_to_vacuum, vacuum_to_air
+from albireo.operators import rebin_operator
+
+__all__ = [
+    "SUPPORTED_MEDIA",
+    "BoxInterpolator",
+    "SimplexInterpolator",
+    "SpectralLibrary",
+    "crossval_library",
+    "library_interpolator",
+    "line_core_medium",
+]
+
+SUPPORTED_MEDIA = ("air", "vacuum")
+"""The two wavelength scales a library may declare. There is no third option and no default."""
+
+
+# ---------------------------------------------------------------------------
+# The container
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SpectralLibrary:
+    """A grid of synthetic spectra, standardized for label fitting.
+
+    Build-time container: plain NumPy, no tracing. The traced object is the interpolator
+    that :func:`library_interpolator` builds from it.
+
+    Attributes
+    ----------
+    label_names
+        Names of the label axes, in the column order of ``nodes`` — e.g.
+        ``("teff", "logg", "mh")``. A grid computed at one fixed metallicity simply omits
+        that axis; the fit then requires ``mh`` to be ``Fixed``, and says so.
+    nodes
+        Label values at each node, shape ``(n_nodes, n_labels)``, in physical units
+        (K, dex, dex).
+    normalized
+        Continuum-normalized flux, shape ``(n_nodes, n_pix)``. Order matches ``nodes``.
+    log_continuum
+        Natural log of the continuum flux, same shape. Units are whatever the upstream
+        grid used; only *ratios between components* enter the model, so the unit cancels —
+        but two libraries mixed in one fit must share it, which ``meta["continuum_unit"]``
+        records and the fit checks.
+    wave
+        Wavelengths in Angstrom, shape ``(n_pix,)``, strictly increasing.
+    medium
+        ``"air"`` or ``"vacuum"``. Required.
+    meta
+        Provenance: grid name, upstream version, retrieval date, checksum, microturbulence,
+        continuum unit, licence, citation. Carried into every template file written from a
+        fit, because a template without its provenance is not reproducible.
+    """
+
+    label_names: tuple[str, ...]
+    nodes: np.ndarray
+    normalized: np.ndarray
+    log_continuum: np.ndarray
+    wave: np.ndarray
+    medium: str
+    meta: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        nodes = np.asarray(self.nodes, dtype=np.float64)
+        normalized = np.asarray(self.normalized, dtype=np.float64)
+        log_continuum = np.asarray(self.log_continuum, dtype=np.float64)
+        wave = np.asarray(self.wave, dtype=np.float64)
+        object.__setattr__(self, "label_names", tuple(self.label_names))
+        object.__setattr__(self, "nodes", nodes)
+        object.__setattr__(self, "normalized", normalized)
+        object.__setattr__(self, "log_continuum", log_continuum)
+        object.__setattr__(self, "wave", wave)
+
+        if self.medium not in SUPPORTED_MEDIA:
+            raise ValueError(
+                f"medium must be one of {SUPPORTED_MEDIA}, got {self.medium!r}. This is "
+                "required and has no default: air and vacuum differ by ~83 km/s, and the "
+                "upstream documentation is not reliable (BOSZ changed convention between "
+                "2017 and 2024 under one name). Use line_core_medium() to measure it."
+            )
+        if nodes.ndim != 2 or nodes.shape[1] != len(self.label_names):
+            raise ValueError(
+                f"nodes must be (n_nodes, {len(self.label_names)}) to match label_names "
+                f"{self.label_names}; got {nodes.shape}"
+            )
+        if normalized.shape != log_continuum.shape:
+            raise ValueError(
+                f"normalized {normalized.shape} and log_continuum {log_continuum.shape} "
+                "must have the same shape"
+            )
+        if normalized.shape != (nodes.shape[0], wave.size):
+            raise ValueError(
+                f"normalized must be (n_nodes, n_pix) = ({nodes.shape[0]}, {wave.size}); "
+                f"got {normalized.shape}"
+            )
+        if wave.ndim != 1 or wave.size < 2 or np.any(np.diff(wave) <= 0):
+            raise ValueError("wave must be 1-D, strictly increasing, with at least 2 points")
+        if not np.all(np.isfinite(normalized)) or not np.all(np.isfinite(log_continuum)):
+            raise ValueError("normalized and log_continuum must be finite everywhere")
+        if not np.all(np.isfinite(nodes)):
+            raise ValueError("nodes must be finite")
+        if nodes.shape[0] != len({tuple(row) for row in nodes}):
+            raise ValueError("nodes contains duplicate label vectors")
+
+    # -- geometry ----------------------------------------------------------
+
+    @property
+    def n_nodes(self) -> int:
+        """Number of grid nodes."""
+        return int(self.nodes.shape[0])
+
+    @property
+    def n_pix(self) -> int:
+        """Number of wavelength pixels."""
+        return int(self.wave.size)
+
+    @property
+    def bounds(self) -> dict[str, tuple[float, float]]:
+        """Per-label ``(min, max)`` over the nodes — the box a fit must stay inside."""
+        return {
+            name: (float(self.nodes[:, i].min()), float(self.nodes[:, i].max()))
+            for i, name in enumerate(self.label_names)
+        }
+
+    def axes(self) -> list[np.ndarray] | None:
+        """Sorted unique values per label axis if the nodes form a complete box, else None.
+
+        "Complete box" means the node set is exactly the Cartesian product of its axes —
+        the case for a BOSZ subset, and *not* the case for a grid whose corners are cut
+        away by physics, like POLLUX's OB models. :func:`library_interpolator` dispatches
+        on this.
+        """
+        axes = [np.unique(self.nodes[:, i]) for i in range(self.nodes.shape[1])]
+        if int(np.prod([a.size for a in axes])) != self.n_nodes:
+            return None
+        return axes
+
+    # -- transforms --------------------------------------------------------
+
+    def in_medium(self, medium: str) -> SpectralLibrary:
+        """The same library with wavelengths on the requested scale.
+
+        Converts the wavelength axis only — the fluxes are unchanged, since they are
+        tabulated *per pixel*, not per unit wavelength. Returns ``self`` when the medium
+        already matches, so this is free to call unconditionally.
+        """
+        if medium not in SUPPORTED_MEDIA:
+            raise ValueError(f"medium must be one of {SUPPORTED_MEDIA}, got {medium!r}")
+        if medium == self.medium:
+            return self
+        convert = air_to_vacuum if medium == "vacuum" else vacuum_to_air
+        return self.replace(wave=np.asarray(convert(self.wave), dtype=np.float64), medium=medium)
+
+    def sliced(self, wave_min: float, wave_max: float) -> SpectralLibrary:
+        """Restrict to a wavelength window, keeping one pixel of margin on each side."""
+        if not wave_max > wave_min:
+            raise ValueError("need wave_min < wave_max")
+        lo = int(np.searchsorted(self.wave, wave_min, side="right") - 1)
+        hi = int(np.searchsorted(self.wave, wave_max, side="left") + 1)
+        lo, hi = max(lo, 0), min(hi + 1, self.n_pix)
+        if hi - lo < 2:
+            raise ValueError(
+                f"window [{wave_min}, {wave_max}] Angstrom does not overlap the library, "
+                f"which spans [{self.wave[0]:.1f}, {self.wave[-1]:.1f}]"
+            )
+        return self.replace(
+            normalized=self.normalized[:, lo:hi],
+            log_continuum=self.log_continuum[:, lo:hi],
+            wave=self.wave[lo:hi],
+        )
+
+    def resampled_to(self, grid: LogGrid, *, medium: str) -> SpectralLibrary:
+        """Project onto a model grid, converting the wavelength scale on the way.
+
+        Flux-conserving pixel integration (:func:`albireo.operators.rebin_operator`), which
+        is the right tool going from a high-resolution library down to a model grid: a
+        point sample would alias the unresolved lines instead of averaging them. The box
+        average adds a broadening of ``dv/sqrt(12)`` — about 1 km/s at ``dv = 3.5`` km/s,
+        negligible in quadrature against any real LSF, and identical on both sides of the
+        comparison since the data are convolved by the same instrument profile.
+
+        This moves the *model* onto the data's grid. The data are never resampled.
+        """
+        library = self.in_medium(medium)
+        target = np.asarray(grid.wave, dtype=np.float64)
+        if library.wave[0] > target[0] or library.wave[-1] < target[-1]:
+            raise ValueError(
+                f"library spans [{library.wave[0]:.2f}, {library.wave[-1]:.2f}] Angstrom in "
+                f"{medium} and cannot cover the model grid "
+                f"[{target[0]:.2f}, {target[-1]:.2f}]. Fetch a wider band, or narrow the "
+                "analysis window."
+            )
+        operator = rebin_operator(library.wave, target)
+        apply = jax.jit(jax.vmap(operator))
+        return SpectralLibrary(
+            label_names=library.label_names,
+            nodes=library.nodes,
+            normalized=np.asarray(apply(jnp.asarray(library.normalized))),
+            log_continuum=np.asarray(apply(jnp.asarray(library.log_continuum))),
+            wave=target,
+            medium=medium,
+            meta={**library.meta, "resampled_to_grid": True},
+        )
+
+    def replace(self, **changes) -> SpectralLibrary:
+        """A copy with fields replaced (``dataclasses.replace``, re-validated)."""
+        fields = {
+            "label_names": self.label_names,
+            "nodes": self.nodes,
+            "normalized": self.normalized,
+            "log_continuum": self.log_continuum,
+            "wave": self.wave,
+            "medium": self.medium,
+            "meta": dict(self.meta),
+        }
+        fields.update(changes)
+        return SpectralLibrary(**fields)
+
+    def summary(self) -> str:
+        """A short human-readable description, including the provenance that matters."""
+        lines = [
+            f"SpectralLibrary: {self.n_nodes} nodes x {self.n_pix} pixels",
+            f"  wavelengths  {self.wave[0]:.2f} - {self.wave[-1]:.2f} Angstrom ({self.medium})",
+        ]
+        for name, (lo, hi) in self.bounds.items():
+            n_unique = np.unique(self.nodes[:, self.label_names.index(name)]).size
+            lines.append(f"  {name:<12} {lo:g} to {hi:g}  ({n_unique} values)")
+        lines.append(f"  geometry     {'complete box' if self.axes() else 'irregular coverage'}")
+        for key in ("grid", "version", "retrieved", "vmicro", "citation"):
+            if key in self.meta:
+                lines.append(f"  {key:<12} {self.meta[key]}")
+        return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Interpolators
+# ---------------------------------------------------------------------------
+
+
+def _axis_weights(axis: jax.Array, value, cubic: bool):
+    """Stencil indices and weights for one label axis.
+
+    Returns ``(idx, w)`` with ``idx`` of length 2 (linear) or 4 (Catmull-Rom). Both
+    reproduce a node *exactly*: at a node the fractional coordinate is exactly 0 and the
+    weight vector is exactly ``(1, 0, ...)``, so the gather returns the stored spectrum
+    bit-for-bit. The tests pin that with ``==``.
+    """
+    n = axis.shape[0]
+    i = jnp.clip(jnp.searchsorted(axis, value, side="right") - 1, 0, n - 2)
+    lo, hi = axis[i], axis[i + 1]
+    t = (value - lo) / (hi - lo)
+    if not cubic or n < 3:
+        return jnp.stack([i, i + 1]), jnp.stack([1.0 - t, t])
+    # Catmull-Rom in its uniform-parameter form: exact at t = 0 and t = 1.
+    t2, t3 = t * t, t * t * t
+    w_m1 = -0.5 * t3 + t2 - 0.5 * t
+    w_0 = 1.5 * t3 - 2.5 * t2 + 1.0
+    w_p1 = -1.5 * t3 + 2.0 * t2 + 0.5 * t
+    w_p2 = 0.5 * t3 - 0.5 * t2
+
+    # Edge cells need a phantom node. *Clamping* it to the end node (the usual quick fix)
+    # silently destroys linear reproduction there, which on a grid with only a handful of
+    # values per axis means the cubic loses to plain multilinear over a third of the range
+    # — measured, and the reason this is written out. Extrapolating the phantom linearly,
+    # f(-1) := 2 f(0) - f(1), keeps the interpolant exact on linear data everywhere.
+    at_low = i == 0
+    at_high = i == n - 2
+    w_0, w_p1 = (
+        jnp.where(at_low, w_0 + 2.0 * w_m1, w_0),
+        jnp.where(at_low, w_p1 - w_m1, w_p1),
+    )
+    w_m1 = jnp.where(at_low, 0.0, w_m1)
+    w_p1, w_0 = (
+        jnp.where(at_high, w_p1 + 2.0 * w_p2, w_p1),
+        jnp.where(at_high, w_0 - w_p2, w_0),
+    )
+    w_p2 = jnp.where(at_high, 0.0, w_p2)
+
+    idx = jnp.stack([jnp.maximum(i - 1, 0), i, i + 1, jnp.minimum(i + 2, n - 1)])
+    return idx, jnp.stack([w_m1, w_0, w_p1, w_p2])
+
+
+@jax.tree_util.register_pytree_node_class
+@dataclass(frozen=True)
+class BoxInterpolator:
+    """Separable interpolation on a complete axis-product grid.
+
+    Multilinear or Catmull-Rom cubic (the default), applied to the flux itself. Cubic is
+    worth the 4^k taps rather than 2^k: it is C^1 in the labels, which matters to both
+    L-BFGS and NUTS, it has local support so it cannot ring across a Balmer jump, and on
+    BOSZ's spacing it halves the interpolation error.
+
+    Call with a label vector; returns ``(normalized, log_continuum)``, each ``(n_pix,)``.
+    """
+
+    axes: tuple[jax.Array, ...]
+    normalized: jax.Array
+    log_continuum: jax.Array
+    cubic: bool = True
+
+    def __call__(self, labels):
+        labels = jnp.atleast_1d(jnp.asarray(labels, dtype=jnp.float64))
+        stencils = [_axis_weights(a, labels[i], self.cubic) for i, a in enumerate(self.axes)]
+        out = []
+        for values in (self.normalized, self.log_continuum):
+            acc = values
+            # Contract one axis at a time: gather the stencil, then weight it away.
+            for idx, w in stencils:
+                acc = jnp.tensordot(w, acc[idx], axes=(0, 0))
+            out.append(acc)
+        return out[0], out[1]
+
+    def hull_margin(self, labels):
+        """Signed distance into the box, in units of each axis span (>= 0 inside)."""
+        labels = jnp.atleast_1d(jnp.asarray(labels, dtype=jnp.float64))
+        margins = [
+            jnp.minimum(labels[i] - a[0], a[-1] - labels[i]) / jnp.maximum(a[-1] - a[0], 1e-30)
+            for i, a in enumerate(self.axes)
+        ]
+        return jnp.min(jnp.stack(margins))
+
+    def tree_flatten(self):
+        return (self.axes, self.normalized, self.log_continuum), self.cubic
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        return cls(axes=children[0], normalized=children[1], log_continuum=children[2], cubic=aux)
+
+
+@jax.tree_util.register_pytree_node_class
+@dataclass(frozen=True)
+class SimplexInterpolator:
+    """Barycentric interpolation over a Delaunay triangulation of scattered nodes.
+
+    For grids whose coverage is bounded by physics rather than by a box — POLLUX's OB
+    models have no cool-and-low-gravity corner, because such a star does not exist — so
+    the axis product is not the node set and :class:`BoxInterpolator` does not apply.
+
+    The triangulation is built once in NumPy; under trace, barycentric coordinates are
+    evaluated against *every* simplex by one batched affine map and the containing simplex
+    is the one whose minimum coordinate is largest. That is a few thousand flops for a
+    realistic grid, and it keeps the whole thing jit- and vmap-safe with no callbacks.
+    Outside the hull the weights are clipped and renormalized, which extrapolates flat
+    rather than diverging; :meth:`hull_margin` goes negative there so the fit can be told.
+    """
+
+    transform: jax.Array
+    simplices: jax.Array
+    scale: jax.Array
+    origin: jax.Array
+    normalized: jax.Array
+    log_continuum: jax.Array
+
+    def _barycentric(self, labels):
+        x = (jnp.atleast_1d(jnp.asarray(labels, dtype=jnp.float64)) - self.origin) / self.scale
+        k = x.shape[0]
+        offset = x[None, :] - self.transform[:, k, :]
+        first = jnp.einsum("sij,sj->si", self.transform[:, :k, :], offset)
+        return jnp.concatenate([first, 1.0 - jnp.sum(first, axis=1, keepdims=True)], axis=1)
+
+    def __call__(self, labels):
+        bary = self._barycentric(labels)
+        best = jnp.argmax(jnp.min(bary, axis=1))
+        weights = jnp.clip(bary[best], 0.0, None)
+        weights = weights / jnp.sum(weights)
+        idx = self.simplices[best]
+        return (
+            jnp.tensordot(weights, self.normalized[idx], axes=(0, 0)),
+            jnp.tensordot(weights, self.log_continuum[idx], axes=(0, 0)),
+        )
+
+    def hull_margin(self, labels):
+        """Largest minimum barycentric coordinate: ``>= 0`` inside the convex hull."""
+        return jnp.max(jnp.min(self._barycentric(labels), axis=1))
+
+    def tree_flatten(self):
+        children = (
+            self.transform,
+            self.simplices,
+            self.scale,
+            self.origin,
+            self.normalized,
+            self.log_continuum,
+        )
+        return children, None
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        return cls(*children)
+
+
+def library_interpolator(
+    library: SpectralLibrary, *, method: str = "auto"
+) -> BoxInterpolator | SimplexInterpolator:
+    """Build a differentiable interpolator over a library's nodes.
+
+    Parameters
+    ----------
+    library
+        The grid to interpolate. Already resampled onto the model grid, normally.
+    method
+        ``"auto"`` (default) picks a Catmull-Rom cubic when the nodes form a complete box
+        and barycentric interpolation when they do not. ``"linear"`` forces multilinear on
+        a box, ``"cubic"`` forces the cubic, and ``"simplex"`` forces the scattered path
+        even for a box — useful for measuring what the box structure is worth.
+
+    Returns
+    -------
+    BoxInterpolator or SimplexInterpolator
+        A callable pytree, safe to pass through ``jit`` as a traced model argument.
+    """
+    if method not in ("auto", "linear", "cubic", "simplex"):
+        raise ValueError(f"method must be auto, linear, cubic or simplex; got {method!r}")
+    axes = None if method == "simplex" else library.axes()
+
+    if axes is not None:
+        order = np.lexsort(tuple(library.nodes[:, i] for i in reversed(range(len(axes)))))
+        shape = tuple(a.size for a in axes)
+        return BoxInterpolator(
+            axes=tuple(jnp.asarray(a) for a in axes),
+            normalized=jnp.asarray(library.normalized[order].reshape(*shape, library.n_pix)),
+            log_continuum=jnp.asarray(library.log_continuum[order].reshape(*shape, library.n_pix)),
+            cubic=method != "linear",
+        )
+
+    if method in ("linear", "cubic"):
+        raise ValueError(
+            f"method={method!r} needs a complete axis-product grid, but this library's "
+            f"{library.n_nodes} nodes do not form one (its coverage is irregular). Use "
+            "method='auto' or 'simplex'."
+        )
+    from scipy.spatial import Delaunay  # scipy ships with jax; imported here to keep it local
+
+    origin = library.nodes.min(axis=0)
+    span = np.maximum(library.nodes.max(axis=0) - origin, 1e-30)
+    if library.nodes.shape[1] < 2:
+        raise ValueError(
+            "a one-label library is always a complete box; irregular coverage needs at "
+            "least two label axes"
+        )
+    tri = Delaunay((library.nodes - origin) / span)
+    # Published grids are lattices with pieces removed, and a lattice is exactly the
+    # cospherical configuration Qhull cannot triangulate uniquely: it emits some
+    # zero-volume simplices whose barycentric transform is NaN. Those cover nothing, so
+    # dropping them loses no domain — but keeping them would poison `argmax` and return a
+    # NaN spectrum. (Joggling the input instead would fix the degeneracy at the cost of
+    # moving the nodes, which would break exact node reproduction.)
+    usable = ~np.isnan(tri.transform).any(axis=(1, 2))
+    if not usable.any():
+        raise ValueError(
+            f"the Delaunay triangulation of these {library.n_nodes} nodes is entirely "
+            "degenerate; the labels are probably collinear or duplicated"
+        )
+    return SimplexInterpolator(
+        transform=jnp.asarray(tri.transform[usable]),
+        simplices=jnp.asarray(tri.simplices[usable], dtype=jnp.int32),
+        scale=jnp.asarray(span),
+        origin=jnp.asarray(origin),
+        normalized=jnp.asarray(library.normalized),
+        log_continuum=jnp.asarray(library.log_continuum),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Measuring what the interpolation costs
+# ---------------------------------------------------------------------------
+
+
+def crossval_library(library: SpectralLibrary, *, method: str = "auto", seed: int = 0) -> dict:
+    """Measure interpolation error by holding nodes out and predicting them.
+
+    This is the number that decides whether a library needs a learned emulator, and it is
+    a measurement rather than an argument. Published context for the same quantity: on a
+    250 K / 0.5 dex FGK grid, Meszaros & Allende Prieto (2013) report 0.051% for linear
+    and 0.031% for cubic flux interpolation, against roughly 0.1% for a Payne-style
+    network. A library that comes in near those numbers does not need one; a coarse,
+    strongly non-linear grid may.
+
+    For a complete box the held-out set is every other node along each axis, so the
+    surviving grid has *twice* the spacing — a deliberately pessimistic proxy, since the
+    real fit interpolates on the full grid. For irregular coverage a random fifth of the
+    nodes is held out and the triangulation rebuilt without them.
+
+    Returns
+    -------
+    dict
+        ``n_tested``, ``rms``, ``median``, ``p95``, ``max`` — fractional flux errors on
+        the normalized spectra — plus ``spacing`` (``"doubled"`` or ``"scattered"``) and
+        ``method``.
+    """
+    axes = library.axes()
+    if axes is not None and method != "simplex":
+        keep_values = [a[::2] if a.size >= 5 else a for a in axes]
+        keep = np.ones(library.n_nodes, dtype=bool)
+        for i, values in enumerate(keep_values):
+            keep &= np.isin(library.nodes[:, i], values)
+        spacing = "doubled"
+    else:
+        rng = np.random.default_rng(seed)
+        keep = np.ones(library.n_nodes, dtype=bool)
+        keep[rng.choice(library.n_nodes, size=max(1, library.n_nodes // 5), replace=False)] = False
+        spacing = "scattered"
+
+    if keep.sum() < 4 or (~keep).sum() == 0:
+        raise ValueError(
+            f"library has too few nodes ({library.n_nodes}) to hold any out for cross-validation"
+        )
+    reduced = library.replace(
+        nodes=library.nodes[keep],
+        normalized=library.normalized[keep],
+        log_continuum=library.log_continuum[keep],
+    )
+    interpolator = library_interpolator(reduced, method=method)
+    predict = jax.jit(jax.vmap(interpolator))
+
+    test = np.flatnonzero(~keep)
+    inside = np.asarray(jax.jit(jax.vmap(interpolator.hull_margin))(library.nodes[test])) >= 0.0
+    test = test[inside]
+    if test.size == 0:
+        raise ValueError("every held-out node fell outside the reduced grid; nothing to measure")
+    predicted = np.asarray(predict(library.nodes[test])[0])
+    error = predicted - library.normalized[test]
+    return {
+        "n_tested": int(test.size),
+        "rms": float(np.sqrt(np.mean(error**2))),
+        "median": float(np.median(np.abs(error))),
+        "p95": float(np.percentile(np.abs(error), 95)),
+        "max": float(np.max(np.abs(error))),
+        "spacing": spacing,
+        "method": method,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Measuring the wavelength medium
+# ---------------------------------------------------------------------------
+
+_MEDIUM_LINES: tuple[tuple[str, float], ...] = (
+    # Strong, isolated, and present in essentially every optical stellar spectrum.
+    # Vacuum wavelengths in Angstrom; the air counterparts are derived with albireo's own
+    # converter, so a library that agrees with one disagrees with the other by ~1.5 A.
+    ("H-delta", 4102.8991),
+    ("H-gamma", 4341.6837),
+    ("H-beta", 4862.6830),
+    ("Mg b1", 5185.0479),
+    ("Na D2", 5891.5833),
+    ("H-alpha", 6564.6127),
+)
+
+
+def line_core_medium(
+    wave, flux, *, window_angstrom: float = 3.0, decisive: float = 4.0
+) -> dict[str, Any]:
+    """Decide whether a spectrum is on the air or the vacuum scale, by measuring it.
+
+    Locates the core of each strong line in range, refines it by fitting a parabola to the
+    three samples around the minimum, and compares the result against both conventions.
+    The two differ by ~1.5 Angstrom in the optical while a correctly identified core lands
+    within a few hundredths, so the answer is not marginal — which is what makes this
+    worth doing instead of reading a README. BOSZ is the cautionary case: the 2017 release
+    was vacuum throughout and the 2024 release is air above 200 nm, under one name.
+
+    Parameters
+    ----------
+    wave, flux
+        A spectrum covering at least two of the reference lines. Normalized or not.
+    window_angstrom
+        Half-width of the search window around each reference position.
+    decisive
+        Required ratio between the losing and winning mean residuals. Below it the answer
+        is refused rather than guessed.
+
+    Returns
+    -------
+    dict
+        ``medium`` (``"air"`` or ``"vacuum"``), ``ratio``, ``n_lines``, and per-line
+        ``residuals`` in Angstrom for both conventions.
+
+    Raises
+    ------
+    ValueError
+        If fewer than two reference lines are covered, or the verdict is not decisive —
+        both of which mean "measure this another way", not "pick the likely one".
+    """
+    wave = np.asarray(wave, dtype=np.float64)
+    flux = np.asarray(flux, dtype=np.float64)
+    if wave.shape != flux.shape or wave.ndim != 1:
+        raise ValueError("wave and flux must be 1-D arrays of the same length")
+
+    residuals: dict[str, dict[str, float]] = {}
+    for name, vac in _MEDIUM_LINES:
+        air = float(vacuum_to_air(vac))
+        # Search around the midpoint so neither convention is favoured by the window.
+        center = 0.5 * (vac + air)
+        lo = int(np.searchsorted(wave, center - window_angstrom))
+        hi = int(np.searchsorted(wave, center + window_angstrom))
+        if hi - lo < 5 or lo == 0 or hi >= wave.size:
+            continue
+        k = lo + int(np.argmin(flux[lo:hi]))
+        if k <= 0 or k >= wave.size - 1:
+            continue
+        y0, y1, y2 = flux[k - 1], flux[k], flux[k + 1]
+        denominator = y0 - 2.0 * y1 + y2
+        shift = 0.5 * (y0 - y2) / denominator if denominator > 0 else 0.0
+        measured = wave[k] + shift * (wave[k + 1] - wave[k - 1]) * 0.5
+        residuals[name] = {"air": abs(measured - air), "vacuum": abs(measured - vac)}
+
+    if len(residuals) < 2:
+        raise ValueError(
+            "need at least two reference lines in range to measure the wavelength medium; "
+            f"the spectrum spans {wave[0]:.1f}-{wave[-1]:.1f} Angstrom and covered "
+            f"{len(residuals)}. Declare the medium explicitly instead."
+        )
+    means = {m: float(np.mean([r[m] for r in residuals.values()])) for m in SUPPORTED_MEDIA}
+    winner = min(means, key=means.__getitem__)
+    loser = next(m for m in SUPPORTED_MEDIA if m != winner)
+    ratio = means[loser] / max(means[winner], 1e-12)
+    if ratio < decisive:
+        raise ValueError(
+            f"the wavelength medium is not decisive: mean line-core residual "
+            f"{means['air']:.4f} A against air and {means['vacuum']:.4f} A against vacuum "
+            f"(ratio {ratio:.1f} < {decisive}). The lines may be too broad, too blended, or "
+            "too coarsely sampled to locate. Declare the medium explicitly."
+        )
+    return {
+        "medium": winner,
+        "ratio": float(ratio),
+        "n_lines": len(residuals),
+        "residuals": residuals,
+    }

@@ -149,4 +149,5 @@ jobs:
           uv run --no-sync python examples/08_forecast.py
           uv run --no-sync python examples/09_rv_table.py
           uv run --no-sync python examples/10_downstream.py
+          uv run --no-sync python examples/11_labels.py
           uv run --no-sync python examples/01_sb2_end_to_end.py

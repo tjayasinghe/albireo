@@ -39,6 +39,7 @@ nav:
       - Bring your own spectra (FITS to Dataset): tutorials/real-data.md
       - Disentangle a BLOeM SB2 end to end: tutorials/bloem-sb2.md
       - Propagate into Teff and log g: tutorials/downstream.md
+      - Turn a component into an RV template: tutorials/labels.md
   - Design: design.md
   - Mathematical foundations: math.md
   - Roadmap: roadmap.md
@@ -56,6 +57,8 @@ nav:
       - Companion scan: api/scan.md
       - Detection limits: api/calibrate.md
       - Observing forecasts: api/forecast.md
+      - Spectral libraries: api/library.md
+      - Stellar labels: api/match.md
       - Results and plotting: api/results.md
       - Downstream handoff: api/handoff.md
       - Simulator: api/simulate.md

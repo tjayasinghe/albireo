@@ -1312,4 +1312,168 @@ are what a wrong period, an unseen third body, or line-profile variability look 
 Sections 1–2 and the operator rows are implemented and tested in M0; §3–4 landed in M2;
 §7.1–7.4 landed in M3 (with §5 diagnostics); §6 and §7.5 landed in M4, except the §7.5
 response swap, which landed post-M5 (D33), as did the §1.4a correlated-noise chain
-(D34) and its §4.5a band assembly (D35).
+(D34) and its §4.5a band assembly (D35). §9 landed with D52–D55.
+
+## 9. Stellar labels from disentangled components (D52–D55)
+
+Everything above returns component *spectra*. This section is the forward model that turns one
+of those into four labels — $T_{\mathrm{eff}}$, $\log g$, [M/H], $v\sin i$ — against a
+published synthetic grid, so the component can be rendered as a template for epoch radial
+velocities elsewhere. It is implemented in `albireo.library` (grids and their interpolation)
+and `albireo.match` (the fit).
+
+The scope is deliberately narrow, and §9.6 states the accuracy that scope actually requires.
+This is not an atmospheric analysis and does not try to be one; `albireo.handoff` remains the
+route to GSSP, iSpec, Korg.jl and PySME for anything needing abundances or bespoke synthesis.
+
+### 9.1 What a disentangled component actually is
+
+Write $s_i$ for star $i$'s own-continuum normalized spectrum and $t_i = s_i - 1$ for its
+deviation. The observed composite, in the system's continuum, is
+
+$$F(\lambda) = 1 + \sum_i w_i(\lambda)\, t_i(\lambda), \qquad \sum_i w_i(\lambda) = 1,$$
+
+with $w_i$ the true, wavelength-dependent continuum light fraction. But §1.3's model fitted
+
+$$F(\lambda) = 1 + \sum_i \ell^0_i \, d_i(\lambda)$$
+
+with $\ell^0$ **assumed** and constant. Equating the two, what the disentangler recovered is
+
+$$\hat d_i \;=\; \frac{w_i(\lambda)}{\ell^0_i}\; t_i \;+\; n_i ,$$
+
+where $n_i$ collects the null-space contamination of §5.1 — the $\eta$-anchored $k=0$ constant
+and the low-$k$ exchange modes, which are **additive** and live in the continuum.
+
+Three consequences follow, and they are the whole design:
+
+1. Only the ratio $w_i/\ell^0_i$ is identified, never $w_i$ alone — §5.2's exact
+   $(\ell, d) \to (\ell/\alpha, \alpha d)$ degeneracy, restated. An error in the assumed
+   $\ell^0$ rescales every line depth, which is indistinguishable from a change in
+   $T_{\mathrm{eff}}$ *unless* the fit is given somewhere else to put it.
+2. $n_i$ is additive, so the nuisance absorbing it must be additive too. A multiplicative
+   continuum polynomial is identically zero wherever $t_i$ is zero, which is exactly where
+   $n_i$ lives, so it cannot represent it.
+3. The light fractions' *wavelength dependence* carries the light-ratio information. A
+   wavelength-independent dilution factor discards it.
+
+### 9.2 The forward model
+
+Per star, on the model grid of §1.1, with labels $\phi_i = (T_i, g_i, Z, \varsigma_i, v_i)$
+and one shared dilution scalar per companion:
+
+$$
+\begin{aligned}
+(N_i, \ln C_i) &= \mathcal{I}_i(T_i, g_i, Z) && \text{grid interpolation (§9.3)}\\
+t_i &= N_i - 1 \\
+t_i' &= K_{\mathrm{rot}}(\varsigma_i) \star K_{\mathrm{macro}} \star t_i && \text{intrinsic broadening}\\
+t_i'' &= B\, t_i' && \text{instrument profile, matched mode only}\\
+t_i''' &= T(\xi(v_i)/\Delta)\, t_i'' && \text{Doppler shift (§1.1)}\\
+w_i &= \frac{A_i\, e^{\ln C_i}}{\sum_j A_j\, e^{\ln C_j}}, \quad A_1 = 1,\; A_i = r_i^2 && \text{dilution}\\
+m_i &= \frac{w_i}{\ell^0_i}\, t_i''' \;+\; \sum_{m=0}^{M} a_{im} T_m(\tilde x) && \text{additive nuisance}
+\end{aligned}
+$$
+
+The dilution line is the load-bearing one. Written as a softmax over $\ln C_i + \ln A_i$ it
+enforces $\sum_i w_i(\lambda) = 1$ **at every pixel by construction** — no constraint site, no
+penalty, nothing to drift — and its wavelength dependence comes from the grids' own continua
+rather than from a fitted polynomial. This is GSSP's `gssp_binary` parameterization
+(Tkachenko 2015); treating the dilution as wavelength-independent instead was measured there
+to move a secondary's $T_{\mathrm{eff}}$ by 275 K. The single-component fallback replaces the
+softmax with one free scalar per component, which is `gssp_single`, and is strictly weaker.
+
+$a_{i0}$ **is** the unconstrained $k=0$ zero point of §5.1. It is fitted and then reported,
+never silently absorbed: a large fitted value says the disentangling zero point was biased,
+which is information rather than noise.
+
+**Rotational broadening.** $K_{\mathrm{rot}}$ is the Gray (2005) limb-darkened profile,
+*integrated over each pixel* rather than point-sampled. The profile has a square-root edge, so
+point sampling puts a kink of unbounded slope wherever the support boundary crosses a pixel;
+the pixel integral is $C^1$ in $v\sin i$ because $g(\pm 1) = 0$, which is what L-BFGS and NUTS
+need. It is *not* $C^2$ at half-integer $v\sin i/\Delta v$, where the edge lands exactly on a
+pixel boundary and that tap picks up a $|\delta|^{3/2}$ term. Both facts are measured in
+`tests/test_operators.py` rather than asserted.
+
+**Why the comparison is at matched resolution.** $\hat d$ is not the intrinsic spectrum: §1.3
+applies the LSF *inside* the epoch model, so $\hat d$ is a regularized partial deconvolution —
+faithful where the data had signal, shrunk toward zero where the smoothness prior dominated.
+Comparing an unbroadened model against it biases $v\sin i$ upward; applying the LSF to the
+model but not the data biases it downward. Convolving *both sides once* with the declared $B$
+compares in the space the data actually constrained. `compare="native"` is kept as a flag, and
+both must pass the closed loop. The LSF width itself is never fitted here: §1.3's
+identifiability argument does not stop applying because the model changed.
+
+### 9.3 Interpolation, and why not an emulator (yet)
+
+$\mathcal{I}$ interpolates the *flux*, never the model atmosphere, and the continuum in the
+log. On the 250 K / 0.5 dex spacing BOSZ actually uses, Mészáros & Allende Prieto (2013)
+measured 0.19% scatter for atmosphere interpolation against 0.051% for linear flux
+interpolation and 0.031% for a cubic — while a Payne-style network reaches about 0.1%. On a
+well-sampled FGK grid a differentiable cubic is therefore not a compromise; it is more
+accurate than the emulator, at zero training cost and with nothing to host.
+
+Two interpolants, chosen by geometry: separable Catmull-Rom on a complete axis product, and
+barycentric interpolation over a Delaunay triangulation when physics has cut the corners off
+the grid, as it has for the OB libraries. Both reproduce a node **exactly**, which is what
+lets the warm-start node scan and the continuous fit be compared on the same footing. The
+cubic's phantom end nodes are extrapolated linearly rather than clamped: clamping destroys
+linear reproduction in the edge cells, and on a grid with a handful of values per axis that
+loses to plain multilinear over a third of the range (measured).
+
+Whether a learned emulator is worth building is thus an empirical question about a particular
+grid, and `crossval_library` is the measurement that answers it — the same measure-first
+discipline as D49 and D50.
+
+### 9.4 Degeneracies, extending the §5.4 ledger
+
+| Degeneracy | Exact/approx | Broken by | albireo policy |
+|---|---|---|---|
+| $T_{\mathrm{eff}}$ vs. $\log g$ | approx, $\rho \approx 0.98$ with both free | an external $\log g$ | eclipsing binaries give $\log g$ to 0.01 dex from $M$ and $R$ — declare `logg=Fixed(...)`. Non-eclipsing: run free, fixed, and fixed-with-dilution, and report the spread. The correlation is *reported*, not hidden |
+| assumed $\ell^0$ vs. line depth vs. $T_{\mathrm{eff}}$ | exact for constant $\ell$ (§5.2) | joint fit of both components with $\sum w = 1$, wavelength-dependent | `RadiusRatio` is the default; `FixedDilution` is the diagnostic that shows what it was worth |
+| $v\sin i$ vs. instrumental width | near-exact (§5.4, restated) | nothing, within one instrument | LSF fixed at its declared value; a fitted $v\sin i$ below it is reported as not a measurement |
+| $v\sin i$ vs. macroturbulence | near-exact (widths add in quadrature) | line-shape detail at high $R$ | macroturbulence is *fixed*, not fitted; with the default 0 a fitted $v\sin i$ means "all broadening beyond the instrument", which is what a template needs |
+| [M/H] vs. microturbulence | approx | an external $\xi$ | $\xi$ is a property of the grid, echoed in `assumptions`, never silently defaulted — fixing it at 2 km/s when the truth is 10 costs ~0.5 dex in [M/H] (ZETA-PAYNE) |
+| $k=0$ zero point vs. line depth | exact (§5.1) | the additive nuisance | $a_{i0}$ fitted and reported; removing it exists only as the control that shows it matters |
+| $T_{\mathrm{eff}}$ vs. He abundance (OB) | approx | a He axis in the grid | not offered — the public OB grids fix He. Stated as a known systematic, since in 3900–4600 Å the He lines *are* the temperature diagnostic |
+
+### 9.5 Uncertainties, and why the formal one is not enough
+
+The Laplace covariance is the curvature of the potential at the MAP, projected to the
+constrained parameterization by the delta method. It answers "how sharp is the optimum", which
+is the wrong question here: the residuals of a disentangled component are correlated rather
+than white, because disentangling artifacts are structured across wavelength by construction
+(§5.1). Every code that has checked finds the same gap — Gebruers et al. (2022) report 70 K
+formal against 425 K realistic for B stars at S/N 150, and Czekala et al. (2015) find 5–10×
+once correlated residuals are modelled.
+
+So albireo quotes two numbers side by side and labels them. The honest one comes from refitting
+the labels once per **joint** posterior draw of the component spectra (`refit_draws`), which
+propagates exactly the correlations the formal error cannot see, including the low-$k$ exchange
+modes that trade flux between components. This internalizes the loop
+`albireo.handoff.export_draws` documents, without a round trip through an external code.
+
+A per-component jitter site is on by default and *bounded*. Its own maximum-likelihood point is
+the RMS residual, so on an over-good fit it runs to zero scale and takes the gradient norm with
+it; bounding it says the quoted per-pixel errors are wrong by at most a factor of five, which
+is an assumption worth stating anyway.
+
+### 9.6 The accuracy this has to reach
+
+A label from this mode is a *template coordinate*. The relevant question is not "is this the
+star's temperature" but "would a better label change the epoch radial velocities", and the
+literature answers that with a surprisingly loose bar:
+
+$$T_{\mathrm{eff}} \lesssim 2\text{–}3\%,\quad \log g \lesssim 0.15\ \mathrm{dex},\quad
+[\mathrm{M/H}] \lesssim 0.15\ \mathrm{dex},\quad v\sin i \lesssim 10\%.$$
+
+Posbic et al. (2012) measure a template 400–1000 K too warm to bias solar-type RVs by
+$\approx 0.2$ km/s — about FWHM/60 — with no loss of precision; Tkachenko et al. (2022) find
+LSD profile shapes insensitive to $\pm5\%$ in $T_{\mathrm{eff}}$ and $\pm0.3$–0.4 dex in
+$\log g$ and [M/H]. Every method in the literature already clears this bar, and so does the
+closed loop in `tests/test_match.py`.
+
+What a wrong template *does* cost is a **per-component constant velocity zero point** — the CfA
+SB2 orbits' $\gamma_1 - \gamma_2 = 0.35 \pm 0.55$ km/s and, pathologically, Gaia DR3's $-20$
+km/s for hot stars before mitigation (Blomme et al. 2023). That is the same
+one-zero-point-per-component quantity §5.3 and §7.6 already track. Framing this mode as fixing
+zero points, flux ratios and pathological mismatch — rather than as improving RV *precision* —
+is both the honest claim and the useful one.

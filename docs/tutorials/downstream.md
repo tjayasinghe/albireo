@@ -18,6 +18,19 @@ spectrum is dropped at exactly that joint, and the papers say so themselves:
 This page is about closing that gap. It has two halves: the half albireo can run for you,
 and the half that needs an atmosphere code installed.
 
+!!! tip "When four labels are enough"
+
+    If what you need is a *template* — the right synthetic spectrum to cross-correlate your
+    individual epochs against, not an abundance table — there is a shorter route that stays
+    inside albireo and never drops the uncertainty at a file boundary:
+    [Turn a component into an RV template](labels.md). It fits Teff, log g, [M/H] and
+    *v* sin *i* against a published grid, propagates the spectral posterior by refitting its
+    draws, and measures the light ratio on the way.
+
+    It does not replace this page. It fits four labels and nothing else: no abundances, no
+    microturbulence, no bespoke synthesis. When the answer belongs in a table, you still want
+    an atmosphere code, and everything below is how to reach one without losing the error bar.
+
 ## Why the file format is the hard part
 
 GSSP and iSpec disagree about nearly everything that can be got wrong quietly.

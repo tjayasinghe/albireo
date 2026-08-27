@@ -9,6 +9,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from scipy import integrate
 
 import albireo as ab
 
@@ -259,6 +260,160 @@ def test_rebin_operators_are_jit_compatible():
         return op(f)
 
     np.testing.assert_allclose(np.asarray(apply(op, f)), np.asarray(op(f)), rtol=1e-15)
+
+
+# ---------------------------------------------------------------------------
+# Rotational (v sin i) broadening
+# ---------------------------------------------------------------------------
+
+
+def rotation_profile(x, epsilon):
+    """Gray (2005) eq. 18.14 in half-width units — the oracle's integrand."""
+    if abs(x) >= 1.0:
+        return 0.0
+    return (
+        2.0 * (1.0 - epsilon) * np.sqrt(1.0 - x * x) + 0.5 * np.pi * epsilon * (1.0 - x * x)
+    ) / (np.pi * (1.0 - epsilon / 3.0))
+
+
+def rotation_kernel_oracle(vsini_px, radius, epsilon=0.6):
+    """Independent kernel: adaptive quadrature of the profile over each pixel.
+
+    ``scipy.integrate.quad`` with the support edges declared as break points. Fixed-rule
+    quadrature (Simpson, Gauss-Legendre) is *not* adequate here: the profile has a
+    square-root edge, so a rule that straddles it converges at O(h^1.5) and disagrees in
+    the 4th decimal — which is a statement about the rule, not about the kernel.
+    """
+    taps = []
+    for offset in range(-radius, radius + 1):
+        lo, hi = offset - 0.5, offset + 0.5
+        breaks = [p for p in (-vsini_px, vsini_px) if lo < p < hi]
+        taps.append(
+            integrate.quad(
+                lambda u: rotation_profile(u / vsini_px, epsilon) / vsini_px,
+                lo,
+                hi,
+                points=breaks or None,
+                limit=200,
+            )[0]
+        )
+    taps = np.asarray(taps)
+    return taps / taps.sum()
+
+
+@pytest.mark.parametrize("vsini_px", [0.7, 2.0, 5.5, 17.3])
+def test_rotational_kernel_matches_quadrature_oracle(vsini_px):
+    k = np.asarray(ab.rotational_kernel(vsini_px))
+    radius = (k.size - 1) // 2
+    np.testing.assert_allclose(k, rotation_kernel_oracle(vsini_px, radius), rtol=1e-12, atol=1e-15)
+
+
+@pytest.mark.parametrize("epsilon", [0.0, 0.3, 0.6, 1.0])
+def test_rotational_kernel_normalized_and_exactly_symmetric(epsilon):
+    k = np.asarray(ab.rotational_kernel(6.25, epsilon=epsilon))
+    assert k.size % 2 == 1
+    np.testing.assert_allclose(k.sum(), 1.0, rtol=1e-14)
+    # Exact invariant: the profile is even, so the taps mirror bit-for-bit.
+    assert np.array_equal(k, k[::-1])
+
+
+def test_rotational_kernel_rejects_bad_arguments():
+    with pytest.raises(ValueError):
+        ab.rotational_kernel(0.0)
+    with pytest.raises(ValueError):
+        ab.rotational_kernel(3.0, epsilon=1.5)
+    with pytest.raises(ValueError):
+        ab.rotational_kernel_traced(3.0, 0)
+
+
+def test_rotational_kernel_traced_matches_static():
+    for vsini_px in (1.5, 4.0, 9.0):
+        radius = (np.asarray(ab.rotational_kernel(vsini_px)).size - 1) // 2
+        static = np.asarray(ab.rotational_kernel(vsini_px))
+        traced = np.asarray(
+            jax.jit(ab.rotational_kernel_traced, static_argnums=1)(vsini_px, radius)
+        )
+        np.testing.assert_allclose(traced, static, rtol=1e-14, atol=1e-16)
+
+
+def _kernel_second_moment(vsini_px, radius):
+    """A functional of the whole kernel, so every tap carries gradient."""
+    k = ab.rotational_kernel_traced(vsini_px, radius)
+    return jnp.sum(k * jnp.arange(-radius, radius + 1, dtype=jnp.float64) ** 2)
+
+
+@pytest.mark.parametrize("vsini_px", [0.9, 3.0, 6.3, 12.0, 25.0, 41.7])
+def test_rotational_kernel_gradient_matches_finite_differences(vsini_px):
+    """The differentiability the optimizer relies on, measured rather than asserted."""
+    radius = ab.rotational_radius_for(300.0, 6.0)
+    analytic = float(jax.jit(jax.grad(_kernel_second_moment), static_argnums=1)(vsini_px, radius))
+    eps = 1e-6 * vsini_px
+    numeric = (
+        float(_kernel_second_moment(vsini_px + eps, radius))
+        - float(_kernel_second_moment(vsini_px - eps, radius))
+    ) / (2 * eps)
+    assert np.isfinite(analytic)
+    np.testing.assert_allclose(analytic, numeric, rtol=1e-6)
+
+
+@pytest.mark.parametrize("vsini_px", [7.5, 49.5])
+def test_rotational_kernel_is_c1_where_the_profile_edge_lands_on_a_pixel_edge(vsini_px):
+    """C^1 but not C^2 at half-integer widths — and C^1 is what L-BFGS and NUTS need.
+
+    When ``vsini_px`` is a half-integer the profile's support boundary coincides exactly
+    with a pixel boundary, and that tap picks up a ``|delta|^{3/2}`` term: the first
+    derivative exists (both one-sided limits agree with the analytic gradient) while the
+    second does not. Central differences therefore converge only as ``sqrt(eps)`` here,
+    which is a property of the profile's square-root edge, not an error — so the test
+    asserts *convergence toward* the analytic value instead of a fixed tolerance.
+    """
+    radius = ab.rotational_radius_for(300.0, 6.0)
+    analytic = float(jax.jit(jax.grad(_kernel_second_moment), static_argnums=1)(vsini_px, radius))
+    assert np.isfinite(analytic)
+
+    errors = []
+    for eps in (1e-4 * vsini_px, 1e-5 * vsini_px, 1e-6 * vsini_px):
+        one_sided = [
+            (
+                float(_kernel_second_moment(vsini_px + s * eps, radius))
+                - float(_kernel_second_moment(vsini_px, radius))
+            )
+            / (s * eps)
+            for s in (+1.0, -1.0)
+        ]
+        # both one-sided slopes approach the same value: the derivative exists
+        assert abs(one_sided[0] - one_sided[1]) < 0.02 * abs(analytic)
+        errors.append(max(abs(d - analytic) for d in one_sided))
+    assert errors[-1] < errors[0] / 5.0  # converging, at the sqrt(eps) rate
+    assert errors[-1] < 1e-3 * abs(analytic)
+
+
+def test_rotational_kernel_degenerates_to_delta():
+    radius = 6
+    k = np.asarray(ab.rotational_kernel_traced(1e-9, radius))
+    assert k[radius] == pytest.approx(1.0)
+    np.testing.assert_allclose(np.delete(k, radius), 0.0, atol=1e-15)
+    # the floor keeps the vsini -> 0 limit differentiable rather than NaN
+    g = jax.grad(lambda v: ab.rotational_kernel_traced(v, radius)[radius])(0.0)
+    assert np.isfinite(float(g))
+
+
+def test_rotational_broadening_conserves_equivalent_width():
+    """Rotation redistributes flux within a line; it must not create or destroy any."""
+    x = np.arange(N, dtype=np.float64)
+    line = -0.4 * gaussian(x, N / 2, 3.0)
+    out = np.asarray(ab.convolve_spectrum(jnp.asarray(line), ab.rotational_kernel(8.0)))
+    np.testing.assert_allclose(out.sum(), line.sum(), rtol=1e-12)
+    assert out.min() > line.min()  # shallower
+
+
+def test_rotational_radius_for_covers_the_bound():
+    radius = ab.rotational_radius_for(120.0, 8.0)
+    assert radius >= 120.0 / 8.0
+    # the bound's own kernel fits inside the radius it asks for
+    assert (np.asarray(ab.rotational_kernel(120.0 / 8.0)).size - 1) // 2 <= radius
+    with pytest.raises(ValueError):
+        ab.rotational_radius_for(0.0, 8.0)
 
 
 # ---------------------------------------------------------------------------

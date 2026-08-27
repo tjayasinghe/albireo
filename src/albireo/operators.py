@@ -38,6 +38,9 @@ __all__ = [
     "rebin_link_pair_tables",
     "rebin_operator",
     "rebin_pair_tables",
+    "rotational_kernel",
+    "rotational_kernel_traced",
+    "rotational_radius_for",
     "shift_spectrum",
     "shift_spectrum_adjoint",
 ]
@@ -168,6 +171,121 @@ def gauss_hermite_kernel_traced(sigma_px, h3, radius: int):
     h3_poly = (2.0 * jnp.sqrt(2.0) * u**3 - 3.0 * jnp.sqrt(2.0) * u) / jnp.sqrt(6.0)
     kernel = jnp.exp(-0.5 * u**2) * (1.0 + h3 * h3_poly)
     return kernel / jnp.sum(kernel)
+
+
+# ---------------------------------------------------------------------------
+# Rotational (v sin i) broadening
+# ---------------------------------------------------------------------------
+
+
+def _rotational_antiderivative(x, epsilon, xp):
+    """Exact antiderivative of the Gray rotation profile, ``A(x)`` with ``A(±1) = ±1/2``.
+
+    The profile itself (Gray 2005, eq. 18.14, in units of the half-width
+    ``Delta lambda_L``) is
+
+    ``g(x) = [2 (1 - eps) sqrt(1 - x^2) + (pi eps / 2) (1 - x^2)] / [pi (1 - eps/3)]``,
+
+    and ``A`` integrates it in closed form. ``g(±1) = 0``, so ``A`` is C^1 across the
+    edge of the support — which is what makes the *pixel-integrated* kernel below
+    differentiable in ``v sin i`` (see :func:`rotational_kernel_traced`).
+
+    ``xp`` is the array module (``numpy`` or ``jax.numpy``); the two kernel builders
+    share this one definition so the static and traced kernels cannot drift apart.
+    """
+    # Evaluate only inside the support and splice the constant tails on. The naive form
+    # is +inf - inf in the derivative at |x| = 1 (the sqrt and the arcsin each blow up,
+    # and only their sum is finite), so gradients would be NaN exactly at the clipped
+    # pixels — which is most of them. The inner `where` keeps a safe argument under the
+    # derivative; the outer one selects the true value.
+    inside = xp.abs(x) < 1.0
+    x_safe = xp.where(inside, x, 0.0)
+    root = xp.sqrt(1.0 - x_safe * x_safe)
+    value = (
+        (1.0 - epsilon) * (x_safe * root + xp.arcsin(x_safe))
+        + 0.5 * xp.pi * epsilon * (x_safe - x_safe**3 / 3.0)
+    ) / (xp.pi * (1.0 - epsilon / 3.0))
+    return xp.where(inside, value, xp.where(x > 0.0, 0.5, -0.5))
+
+
+def _rotational_radius(vsini_px) -> int:
+    """Static kernel radius covering a rotation profile of half-width ``vsini_px``."""
+    return max(1, int(np.ceil(float(vsini_px))) + 1)
+
+
+def rotational_kernel(vsini_px, *, epsilon: float = 0.6):
+    """Pixel-integrated limb-darkened rotation kernel, half-width ``vsini_px`` pixels.
+
+    On the uniform log-wavelength grid rotational broadening is stationary — the
+    profile's width in velocity is constant — so ``vsini_px = vsini_kms /
+    grid.dv_kms``, exactly as ``sigma_px`` works for :func:`gaussian_kernel`.
+
+    Each tap is the *integral* of the Gray profile over its pixel,
+    ``K_p = A((p + 1/2)/vsini_px) - A((p - 1/2)/vsini_px)``, not a point sample. That
+    is not a refinement: the profile has a square-root edge, so point sampling puts a
+    kink with unbounded slope wherever the support boundary crosses a pixel, and an
+    optimizer differentiating through it stalls. The integral is C^1 in ``v sin i``
+    because ``g(±1) = 0`` — which is what L-BFGS and NUTS need. It is *not* C^2 at
+    half-integer ``vsini_px``, where the support edge lands exactly on a pixel edge and
+    the tap picks up a ``|delta|^{3/2}`` term; the tests measure both facts.
+
+    The kernel has odd length ``2 * radius + 1`` with ``radius = ceil(vsini_px) + 1``,
+    and sums to exactly 1. ``epsilon`` is the linear limb-darkening coefficient
+    (default 0.6, Gray's canonical optical value); it changes the profile's shape by a
+    few percent and is not identifiable alongside ``v sin i`` at survey resolution.
+    """
+    vsini = float(vsini_px)
+    if vsini <= 0:
+        raise ValueError("vsini_px must be positive")
+    if not 0.0 <= epsilon <= 1.0:
+        raise ValueError("epsilon must lie in [0, 1]")
+    radius = _rotational_radius(vsini)
+    offsets = np.arange(-radius, radius + 1, dtype=np.float64)
+    hi = _rotational_antiderivative((offsets + 0.5) / vsini, epsilon, np)
+    lo = _rotational_antiderivative((offsets - 0.5) / vsini, epsilon, np)
+    kernel = hi - lo
+    return jnp.asarray(kernel / kernel.sum())
+
+
+def rotational_kernel_traced(vsini_px, radius: int, *, epsilon: float = 0.6):
+    """Rotation kernel with a *static* radius and a traced ``vsini_px``.
+
+    The jit-safe counterpart of :func:`rotational_kernel`, for inference over
+    ``v sin i``: the length ``2 * radius + 1`` is fixed at trace time while the taps
+    are differentiable in ``vsini_px``. Build the radius from the *upper bound* of the
+    ``v sin i`` prior — :func:`rotational_radius_for` does exactly that — since a
+    radius short of the realized half-width truncates the profile, and renormalization
+    then quietly redistributes the missing wings.
+
+    Degenerates gracefully as ``vsini_px -> 0``: all the weight collects in the central
+    tap and the kernel becomes a delta, with a vanishing gradient. That is the honest
+    identifiability floor rather than a failure — rotation far below the pixel scale
+    leaves no imprint to fit — and the caller is expected to report it (a fitted
+    ``v sin i`` below the instrumental width is not a measurement).
+    """
+    if radius < 1:
+        raise ValueError("radius must be at least 1")
+    if not 0.0 <= epsilon <= 1.0:
+        raise ValueError("epsilon must lie in [0, 1]")
+    offsets = jnp.arange(-radius, radius + 1, dtype=jnp.float64)
+    # A floor keeps the division finite at vsini_px == 0; the profile there is already
+    # a delta, so the floor changes no value, only the (correctly vanishing) gradient.
+    scale = jnp.maximum(jnp.asarray(vsini_px, dtype=jnp.float64), 1e-12)
+    hi = _rotational_antiderivative((offsets + 0.5) / scale, epsilon, jnp)
+    lo = _rotational_antiderivative((offsets - 0.5) / scale, epsilon, jnp)
+    kernel = hi - lo
+    return kernel / jnp.sum(kernel)
+
+
+def rotational_radius_for(vsini_max_kms: float, dv_kms: float) -> int:
+    """Static kernel radius covering every ``v sin i`` up to ``vsini_max_kms``.
+
+    The bound the traced kernel's contract asks for, in the units a caller actually
+    has: the upper end of the ``v sin i`` prior and the grid's pixel width.
+    """
+    if not vsini_max_kms > 0 or not dv_kms > 0:
+        raise ValueError("vsini_max_kms and dv_kms must be positive")
+    return _rotational_radius(vsini_max_kms / dv_kms)
 
 
 def convolve_spectrum(flux, kernel):
