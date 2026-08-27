@@ -2318,3 +2318,78 @@ The M5 tables stand as history, now labeled with what their machine was: an earl
 stack unrecorded. The accuracy story is unchanged and is now double-confirmed by exact
 replication: ~2× on shape, the same *k* = 0 null space in all three codes, and a posterior
 from exactly one of them.
+
+## The incumbent's repository, feature for feature (2026-08-27)
+
+Everything above compares *algorithms*: the clean-room `scripts/shift_and_add.py` implements
+González & Levato's recurrence and nothing else, which is what makes the three-way table a
+statement about methods rather than about codebases. This section records the comparison one
+level up — the repository most of the field actually runs,
+[`TomerShenar/Disentangling_Shift_And_Add`](https://github.com/TomerShenar/Disentangling_Shift_And_Add),
+examined as software: what it provides, how it is distributed, and which differences from
+albireo are differences in kind rather than in degree.
+
+**Provenance first, because the clean room has to survive this page.** Everything below comes
+from the repository's README and the GitHub API; **the source files were never opened**, for
+the same reason `scripts/shift_and_add.py` was written from the papers: the repository has no
+license (`"license": null` from the API, checked 2026-08-27), so reading it would contaminate
+the one implementation of this algorithm that albireo can legally maintain. Anyone who does
+open it should not afterwards edit `scripts/shift_and_add.py`. Where the rule limits what this
+page can claim, the limit is stated rather than papered over.
+
+**What the repository is.** A set of Python research scripts, configured by editing
+`Input_disentangle.py` and run as `python disentangle_shift_and_add.py`, with the core in
+`Disentangling/disentangle_functions.py`. Around the recurrence it provides what a working
+research tool needs: a χ² grid over the semi-amplitudes — K₁ and K₂, and K₃, since it
+supports triples — given (P, T0, e, ω) from elsewhere; a negativity constraint against
+spurious emission features; multi-instrument input in ASCII or FITS; mock-data generators for
+SB2s and SB3s; and plotting utilities. V2.0 is dated September 2023, the last commit
+2024-03-07; at the check date it had 10 stars, 2 forks and 1 open issue. It cites González &
+Levato (2006) for the algorithm and asks users to cite Shenar et al. 2020 (A&A 639, A6) and
+2022 (A&A 665, A148) — both already in `paper/paper.bib`. This is the code behind the LB-1
+and HR 6819 companion identifications, which is why this page calls it the incumbent.
+
+**What the numbers above do and do not cover.** The three-way table measured the shared core
+— the published recurrence under the paper's own stopping rule, orbit fixed at truth — so its
+RMS and wall values carry over to the incumbent's *algorithm*, not to the incumbent's *code*:
+the negativity constraint and the χ² grid sit on top of that core and were never run here, and
+under the provenance rule they cannot be reimplemented from the source either. A head-to-head
+against the repository as it ships would be legitimate (running unlicensed code is fine; it is
+deriving from it that is not) and remains undone.
+
+| | `Disentangling_Shift_And_Add` | albireo |
+|---|---|---|
+| orbit | χ² grid over (K₁, K₂[, K₃]); P, T0, e, ω supplied | joint inference of every orbital site, gradient-based, with NUTS |
+| uncertainty on K | χ² map over the grid | posterior draws |
+| uncertainty on spectra | none | pointwise band, and draws from the joint posterior |
+| the *k* = 0 null space | suppressed by the negativity constraint | pinned by the smoothness prior; reported as the leading mode by the forecast |
+| contaminated pixels | masking/weights (in the published method) | the same masking, plus telluric and nebular *components* when masking would discard the science |
+| triples | yes, K₃ in the grid | yes at the expert level (hierarchical outer orbit); the façade refuses it in v1 |
+| validation | mock-data generators | closed-loop gates in CI against packaged truth, plus calibrated detection |
+| distribution | scripts + a config file; no license, no package, no tests | BSD-3-Clause package on PyPI, CI, docs, tutorials |
+
+Three sentences survive that table. The differences in *degree* are the measured ones above:
+about 2× on aligned shape, and the fastest wall in the comparison belongs to the incumbent's
+algorithm — a handful of shifts and means should win, and does. The difference in *kind* is
+the same column no handicap equalizes in the three-way table: an uncertainty on the
+disentangled spectra, which no code in [the roadmap's survey](roadmap.md) produces. And the
+difference in *practice* is the license line: the incumbent cannot be vendored, forked, or
+legally built upon, which is simultaneously why the clean room exists, a real barrier for
+anyone extending the method, and the opening the roadmap names. Nobody is doing anything
+wrong — disentangling is a means to an end for its authors, and the software is a by-product
+of the science — but a comparison page should record the state of the shelf, not only of the
+algorithms.
+
+The masking row deserves its earlier caveat repeated: weights and rejection are *inside* the
+published method, so masking is not an albireo advantage and is not presented as one. What
+differs is what happens when masking would throw away the pixels the science needs — a
+nebular line sitting in Hβ — where albireo models the contaminant instead
+([D40](design.md): unmodelled, it moves K₂ by −59% and reports a circular orbit at e = 0.95,
+so the choice reaches the masses, not just the atmospheres).
+
+One connection worth recording: BLOeM, the survey behind
+[the BLOeM tutorial](tutorials/bloem-sb2.md), is led by the incumbent's author, and its 59
+published SB2s have no orbital solutions — exactly the case `Disentangler(velocities=...)`
+was built for (D48). In practice the two codes are not rivals so much as stages: the
+incumbent's shift-and-add is how several of those systems were found, and albireo is aimed at
+what comes after — the orbit, the spectra, and the error bars on both.

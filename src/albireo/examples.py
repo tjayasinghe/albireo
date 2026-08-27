@@ -61,7 +61,7 @@ _EXAMPLES: dict[str, _Example] = {
     "sb2_sim": _Example(
         name="sb2_sim",
         description=(
-            "A simulated double-lined binary: 12 epochs of a P = 6 d circular SB2 on one "
+            "A simulated double-lined binary: 12 epochs of a P = 6 d, e = 0.15 SB2 on one "
             "instrument, S/N 80, with the injected truth included. Ships with the package; "
             "no download."
         ),

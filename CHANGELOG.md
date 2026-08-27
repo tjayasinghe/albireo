@@ -11,6 +11,38 @@ This file records *what changed*. The reasons live elsewhere and are worth follo
 
 ## [Unreleased]
 
+### Added
+
+- **`docs/tutorials/showcase.ipynb` — an executed notebook touring every headline output**
+  on the packaged example: `explain()`, the fit summary, the component spectra with their
+  uncertainty band, the residual diagnostics, the NUTS posterior (RV-curve draws and a
+  corner plot), spectra drawn from the joint posterior, and a sensitivity forecast with
+  six planned epochs against the twelve in hand. Rendered into the docs site by
+  `mkdocs-jupyter`, which had been a declared docs dependency since the D39 block without
+  ever being configured; `execute: false`, so the committed outputs are what the site
+  shows and the docs build stays cheap and offline. `scripts/build_showcase_notebook.py`
+  regenerates it (a release-time step, ~10 minutes of NUTS), strips kernel-environment
+  noise from the outputs, and palette-quantizes the figures — 884 → 373 KiB, under the
+  500 kB pre-commit file-size limit.
+- **A feature-level comparison against the incumbent's repository** in
+  [`docs/benchmarks.md`](docs/benchmarks.md) ("The incumbent's repository, feature for
+  feature"): `TomerShenar/Disentangling_Shift_And_Add` examined as *software* — the
+  three-way table already compares the algorithms — covering the orbit treatment (a χ²
+  grid over semi-amplitudes against joint inference), uncertainty (χ² contours on K, and
+  nothing on the spectra, against posteriors on both), SB3 support, masking (in the
+  published method, so deliberately not claimed as an albireo advantage), and
+  distribution (unlicensed research scripts against a BSD-3 package). Written from the
+  repository's README and GitHub API metadata only; the source was never opened, so the
+  clean-room provenance of `scripts/shift_and_add.py` survives the comparison.
+
+### Fixed
+
+- `example_info("sb2_sim")` described the packaged example as a "circular SB2". It is
+  deliberately eccentric — e = 0.15, precisely so that the first thing a new user runs
+  never starts at the `(sqrt(e) cos w, sqrt(e) sin w)` singularity — and the generator
+  script says so in a comment while the registry description contradicted it. The
+  description now states e = 0.15.
+
 ### Changed
 
 - **Gradients are ~2x faster, and the answers are bit-identical.** Two exact changes in
