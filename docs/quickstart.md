@@ -101,9 +101,23 @@ the summary says so: the orbital credible intervals do not include smoothness un
 ## Look at what came out
 
 ```python
+import numpy as np
+
 d_hat = fit.spectra()          # (2, n_pix) component deviation spectra
 std = fit.std()                # pointwise posterior uncertainty
-fig, axes = ab.plot_spectra(dis.grid, d_hat, std=std, truth=truth["components"])
+
+# The truth was generated on its own grid, which is not the one the model was solved on:
+# `dis.grid` is widened by the velocity budget and the LSF radius, and takes its sampling
+# from the data. Resample before overlaying, or plot_spectra will tell you to.
+truth_grid = ab.LogGrid(x0=truth["grid_x0"], dx=truth["grid_dx"], n=int(truth["grid_n"]))
+truth_on_model = np.stack(
+    [
+        np.interp(dis.grid.wave, truth_grid.wave, component, left=0.0, right=0.0)
+        for component in truth["components"]
+    ]
+)
+
+fig, axes = ab.plot_spectra(dis.grid, d_hat, std=std, truth=truth_on_model)
 ```
 
 **Read the band, not the line.** Between the lines, and anywhere the epochs give little

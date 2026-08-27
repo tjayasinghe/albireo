@@ -197,7 +197,10 @@ def plot_spectra(grid, spectra, *, std=None, truth=None, labels=None, axes=None,
         Pointwise standard deviations matching a ``(n_comp, n_pix)`` mean, e.g. from
         :func:`albireo.likelihood.spectra_std`.
     truth
-        Optional injected truth, shape ``(n_comp, n_pix)``, for simulated data.
+        Optional injected truth, shape ``(n_comp, n_pix)``, for simulated data. It must
+        already be on ``grid``. A simulation stores its truth on the grid it was generated
+        on, which is *not* the grid the model was solved on, so resample it first --
+        ``np.interp(grid.wave, truth_grid.wave, component, left=0.0, right=0.0)``.
     labels
         Component names for the y-axis; defaults to ``d_1``, ``d_2``, ...
     axes
@@ -229,6 +232,18 @@ def plot_spectra(grid, spectra, *, std=None, truth=None, labels=None, axes=None,
             "they must come from the same fit."
         )
 
+    if truth is not None:
+        truth = np.asarray(truth)
+        if truth.shape[-1] != wave.size:
+            raise ValueError(
+                f"truth has {truth.shape[-1]} pixels but the grid has {wave.size}. "
+                "A simulation's truth is stored on the grid it was generated on, which is "
+                "not the grid the model was solved on -- the model grid is widened by the "
+                "velocity budget and the LSF radius, and its sampling comes from the data. "
+                "Resample it first: np.interp(grid.wave, truth_grid.wave, component, "
+                "left=0.0, right=0.0) per component."
+            )
+
     n_comp = mean.shape[0]
     if axes is None:
         fig, axes = plt.subplots(n_comp, 1, figsize=(9.0, 3.0 * n_comp), sharex=True, squeeze=False)
@@ -252,7 +267,7 @@ def plot_spectra(grid, spectra, *, std=None, truth=None, labels=None, axes=None,
             )
         ax.plot(wave, offset + mean[i], color=color, lw=1.0, label="posterior mean")
         if truth is not None:
-            ax.plot(wave, offset + np.asarray(truth)[i], "k--", lw=0.8, label="truth")
+            ax.plot(wave, offset + truth[i], "k--", lw=0.8, label="truth")
         default = f"$1 + d_{{{i + 1}}}$" if flux else f"$d_{{{i + 1}}}$"
         ax.set_ylabel(labels[i] if labels is not None else default)
         ax.legend(fontsize=8, loc="lower right", ncol=3)

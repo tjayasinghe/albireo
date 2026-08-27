@@ -82,6 +82,17 @@ This file records *what changed*. The reasons live elsewhere and are worth follo
 
 ### Fixed
 
+- **`docs/quickstart.md` overlaid the injected truth on the wrong wavelength grid.** A
+  simulation's truth is stored on the grid it was *generated* on; the model is solved on a
+  grid that is widened by the velocity budget and the LSF radius and takes its sampling from
+  the data. On the packaged example those are 663 and 1074 pixels, so the quickstart's final
+  plotting call raised from inside matplotlib. The doc now resamples first, as
+  `scripts/build_showcase_notebook.py` already did, and `plot_spectra` validates `truth`
+  against the grid the way it already validated the mean — the error now names the trap and
+  gives the one-line fix instead of reporting a shape mismatch. Had the two grids happened to
+  agree in length, the old code would have silently plotted the truth against the wrong
+  wavelengths, which is the failure worth guarding against.
+
 - `example_info("sb2_sim")` described the packaged example as a "circular SB2". It is
   deliberately eccentric — e = 0.15, precisely so that the first thing a new user runs
   never starts at the `(sqrt(e) cos w, sqrt(e) sin w)` singularity — and the generator

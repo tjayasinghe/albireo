@@ -124,6 +124,19 @@ def test_plot_spectra_rejects_a_grid_mismatch(small_grid):
         plotting.plot_spectra(small_grid, np.zeros((2, small_grid.n + 3)))
 
 
+def test_plot_spectra_rejects_a_truth_on_a_different_grid(small_grid):
+    """A simulation's truth lives on the grid it was generated on, not the model's.
+
+    Nothing downstream can catch this: the arrays are both (n_comp, n_pix)-shaped and only
+    the pixel count differs, so an unchecked overlay either dies inside matplotlib with a
+    message about x and y, or -- if the counts happen to agree -- silently plots the truth
+    against the wrong wavelengths.
+    """
+    mean = np.zeros((2, small_grid.n))
+    with pytest.raises(ValueError, match="Resample it first"):
+        plotting.plot_spectra(small_grid, mean, truth=np.zeros((2, small_grid.n - 5)))
+
+
 def test_plot_spectra_rejects_a_bad_rank(small_grid):
     with pytest.raises(ValueError, match="must have shape"):
         plotting.plot_spectra(small_grid, np.zeros(small_grid.n))
