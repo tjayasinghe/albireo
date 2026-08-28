@@ -13,6 +13,34 @@ This file records *what changed*. The reasons live elsewhere and are worth follo
 
 ### Added
 
+- **Named synthetic grids, downloaded and cached — `fetch_library` (D52).** The label mode
+  shipped able to fit any library you could construct, and with no way to obtain one. Three
+  named grids are now registered: `bosz2024-fgk-r20000` (BOSZ 2024 MARCS, Teff 4000–7000 K in
+  250 K steps, log g 3–5, [M/H] −1→+0.5; 455 nodes over 4000–7000 Å), `bosz2024-fgk-rvs` (the
+  same nodes in the Gaia RVS window), and `pollux-ob-smc24` (POLLUX CMFGEN, SMC metallicity).
+  New names: `fetch_library`, `library_names`, `library_info`, `clear_library_cache`,
+  `ingest_bosz`, `ingest_pollux`, `save_library`, `load_library`. Still no new dependencies —
+  both grids are plain ASCII, so nothing here needs astropy.
+
+  BOSZ builds automatically because its URLs on MAST are deterministic; the shards download in
+  parallel, the raw files are kept so re-cutting another band costs nothing, and the result is
+  sliced to the registered band. POLLUX serves its collections through a form that posts to
+  `/download/`, so `ingest_pollux` explains the manual step and stops rather than shipping a
+  parser written against a file format nobody has inspected.
+
+  Three details of the archive were checked against it rather than read off the documentation,
+  and two were not what a careful reading gives: **Teff is not zero-padded** in a BOSZ filename
+  (`t6000`, not `t06000`), and the **atmosphere code changes across the grid** — MARCS spherical
+  below log g 3.5, plane-parallel at and above it, ATLAS9 above 8000 K. Both are pinned by
+  tests. The third is the medium: a build measures it with `line_core_medium` and refuses to
+  reconcile a disagreement with the registry, which on the real grid returns *air* at a ratio of
+  256 to 1.
+
+  A cached build is verified on every load against a digest taken over the arrays rather than
+  the file, so it survives a save/load round trip and is reproducible across machines. The build
+  path reads back what it wrote, so a warm cache and a cold one return bit-identical arrays
+  instead of differing in the last digits by whether the fluxes had been through float32 yet.
+
 - **Stellar labels for template selection — `albireo.match` and `albireo.library` (D52, D53).**
   A new optional mode that fits Teff, log g, [M/H] and *v* sin *i* to disentangled component
   spectra against published synthetic grids, so a component can be rendered as a template for

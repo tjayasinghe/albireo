@@ -10,6 +10,10 @@ Nothing here needs the network. Libraries are generated in-test from an analytic
 the air/vacuum measurement is exercised on spectra built with a known convention.
 """
 
+import dataclasses
+import gzip
+import io
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -17,6 +21,7 @@ import pytest
 from scipy.interpolate import LinearNDInterpolator, RegularGridInterpolator
 
 import albireo as ab
+from albireo import library as lib_mod
 from albireo.library import (
     BoxInterpolator,
     SimplexInterpolator,
@@ -443,3 +448,266 @@ def test_interpolators_survive_a_jit_boundary_as_arguments(library, punched_libr
         out = evaluate(interpolator, jnp.asarray([4700.0, 4.0, -0.2]))
         assert out.shape == (lib.n_pix,)
         assert out.dtype == jnp.float64  # x64 must survive the round trip
+
+
+# ---------------------------------------------------------------------------
+# the registry: naming, caching, and downloads that never touch the network
+# ---------------------------------------------------------------------------
+#
+# Everything checkable offline is checked offline, in the shape tests/test_archive.py uses:
+# a fake transport, not a recorded cassette. The BOSZ URL facts were confirmed against the
+# live archive on 2026-08-27 and are pinned here so a silent change upstream shows up as a
+# failing test rather than as a wrong spectrum.
+
+
+def _fake_bosz_shard(n_pix, seed=0):
+    """Two whitespace columns, flux and continuum, gzipped -- the real BOSZ layout."""
+    rng = np.random.default_rng(seed)
+    continuum = 1e6 * np.exp(-0.3 * np.linspace(0.0, 1.0, n_pix))
+    flux = continuum * (1.0 - 0.4 * rng.random(n_pix))
+    buffer = io.BytesIO()
+    with gzip.GzipFile(fileobj=buffer, mode="wb") as handle:
+        np.savetxt(handle, np.column_stack([flux, continuum]), fmt="%.6e")
+    return buffer.getvalue()
+
+
+@pytest.fixture
+def offline_registry(monkeypatch, tmp_path):
+    """A tiny BOSZ-shaped library whose downloads are served from memory."""
+    monkeypatch.setenv("ALBIREO_DATA_DIR", str(tmp_path))
+    wave = np.linspace(4000.0, 7000.0, 400)
+    entry = dataclasses.replace(
+        lib_mod._LIBRARIES["bosz2024-fgk-r20000"],
+        name="test-grid",
+        axes={"teff": [5000.0, 5250.0], "logg": [4.0, 4.5], "mh": [0.0, 0.25]},
+        download_mb=1.0,
+    )
+    monkeypatch.setitem(lib_mod._LIBRARIES, "test-grid", entry)
+
+    calls: list[str] = []
+
+    def fake_download(url, destination, attempts=4):
+        calls.append(url)
+        if url.endswith(".txt"):  # the shared wavelength grid
+            destination.write_text("\n".join(f"{w:.7e}" for w in wave))
+        else:
+            destination.write_bytes(_fake_bosz_shard(wave.size, seed=len(calls)))
+
+    monkeypatch.setattr(lib_mod, "_download_with_retries", fake_download)
+    # The medium check needs real line cores; a random spectrum has none, so it declines to
+    # answer rather than guessing -- which is the branch this fixture exercises.
+    return entry, calls
+
+
+def test_the_registry_lists_what_it_can_build():
+    names = ab.library_names()
+    assert "bosz2024-fgk-r20000" in names
+    assert names == sorted(names)
+
+
+@pytest.mark.parametrize("name", ab.library_names())
+def test_every_entry_carries_its_provenance(name):
+    """A library without a licence and a citation is not redistributable or publishable."""
+    info = ab.library_info(name)
+    for key in ("description", "licence", "citation", "medium", "wave_range", "upstream_note"):
+        assert info[key], f"{name} is missing {key}"
+    assert info["wave_range"][0] < info["wave_range"][1]
+    assert info["caveats"], f"{name} records no caveats, which is never true of a real grid"
+
+
+def test_an_unknown_name_lists_the_known_ones():
+    with pytest.raises(KeyError, match="bosz2024-fgk-r20000"):
+        ab.library_info("no-such-grid")
+
+
+def test_bosz_urls_match_the_archive():
+    """Pinned against files fetched from MAST on 2026-08-27.
+
+    Two of these are not what a careful reading of the documentation would give: Teff is
+    not zero-padded, and the atmosphere code changes across the grid. Both were wrong in
+    the first draft of the builder and cost a 404 each.
+    """
+    url = lib_mod._bosz_url(6000.0, 4.0, 0.0, alpha=0.0, carbon=0.0, vmicro=2, resolution=20000)
+    assert url == (
+        "https://archive.stsci.edu/hlsps/bosz/bosz2024/r20000/m+0.00/"
+        "bosz2024_mp_t6000_g+4.0_m+0.00_a+0.00_c+0.00_v2_r20000_resam.txt.gz"
+    )
+    assert "_t6000_" in url and "_t06000_" not in url
+
+
+@pytest.mark.parametrize(
+    ("teff", "logg", "code"),
+    [
+        (4000.0, 3.0, "ms"),  # MARCS spherical below log g 3.5
+        (4000.0, 3.5, "mp"),  # plane-parallel at and above it
+        (7000.0, 4.5, "mp"),
+        (8000.0, 4.0, "mp"),  # MARCS wins the 7500-8000 overlap, so one family throughout
+        (9000.0, 4.0, "ap"),  # ATLAS9 above it
+    ],
+)
+def test_the_atmosphere_code_follows_the_archive(teff, logg, code):
+    assert lib_mod._bosz_atmosphere(teff, logg) == code
+
+
+def test_a_build_downloads_once_and_is_cached(offline_registry):
+    _, calls = offline_registry
+    first = ab.fetch_library("test-grid", progress=False)
+    assert first.nodes.shape == (8, 3)
+    assert len(calls) == 9  # eight nodes and one shared wavelength grid
+
+    second = ab.fetch_library("test-grid", progress=False)
+    assert len(calls) == 9, "a cache hit must not touch the network"
+    # Bit-identical, not merely close: the build path reads back what it wrote, so a warm
+    # cache and a cold one cannot return different precision.
+    assert np.array_equal(first.normalized, second.normalized)
+    assert np.array_equal(first.log_continuum, second.log_continuum)
+
+
+def test_the_build_is_reproducible_across_machines(offline_registry):
+    """The digest is over the arrays, not the file, so npz framing cannot change it."""
+    built = ab.fetch_library("test-grid", progress=False)
+    digest = built.meta["content_sha256"]
+    assert digest == lib_mod._content_digest(built)
+
+    path = lib_mod._library_cache_path(lib_mod._LIBRARIES["test-grid"])
+    reloaded = lib_mod.load_library(path)
+    assert lib_mod._content_digest(reloaded) == digest
+
+
+def test_a_corrupted_cache_is_caught_and_named(offline_registry):
+    ab.fetch_library("test-grid", progress=False)
+    path = lib_mod._library_cache_path(lib_mod._LIBRARIES["test-grid"])
+    with np.load(path, allow_pickle=True) as handle:
+        contents = {key: handle[key] for key in handle}
+    contents["normalized"] = contents["normalized"] * 1.01
+    np.savez_compressed(path, **contents)
+
+    with pytest.raises(RuntimeError, match="clear_library_cache"):
+        ab.fetch_library("test-grid", progress=False)
+
+
+def test_an_interrupted_download_never_becomes_a_cache_entry(offline_registry, monkeypatch):
+    def explode(url, destination, attempts=4):
+        destination.write_bytes(b"half a fi")
+        raise RuntimeError("connection reset")
+
+    monkeypatch.setattr(lib_mod, "_download_with_retries", explode)
+    with pytest.raises(RuntimeError, match="connection reset"):
+        ab.fetch_library("test-grid", progress=False)
+
+    path = lib_mod._library_cache_path(lib_mod._LIBRARIES["test-grid"])
+    assert not path.is_file()
+    raw = lib_mod._raw_dir()
+    assert not list(raw.glob("*.gz")), "a partial transfer was left where a build would use it"
+
+
+def test_a_band_can_be_narrowed_but_not_widened(offline_registry):
+    inside = ab.fetch_library("test-grid", wave_range=(5000.0, 6000.0), progress=False)
+    assert inside.wave.min() >= 5000.0 and inside.wave.max() <= 6000.0
+
+    with pytest.raises(ValueError, match="was built over"):
+        ab.fetch_library("test-grid", wave_range=(3000.0, 9000.0), progress=False)
+
+
+def test_clearing_the_cache_keeps_the_raw_shards(offline_registry):
+    ab.fetch_library("test-grid", progress=False)
+    raw_before = sorted(p.name for p in lib_mod._raw_dir().glob("*"))
+    assert raw_before
+
+    removed = ab.clear_library_cache("test-grid")
+    assert removed and not lib_mod._library_cache_path(lib_mod._LIBRARIES["test-grid"]).is_file()
+    # Re-slicing another band out of the raw shards is free; re-downloading them is not.
+    assert sorted(p.name for p in lib_mod._raw_dir().glob("*")) == raw_before
+
+    assert ab.clear_library_cache("_raw")
+    assert not list(lib_mod._raw_dir().glob("*"))
+
+
+def test_a_declared_medium_is_checked_against_the_spectra(offline_registry, monkeypatch):
+    """BOSZ flipped convention between 2017 and 2024 under one name, so this is not
+    hypothetical: the build measures the medium and refuses to reconcile a disagreement."""
+    entry = lib_mod._LIBRARIES["test-grid"]
+    monkeypatch.setitem(
+        lib_mod._LIBRARIES, "test-grid", dataclasses.replace(entry, medium="vacuum")
+    )
+    monkeypatch.setattr(
+        lib_mod,
+        "line_core_medium",
+        lambda *a, **k: {"medium": "air", "ratio": 120.0, "n_lines": 6, "residuals": {}},
+    )
+    with pytest.raises(ValueError, match="upstream convention has moved"):
+        ab.fetch_library("test-grid", progress=False)
+
+
+def test_a_two_column_file_is_required(tmp_path):
+    """The reader states the format it expects rather than silently taking column 0."""
+    path = tmp_path / "wrong.txt.gz"
+    with gzip.open(path, "wt") as handle:
+        np.savetxt(handle, np.ones((10, 3)))
+    with pytest.raises(ValueError, match="two columns"):
+        lib_mod._read_bosz_shard(path, np.arange(10))
+
+
+def test_pollux_refuses_rather_than_guessing_a_format():
+    """No parser is shipped for a file format nobody here has seen."""
+    with pytest.raises(NotImplementedError, match="pollux"):
+        ab.ingest_pollux(None)
+
+
+def test_a_single_valued_axis_is_constant_rather_than_nan():
+    """A library sliced to one metallicity keeps its column.
+
+    Before this was handled the degenerate cell gave lo == hi and a 0/0 that reached every
+    pixel as a NaN -- silent, and only visible once a fit failed to converge.
+    """
+    wave = np.linspace(5000.0, 5010.0, 40)
+    nodes = [(t, g, 0.0) for t in (6000.0, 6250.0) for g in (4.0, 4.5)]
+    lib = SpectralLibrary(
+        label_names=("teff", "logg", "mh"),
+        nodes=np.asarray(nodes),
+        normalized=np.full((4, wave.size), 0.9),
+        log_continuum=np.zeros((4, wave.size)),
+        wave=wave,
+        medium="air",
+    )
+    out = np.asarray(library_interpolator(lib)(jnp.asarray([6100.0, 4.2, 0.0]))[0])
+    assert np.isfinite(out).all()
+    np.testing.assert_allclose(out, 0.9)
+
+
+def test_saving_and_loading_round_trips(tmp_path):
+    wave = np.linspace(4500.0, 4600.0, 64)
+    rng = np.random.default_rng(3)
+    lib = SpectralLibrary(
+        label_names=("teff", "logg"),
+        nodes=np.asarray([(6000.0, 4.0), (6250.0, 4.0), (6000.0, 4.5), (6250.0, 4.5)]),
+        normalized=rng.random((4, wave.size)),
+        log_continuum=rng.random((4, wave.size)),
+        wave=wave,
+        medium="vacuum",
+        meta={"grid": "unit-test", "citation": "nobody 2026"},
+    )
+    path = lib_mod.save_library(lib, tmp_path / "round-trip.npz")
+    back = lib_mod.load_library(path)
+
+    assert back.label_names == lib.label_names
+    assert back.medium == "vacuum"
+    assert back.meta["citation"] == "nobody 2026"
+    assert back.normalized.dtype == np.float64  # stored as float32, restored to x64
+    np.testing.assert_array_equal(back.nodes, lib.nodes)
+    np.testing.assert_allclose(back.normalized, lib.normalized, rtol=1e-6)
+
+
+@pytest.mark.network
+def test_the_archive_still_serves_what_the_registry_expects():
+    """One live request, pinning the two facts a silent upstream change would break.
+
+    Deliberately small: it fetches headers for a single shard rather than any spectrum.
+    """
+    import urllib.request
+
+    url = lib_mod._bosz_url(6000.0, 4.0, 0.0, alpha=0.0, carbon=0.0, vmicro=2, resolution=20000)
+    request = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "albireo test"})
+    with urllib.request.urlopen(request, timeout=60) as response:
+        assert response.status == 200
+        assert int(response.headers["Content-Length"]) > 100_000

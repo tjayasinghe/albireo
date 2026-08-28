@@ -150,6 +150,33 @@ that the error comes back as dilution rather than as temperature. On the package
 components land within a few K of the injected Teff, and the light fractions recover 0.62/0.38
 from an assumed 0.72/0.28.
 
+## Getting a real grid
+
+The toy grid above keeps the example offline. For real work, `fetch_library` downloads and
+caches a published one:
+
+```python
+ab.library_names()
+# ['bosz2024-fgk-r20000', 'bosz2024-fgk-rvs', 'pollux-ob-smc24']
+
+ab.library_info("bosz2024-fgk-r20000")          # coverage, licence, citation, sizes
+library = ab.fetch_library("bosz2024-fgk-r20000")
+```
+
+The first call downloads about 645 MB from MAST and leaves a ~95 MB cache; every call after
+that reads the cache. `$ALBIREO_DATA_DIR` moves the cache somewhere with room, or points at a
+directory somebody has already populated. If you only need part of the band, ask for it —
+`fetch_library(name, wave_range=(5150.0, 5250.0))` — which is free, because it slices what was
+already cached.
+
+For the SMC OB regime `pollux-ob-smc24` is registered with its coverage and citation, but
+POLLUX has no stable download URL — its collections come through a web form — so the archive
+has to be fetched by hand and `ingest_pollux` tells you so instead of shipping a parser for a
+format nobody has inspected.
+
+Whatever you use, cite it. `library_info(name)["citation"]` is the string, and both shipped
+grids are CC BY 4.0, which obliges attribution.
+
 ## Choosing a grid, and the trap in it
 
 `SpectralLibrary.medium` is required and has no default. Air and vacuum wavelengths differ by
