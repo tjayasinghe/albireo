@@ -492,6 +492,21 @@ def test_matched_and_native_comparison_both_recover_the_labels(library, grid):
         assert got.assumptions["compare"] == compare
 
 
+def test_the_default_comparison_is_native(library, grid):
+    """The default is `native`, and D55 is why.
+
+    `matched` convolves both sides with the LSF, which reads like the careful choice and was
+    the default until AI Phe was fitted. Convolving the residuals correlates them while the
+    likelihood stays diagonal, so chi-square is over-counted by ~1/sum(k^2) and v sin i
+    absorbs the mis-specification -- on real HARPS data both components went to the floor of
+    their prior. The closed loop here cannot see any of that, because its rows never pass
+    through an LSF or a disentangling; this test pins the default so that the decision has to
+    be taken deliberately rather than drifting back.
+    """
+    got = fit(library, grid, noisy_rows(library, grid))
+    assert got.assumptions["compare"] == "native"
+
+
 def test_problem_is_a_traceable_pytree(baseline):
     """It must survive a jit boundary as an argument, not be folded in as a constant."""
     leaves, structure = jax.tree.flatten(baseline.problem)

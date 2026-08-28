@@ -13,6 +13,27 @@ This file records *what changed*. The reasons live elsewhere and are worth follo
 
 ### Added
 
+- **AI Phoenicis validates the label mode on a real star, and corrected it (D55).**
+  `scripts/download_aiphe.py` fetches the 36 archival HARPS spectra;
+  `scripts/aiphe_labels_bench.py` scores a label fit against them; and
+  `docs/tutorials/aiphe-labels.ipynb` is that run, executed, for readers who will not
+  download 840 MB to see it. AI Phe is the target because every quantity the mode produces
+  has an independent published value, including a radius ratio measured photometrically that
+  the fit is never told. The primary comes back at **+0.52%** in Teff, inside the documented
+  2–3% target; **the secondary at +4.33% does not**, and is recorded as a miss.
+
+  `LabelMatch.radius_ratio` is new, because on an eclipsing system the shared dilution scalar
+  is a measurement with an external answer rather than an implementation detail.
+
+- **`match_labels(compare=...)` now defaults to `"native"`, not `"matched"` (D55).** Convolving
+  both sides with the LSF correlates the residuals over the kernel width while the likelihood
+  stays diagonal, so χ² is over-counted by `1/Σk²` — predicted 4.91 on this dataset, measured
+  4.26 — and *v* sin *i* absorbs the mis-specification rather than the χ² doing so visibly. On
+  AI Phe `matched` pinned both components to the floor of their *v* sin *i* prior where
+  `native` returns a physical 2.2 km/s. `matched` remains available and is the right choice
+  only alongside a residual-covariance model. The closed-loop test could not have caught this:
+  its rows never pass through an LSF or a disentangling.
+
 - **Named synthetic grids, downloaded and cached — `fetch_library` (D52).** The label mode
   shipped able to fit any library you could construct, and with no way to obtain one. Three
   named grids are now registered: `bosz2024-fgk-r20000` (BOSZ 2024 MARCS, Teff 4000–7000 K in

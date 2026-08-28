@@ -38,6 +38,7 @@ nav:
       - Find a hidden companion with the K2 scan: tutorials/k2-scan.md
       - Bring your own spectra (FITS to Dataset): tutorials/real-data.md
       - Disentangle a BLOeM SB2 end to end: tutorials/bloem-sb2.md
+      - Validate the labels on a real star: tutorials/aiphe-labels.ipynb
       - Propagate into Teff and log g: tutorials/downstream.md
       - Turn a component into an RV template: tutorials/labels.md
   - Design: design.md

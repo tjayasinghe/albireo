@@ -223,7 +223,7 @@ uv.lock
 # Claude Code
 .claude/
 
-# Downloaded observational data (see scripts/download_hr6819.py).
+# Downloaded observational data (see scripts/download_hr6819.py, download_aiphe.py).
 # Note this does not match src/albireo/data_files/, which holds the packaged example
 # dataset and is part of the distribution.
 data/

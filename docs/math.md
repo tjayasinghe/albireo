@@ -1393,14 +1393,32 @@ need. It is *not* $C^2$ at half-integer $v\sin i/\Delta v$, where the edge lands
 pixel boundary and that tap picks up a $|\delta|^{3/2}$ term. Both facts are measured in
 `tests/test_operators.py` rather than asserted.
 
-**Why the comparison is at matched resolution.** $\hat d$ is not the intrinsic spectrum: §1.3
-applies the LSF *inside* the epoch model, so $\hat d$ is a regularized partial deconvolution —
-faithful where the data had signal, shrunk toward zero where the smoothness prior dominated.
-Comparing an unbroadened model against it biases $v\sin i$ upward; applying the LSF to the
-model but not the data biases it downward. Convolving *both sides once* with the declared $B$
-compares in the space the data actually constrained. `compare="native"` is kept as a flag, and
-both must pass the closed loop. The LSF width itself is never fitted here: §1.3's
-identifiability argument does not stop applying because the model changed.
+**Why the comparison is at native resolution, and why it was not.** $\hat d$ is not quite the
+intrinsic spectrum: §1.3 applies the LSF *inside* the epoch model, so $\hat d$ is a regularized
+partial deconvolution — faithful where the data had signal, shrunk toward zero where the
+smoothness prior dominated. That argues for convolving *both sides once* with the declared $B$
+and comparing in the space the data actually constrained, and `compare="matched"` did exactly
+that, as the default, until AI Phe was fitted (D55).
+
+The argument is right about the deconvolution and wrong about what it costs. Convolving the
+residuals correlates them over the kernel width, while the likelihood of §9.1 stays diagonal.
+For a unit-sum kernel $k$ the resulting over-count is
+
+$$\frac{\chi^2_{\text{matched}}}{\chi^2_{\text{native}}} \;\approx\; \Big(\sum_p k_p^2\Big)^{-1},$$
+
+the usual effective-sample-size factor. On AI Phe (HARPS, $R = 115{,}000$, $\Delta v = 0.8$
+km s$^{-1}$, so $\sigma_{\mathrm{LSF}} = 1.38$ px) that predicts 4.91 and the fit measured
+**4.26** — the whole gap between the two modes. A mis-specified likelihood does not merely
+inflate $\chi^2$: $v\sin i$ absorbs it, and both components went to the floor of their prior
+(0.14 and 0.46 km s$^{-1}$) where native returned a physically sensible 2.2 km s$^{-1}$ for
+both. So the default is `"native"`; `"matched"` is kept, and is the right choice only once a
+residual-covariance model can carry the correlation it creates.
+
+The closed-loop test cannot decide this, and that is worth recording: its injected rows never
+pass through an LSF or a disentangling, so they *are* intrinsic spectra and both modes recover
+them. Only real data with a real deconvolution behind it separates the two. The LSF width
+itself is never fitted here either way: §1.3's identifiability argument does not stop applying
+because the model changed.
 
 ### 9.3 Interpolation, and why not an emulator (yet)
 

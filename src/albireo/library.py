@@ -35,6 +35,7 @@ import datetime as _dt
 import gzip
 import hashlib
 import json
+import urllib.error
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -721,6 +722,7 @@ class _Library:
     doi: str | None = None
     upstream_note: str = ""
     caveats: tuple[str, ...] = ()
+    known_gaps: tuple[str, ...] = ()
     download_mb: float | None = None
     cache_mb: float | None = None
 
@@ -746,6 +748,12 @@ _BOSZ_CAVEATS = (
     "hiding it.",
 )
 
+# Confirmed against the archive listing on 2026-08-27: this one model is absent while every
+# carbon-varied version of it is present, so it is a gap in the published calculation rather
+# than a naming mistake on our side. It costs the grid its completeness, which is why the
+# shipped FGK library interpolates barycentrically rather than with the cubic.
+_BOSZ_GAPS = ("Teff 5750 K, log g 3.0, [M/H] -0.75 is not published (a+0.00, c+0.00, v2).",)
+
 _BOSZ_RECOMPUTE_NOTE = (
     "BOSZ 2024 was recomputed on 2025-09-25 to correct the hydrogen lines and the OH+ band "
     "strength. Anything cached before that date is the earlier calculation."
@@ -767,6 +775,7 @@ _LIBRARIES: dict[str, _Library] = {
         doi="10.17909/T95G68",
         upstream_note=_BOSZ_RECOMPUTE_NOTE,
         caveats=_BOSZ_CAVEATS,
+        known_gaps=_BOSZ_GAPS,
         download_mb=645.0,
         cache_mb=95.0,
     ),
@@ -789,6 +798,7 @@ _LIBRARIES: dict[str, _Library] = {
             "Gaia publishes RVS spectra on the vacuum scale and this library is air. "
             "Convert with SpectralLibrary.in_medium('vacuum') before comparing the two.",
         ),
+        known_gaps=_BOSZ_GAPS,
         download_mb=645.0,
         cache_mb=16.0,
     ),
@@ -854,6 +864,7 @@ def library_info(name: str) -> dict[str, Any]:
         "doi": lib.doi,
         "upstream_note": lib.upstream_note,
         "caveats": list(lib.caveats),
+        "known_gaps": list(lib.known_gaps),
         "download_mb": lib.download_mb,
         "cache_mb": lib.cache_mb,
         "cached": _library_cache_path(lib).is_file(),
@@ -1125,14 +1136,37 @@ def ingest_bosz(
         )
         targets.append((url, raw / Path(url).name))
 
+    # A published grid is not always the box its axes imply: BOSZ is missing exactly one
+    # model in this box -- (5750 K, log g 3.0, [M/H] -0.75) -- while every carbon-varied
+    # version of it is present, so it is a gap in the calculation rather than a naming
+    # mistake. Dying on it would be wrong, and quietly substituting a neighbour would be
+    # worse; the node is dropped, named, and recorded in the metadata.
+    missing: list[int] = []
     done = 0
     with ThreadPoolExecutor(max_workers=max(1, int(jobs))) as pool:
-        futures = {pool.submit(_fetch_shard, url, path): path for url, path in targets}
+        futures = {pool.submit(_fetch_shard, url, path): i for i, (url, path) in enumerate(targets)}
         for future in as_completed(futures):
-            future.result()
+            index = futures[future]
+            try:
+                future.result()
+            except urllib.error.HTTPError as exc:
+                if exc.code != 404:
+                    raise
+                missing.append(index)
             done += 1
             if progress and (done % 25 == 0 or done == len(targets)):
                 print(f"  {done}/{len(targets)} shards")
+
+    if missing:
+        absent = sorted(missing)
+        kept = [i for i in range(len(nodes)) if i not in set(absent)]
+        if progress:
+            print(f"  {len(absent)} node(s) are not published and were dropped:")
+            for i in absent[:5]:
+                teff, logg, mh = nodes[i]
+                print(f"    Teff {teff:.0f}, log g {logg:.1f}, [M/H] {mh:+.2f}")
+        nodes = [nodes[i] for i in kept]
+        targets = [targets[i] for i in kept]
 
     normalized = np.empty((len(nodes), wave.size), dtype=np.float64)
     log_continuum = np.empty_like(normalized)
@@ -1155,8 +1189,16 @@ def ingest_bosz(
         "alpha": fixed["alpha"],
         "carbon": fixed["carbon"],
         "caveats": list(lib.caveats),
+        "n_requested": len(lib.axes["teff"]) * len(lib.axes["logg"]) * len(lib.axes["mh"]),
+        "n_missing": len(missing),
         "shard_sha256": {Path(p).name: _sha256(p) for _, p in targets[:1]},
     }
+    if missing:
+        meta["missing_note"] = (
+            "One or more nodes the axes imply are not published upstream and were dropped, "
+            "so the grid is not a complete box and interpolation falls back from the cubic "
+            "to barycentric over a triangulation. See library_info()['known_gaps']."
+        )
 
     library = SpectralLibrary(
         label_names=lib.label_names,

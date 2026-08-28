@@ -2503,3 +2503,91 @@ version let Teff and [M/H] both scale one depth and produced a fit that drove ch
 and a continuum that is not a smooth exponential in Teff, so the recovery figures here are an
 upper bound on how well this can go. The real-data gate is AI Phe against Maxted et al. (2020),
 which is not run here.
+
+
+## D55 — AI Phoenicis: the label fit against a star (2026-08-27)
+
+Machine: **AMD Ryzen 9 9950X3D desktop**, as D49-D53. Harness: `scripts/aiphe_labels_bench.py`
+over 36 archival HARPS spectra (R = 115,000, `scripts/download_aiphe.py`), disentangled on
+5150-5250 A with the velocities held at the published orbit so that what is under test is the
+label fit and not the orbit. Library: `bosz2024-fgk-r20000`, 454 nodes. The notebook of the
+same run is `docs/tutorials/aiphe-labels.ipynb`.
+
+AI Phe is the validation target because every quantity the mode produces has an independent
+published value: Teff 6310 K and 5010 K, log g 4.001 and 3.598, R2/R1 = 1.6237 (Maxted et al.
+2020, run C). The log g values are **derived** from the spectroscopic and photometric elements
+rather than quoted, via `g_i = 2 pi sqrt(1-e^2) K_j / (P r_i^2 sin i)`, which needs no absolute
+masses and reproduces the published ones to 0.002 dex; the script asserts that rather than
+trusting it.
+
+### Result
+
+| configuration | primary Teff | secondary Teff | R2/R1 | chi2 |
+|---|---|---|---|---|
+| log g declared, dilution fitted | **6342.5 K (+0.52%)** | **5227.0 K (+4.33%)** | 1.5416 (-5.1%) | 425,869 |
+| log g free | 6019.7 K (-4.60%) | 4900.3 K (-2.19%) | 1.5459 | 412,882 |
+| log g declared, dilution frozen | 6449.4 K (+2.21%) | 5179.8 K (+3.39%) | n/a | 1,853,578 |
+
+The primary is recovered to **0.52 per cent**, inside the 2-3 per cent that math.md 9.6 says is
+enough for template selection. **The secondary is not**: +217 K, or 4.3 per cent, and that is
+recorded as a miss rather than tuned away. The radius ratio, which nothing in the fit is told,
+comes back 5 per cent low from spectroscopy alone against a photometric measurement.
+
+Freeing log g reproduces the failure the tutorial warns about, on real data: log g runs to the
+bottom of its prior (3.000, the grid edge) and drags both temperatures down with it, while
+**chi-square improves**. Worth noting for anyone relying on the diagnostic: the correlation
+report comes back *empty* here, because a parameter pinned against a bound stops varying and
+the curvature at the optimum no longer shows the degeneracy that produced the answer. A flagged
+correlation is evidence; an empty one is not absence of it.
+
+### The comparison mode was wrong, and this is what found it
+
+`compare="matched"` convolves both the model and the data with the declared LSF before
+comparing, on the argument that `d_hat` is a regularized partial deconvolution. It was the
+default from D53. On AI Phe it drove **both** components to the floor of their `v sin i` prior
+(0.14 and 0.46 km/s) and inflated chi-square against `native`:
+
+| mode | primary Teff | secondary Teff | v sin i | chi2 |
+|---|---|---|---|---|
+| `matched` | 6319.5 K (+0.15%) | 5280.1 K (+5.39%) | 0.14 / 0.46 km/s | 1,813,881 |
+| `native` | 6342.5 K (+0.52%) | 5227.0 K (+4.33%) | 2.23 / 2.21 km/s | 425,869 |
+
+The mechanism is arithmetic, not taste. Convolving the residuals correlates them over the
+kernel width while the likelihood stays diagonal, so chi-square is over-counted by the usual
+effective-sample-size factor `1/sum(k^2)`. At sigma_LSF = 1.38 px that predicts **4.91** and
+the fit measured **4.26** -- the entire gap between the two modes. A mis-specified likelihood
+does not merely inflate chi-square; `v sin i` absorbs it. **The default is now `native`**, and
+`matched` is the right choice only once a residual-covariance model can carry the correlation
+it creates.
+
+**The closed-loop test could not have found this**, which is the more general lesson. Its
+injected rows never pass through an LSF or a disentangling, so they *are* intrinsic spectra and
+both modes recover them (matched even wins at S/N 1000: -0.1 K against -4.6 K). Only real data
+with a real deconvolution behind it separates the two. A toy fixture validates the arithmetic
+it contains and nothing about the assumption it was built on.
+
+### Microturbulence: a hypothesis, tested and refuted
+
+The obvious suspect for the secondary was the library's pinned microturbulence. BOSZ offers
+xi in {0, 1, 2, 4} km/s and the registry pins 2; a K subgiant wants nearer 1.3, and too much
+microturbulence makes the model's metal lines too strong, which a fit can answer by raising
+Teff. The direction checks out -- at the t5250/g3.5 node, xi = 2 gives **8.45 per cent** more
+equivalent width than xi = 1 -- so a 160-node library was rebuilt at xi = 1 to test it.
+
+It is not the answer. The secondary got **worse** (+292 K against +273 K) and chi-square with
+it (1.97e6 against 1.81e6). What moved instead was **[M/H], by +0.10 dex** -- the documented
+[M/H]-xi degeneracy absorbing the change, exactly where math.md 9.2 says it goes. Recorded so
+the next person does not spend the download on it.
+
+What remains unexplained is most of the secondary's offset. Candidates, untested: a 100 A
+window carrying far more temperature leverage for an F star than for a K subgiant; the
+published 5010 K being a photometric/SED temperature rather than a spectroscopic one; and the
+assumed light fractions, which the fitted radius ratio only partly absorbs.
+
+### Caveats on these numbers
+
+Formal errors here are sub-kelvin and mean nothing -- they are the curvature of an optimum on
+correlated residuals, and `summary()` says so every time it prints them. `refit_draws` is the
+number to quote and was not run for this record. HARPS ships no error array, so the weights
+are albireo's own estimate (the z-RMS 2.64 noted in the D-numbered AI Phe disentangling entry
+applies here too). One system, one window, one library: this is a validation, not a survey.

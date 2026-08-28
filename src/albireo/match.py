@@ -597,7 +597,7 @@ def match_labels(
     std=None,
     mh=None,
     dilution=None,
-    compare: str = "matched",
+    compare: str = "native",
     offset_order: int = 2,
     offset_scale: float = 0.05,
     jitter: bool = True,
@@ -648,11 +648,18 @@ def match_labels(
         :class:`RadiusRatio` (default for two or more stars), :class:`ScalarDilution`
         (default for one), or :class:`FixedDilution`.
     compare
-        ``"matched"`` (default) convolves *both* the model and the data with the declared
-        LSF before comparing; ``"native"`` compares the intrinsic model against ``d_hat``
-        directly. Matched is the honest default because ``d_hat`` is a regularized partial
-        deconvolution — at fine scales it is shrunk toward zero by the smoothness prior,
-        and comparing an unshrunk model against it biases ``v sin i`` upward.
+        ``"native"`` (default) compares the intrinsic model against ``d_hat`` directly.
+        ``"matched"`` convolves *both* sides with the declared LSF first, which reads like
+        the more careful choice -- ``d_hat`` is a regularized partial deconvolution, so at
+        fine scales it is shrunk toward zero by the smoothness prior -- but **measurement
+        says otherwise, and the default changed because of it** (D55).
+
+        Convolving the residuals correlates them over the kernel width while the likelihood
+        stays diagonal, so the mis-specification costs a factor of ``1 / sum(k^2)`` in
+        chi-square and ``v sin i`` absorbs it. On AI Phe (HARPS, R = 115,000) matched drove
+        both components to the ``v sin i`` floor and inflated chi-square 4.26x against
+        native, where the kernel predicts 4.91x -- the whole gap. Use ``"matched"`` only
+        with a residual-covariance model that can carry the correlation.
     offset_order
         Degree of the additive Chebyshev nuisance per component. The ``m = 0`` term is the
         unconstrained zero point of ``docs/math.md`` §5.1; the default of 2 also absorbs
@@ -1094,6 +1101,21 @@ class LabelMatch:
                 if key in self.specs and _is_fixed(self.specs[key])
             )
             for name in self.names
+        }
+
+    @property
+    def radius_ratio(self) -> dict[str, float]:
+        """Fitted radius ratios R_i / R_first, when the dilution model carries them.
+
+        This is a measurement the fit produces rather than consumes: the shared scalar that
+        converts the grids' own continua into light fractions is a radius ratio, so on a
+        system whose radii are known from eclipses there is an external number to hold it
+        against. Empty for the other dilution models, which carry no such scalar.
+        """
+        if self.problem.dilution != "radius_ratio":
+            return {}
+        return {self.names[0]: 1.0} | {
+            name: self._value(f"ratio_{name}") for name in self.names[1:]
         }
 
     def errors(self, method: str = "laplace") -> dict[str, dict[str, float]]:

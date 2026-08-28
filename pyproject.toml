@@ -109,6 +109,12 @@ extend-exclude = ["*.md"]
 select = ["E", "F", "W", "I", "UP", "B", "NPY", "RUF"]
 ignore = ["E741"]
 
+[tool.ruff.lint.per-file-ignores]
+# The notebook builders hold their pages' Markdown as Python string literals, so RUF001's
+# ambiguous-character rule fires on typography that is correct where it is rendered: a real
+# sigma, a multiplication sign, an en dash. The prose is reviewed by reading it.
+"scripts/build_*_notebook.py" = ["RUF001"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # `-q` for signal; `--strict-markers` so a typo'd marker is an error rather than a test
