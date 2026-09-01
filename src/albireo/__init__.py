@@ -145,6 +145,7 @@ from albireo.priors import (
     window_profile,
 )
 from albireo.results import load_fit, save_fit, to_inference_data, write_ascii
+from albireo.rvorbit import RVOrbit, find_period, fit_rv_orbit
 from albireo.scan import K2ScanResult, k2_scan
 from albireo.simulate import (
     InstrumentSpec,
@@ -155,6 +156,15 @@ from albireo.simulate import (
     synthetic_deviation_spectrum,
     synthetic_nebular_spectrum,
     synthetic_telluric_spectrum,
+)
+from albireo.todcor import (
+    Template,
+    TodcorBatch,
+    TodcorSurface,
+    VelocityTable,
+    todcor,
+    todcor_batch,
+    todcor_surface,
 )
 
 __version__ = "0.1.0.dev0"
@@ -183,6 +193,8 @@ _PLOT_EXPORTS = frozenset(
         "plot_residual_zscores",
         "plot_rv_curve",
         "plot_spectra",
+        "plot_todcor_surface",
+        "plot_velocity_table",
     }
 )
 
@@ -233,6 +245,7 @@ __all__ = [
     "OrbitParams",
     "Posterior",
     "Problem",
+    "RVOrbit",
     "RadiusRatio",
     "RawSpectrum",
     "RebinOperator",
@@ -248,6 +261,10 @@ __all__ = [
     "Star",
     "StarLabels",
     "Telluric",
+    "Template",
+    "TodcorBatch",
+    "TodcorSurface",
+    "VelocityTable",
     "air_to_vacuum",
     "bin_edges_from_centers",
     "bloem_catalogue",
@@ -269,7 +286,9 @@ __all__ = [
     "example_names",
     "export_draws",
     "fetch_library",
+    "find_period",
     "fit_continuum",
+    "fit_rv_orbit",
     "gauss_hermite_kernel_traced",
     "gaussian_kernel",
     "gaussian_kernel_traced",
@@ -311,6 +330,8 @@ __all__ = [
     "plot_residual_zscores",
     "plot_rv_curve",
     "plot_spectra",
+    "plot_todcor_surface",
+    "plot_velocity_table",
     "posterior_spectra",
     "query",
     "radial_velocity",
@@ -344,6 +365,9 @@ __all__ = [
     "t_peri_from_t_conj",
     "to_epoch",
     "to_inference_data",
+    "todcor",
+    "todcor_batch",
+    "todcor_surface",
     "true_anomaly",
     "vacuum_to_air",
     "window_profile",

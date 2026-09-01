@@ -2591,3 +2591,147 @@ correlated residuals, and `summary()` says so every time it prints them. `refit_
 number to quote and was not run for this record. HARPS ships no error array, so the weights
 are albireo's own estimate (the z-RMS 2.64 noted in the D-numbered AI Phe disentangling entry
 applies here too). One system, one window, one library: this is a validation, not a survey.
+
+## D56 — epoch velocities by N-dimensional correlation (2026-09-01)
+
+Machine: **AMD Ryzen 9 9950X3D desktop**, 16 cores / 32 threads, 32 GB, Windows 11, CPU only,
+float64 — the same box as D49–D55. Harness: `scripts/todcor_bench.py`, offline and reproducible.
+The fixture is a simulated SB2 through the real operator stack (LSF sigma 5 km/s, rebin onto a
+0.05 Å native grid, light 0.6/0.4, barycentric motion), with the injected component spectra as
+templates on a 1 km/s grid (five pixels per LSF sigma). Every number here is therefore about the
+estimator, not about template mismatch, which a real star adds on top and which is discussed
+at the end.
+
+### The estimator is TODCOR, exactly
+
+Before any of the numbers below: on a uniform grid with uniform weights and the data on the
+model grid, the weighted-least-squares surface albireo evaluates reproduces Zucker & Mazeh's
+(1994) symmetric two-dimensional correlation (light ratio maximized out), their original
+fixed-ratio expression, and the pinned least squares, each to **1e-10** against an independent
+NumPy transcription of the published formulae (`tests/test_todcor.py`, the three identity
+tests). What follows is what the generalization buys on data the published form cannot take.
+
+### Precision, bias and calibration against S/N
+
+Sixteen noise realizations of eight epochs each, fixed light fractions, errors profiled
+(Zucker 2003) and, in the last column, with the declared weights trusted:
+
+| S/N | star | bias [km/s] | scatter [km/s] | mean quoted sigma [km/s] | pull rms | pull rms (ivar errors) |
+|---|---|---|---|---|---|---|
+| 30 | A | -0.0233 +- 0.0142 | 0.1604 | 0.1702 | 0.957 | 0.953 |
+| 30 | B | +0.0208 +- 0.0168 | 0.1901 | 0.1923 | 0.999 | 0.993 |
+| 100 | A | -0.0070 +- 0.0043 | 0.0484 | 0.0510 | 0.961 | 0.958 |
+| 100 | B | +0.0065 +- 0.0051 | 0.0573 | 0.0577 | 1.005 | 0.999 |
+| 300 | A | -0.0023 +- 0.0014 | 0.0161 | 0.0170 | 0.960 | 0.957 |
+| 300 | B | +0.0021 +- 0.0017 | 0.0192 | 0.0192 | 1.007 | 1.001 |
+
+Three readings. The quoted errors are **calibrated** — the pull rms sits between 0.96 and 1.01
+at every S/N, which is Zucker's (2003) Figure 4 reproduced for the weighted, projected,
+sub-pixel version — and the profiled and trusted errors agree because the noise was injected
+at the declared level, so the rescaling is a no-op here and matters only on real data. The
+scatter scales as 1/(S/N) from 0.16 to 0.016 km/s, a sixtieth of a pixel at S/N 300. And there
+is a **bias of a few thousandths of a km/s**, of opposite sign in the two components and
+independent of S/N (−0.002 / +0.002 km/s at S/N 300, about 1.5 sigma each): that is the
+shift-interpolation systematic of the next table, at the 0.002–0.006 px level this grid
+sampling predicts, not a property of the noise.
+
+### Pixel locking of the shift operator against template sampling
+
+The linear shift operator (D3) blurs a template at half-pixel shifts, which adds a
+one-pixel-periodic ripple to the chi-square and pulls the minimum toward integer shifts
+(math.md §10.3). Measured on **noiseless** data simulated at 0.25 km/s, with the templates
+rebinned onto coarser grids so the template interpolation error is real rather than an inverse
+crime, and the injected velocities spanning a whole pixel of the coarsest grid in eighths:
+
+| template dv [km/s] | LSF sigma [px] | estimate 0.1/sigma_px^2 [px] | max abs error [px] | max abs error [km/s] | rms error [km/s] |
+|---|---|---|---|---|---|
+| 0.50 | 10.0 | 0.0010 | 0.0022 | 0.0011 | 0.0007 |
+| 1.00 | 5.0 | 0.0040 | 0.0058 | 0.0058 | 0.0033 |
+| 2.50 | 2.0 | 0.0250 | 0.0153 | 0.0382 | 0.0173 |
+| 5.00 | 1.0 | 0.1000 | 0.0293 | 0.1463 | 0.0967 |
+
+The order-of-magnitude estimate is right within a factor of three either way; it is quoted in
+the docs as an estimate, and this table as the measurement. The rule it sets: **three or more
+pixels per LSF sigma** keeps the systematic below a hundredth of a pixel, and at one pixel per
+sigma it is a tenth of a km/s — the same size as a good epoch error. `Fit.templates()`
+upsamples to three per sigma for that reason, and `todcor` warns below two.
+
+### Two dimensions against one as the components blend
+
+The reason the method exists. The same spectra correlated against the primary's template
+alone (the one-dimensional CCF, `todcor` with one template) against the two-dimensional fit,
+as the injected separation of the two stars' lines closes, at S/N 200:
+
+| separation [km/s] | 1-D primary error [km/s] | 2-D primary error [km/s] | 2-D secondary error [km/s] | 2-D sigma A | blended flag |
+|---|---|---|---|---|---|
+| 0 | -1.924 | +0.010 | -0.001 | 0.024 | no |
+| 5 | -2.369 | -0.023 | +0.056 | 0.026 | no |
+| 10 | -2.743 | +0.019 | +0.022 | 0.025 | no |
+| 20 | -0.990 | +0.026 | +0.047 | 0.026 | no |
+| 40 | -0.267 | +0.003 | -0.018 | 0.025 | no |
+| 80 | -0.148 | +0.028 | -0.007 | 0.026 | no |
+| 120 | +0.621 | -0.019 | +0.012 | 0.026 | no |
+| 160 | -0.316 | +0.001 | +0.065 | 0.025 | no |
+
+The one-dimensional error reaches **2.7 km/s** — a hundred times the two-dimensional quoted
+error — at 10 km/s separation, and it does not vanish when the lines separate: a secondary
+carrying 40% of the light contaminates the primary's peak at every separation, in a direction
+set by which of its lines happen to fall near the primary's (+0.6 km/s at 120 km/s). The
+two-dimensional fit is unbiased throughout because the contaminant is in the model, and its
+error is *flat* in separation. Note the blending flag: it never fires here, correctly. Two
+*different* spectra at the same velocity remain separable — their line lists differ — and the
+flag is a statement about the covariance, not about the velocity difference; it fires for twin
+spectra at one velocity (`test_twin_stars_at_the_same_velocity_are_flagged_blended...`), which
+is the case that is genuinely degenerate.
+
+### Wall clock
+
+Fixed light, one instrument, the coarse search striding five template pixels (the LSF sigma);
+min of three after a warm-up, and the compile:
+
+| window [A] | native pixels | search range [km/s] | coarse step [px] | compile + first epoch [s] | per epoch [s] |
+|---|---|---|---|---|---|
+| 60 | 220 | +-100 | 5 | 0.23 | 0.007 |
+| 60 | 220 | +-300 | 5 | 0.11 | 0.007 |
+| 60 | 880 | +-100 | 5 | 0.01 | 0.006 |
+| 60 | 880 | +-300 | 5 | 0.10 | 0.006 |
+| 60 | 3520 | +-100 | 5 | 0.22 | 0.011 |
+| 60 | 3520 | +-300 | 5 | 0.11 | 0.012 |
+| 2000 | 39680 | +-100 | 5 | 0.39 | 0.081 |
+| 2000 | 39680 | +-300 | 5 | 0.25 | 0.125 |
+
+A whole optical range — 2000 Å at 0.05 Å, forty thousand pixels, an echelle's worth of orders
+— over ±300 km/s costs **0.13 s per epoch** on the CPU, and the compile a quarter of a second
+per distinct (instrument, pixel count) shape. A BLOeM-sized survey (929 stars × 25 epochs of
+~2000 pixels) is therefore minutes, not hours; the cost is dominated by the pair Gram matrix,
+one matrix product of size pixels × shifts², which is exactly what a GPU is for when the
+window and the search range both grow. The example's twelve epochs of ten thousand pixels take
+0.6 s including everything but the compile.
+
+### Three components
+
+| star | rms error [km/s] | mean quoted sigma [km/s] | pull rms | recovered light |
+|---|---|---|---|---|
+| A | 0.0251 | 0.0313 | 0.816 | 0.500 |
+| B | 0.0413 | 0.0389 | 1.098 | 0.300 |
+| C | 0.0645 | 0.0649 | 0.962 | 0.200 |
+
+Light 0.5/0.3/0.2 fitted freely, S/N 200, ±80 km/s, four epochs in 1.3 s including the
+compile. The 20% component — a TRICOR tertiary — comes back to 0.06 km/s with a calibrated
+error and its light fraction to three decimals. The search grid grows as the cube of the shift
+count, so the range was kept narrow; beyond three components the honest advice in the docstring
+is to narrow `v_range` and coarsen `coarse_step`.
+
+### Scope of these numbers
+
+They measure the estimator against *its own* templates. A real star adds template mismatch —
+the wrong temperature, gravity or rotation, or a disentangled component's own noise and
+null-space contamination (§5.1) — which is outside the quoted error and, per the literature
+cited in `docs/tutorials/labels.md` (Posbic et al. 2012), mostly costs a constant zero point
+per component rather than precision. The self-consistent loop in `examples/12_todcor.py` is
+the one real-data-shaped check here: against the components a MAP disentangling of the packaged
+example recovered, the velocities come back to 0.13 and 0.10 km/s rms once each component's
+zero point is removed, and the Keplerian fitted to them returns *K* to 0.05%, with the
+reduced chi-square of the correlation itself at 1.005. AI Phoenicis, where every element has a
+published value and the templates would be the D55 label fits, is the obvious next gate and
+has not been run.

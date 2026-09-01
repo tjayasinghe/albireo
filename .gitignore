@@ -239,3 +239,5 @@ nebular_*.png
 detection_limit.png
 forecast.png
 rv_table.png
+todcor_*.png
+todcor_tables/

@@ -574,6 +574,37 @@ whose punchline is a capability the comparison code actually has would have been
 "the old code is wrong" framing this section forbids. What the incumbents genuinely cannot do is
 report an uncertainty, and that is the comparison the page draws instead.
 
+### 10. Epoch radial velocities for every component, by TODCOR — **done** (D56, D57)
+
+The joint fit deliberately never measures a per-epoch velocity, and that is the right thing when
+the component spectra are unknown. It is also the one product every eclipsing-binary analysis,
+survey pipeline and orbit code starts from, and the reason a user arriving from a
+cross-correlation background found nothing familiar here. `albireo.todcor` is the two-dimensional
+correlation of Zucker & Mazeh (1994) — correlate each spectrum against a *combination* of two
+templates with independent shifts, so that blended peaks stop pulling each other and a faint
+companion can be measured from a single spectrum — generalized to any number of components and
+to weighted, masked, multi-instrument data by writing it as the least-squares fit it is. On a
+uniform grid with uniform weights it reproduces the published formulae to 1e-10; on real data
+the masks, gaps, cosmics and per-pixel weights enter through the same operators as the forward
+model and change nothing.
+
+Three things make it more than a port. The sub-pixel minimum is **computed** rather than read
+off a parabola, because the shift operator is linear in the template and the chi-square is
+therefore an exact quadratic inside each pixel cell; the errors are Zucker's (2003)
+maximum-likelihood ones, with the blending and detection diagnostics that a batch has to
+notice; and the loop closes — `Fit.templates()` turns a disentangling's own components into
+templates and `Fit.measure_velocities()` runs the epochs against them, with the zero point that
+a disentangled frame cannot identify stated on every table rather than silently absorbed.
+`albireo.rvorbit` fits the Keplerian to the table with the same solver and conventions as the
+joint model, and hands the elements back as a warm start. `todcor_batch` runs a survey's worth
+of stars in one call and records failures instead of stopping on them.
+
+This does not reopen the non-goal below on synthesis: the templates come from the disentangling,
+from a label match, or from the published grids of `albireo.library`. What it adds is the
+front-half job the package was missing — the table — and the honest position that when the
+spectra are known, measuring velocities against them is faster, simpler and works on one
+spectrum, which is exactly the split Zucker himself drew between correlation and disentangling.
+
 ## Tier 3 — later, and why later
 
 **Time-variable component spectra.** The core assumption of disentangling is that each component's
@@ -636,7 +667,10 @@ Recorded so they stop being reconsidered.
   flux ratio. It synthesizes no spectrum, carries no line list, solves no radiative transfer,
   and fits no individual abundances; its module docstring says so first, before it says what it
   does do. The moment a question needs bespoke synthesis, abundances, microturbulence, or an
-  eclipsing-binary model, the answer remains `albireo.handoff` and the codes above.
+  eclipsing-binary model, the answer remains `albireo.handoff` and the codes above. Nor does
+  `albireo.todcor` (D56): it correlates against templates the user already has — the
+  disentangled components, a label-matched grid point, a library rendering — and synthesizes
+  none of its own.
 - **No GUI**, per the v1 non-goals.
 
 ## What would change this page

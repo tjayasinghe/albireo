@@ -1308,11 +1308,15 @@ are what a wrong period, an unseen third body, or line-profile variability look 
 | LSF bound + outer-disk guards | width above build bound / outer $e > e_{\max}$ ⇒ non-finite model log-density |
 | telluric constant exchange (§5.4) | closed loop: the two $k=0$ offsets cancel in the light-weighted sum to $<5\times10^{-3}$ |
 | **M4 gate**: closed loop per realism feature | telluric joint MAP; SB3 MAP (inner and outer $K$'s <2%); per-epoch light inferred (ℓ rms <0.01, components individually recovered); LSF width vs. reference instrument <3%; $K_2$ scan (peak at truth, negative $D$ under null) |
+| TODCOR identities (§10.2) | free-amplitude surface $=$ Zucker & Mazeh's symmetric $R^2$, fixed-ratio/free-scale surface $=$ their $R^2(s_1, s_2; \alpha)$, held-fraction surface $=$ the pinned least squares, each to $10^{-10}$ against a NumPy transcription on a uniform-weight grid epoch |
+| **D56 gate**: velocities and calibrated errors (§10.1, §10.4) | simulated SB2 through LSF, rebin, cosmics, gaps and barycentric motion: every velocity within $5\sigma$, rms $<0.1$ km/s, pull rms in $[0.6, 1.6]$; both frames agree; mixed instruments; one and three components; free and global light fractions recover the injected ones; profiled $=$ ivar errors $\times\sqrt{\chi^2_\nu}$ |
+| zero points and flags (§10.4, §10.5) | a template offset composes relativistically to $10^{-9}$; an unknown offset is reported as differential; twin stars at one velocity are flagged blended and at 120 km/s are not; a minimum at the range edge is flagged; a continuum offset is absorbed by the nuisance and biases the light without it |
+| orbit from the table (§10.6) | injected $P, e, \omega, K_1, K_2, \gamma$ recovered from a noisy table within $3\sigma$; `predict` $\equiv$ `orbit_velocities(to_theta())` $+ \gamma$; per-component $\gamma$ recovers offset zero points while a forced shared one corrupts $K$; the periodogram finds $P$ to 1% |
 
 Sections 1–2 and the operator rows are implemented and tested in M0; §3–4 landed in M2;
 §7.1–7.4 landed in M3 (with §5 diagnostics); §6 and §7.5 landed in M4, except the §7.5
 response swap, which landed post-M5 (D33), as did the §1.4a correlated-noise chain
-(D34) and its §4.5a band assembly (D35). §9 landed with D52–D55.
+(D34) and its §4.5a band assembly (D35). §9 landed with D52–D55, §10 with D56–D57.
 
 ## 9. Stellar labels from disentangled components (D52–D55)
 
@@ -1495,3 +1499,156 @@ km/s for hot stars before mitigation (Blomme et al. 2023). That is the same
 one-zero-point-per-component quantity §5.3 and §7.6 already track. Framing this mode as fixing
 zero points, flux ratios and pathological mismatch — rather than as improving RV *precision* —
 is both the honest claim and the useful one.
+
+## 10. Epoch velocities by N-dimensional correlation (D56–D57)
+
+Everything above infers the orbit from the composite spectra and never measures a per-epoch
+velocity. This section is the complementary tool: given the component spectra — from a
+library, a label match, or the disentangling itself — measure every component's velocity in
+every epoch separately, by the two-dimensional correlation of Zucker & Mazeh (1994, ApJ 420,
+806) generalized to $N$ components and to weighted, masked, multi-instrument data. It is
+implemented in `albireo.todcor`, and `albireo.rvorbit` fits a Keplerian to what it produces.
+
+### 10.1 The estimator
+
+Fix the templates $t_i$ (deviation spectra on the model grid, normalized to their own
+continua) and write the epoch model of §1.4 with the spectra *given*:
+
+$$
+y_j = 1 + \sum_{i=1}^{N} a_{ij}\, \mathbf{R}_j \mathbf{B}_j \mathbf{T}(\delta_{ij})\, t_i
+      + \mathbf{P}_j c_j + n_j ,
+\qquad n_j \sim \mathcal{N}(0, \mathbf{W}_j^{-1}),
+$$
+
+with $\mathbf{P}_j$ an additive low-order (Chebyshev) nuisance basis on the native pixels —
+additive for the reason §9.1 gives: what it absorbs lives in the continuum, where a
+multiplicative term is identically zero. Write $A_i(\delta) = \mathbf{R}\mathbf{B}\mathbf{T}(\delta) t_i$
+for a template shifted, convolved and projected onto the epoch's pixels, $z = y - 1$, and for a
+set of shifts $\mathbf{s} = (\delta_1, \dots, \delta_N)$
+
+$$
+b_i(\delta_i) = A_i^{\!\top} \mathbf{W} z, \qquad
+G_{ik}(\delta_i, \delta_k) = A_i^{\!\top} \mathbf{W} A_k, \qquad
+r_P(\mathbf{s}) = \mathbf{P}^{\!\top}\mathbf{W} z - \sum_i a_i\, \mathbf{P}^{\!\top}\mathbf{W} A_i .
+$$
+
+The chi-square with the nuisance profiled out is, for **held** amplitudes $a = \ell$,
+
+$$
+\chi^2(\mathbf{s}) = z^{\!\top}\mathbf{W}z - 2\,\ell^{\!\top} b + \ell^{\!\top} G\, \ell
+  - r_P^{\!\top} (\mathbf{P}^{\!\top}\mathbf{W}\mathbf{P})^{-1} r_P ,
+$$
+
+for a **free overall scale** on held ratios ($a = \alpha\ell$) the Schur complement of the
+same system in $\alpha$, and for **free** amplitudes the block solve
+$\chi^2 = z^{\!\top}\mathbf{W}z - \beta^{\!\top} \mathbf{K}^{-1} \beta$ with
+$\mathbf{K} = \begin{pmatrix} G & (\mathbf{P}^{\!\top}\mathbf{W}A)^{\!\top} \\ \mathbf{P}^{\!\top}\mathbf{W}A & \mathbf{P}^{\!\top}\mathbf{W}\mathbf{P}\end{pmatrix}$
+and $\beta = (b;\ \mathbf{P}^{\!\top}\mathbf{W}z)$. The velocities are the minimizer over $\mathbf{s}$,
+which is searched on the integer shifts of the template grid — one segment-sum builds every
+shifted, projected column, and one matrix product per template pair gives every $G_{ik}$ —
+then refined below a pixel (§10.3). The search costs $O(N^2 S^2 n_{\rm pix})$ for $S$ shifts
+per component, so the global pass strides the grid by the narrowest LSF sigma, which cannot
+step over a correlation peak, and the fine pass runs at full resolution around its minimum.
+
+### 10.2 Relation to TODCOR
+
+On a uniform grid with uniform weights, the data on the model grid ($\mathbf{R} = \mathbf{B} = \mathbf{I}$)
+and no nuisance, define the classic one-dimensional correlations
+$c_i = b_i / (\lVert z\rVert\,\lVert A_i\rVert)$ and $c_{12} = G_{12} / (\lVert A_1\rVert\,\lVert A_2\rVert)$.
+Then the free-amplitude chi-square satisfies
+
+$$
+1 - \frac{\chi^2(s_1, s_2)}{\lVert z\rVert^2}
+  = \frac{c_1^2 - 2 c_1 c_2 c_{12} + c_2^2}{1 - c_{12}^2} = R^2(s_1, s_2),
+$$
+
+Zucker & Mazeh's symmetric expression with the light ratio maximized out, and the
+fixed-ratio, free-scale chi-square satisfies
+
+$$
+1 - \frac{\chi^2(s_1, s_2)}{\lVert z\rVert^2}
+  = \left[\frac{c_1 + \alpha' c_2}{\sqrt{1 + 2\alpha' c_{12} + \alpha'^2}}\right]^2,
+\qquad \alpha' = \frac{\ell_2}{\ell_1}\,\frac{\lVert A_2\rVert}{\lVert A_1\rVert},
+$$
+
+their original $R(s_1, s_2; \alpha)$. Both identities hold to $10^{-10}$ in the suite. The
+three- and four-component extensions (Zucker, Torres & Mazeh 1995; Torres, Latham & Stefanik
+2007) are the same block solve with a larger $G$; nothing in the formulation is specific to
+$N = 2$. What the least-squares form adds is that masks, chip gaps, cosmic rays, per-pixel
+weights, mixed instruments and mixed samplings enter through $\mathbf{W}$ and $\mathbf{R}_j$
+and change no formula — the same D4 discipline as the rest of the package — and that the
+templates can be intrinsic spectra with each instrument's LSF applied in quadrature above
+whatever resolution they already carry.
+
+Two differences from the published practice are deliberate. Continuum-normalized data pin
+the composite's scale, so the default holds the light fractions exactly rather than leaving
+the overall amplitude free; `scale="free"` restores the classic scale-invariant form.
+And multi-order spectra are pooled through their declared weights into one chi-square rather
+than combined through Zucker's (2003) per-order maximum-likelihood product, which profiles a
+separate noise level per order; declare `ivar` per order (the readers do) or split the
+dataset by order if that matters.
+
+### 10.3 Fractional shifts are exact, and the pixel-locking bound
+
+The shift operator is linear in the template and, for a fractional shift $n + f$,
+$\mathbf{T}(n + f)\, t = (1 - f)\,\mathbf{T}(n)\, t + f\,\mathbf{T}(n + 1)\, t$ (§1.1, D3). Every inner
+product above is therefore **bilinear in the fractional parts**, and $\chi^2(\mathbf{s})$ with
+held amplitudes is an exact quadratic in $f \in [0, 1]^N$ inside each unit cell of the
+integer grid — reconstructed from $3^N$ exact evaluations and minimized in closed form, with
+the amplitude solve alternating when they are profiled. The sub-pixel minimum and the
+curvature at it are thus *computed* for the same operator the forward model uses, not read
+off a parabola through three grid points.
+
+That operator has a known artifact: at $f = \tfrac12$ the two-tap interpolation is a
+$[\tfrac12, \tfrac12]$ smoothing, which lowers a Gaussian line of width $\sigma_{\rm px}$ by
+$\approx 1/(8\sigma_{\rm px}^2)$ of its depth and so adds a one-pixel-periodic ripple to the
+chi-square whose pull on the minimum is of order $2\pi / (64\sigma_{\rm px}^2) \approx
+0.1/\sigma_{\rm px}^2$ pixels — an estimate, not a bound: measured on noiseless data simulated at
+four times the template resolution, the largest error is 0.03 px at one pixel per sigma, 0.015
+at two, 0.006 at five and 0.002 at ten (benchmarks.md, D56). Three pixels per LSF sigma puts it
+below a hundredth of a pixel; `Fit.templates()` upsamples the components to that, and `todcor`
+warns below two.
+
+### 10.4 Uncertainties and detection
+
+Zucker (2003) showed the correlation peak is a maximum-likelihood estimate with the noise
+level profiled out, $\log L = -\tfrac{N}{2}\log[1 - C^2(\hat s)]$, and derived its error from
+the Hessian. In the chi-square form the same profiling gives
+
+$$
+\operatorname{Cov}(\hat{\mathbf{s}}) = \frac{\chi^2_{\min}}{n_{\rm pix} - p}\; 2\,\mathbf{H}^{-1},
+\qquad \mathbf{H} = \left.\frac{\partial^2 \chi^2}{\partial \mathbf{s}\,\partial \mathbf{s}^{\!\top}}\right|_{\hat{\mathbf{s}}},
+$$
+
+the curvature error rescaled by the reduced chi-square — what `errors="profiled"` reports —
+against $2\mathbf{H}^{-1}$ with the declared weights trusted (`errors="ivar"`). The
+off-diagonal of $\mathbf{H}^{-1}$ is the blending diagnostic: near conjunction the two shifts
+are measured along a ridge, their correlation approaches one, and the table flags the epoch.
+Each component's detection statistic is $\Delta\chi^2_i = \chi^2_{\min}(\text{without } i) -
+\chi^2_{\min}$ with the remaining amplitudes refitted — small for a companion the epoch does
+not actually see, which is the case a batch has to notice.
+
+### 10.5 Frames and zero points
+
+Velocities are reported barycentric whatever the data's frame: for topocentric data the shift
+searched is $\xi(v) - \xi(v_{\rm bary})$ in log-wavelength (§1.2), and the composition is
+exact because log-shifts add. A template's rest frame enters the same way: a template at
+velocity $v_0$ relative to the star's true rest frame gives $v = v_{\rm meas} \oplus v_0$,
+relativistic velocity addition (§7.6). A synthetic template has $v_0 = 0$ and yields absolute
+velocities. A disentangled component has an **unknown** $v_0$ — its zero point is the
+unidentified constant of §5.3 — so the velocities measured against it are differential, one
+arbitrary constant per component; `VelocityTable.absolute` records which is which, and the
+label match of §9 is what pins the constant.
+
+### 10.6 The orbit from the table
+
+`albireo.rvorbit` fits the Keplerian of §7.2 — period, conjunction time,
+$(\sqrt{e}\cos\omega, \sqrt{e}\sin\omega)$, one $K_i$ per component, and a systemic velocity —
+to the table by weighted nonlinear least squares with the Jacobian from JAX, using the same
+Kepler solver and angle conventions as `orbit_velocities`, so the two routes compare element
+for element. The systemic velocity is one number when every component is absolute and **one
+per component** otherwise, since a shared $\gamma$ across two different zero points would be
+absorbed into the semi-amplitudes. Errors are the curvature errors rescaled by the reduced
+chi-square, because a template fit's per-epoch errors never include template mismatch. The
+minimum masses follow from $M_{1,2}\sin^3 i = 1.0361\times10^{-7}\,(1 - e^2)^{3/2}\,(K_1 + K_2)^2 K_{2,1}\,P$
+in solar masses with $K$ in km/s and $P$ in days.

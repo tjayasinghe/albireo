@@ -13,6 +13,48 @@ This file records *what changed*. The reasons live elsewhere and are worth follo
 
 ### Added
 
+- **Epoch radial velocities for every component by N-dimensional correlation — `albireo.todcor`
+  (D56).** The two-dimensional correlation of Zucker & Mazeh (1994), generalized to any number
+  of components and to weighted, masked, multi-instrument data by writing it as the weighted
+  least-squares fit of shifted templates to the observed pixels — the model of `docs/math.md`
+  §1.4 with the spectra given rather than marginalized. On a uniform grid with uniform weights
+  it *is* TODCOR: the symmetric expression with the light ratio maximized out and the original
+  fixed-ratio one are both pinned to 1e-10 against a NumPy transcription. New names:
+  `Template` (from a flux array, a library at given labels, or a label match), `todcor`,
+  `todcor_batch`, `todcor_surface`, `VelocityTable`, `TodcorBatch`, `TodcorSurface`, plus
+  `plot_todcor_surface` and `plot_velocity_table`. **Zero new dependencies.**
+
+  What it does that a port would not. The shifted, LSF-convolved templates are projected onto
+  each epoch's own pixels (data are never resampled, D4), so masks, chip gaps, cosmic rays,
+  per-pixel weights and mixed samplings enter through the weights and change no formula. The
+  sub-pixel minimum is **computed, not interpolated**: the shift operator is linear in the
+  template, so the chi-square is an exact quadratic inside each pixel cell, reconstructed from
+  3^N exact evaluations and minimized in closed form. The same fact bounds the operator's
+  pixel-locking ripple at ~0.1/σ_px² pixels, which sets the sampling rule (three pixels per LSF
+  sigma) and the warning below two. Errors are Zucker's (2003) maximum-likelihood ones — the
+  curvature rescaled by the reduced chi-square — beside the trusted-weights version; the
+  covariance's off-diagonal flags blended epochs; a per-component Δχ² says whether the epoch
+  actually detects each star; a minimum at the search edge is flagged. Light fractions default
+  to `"global"` (free per epoch, then the weighted median over well-detected unblended epochs
+  held), with `"free"`, fixed fractions, and the classic free-scale form available.
+
+  The zero point is stated on every table: a synthetic template is absolute, a disentangled
+  component's rest frame is not identified (§5.3), and the velocities measured against it
+  are reported as differential rather than silently offset.
+
+- **Orbits from velocity tables — `albireo.rvorbit` (D57), and the loop closed through the
+  façade.** `fit_rv_orbit` fits the Keplerian by weighted least squares with the JAX Jacobian,
+  using the same Kepler solver and angle conventions as the joint model, with one systemic
+  velocity per component whenever a component is differential (a shared γ across two zero
+  points is absorbed into both K's — the test forces it and watches); `find_period` runs a
+  Lomb-Scargle search on the difference of the first two components and returns the aliases;
+  `RVOrbit.to_theta()` hands the elements back as a disentangling warm start. `Fit.templates()`
+  turns a fit's stellar components into templates (upsampled to three pixels per LSF sigma,
+  intrinsic, zero point declared unknown) and `Fit.measure_velocities()` runs the epochs
+  against them with the declared fractions and the declared LSF per instrument. Docs:
+  `docs/math.md` §10, `docs/api/todcor.md`, `docs/api/rvorbit.md`, `docs/tutorials/todcor.md`,
+  `examples/12_todcor.py`, `scripts/todcor_bench.py`, benchmarks.md "D56".
+
 - **AI Phoenicis validates the label mode on a real star, and corrected it (D55).**
   `scripts/download_aiphe.py` fetches the 36 archival HARPS spectra;
   `scripts/aiphe_labels_bench.py` scores a label fit against them; and

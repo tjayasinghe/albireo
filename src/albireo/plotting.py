@@ -36,6 +36,8 @@ __all__ = [
     "plot_residual_zscores",
     "plot_rv_curve",
     "plot_spectra",
+    "plot_todcor_surface",
+    "plot_velocity_table",
 ]
 
 _COMPONENT_COLORS = ("C0", "C3", "C2", "C4", "C5", "C6")
@@ -772,3 +774,145 @@ def plot_corner(idata, *, var_names=None, **kwargs):
     if var_names is None:
         var_names = _default_corner_vars(idata)
     return az.plot_pair(idata, var_names=var_names, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# TODCOR: the surface and the table
+# ---------------------------------------------------------------------------
+
+
+def plot_todcor_surface(surface, *, truth=None, ax=None, levels: int = 30):
+    """The two-dimensional correlation surface of one epoch, with its maximum marked.
+
+    Parameters
+    ----------
+    surface
+        A :class:`albireo.todcor.TodcorSurface` from :func:`albireo.todcor_surface`.
+    truth
+        Optional ``(v1, v2)`` to mark, for simulated data.
+    ax
+        Existing axis to draw into.
+    levels
+        Number of filled contour levels of ``R^2``.
+
+    Returns
+    -------
+    (Figure, Axes)
+    """
+    plt = _plt()
+    fig, ax = (ax.figure, ax) if ax is not None else plt.subplots(figsize=(5.6, 5.0))
+    r2 = np.asarray(surface.r_squared)
+    finite = r2[np.isfinite(r2)]
+    lo = float(np.percentile(finite, 5.0)) if finite.size else 0.0
+    hi = float(np.nanmax(r2)) if finite.size else 1.0
+    contour = ax.contourf(
+        surface.v2, surface.v1, np.clip(r2, lo, hi), levels=levels, cmap="viridis"
+    )
+    fig.colorbar(contour, ax=ax, label="$R^2 = 1 - \\chi^2/\\chi^2_{\\rm null}$")
+    peak = surface.peak
+    ax.plot(peak[1], peak[0], "w+", ms=12, mew=1.5, label="maximum")
+    if truth is not None:
+        ax.plot(truth[1], truth[0], "rx", ms=9, mew=1.5, label="truth")
+    ax.plot(surface.v2, surface.v2, color="w", lw=0.6, ls=":", alpha=0.6)
+    ax.set_xlabel(f"{surface.names[1]} velocity [km/s]")
+    ax.set_ylabel(f"{surface.names[0]} velocity [km/s]")
+    ax.legend(fontsize=8, loc="upper left")
+    return fig, ax
+
+
+def plot_velocity_table(table, *, period=None, t_conj=None, orbit=None, truth=None, axes=None):
+    """A velocity table against time or phase, with its errors and flags.
+
+    Parameters
+    ----------
+    table
+        A :class:`albireo.todcor.VelocityTable`.
+    period, t_conj
+        Fold on this ephemeris; otherwise plot against BJD. Taken from ``orbit`` when one
+        is given.
+    orbit
+        An :class:`albireo.rvorbit.RVOrbit` to overplot, and to fold on.
+    truth
+        Optional ``(n_comp, n_epochs)`` injected velocities, for simulated data.
+    axes
+        A pair of axes ``(curve, residuals)``; residuals are drawn only with ``orbit``.
+
+    Returns
+    -------
+    (Figure, Axes)
+    """
+    plt = _plt()
+    if orbit is not None:
+        period, t_conj = orbit.period, orbit.t_conj
+    if axes is None:
+        if orbit is not None:
+            fig, axes = plt.subplots(2, 1, figsize=(7.2, 6.0), sharex=True, height_ratios=[3, 1])
+        else:
+            fig, ax = plt.subplots(figsize=(7.2, 4.4))
+            axes = (ax,)
+    else:
+        fig = axes[0].figure
+    ax = axes[0]
+    folded = period is not None and t_conj is not None
+    x = phase_of(table.bjd, period, t_conj) if folded else table.bjd
+    good = table.good
+    for i, name in enumerate(table.names):
+        color = _color(i)
+        ax.errorbar(
+            x[good],
+            table.velocity[i, good],
+            yerr=table.sigma[i, good],
+            fmt="o",
+            ms=4,
+            capsize=2,
+            color=color,
+            label=name,
+        )
+        if (~good).any():
+            ax.errorbar(
+                x[~good],
+                table.velocity[i, ~good],
+                yerr=table.sigma[i, ~good],
+                fmt="o",
+                ms=4,
+                mfc="none",
+                capsize=2,
+                color=color,
+                alpha=0.6,
+            )
+        if truth is not None:
+            ax.plot(x, np.asarray(truth)[i], "_", color="k", ms=10, alpha=0.7)
+    if orbit is not None:
+        if folded:
+            dense_phase = np.linspace(0.0, 1.0, 400)
+            dense_t = t_conj + dense_phase * period
+            model = orbit.predict(dense_t)
+            for i in range(model.shape[0]):
+                ax.plot(dense_phase, model[i], color=_color(i), lw=1.0, alpha=0.7)
+        else:
+            dense_t = np.linspace(table.bjd.min(), table.bjd.max(), 1500)
+            model = orbit.predict(dense_t)
+            for i in range(model.shape[0]):
+                ax.plot(dense_t, model[i], color=_color(i), lw=1.0, alpha=0.7)
+        if len(axes) > 1:
+            res = axes[1]
+            for i in range(orbit.residuals.shape[0]):
+                res.errorbar(
+                    x,
+                    orbit.residuals[i],
+                    yerr=table.sigma[i],
+                    fmt="o",
+                    ms=3,
+                    capsize=2,
+                    color=_color(i),
+                )
+            res.axhline(0.0, color="0.6", lw=0.8)
+            res.set_ylabel("O - C [km/s]")
+            res.set_xlabel("phase from conjunction" if folded else "BJD")
+    if len(axes) == 1 or orbit is None:
+        ax.set_xlabel("phase from conjunction" if folded else "BJD")
+    if folded:
+        ax.set_xlim(0.0, 1.0)
+    ax.set_ylabel("radial velocity [km/s]")
+    ax.legend(fontsize=8)
+    return fig, axes

@@ -82,6 +82,17 @@ directly, with the component spectra marginalized out in closed form. Run
   equivalent width and — because a static line is a component with *K* = 0 — 59% of K₂;
   modelling it costs 0.14% and 0.3%
   ([`examples/04_nebular.py`](examples/04_nebular.py)).
+- **Epoch radial velocities for every component, by TODCOR** — the one product the joint fit
+  never makes and every eclipsing-binary analysis and orbit code starts from. `ab.todcor`
+  correlates each spectrum against a combination of templates with independent shifts
+  (Zucker & Mazeh 1994, generalized to *N* components), written as the weighted least-squares
+  fit it is so that masks, gaps, cosmics and mixed instruments cost nothing; on a uniform grid
+  it reproduces the published formulae to 1e-10. The sub-pixel minimum is computed exactly,
+  the errors are the maximum-likelihood ones, blending and non-detections are flagged, and
+  `ab.todcor_batch` runs a survey's worth of stars in one call. Templates come from a
+  library, a label match, or the disentangling itself — `fit.measure_velocities()` closes
+  the loop — and `ab.fit_rv_orbit` turns the table into a Keplerian with the same solver as
+  the joint model ([`examples/12_todcor.py`](examples/12_todcor.py)).
 - **Reads archival spectra directly** — `albireo.io` turns a directory of ESO Phase-3 or
   IRAF-style FITS into a `Dataset`, and `albireo.preprocess` supplies the things reduced
   spectra are missing: a continuum, an inverse variance, masks, and one shared wavelength grid.

@@ -1898,6 +1898,120 @@ class Fit:
             **kwargs,
         )
 
+    def templates(self, *, pixels_per_sigma: float = 3.0) -> list:
+        """The stellar components of this fit as :class:`albireo.todcor.Template` objects.
+
+        The best templates that exist for a system are the system's own disentangled
+        components: they have the right lines, the right depths, and the right rotation,
+        because they were measured from these very epochs. What they do *not* have is an
+        absolute rest frame — each carries its own unidentified zero point
+        (``docs/math.md`` §5.3, §7.6) — so every template returned here has
+        ``v_zero_kms=None``, and the velocities measured against it are differential.
+        A label match (:meth:`match_labels`, then :meth:`albireo.Template.from_labels`)
+        is what pins them.
+
+        Telluric and nebular components are not stars and are not returned. The templates
+        are intrinsic (``sigma_kms=0``): the fit solved for the spectra *under* the
+        declared LSF, which :meth:`measure_velocities` applies again per instrument.
+
+        The fit's grid samples the native pixel at about two points, which is right for
+        the solver and too coarse for a correlation template: the linear shift operator's
+        pixel-locking ripple is ``~0.1 / sigma_px^2`` pixels (``docs/math.md`` §10.3). The
+        components are therefore linearly upsampled by an integer factor onto a grid that
+        puts at least ``pixels_per_sigma`` pixels under the narrowest declared LSF sigma;
+        the smoothness prior has already band-limited them to well above that scale, so
+        the upsampling adds nothing and removes the ripple.
+        """
+        from albireo.todcor import Template
+
+        grid = self.dis.grid
+        narrowest = min(
+            float(np.min(np.atleast_1d(np.asarray(_coerce_lsf(v, k).sigma_kms, dtype=float))))
+            for k, v in self.dis.lsf.items()
+        )
+        factor = max(1, math.ceil(pixels_per_sigma * grid.dv_kms / narrowest))
+        fine = LogGrid(
+            x0=grid.x0,
+            dx=grid.dx / factor,
+            n=(grid.n - 1) * factor + 1,
+            relativistic=grid.relativistic,
+        )
+        spectra = self.spectra()
+        out = []
+        for star in self.dis.stars:
+            row = self.dis.component_names.index(star.name)
+            deviation = spectra[row] if factor == 1 else np.interp(fine.x, grid.x, spectra[row])
+            out.append(
+                Template(
+                    name=star.name,
+                    grid=fine,
+                    deviation=deviation,
+                    sigma_kms=0.0,
+                    v_zero_kms=None,
+                    meta={
+                        "source": "disentangling",
+                        "light": star.light,
+                        "mode": self.mode,
+                        "upsampled": factor,
+                    },
+                )
+            )
+        return out
+
+    def measure_velocities(self, *, templates=None, light=None, v_range=None, **kwargs):
+        """Per-epoch velocities of every star by TODCOR against this fit's own components.
+
+        The loop closing on itself: the disentangling gives the spectra, and correlating
+        the epochs against them gives the one product the joint fit never makes — a table
+        of one velocity per star per epoch (:func:`albireo.todcor`). The declared light
+        fractions are held fixed by default because the components were solved *against*
+        them (``docs/math.md`` §9.1: what was recovered is ``(w/l0) t``, so ``l0`` is the
+        only amplitude consistent with those spectra), and the declared LSF is applied per
+        instrument exactly as the fit applied it.
+
+        Parameters
+        ----------
+        templates
+            Defaults to :meth:`templates`. Pass absolute templates (from a library or a
+            label match) to get absolute velocities instead of differential ones.
+        light
+            Defaults to the declared fractions when the templates are this fit's own, and
+            to ``"global"`` otherwise.
+        v_range
+            Defaults to the span of the fitted velocities widened by 40 km/s on each side.
+        **kwargs
+            Passed to :func:`albireo.todcor`.
+
+        Returns
+        -------
+        albireo.todcor.VelocityTable
+        """
+        from albireo.todcor import todcor
+
+        own = templates is None
+        if own:
+            templates = self.templates()
+        if light is None:
+            light = [s.light for s in self.dis.stars] if own else "global"
+        if v_range is None:
+            fitted = np.asarray(self.velocities())
+            v_range = (float(fitted.min()) - 40.0, float(fitted.max()) + 40.0)
+        lsf_sigma, anchors = {}, {}
+        for key, value in self.dis.lsf.items():
+            spec = _coerce_lsf(value, key)
+            lsf_sigma[key] = spec.sigma_kms
+            if spec.anchors_angstrom is not None:
+                anchors[key] = tuple(spec.anchors_angstrom)
+        return todcor(
+            self.dis.dataset,
+            templates,
+            v_range=v_range,
+            light=light,
+            lsf_sigma_v=lsf_sigma,
+            lsf_anchors_angstrom=anchors or None,
+            **kwargs,
+        )
+
 
 @dataclass(frozen=True)
 class Posterior:
