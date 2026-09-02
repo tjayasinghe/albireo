@@ -2,18 +2,18 @@
 
 The LB-1 / HR 6819 debates hinged on disentangled component spectra whose light
 ratio was set by hand: the recovered deviation spectrum scales as 1/ell, so an
-assumed ell that is wrong by a factor alpha rescales every line depth by alpha —
-which then feeds directly into surface-gravity / class diagnostics. This script
+assumed ell that is wrong by a factor alpha rescales every line depth by alpha,
+which then feeds directly into surface-gravity and class diagnostics. This script
 demonstrates, on a seeded simulation:
 
 1. Fixed-orbit disentangling with a hand-set wrong ell reproduces the systematic:
    measured line-depth scaling equals ell_true / ell_assumed (math.md §5.2).
-2. The marginal likelihood over ell — with hyperparameters refit by ML-II at
-   every trial ell, so the comparison is like for like — is *flat* with constant
-   light fractions (the data genuinely do not choose ell, the hand does) but
-   sharply peaked at truth when three partial-eclipse epochs are added. With
-   *fixed* hypers the constant-light profile shows spurious prior-mediated
-   curvature; that trap is the reason for the per-trial refit.
+2. The marginal likelihood over ell, with hyperparameters refit by ML-II at every
+   trial ell so that the comparison is like for like, is flat with constant light
+   fractions (the data do not determine ell) but sharply peaked at the truth when
+   three partial-eclipse epochs are added. With fixed hyperparameters the
+   constant-light profile shows spurious prior-mediated curvature, which is the
+   reason for the per-trial refit.
 
 Run: python scripts/m5_light_ratio_demo.py   (~12 min CPU; 16 small ML-II fits)
 """
@@ -154,7 +154,7 @@ def main():
         for ell1 in ell1_grid:
             ell = np.repeat(np.array([[ell1], [1.0 - ell1]]), N_EP, axis=1)
             if eclipse:
-                # keep the *relative* eclipse dips, move the out-of-eclipse level
+                # keep the relative eclipse dips, move the out-of-eclipse level
                 ell[0, [2, 5, 9]] = ell1 - ELL_TRUE[0] + np.array([0.52, 0.44, 0.57])
                 ell[1] = 1.0 - ell[0]
             lls.append(ml2_loglike(jnp.asarray(ell.T)))

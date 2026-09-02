@@ -5,135 +5,113 @@
 [![License: BSD-3-Clause](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 
-Albireo is the famous gold-and-blue double star in Cygnus: **albireo separates the gold from the
-blue** — GPU-accelerated, fully Bayesian spectral disentangling of spectroscopic binaries in JAX.
+albireo performs Bayesian spectral disentangling of double- and multiple-lined
+spectroscopic binaries. Given a time series of composite spectra, it infers the orbital
+elements and the individual component spectra jointly, with posterior uncertainties on
+both. The component spectra are marginalized analytically, so only the low-dimensional
+orbital and instrumental parameters are sampled. The package is written in JAX (float64),
+is differentiable end to end, and runs on CPU or GPU. It is named after Albireo, the
+double star in Cygnus.
 
 > [!WARNING]
-> **Status: pre-alpha, under active development, API unstable.**
-> Expect breaking changes without notice. Not yet suitable for production science.
+> **Status: pre-alpha.** The API is unstable and may change without notice.
 
 ## Quickstart
 
-An example dataset ships inside the package, so the first thing you run needs no data of
-your own and no network:
+A simulated double-lined binary with a known injected orbit ships with the package, so
+the first fit needs no data and no network:
 
 ```python
 import albireo as ab
 
-dataset, truth = ab.load_example("sb2_sim", with_truth=True)   # simulated SB2, 12 epochs
-grid = ab.LogGrid(x0=truth["grid_x0"], dx=truth["grid_dx"], n=int(truth["grid_n"]))
+dataset, truth = ab.load_example("sb2_sim", with_truth=True)   # 12 epochs, one instrument
 
-model = ab.MarginalOrbitModel(
-    grid, dataset,
-    light_fractions=truth["light_fractions"],
-    lsf_sigma_v={"DEMO": 6.5},
-    v_rel_max_kms=160.0,
+dis = ab.Disentangler(
+    dataset,
+    components=[ab.Star("primary", light=0.62), ab.Star("secondary", light=0.38)],
+    orbit=ab.Orbit(period=ab.Between(5.5, 6.5), k=ab.Between([10.0, 10.0], [90.0, 90.0])),
+    lsf={"DEMO": 6.5},                     # Gaussian LSF sigma in km/s
 )
-priors, init = ...              # elided; the runnable version is examples/00_quickstart.py
-fit = ab.run_map(model.model(priors), init=init)
-marginal = model.marginal(fit.params)
+fit = dis.fit()                            # phase scan, MAP, empirical-Bayes hyperparameters
+post = fit.sample(seed=0)                  # NUTS over the orbit; spectra marginalized
+print(post.summary())
 
-ab.plot_spectra(grid, marginal.d_hat, std=ab.spectra_std(marginal))
+ab.plot_spectra(dis.grid, fit.spectra(), std=fit.std())
 ```
 
-`K_1` and `K_2` come back to better than 0.05% in about twenty seconds on a laptop, and no
-per-epoch radial velocity was measured anywhere: the orbit is inferred from the spectra
-directly, with the component spectra marginalized out in closed form. Run
-[`examples/00_quickstart.py`](examples/00_quickstart.py) for the whole thing, or read
-[`docs/quickstart.md`](docs/quickstart.md) for the annotated walk through it.
+The semi-amplitudes are recovered to better than 0.1% of the injected values, and no
+per-epoch radial velocity is measured at any stage: the orbit is inferred from the spectra
+directly. The annotated version is [`docs/quickstart.md`](docs/quickstart.md); the
+low-level equivalent is [`examples/00_quickstart.py`](examples/00_quickstart.py).
 
-## Why albireo
+## Capabilities
 
-- **Analytic marginalization of the component spectra** — the (very high-dimensional) component
-  spectra are integrated out in closed form, so NUTS only ever has to explore the low-dimensional
-  orbit.
-- **Honest uncertainties** on both the orbital elements *and* the recovered component spectra, from
-  a single joint posterior rather than from a bootstrap around a point estimate.
-- **Works in wavelength space**, so masks, per-pixel weights, spectral gaps, non-uniform sampling,
-  and multi-instrument data sets are handled natively — no Fourier-domain padding or interpolation
-  onto a common wavelength solution required.
-- **GPU-accelerated and differentiable** end to end via JAX (float64), with numpyro for NUTS and
-  optax for MAP optimization.
-- **SB1 faint-companion detection**, via a K2 scan: profile the marginal likelihood over the
-  secondary velocity semi-amplitude to search for companions that never show up as a second set of
-  lines. K₁ can be integrated out rather than assumed — the fix for the failure mode the
-  literature reports, where an error in the primary's semi-amplitude puts spurious features in
-  the recovered secondary *and* inflates the detection statistic while doing so.
-- **Detection limits with a false-alarm rate attached**, not just a peak. `ab.detection_limit`
-  resimulates the observed dataset through its own operators, scans hundreds of companion-free
-  draws for the null distribution, and injects a ladder of light fractions for completeness —
-  producing the sentence a referee asks for: *any companion contributing more than X% of the
-  light would have been detected at 95% confidence*
-  ([`examples/05_detection_limit.py`](examples/05_detection_limit.py)).
-- **Forecasts what the *next* epochs would buy, before they are taken.** The posterior
-  covariance of the component spectra contains no fluxes — only the epochs, their phases, the
-  weights, the LSF and the prior — so `ab.sensitivity_forecast` answers "will twelve more nights
-  at these phases separate the two stars?" from a set of planned epochs alone
-  (`ab.plan_epochs`). It reports the forecast band, the spectral patterns the design *cannot*
-  pin down, and how many degrees of freedom the data would actually constrain — each quoted
-  against the prior alone, so a design that is learning nothing says so. It is also a working
-  correction to the obvious heuristic: a cadence aliased to the orbital period maximizes the
-  spread of the differential velocity and is a *worse* design than the same nights spread over
-  phase — 243 nats against 375 ([`examples/08_forecast.py`](examples/08_forecast.py)).
-- **Nebular emission modelled, not masked** — massive stars sit in H II regions, and the emission
-  lines that come with them fill the disentangled line cores. albireo fits them as a component at
-  rest in the barycentric frame with a free per-epoch amplitude, so the stellar spectra come back
-  uncontaminated *and* complete. On a simulated SB2, leaving the line in costs 11.5% of the Hβ
-  equivalent width and — because a static line is a component with *K* = 0 — 59% of K₂;
-  modelling it costs 0.14% and 0.3%
-  ([`examples/04_nebular.py`](examples/04_nebular.py)).
-- **One command from a list of stars to spectra, labels, velocities and orbits.**
-  `albireo init` writes an annotated TOML, `albireo run config.toml --jobs 4` reads each star's
-  epochs, disentangles them, fits atmospheric labels to the components against a published
-  grid, measures one velocity per component per epoch against those components, fits the
-  Keplerian to the table, and writes tables, spectra with their bands, a JSON report and six
-  diagnostic figures per star — in worker processes, with every failure recorded and every
-  caveat flagged. `albireo demo` runs it on two simulated stars with known answers, offline
-  ([`examples/13_pipeline.py`](examples/13_pipeline.py)).
-- **Epoch radial velocities for every component, by TODCOR** — the one product the joint fit
-  never makes and every eclipsing-binary analysis and orbit code starts from. `ab.todcor`
-  correlates each spectrum against a combination of templates with independent shifts
-  (Zucker & Mazeh 1994, generalized to *N* components), written as the weighted least-squares
-  fit it is so that masks, gaps, cosmics and mixed instruments cost nothing; on a uniform grid
-  it reproduces the published formulae to 1e-10. The sub-pixel minimum is computed exactly,
-  the errors are the maximum-likelihood ones, blending and non-detections are flagged, and
-  `ab.todcor_batch` runs a survey's worth of stars in one call. Templates come from a
-  library, a label match, or the disentangling itself — `fit.measure_velocities()` closes
-  the loop — and `ab.fit_rv_orbit` turns the table into a Keplerian with the same solver as
-  the joint model ([`examples/12_todcor.py`](examples/12_todcor.py)).
-- **Reads archival spectra directly** — `albireo.io` turns a directory of ESO Phase-3 or
-  IRAF-style FITS into a `Dataset`, and `albireo.preprocess` supplies the things reduced
-  spectra are missing: a continuum, an inverse variance, masks, and one shared wavelength grid.
-  Columns are identified by their IVOA utypes rather than their names, because across seven
-  instruments no two ESO collections agree on the names, the units, the extension or the
-  wavelength scale — and the obvious shortcut is a trap: UVES labels its *sky-background*
-  column with the same UCD HARPS puts on its *flux*.
-- **Fetches the data too, by name.** `albireo.archive` queries the ESO archive and downloads
-  resumably, stdlib-only. For BLOeM — 929 SMC stars, ~25 epochs each, 59 published SB2s whose
-  disentangling is still listed as future work — `ab.bloem_catalogue(binary_class="SB2")` gives
-  the targets and `ab.bloem_spectra("1-037")` gives one star's epochs, resolving the survey
-  identifier through VizieR because the archive files these under their Gaia DR3 source ids
-  ([`examples/06_bloem.py`](examples/06_bloem.py)).
+- **Joint inference of orbit and spectra.** Conditional on the orbit, light fractions,
+  line-spread function and prior hyperparameters, the model is linear-Gaussian in the
+  component spectra, which are integrated out in closed form. The No-U-Turn Sampler then
+  explores 10 to 200 nonlinear parameters regardless of the number of pixels, and the
+  spectra with their covariance are recovered at each posterior draw.
+- **Wavelength-space model on native pixel grids.** Data are never resampled. Masks,
+  chip gaps, cosmic rays, per-pixel weights, non-uniform sampling and multi-instrument
+  data sets are handled by the weights alone.
+- **Degeneracies made explicit.** The low-frequency separation degeneracy, the light-ratio
+  versus line-depth degeneracy, and the systemic-velocity zero point are regularized with
+  explicit prior scales and reported in the posterior. There is no default light fraction:
+  the treatment must be declared, and per-epoch light fractions can be inferred where
+  eclipses exist.
+- **Instrumental and astrophysical nuisance components.** Telluric absorption, nebular
+  emission with a free amplitude per exposure, per-epoch response polynomials,
+  per-instrument and wavelength-dependent line-spread functions with an optional
+  Gauss-Hermite asymmetry, per-epoch noise rescaling, and first-order autoregressive
+  correlated noise. Hierarchical triples are modelled as nested Keplerians.
+- **Faint-companion detection for single-lined systems.** A scan over the companion
+  semi-amplitude with the companion spectrum marginalized at every trial, optionally with
+  the primary semi-amplitude integrated out. Detection limits and false-alarm probabilities
+  are measured by injection and recovery through the observed data's own operators.
+- **Observing-strategy forecasts.** The posterior covariance of the spectra contains no
+  fluxes, so the uncertainty band, the worst-determined spectral modes and the expected
+  information gain of a planned set of epochs are computed before the data are taken.
+- **Stellar labels for template selection.** Effective temperature, surface gravity,
+  metallicity and projected rotation are fitted to the disentangled components against
+  published synthetic grids (BOSZ, POLLUX), with the dilution of both components fitted
+  jointly through a shared radius ratio and with two uncertainty estimates: the formal
+  covariance and the spread over refits of joint posterior draws.
+- **Epoch radial velocities by TODCOR.** One velocity per component per epoch by
+  N-dimensional correlation against templates from a library, a label fit, or the
+  disentangling itself, evaluated as a weighted least-squares fit so that masks and mixed
+  instruments need no special treatment. A Keplerian is fitted to the resulting table with
+  the same solver and conventions as the joint model.
+- **Archive access and preprocessing.** ESO Phase 3 and IRAF-style FITS spectra are read
+  with the wavelength frame, time system and barycentric correction taken from the header,
+  the ESO archive is queried and downloaded from with the standard library only, and
+  continuum normalization, noise estimation and masking are provided for reduced spectra
+  that lack them.
+- **A pipeline and command line.** `albireo run config.toml` reads each star's epochs,
+  disentangles them, fits labels, measures velocities, fits the orbit, and writes tables,
+  spectra with uncertainty bands, a JSON report and diagnostic figures, running stars in
+  parallel worker processes and recording failures without stopping the batch.
 
-## One command
+The scientific background and the literature each method rests on are summarized in
+[`docs/science.md`](docs/science.md).
+
+## Command line
 
 ```bash
 pip install "albireo[io,plots]"
 albireo demo                      # two simulated stars with known answers, offline
-albireo init                      # an annotated albireo.toml to edit for your own stars
+albireo init                      # writes an annotated albireo.toml
 albireo run albireo.toml --jobs 4
 ```
 
-Each star gets a directory with `summary.txt`, `result.json`, the velocity table, the
-disentangled spectra with their uncertainty bands, the orbit, the labels and the figures; the
-batch gets `results.csv` with one row per star. The things the data cannot supply — the light
-fraction of each component, and the wavelength scale where a synthetic grid is consulted — are
-required by the file rather than defaulted by the command. The walkthrough is
+Each star receives a directory with `summary.txt`, `result.json`, the velocity table, the
+disentangled spectra with their uncertainty bands, the orbit, the labels and the figures;
+the batch receives `results.csv` with one row per star. Light fractions and the wavelength
+medium are required in the configuration file rather than defaulted. See
 [`docs/tutorials/pipeline.md`](docs/tutorials/pipeline.md).
 
 ## Installation
 
-albireo is **not yet on PyPI**. Install from a clone:
+albireo is not yet on PyPI. Install from a clone:
 
 ```bash
 git clone https://github.com/tjayasinghe/albireo.git
@@ -141,80 +119,25 @@ cd albireo
 pip install -e ".[dev]"
 ```
 
-Python 3.12+ is required (current jaxlib no longer ships 3.11 wheels). JAX's x64 mode is enabled by the package at import time, so all
-computation is done in float64 — you do not need to set `JAX_ENABLE_X64` yourself.
+Python 3.12 or newer is required. JAX 64-bit mode is enabled when the package is imported;
+all computation is done in float64.
 
-Two optional extras, both genuinely optional — the core never imports either, so a fit on a
-headless node needs neither:
+Two optional extras exist. The core never imports either, so a fit on a headless node
+needs neither:
 
-- `pip install -e ".[io]"` — astropy, for reading and writing FITS (`albireo.io`).
-- `pip install -e ".[plots]"` — matplotlib and arviz, for `albireo.plotting` and the
-  posterior diagnostics.
+- `pip install -e ".[io]"` installs astropy for reading and writing FITS (`albireo.io`);
+- `pip install -e ".[plots]"` installs matplotlib and ArviZ for `albireo.plotting` and
+  the posterior diagnostics.
 
-For a GPU build, install the appropriate `jax[cuda]` wheel for your platform following the
+For a GPU build, install the `jax[cuda]` wheel for your platform following the
 [JAX installation guide](https://docs.jax.dev/en/latest/installation.html).
 
-## Current API (M4: joint inference + realism features)
+## Low-level interface
 
-Working today: the simulator, the fixed-orbit marginal solver, joint NUTS inference
-of the orbit with the spectra marginalized (MAP → Laplace mass matrix → NUTS
-pipeline; hyperparameters by ML-II), and the realism layer — telluric components,
-hierarchical SB3 triples (`period_out`/…/`k_out` sites), per-epoch light-fraction
-inference (`light` site, Dirichlet priors — the eclipse breaker, inferred),
-multi-instrument LSF-width inference (`lsf_sigma` site; anchor one reference
-instrument), per-epoch noise rescaling (`log_jitter` site — read
-[the benchmarks](docs/benchmarks.md) before trusting one on real data), nebular
-emission components (`nebular=True` plus the `log_nebular_amp` site, with per-pixel
-prior profiles to confine them to their lines), and the SB1
-faint-companion K₂ scan (`ab.k2_scan`).
-
-`ab.Disentangler` is a declarative front end over all of it — **experimental**, because a
-vocabulary is expensive to change once people depend on it. It derives the four things the
-low-level path makes you get right yourself (the solver's velocity budget, the grid margin,
-the conjunction phase, and the smoothness hyperparameters by empirical Bayes), and refuses
-to derive the ones where a default would be a scientific claim. It is a compiler rather
-than a wall: `dis.explain()` prints every derivation and `dis.expert()` hands back the
-`(model, priors, init)` triple, so the core below stays the supported surface.
-
-```python
-dis = ab.Disentangler(
-    dataset,
-    components=[ab.Star("primary", light=0.62), ab.Star("secondary", light=0.38)],
-    orbit=ab.Orbit(period=ab.Between(5.5, 6.5), k=ab.Between([10.0, 10.0], [90.0, 90.0])),
-    lsf={"DEMO": 6.5},
-)
-fit = dis.fit()          # phase scan -> MAP + ML-II -> residual check
-post = fit.sample(seed=0)  # Laplace mass matrix -> NUTS
-```
-
-### From a directory of FITS files
-
-Reduced spectra are not what the model consumes: they are rarely continuum-normalized, they
-often ship no usable error array, and pipelines that apply the barycentric correction before
-resampling give every exposure its own wavelength grid. `read_dataset` handles all three, and
-warns about anything it had to assume (frame, time system, wavelength unit) instead of guessing
-silently.
-
-```python
-import albireo as ab
-
-ds = ab.read_dataset(
-    "data/hr6819/*.fits",            # ESO Phase-3 or IRAF-style 1-D spectra
-    instrument="FEROS",
-    region=(4380.0, 4600.0),         # a full echelle order set is far more than you need
-    smooth_angstrom=120.0,           # continuum stiffness
-)
-ds = ab.Dataset(ab.share_wavelength_grid(list(ds)), frame=ds.frame)  # 28 grids -> 1
-grid = ab.LogGrid.covering(ds, dv_kms=1.5, v_margin_kms=90.0, lsf_sigma_kms=2.65)
-print(ds.summary())
-```
-
-`ab.read_spectrum` returns the intermediate `RawSpectrum` if you want to inspect what the
-header actually said before any of it is applied. See
-[`examples/03_hr6819_real_data.py`](examples/03_hr6819_real_data.py) for a complete run on
-real archival data.
-
-### The inference pipeline
+`Disentangler` is a declarative front end that derives the solver's velocity budget, the
+model grid margins, the conjunction phase and the smoothness hyperparameters from the
+declaration, and `dis.expert()` returns the `(model, priors, init)` triple it built. The
+underlying classes and functions are the supported interface:
 
 ```python
 import albireo as ab
@@ -227,7 +150,7 @@ model = ab.MarginalOrbitModel(
     ds,
     light_fractions=[0.62, 0.38],
     lsf_sigma_v={"HERMES": 4.0},
-    v_rel_max_kms=250.0,  # velocity budget; wider priors are guarded, not corrupted
+    v_rel_max_kms=250.0,   # velocity budget of the static solver; exceeding it is guarded
 )
 priors = {
     "period": dist.Normal(63.1, 0.01),
@@ -238,8 +161,8 @@ priors = {
     "log_tau": dist.Normal(jnp.log(300.0) * jnp.ones(2), 3.0),
     "log_eta": dist.Normal(jnp.log(5.0) * jnp.ones(2), 3.0),
 }
-map_fit = ab.run_map(model.model(priors), init=init_values)  # MAP + ML-II
-hyper = {s: map_fit.params[s] for s in ("log_tau", "log_eta")}  # empirical Bayes
+map_fit = ab.run_map(model.model(priors), init=init_values)          # MAP and ML-II
+hyper = {s: map_fit.params[s] for s in ("log_tau", "log_eta")}
 nuts_model = model.model({s: d for s, d in priors.items() if s not in hyper}, fixed=hyper)
 mcmc = ab.run_nuts(
     nuts_model,
@@ -248,54 +171,39 @@ mcmc = ab.run_nuts(
     inverse_mass_matrix=ab.laplace_inverse_mass(nuts_model, map_fit.params),
 )
 spectra = ab.posterior_spectra(model, mcmc.get_samples(), key, extra=hyper)
-
-# SB1 + faint companion: marginalized K2 detection scan (docs/math.md §6)
-search = dict(
-    orbit=sb1_solution,
-    k1=12.0,
-    k1_sigma=0.4,  # integrate K_1 out rather than condition on it (§6.1)
-    k2_grid=jnp.arange(10.0, 150.0, 2.0),
-    light_fractions=(0.95, 0.05),  # explicit — see the light-ratio policy
-    lsf_sigma_v={"HERMES": 4.0},
-    prior=spec_prior,
-    v_rel_max_kms=250.0,
-)
-scan = ab.k2_scan(grid, ds, **search)
-scan.k2_peak, scan.detection_peak, scan.companion  # + std, null loglike, ...
-
-# ...and what that peak is worth: a measured false-alarm rate and a limit (§6.2)
-limit = ab.detection_limit(
-    grid, ds, k2_true=scan.k2_peak, ell2_grid=np.array([0.005, 0.01, 0.02, 0.04]), **search
-)
-print(limit.summary())
-print(limit.false_alarm_probability(scan.detection_peak))
-
-# Planning the next run: what would twelve more nights at these phases buy? (§5.5)
-design = ab.Dataset([*ds, *ab.plan_epochs(ds[0], bjd=t_new)], frame=ds.frame)
-forecast = ab.sensitivity_forecast(
-    grid, design, orbit=fitted_orbit, light_fractions=(0.6, 0.4),
-    lsf_sigma_v={"HERMES": 4.0}, prior=spec_prior, baseline=range(ds.n_epochs),
-)
-print(forecast.summary())  # no fluxes were read; the planned epochs have none
 ```
+
+Reading archival spectra:
+
+```python
+ds = ab.read_dataset(
+    "data/hr6819/*.fits",            # ESO Phase 3 or IRAF-style 1-D spectra
+    instrument="FEROS",
+    region=(4380.0, 4600.0),
+    smooth_angstrom=120.0,           # continuum stiffness
+)
+ds = ab.Dataset(ab.share_wavelength_grid(list(ds)), frame=ds.frame)
+grid = ab.LogGrid.covering(ds, dv_kms=1.5, v_margin_kms=90.0, lsf_sigma_kms=2.65)
+```
+
+The reader warns about every quantity it had to assume (frame, time system, wavelength
+unit). See [`examples/03_hr6819_real_data.py`](examples/03_hr6819_real_data.py) for a
+complete analysis of archival FEROS spectra.
 
 ## Documentation
 
-- [`docs/quickstart.md`](docs/quickstart.md) — the five-minute version, on packaged data.
-- [`examples/`](examples/) — executable tutorials (quickstart, SB2 end-to-end, K₂ scan,
-  detection limits, nebular contamination, observing-strategy forecasts, free per-epoch
-  velocities, and HR 6819 on real archival FEROS spectra); everything but the
-  HR 6819 script runs in CI. Narrative versions in [`docs/tutorials/`](docs/tutorials/).
-- [`docs/design.md`](docs/design.md) — architecture, data model, and the shape of the inference
-  problem.
-- [`docs/math.md`](docs/math.md) — the disentangling likelihood, analytic marginalization of the
-  component spectra, and the orbital parameterization.
-- [`docs/benchmarks.md`](docs/benchmarks.md) — the running validation and performance record.
-- [`docs/roadmap.md`](docs/roadmap.md) — where albireo is going and why, with the non-goals recorded.
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — dev setup and the test philosophy.
+- [`docs/quickstart.md`](docs/quickstart.md): the first fit, on packaged data.
+- [`docs/science.md`](docs/science.md): scientific background and references.
+- [`examples/`](examples/): executable tutorials, each ending in assertions against the
+  injected truth; narrative versions in [`docs/tutorials/`](docs/tutorials/).
+- [`docs/design.md`](docs/design.md): architecture, data model, and the decision ledger.
+- [`docs/math.md`](docs/math.md): the forward model, the marginal likelihood, the
+  degeneracy analysis, and the estimators for labels and epoch velocities.
+- [`docs/benchmarks.md`](docs/benchmarks.md): the validation and performance record.
+- [`docs/roadmap.md`](docs/roadmap.md): planned work and stated non-goals.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md): development setup and test requirements.
 
-Docs are built with [MkDocs Material](https://squidfunk.github.io/mkdocs-material/) and will be
-hosted once the package reaches a usable state. To build them locally:
+The documentation is built with MkDocs Material:
 
 ```bash
 pip install -e ".[docs]"
@@ -304,8 +212,8 @@ mkdocs serve
 
 ## Citation
 
-A methods paper is in preparation. Until it appears, please cite the repository directly — see
-[`CITATION.cff`](CITATION.cff).
+A methods paper is in preparation. Until it appears, please cite the repository; see
+[`CITATION.cff`](CITATION.cff) and [`docs/citing.md`](docs/citing.md).
 
 ## License
 

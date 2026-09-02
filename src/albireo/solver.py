@@ -1,16 +1,29 @@
-"""Block-tridiagonal solver: exact probe assembly, Cholesky, solves, sampling, Takahashi.
+"""Block-tridiagonal linear algebra: comb-probe assembly, Cholesky, solves, sampling and
+selected inversion.
 
-Strategy A of ``docs/math.md`` §4.2. A banded SPD operator of half-bandwidth ``p`` is
-partitioned into ``K`` dense blocks of size ``B >= p``, making it block-tridiagonal
-exactly. Assembly uses *comb probing*: probing a banded matrix with unit combs of
-stride ``2p + 1`` recovers every entry exactly (columns of the same comb are too far
-apart to alias within the band), so the matrix is built from ``2p + 1`` matrix-free
-operator applications — reusing the tested forward/adjoint operators and nothing else.
-All stages are ``lax.scan``-based and differentiable.
+Implements Strategy A of ``docs/math.md`` §4.2. A banded symmetric positive definite
+operator of half-bandwidth ``p`` is partitioned into ``K`` dense blocks of size
+``B >= p``, which makes it exactly block-tridiagonal. Every stage (factorization,
+triangular solves, sampling, selected inversion) is a ``lax.scan`` over the blocks and is
+differentiable.
 
-The logical dimension ``n`` is padded to ``K * B``; the pad block is the identity
-(probe pass-through), which leaves solves, log-determinants, and sampling of the
-first ``n`` coordinates untouched.
+Assembly by comb probing applies the matrix-free operator to unit combs of stride
+``2p + 1``. Columns of one comb are separated by more than the bandwidth, so they do not
+alias within the band, and ``2p + 1`` operator applications recover every band entry
+exactly from the tested forward and adjoint operators. Direct band assembly
+(``docs/math.md`` §4.5, D28) has replaced probing on the likelihood path; probing remains
+the reference construction and the validation oracle.
+
+The logical dimension ``n`` is padded to ``K * B``. The pad block is the identity (probing
+passes the pad coordinates through), so solves, log-determinants and samples restricted to
+the first ``n`` coordinates are unaffected.
+
+The selected inverse (the block diagonal and first block subdiagonal of the inverse) is
+computed by the Takahashi recursion on the block Cholesky factor (Takahashi et al. 1973).
+
+References
+----------
+Takahashi, K., Fagan, J. & Chin, M.-S. 1973, in Proc. 8th PICA Conference, 63
 """
 
 from __future__ import annotations
@@ -42,9 +55,12 @@ __all__ = [
 @jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True)
 class BlockTridiagonal:
-    """Symmetric block-tridiagonal matrix: ``diag[k]`` on the diagonal and
-    ``lower[k] = M[block k+1, block k]`` below it. ``n`` is the logical (unpadded)
-    dimension; the stored dimension is ``K * B``."""
+    """Symmetric block-tridiagonal matrix in block storage.
+
+    ``diag[k]`` is the ``k``-th diagonal block and ``lower[k] = M[block k+1, block k]``
+    the block below it; the blocks above the diagonal are the transposes and are not
+    stored. ``n`` is the logical (unpadded) dimension; the stored dimension is ``K * B``.
+    """
 
     diag: jax.Array  # (K, B, B)
     lower: jax.Array  # (K-1, B, B)
@@ -101,7 +117,7 @@ class BlockCholesky:
         return cls(*children, n=aux)
 
 
-_SMALL_PROBE_BYTES = 64 * 1024 * 1024  # outputs-array size below which memory is a non-issue
+_SMALL_PROBE_BYTES = 64 * 1024 * 1024  # outputs-array size below which memory is unconstrained
 
 
 def probe_block_tridiagonal(
@@ -113,41 +129,53 @@ def probe_block_tridiagonal(
     probe_chunk: int | None = None,
     remat: bool | None = None,
 ):
-    """Assemble a banded SPD operator into :class:`BlockTridiagonal` by comb probing.
+    """Assemble a banded SPD operator into a :class:`BlockTridiagonal` by comb probing.
 
-    Probes are applied in *sequential* batches of ``probe_chunk`` via ``lax.map``
-    (combs generated from their offsets inside the loop body), and the block
-    storage is read out of the probe outputs with per-block gathers, also under
-    ``lax.map``. Sequential batching is load-bearing: unrolled probe batches have
-    no data dependence, so XLA schedules them with overlapping live ranges and the
-    temporary-buffer plan grows with the *total* probe count (~80 GB at survey
-    scale, measured); a scan reuses one batch's buffers for the next, capping peak
-    memory at the ``(2p + 1, n_pad)`` output array plus one batch's intermediates.
+    Probes are applied in sequential batches of ``probe_chunk`` under ``lax.map``, with
+    the combs generated from their offsets inside the loop body, and the block storage is
+    read out of the probe outputs with per-block gathers, also under ``lax.map``.
+    Sequential batching bounds the memory: unrolled probe batches have no data
+    dependence, so XLA schedules them with overlapping live ranges and the
+    temporary-buffer plan grows with the total probe count (about 80 GB at survey scale,
+    measured). A scan reuses one batch's buffers for the next, so peak memory is the
+    ``(2p + 1, n_pad)`` output array plus one batch's intermediates.
 
     Parameters
     ----------
     matvec
-        Linear map on vectors of length ``n``. Must have half-bandwidth at most
-        ``half_bandwidth`` — probing silently corrupts entries otherwise (validate with
-        :meth:`BlockTridiagonal.matvec` against ``matvec`` on a random vector).
+        Linear map on vectors of length ``n``. Its half-bandwidth must not exceed
+        ``half_bandwidth``; otherwise probing aliases band entries and the assembled
+        matrix is wrong without any error being raised. Validate by comparing
+        :meth:`BlockTridiagonal.matvec` against ``matvec`` on a random vector.
     n
         Logical dimension.
     half_bandwidth
-        Bound ``p`` on ``|q - c|`` for nonzero entries.
+        Bound ``p`` on ``|q - c|`` for nonzero entries ``M[q, c]``.
     block_size
-        Block size ``B >= p`` (default ``max(p, 8)``). Dimension is padded to a
+        Block size ``B >= p`` (default ``max(p, 8)``). The dimension is padded to a
         multiple of ``B``; the pad block is the identity.
     probe_chunk
-        Probes per sequential batch. Peak probing memory scales linearly with it;
-        larger values amortize per-step overhead (raise on GPU, where memory
-        bandwidth favors bigger batches). Default: size-adaptive — 64 for small
-        problems, 8 once the outputs array exceeds ~64 MB.
+        Probes per sequential batch. Peak probing memory scales linearly with it, and
+        larger values amortize the per-step overhead (on a GPU, where memory bandwidth
+        favours larger batches, it should be raised). Default: size-adaptive, all
+        ``2p + 1`` probes in one batch for small problems and 8 once the outputs array
+        exceeds about 64 MB.
     remat
         Rematerialize probe batches in the backward pass. Saves gradient memory
-        proportional to the probe count at ~1.5-2x backward probing cost. Default:
-        size-adaptive — off for small problems (measured 2x NUTS slowdown at the
-        M3 gate scale for no memory benefit), on at scale (where storing every
-        batch costs hundreds of GB).
+        proportional to the probe count at about 1.5-2x the backward probing cost.
+        Default: size-adaptive, off for small problems (a measured 2x NUTS slowdown at
+        the M3 gate scale with no memory benefit) and on at scale, where storing every
+        batch would need hundreds of GB.
+
+    Returns
+    -------
+    BlockTridiagonal
+        The assembled operator in block storage.
+
+    Raises
+    ------
+    ValueError
+        If ``block_size`` is smaller than ``half_bandwidth``.
     """
     p = int(half_bandwidth)
     b = int(block_size) if block_size is not None else max(p, 8)
@@ -158,8 +186,8 @@ def probe_block_tridiagonal(
     stride = 2 * p + 1
     small = stride * n_pad * 8 <= _SMALL_PROBE_BYTES
     if probe_chunk is None:
-        # Small problems: one batch = all probes, fully parallel across cores (the
-        # serialization that bounds memory at scale costs real wall time here).
+        # Small problems: one batch holds all probes and runs in parallel across cores;
+        # the serialization that bounds memory at scale would cost wall time here.
         probe_chunk = stride if small else 8
     if remat is None:
         remat = not small
@@ -213,7 +241,12 @@ def probe_block_tridiagonal(
 
 
 def block_cholesky(bt: BlockTridiagonal) -> BlockCholesky:
-    """Cholesky factorization via a ``lax.scan`` over blocks (``docs/math.md`` §4.2)."""
+    """Block Cholesky factorization by a ``lax.scan`` over blocks (``docs/math.md`` §4.2).
+
+    The recursion is ``L_kk L_kk^T = D_k - L_{k,k-1} L_{k,k-1}^T`` and
+    ``L_{k+1,k} = E_k L_kk^{-T}``, with ``D_k`` the diagonal and ``E_k`` the subdiagonal
+    blocks of the input.
+    """
     d, e = bt.diag, bt.lower
     l0 = jnp.linalg.cholesky(d[0])
     if bt.num_blocks == 1:
@@ -280,7 +313,15 @@ def sample_standard(chol: BlockCholesky, z):
 
 
 def selected_inverse_diag(chol: BlockCholesky):
-    """Diagonal of ``(L L^T)^{-1}`` via block Takahashi recursions (backward scan)."""
+    """Diagonal of ``(L L^T)^{-1}`` by the block Takahashi recursion (backward scan).
+
+    The recursion is the one written out in :func:`selected_inverse_blocks`; only the
+    diagonal of each block is emitted.
+
+    References
+    ----------
+    Takahashi, K., Fagan, J. & Chin, M.-S. 1973, in Proc. 8th PICA Conference, 63
+    """
     k, b = chol.num_blocks, chol.block_size
     eye = jnp.eye(b)
     inv_last = solve_triangular(chol.diag[-1], eye, lower=True)
@@ -300,20 +341,24 @@ def selected_inverse_diag(chol: BlockCholesky):
 
 
 def selected_inverse_blocks(chol: BlockCholesky):
-    """Block diagonal and first block subdiagonal of ``(L L^T)^{-1}`` (Takahashi).
+    """Block diagonal and first block subdiagonal of ``(L L^T)^{-1}`` (Takahashi recursion).
 
     Returns ``(s_diag, s_sub)`` of shapes ``(K, B, B)`` and ``(K-1, B, B)`` with
-    ``s_diag[k] = Sigma[block k, block k]`` and ``s_sub[k] = Sigma[block k+1, block k]``
-    — exactly the banded part of the inverse needed to contract against a
-    block-tridiagonal perturbation (the closed-form marginal-likelihood gradient).
-    Same backward recursion as :func:`selected_inverse_diag`:
+    ``s_diag[k] = Sigma[block k, block k]`` and ``s_sub[k] = Sigma[block k+1, block k]``:
+    the banded part of the inverse that a block-tridiagonal perturbation contracts
+    against, as the closed-form marginal-likelihood gradient requires (``docs/math.md``
+    §4.5). The recursion runs backward from the last block,
     ``Sigma_{k+1,k} = -Sigma_{k+1,k+1} W_k`` and
     ``Sigma_{kk} = L_kk^{-T} L_kk^{-1} + W_k^T Sigma_{k+1,k+1} W_k`` with
     ``W_k = L_{k+1,k} L_kk^{-1}``.
 
-    Reference implementation and test oracle. The likelihood gradient uses the fused
-    :func:`selected_inverse_cotangent`, which never materializes these ``2K - 1``
-    blocks (3.1 GB at the design target).
+    This is the reference implementation and the test oracle. The likelihood gradient
+    uses the fused :func:`selected_inverse_cotangent`, which does not materialize these
+    ``2K - 1`` blocks (3.1 GB at the design target).
+
+    References
+    ----------
+    Takahashi, K., Fagan, J. & Chin, M.-S. 1973, in Proc. 8th PICA Conference, 63
     """
     k, b = chol.num_blocks, chol.block_size
     eye = jnp.eye(b)
@@ -335,19 +380,19 @@ def selected_inverse_blocks(chol: BlockCholesky):
 
 
 def selected_inverse_cotangent(chol: BlockCholesky, d_blocks, u_blocks, g_logdet, g_quad):
-    """The marginal-likelihood cotangent of ``Lambda``, fused into the Takahashi sweep.
+    """Marginal-likelihood cotangent of ``Lambda``, fused into the Takahashi sweep.
 
     Returns the block-tridiagonal storage of
 
         ``g_logdet * Sigma  -  g_quad * d d^T  -  sym(u d^T)``
 
     restricted to the block-tridiagonal pattern, where ``Sigma = (L L^T)^{-1}``. This is
-    exactly what :func:`albireo.likelihood._solve_stage`'s reverse rule needs; forming it
-    inside the recursion means each ``Sigma`` block is consumed at the step that produces
-    it and the selected inverse is never stored. Against the unfused route
-    (:func:`selected_inverse_blocks` followed by the outer products) this removes
-    ``2K - 1`` blocks of live storage plus the outer-product temporaries — 3.1 GB at the
-    design target — for identical arithmetic.
+    the quantity the reverse rule of :func:`albireo.likelihood._solve_stage` requires
+    (``docs/math.md`` §4.5). Forming it inside the recursion consumes each ``Sigma`` block
+    at the step that produces it, so the selected inverse is never stored. Compared with
+    the unfused route (:func:`selected_inverse_blocks` followed by the outer products)
+    this removes ``2K - 1`` blocks of live storage and the outer-product temporaries,
+    3.1 GB at the design target, with identical arithmetic.
 
     The subdiagonal blocks carry a factor 2 because ``BlockTridiagonal.lower[k]`` is the
     sole storage for both ``Lambda[k+1, k]`` and ``Lambda[k, k+1]`` (see
@@ -361,6 +406,15 @@ def selected_inverse_cotangent(chol: BlockCholesky, d_blocks, u_blocks, g_logdet
         ``(K, B)`` block views of ``d = Lambda^{-1} b`` and ``u = Lambda^{-1} g_d``.
     g_logdet, g_quad
         Scalar cotangents of ``log det Lambda`` and of ``b^T Lambda^{-1} b``.
+
+    Returns
+    -------
+    tuple[jax.Array, jax.Array]
+        ``(diag_bar, lower_bar)`` of shapes ``(K, B, B)`` and ``(K-1, B, B)``.
+
+    References
+    ----------
+    Takahashi, K., Fagan, J. & Chin, M.-S. 1973, in Proc. 8th PICA Conference, 63
     """
     k, b = chol.num_blocks, chol.block_size
     eye = jnp.eye(b)

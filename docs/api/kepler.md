@@ -4,4 +4,6 @@ A differentiable Kepler solver: fixed-iteration Newton wrapped in a `custom_jvp`
 supplies the implicit-function tangent, so the gradient is exact rather than
 backpropagated through the iteration. Verified to e = 0.95.
 
+Background and references: [science overview](../science.md).
+
 ::: albireo.kepler

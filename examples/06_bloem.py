@@ -1,56 +1,55 @@
-"""BLOeM by name: from a survey identifier to a model-ready Dataset, in one script.
+"""BLOeM by name: from a survey identifier to a model-ready Dataset.
 
-BLOeM (Binarity at LOw Metallicity) is a VLT/FLAMES-GIRAFFE survey of 929 OBAF stars in
-the Small Magellanic Cloud — about 25 epochs each, an intrinsic binary fraction above 70%,
-and 59 published double-lined systems whose *disentangling* the survey team still lists as
-future work. It is the largest public dataset albireo was built for, and none of it needs
-an ESO account.
+BLOeM (Binarity at LOw Metallicity) is a VLT/FLAMES-GIRAFFE survey of 929 OBAF stars in the
+Small Magellanic Cloud, with about 25 epochs each, an intrinsic binary fraction above 70%,
+and 59 published double-lined systems whose disentangling the survey team lists as future
+work. It is the largest public dataset albireo was built for, and none of it requires an ESO
+account.
 
     python examples/06_bloem.py            # defaults to BLOeM 1-037, an SB2
     python examples/06_bloem.py 1-002      # any identifier; 'BLOeM_1-2' also works
 
-What this demonstrates that examples 01-05 cannot
--------------------------------------------------
-Every other example either simulates its data or points at a directory somebody already
-filled. This one starts from a name printed in a paper, and the two steps in between are
-the ones that are not guessable:
+What this adds to examples 01-05
+--------------------------------
+The other examples either simulate their data or read a directory that has already been
+filled. This one starts from an identifier printed in a paper, and two of the steps in
+between are not obvious:
 
-* **The archive does not know the survey's names.** BLOeM spectra are filed under
-  ``obs_collection='GIRAFFE'`` — there is no BLOeM Phase 3 collection — and ``target_name``
-  is the *Gaia DR3 source id*, not ``1-037``. :func:`albireo.resolve_bloem` fetches the
+* The archive does not use the survey's names. BLOeM spectra are filed under
+  ``obs_collection='GIRAFFE'`` (there is no BLOeM Phase 3 collection) and ``target_name``
+  is the Gaia DR3 source id, not ``1-037``. :func:`albireo.resolve_bloem` fetches the
   published cross-match from VizieR, which speaks the same TAP dialect as ESO, so the join
-  costs no new dependency.
-* **The file layout is not the one HR 6819 has.** These are GIRAFFE products: the flux is
-  in ``FLUX_REDUCED``, the errors in ``ERR_REDUCED``, the quality flags in
-  ``QUAL_REDUCED``, and the wavelengths are in **nanometres** on an **air** scale in the
+  adds no dependency.
+* The file layout differs from the FEROS one of example 03. These are GIRAFFE products: the
+  flux is in ``FLUX_REDUCED``, the errors in ``ERR_REDUCED``, the quality flags in
+  ``QUAL_REDUCED``, and the wavelengths are in nanometres on an air scale in the
   heliocentric frame. Example 03's FEROS files use ``FLUX``/``ERR``, angstrom, barycentric.
   :func:`albireo.read_dataset` reads both without being told which is which, because it
   dispatches on the IVOA utypes rather than on column names (``docs/design.md`` D45).
 
-Two things this script deliberately does not do
------------------------------------------------
-**It does not fit an orbit.** These systems' orbital solutions are unpublished — that is
-precisely why they are interesting — so there is no literature value to score against and
-no informative prior to start from. Printing a period here would be a claim, not a demo.
-What it does instead is build the problem and evaluate the marginal likelihood once, which
-is the honest end of a *loading* example.
+Two things this script does not do
+----------------------------------
+It does not fit an orbit. These systems have no published orbital solutions, so there is no
+literature value to score against and no informative prior to start from. The script builds
+the problem and evaluates the marginal likelihood once, which is where a loading example
+ends.
 
-**It does not model the nebula.** BLOeM's targets sit in H II regions, so a real analysis
-of the Balmer lines needs the nebular component of example 04. The window below avoids the
-Balmer cores for exactly that reason.
+It does not model the nebula. BLOeM's targets sit in H II regions, so a real analysis of the
+Balmer lines needs the nebular component of example 04. The window below avoids the Balmer
+cores for that reason.
 
 The window
 ----------
 4120-4300 A, inside LR02's 3960-4571 A: Si III 4128/4130, He I 4144, He I 4169,
-He II 4200. It sits strictly between H-delta (4101.7) and H-gamma (4340.5) — **neither
-line nor its wings is inside** — and well away from the order edges.
+He II 4200. It lies strictly between H-delta (4101.7) and H-gamma (4340.5), with neither
+line nor its wings inside, and well away from the order edges.
 
-That bound is the whole reason for the window and it is tighter than it looks. A wider
-blue edge would reach H-delta, and in an H II region H-delta carries nebular emission
-that this script does not model; ``albireo.nebular_windows`` puts a +/-300 km/s window
-around it, so anything below ~4096 A is contaminated. Widen this region only together
-with the nebular component of example 04 — an unmodelled static emission line does not
-merely dent the spectra, it hands the orbit a component with K = 0 (D40: K_2 59% low).
+That bound is the reason for the window, and the margin is smaller than it appears. A wider
+blue edge would reach H-delta, which in an H II region carries nebular emission that this
+script does not model; ``albireo.nebular_windows`` places a +/-300 km/s window around it, so
+anything below ~4096 A is contaminated. Widen this region only together with the nebular
+component of example 04: an unmodelled static emission line is a component with K = 0, and
+D40 measured K_2 59% low under one.
 
 Environment
 -----------
@@ -100,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # --- 2. Fetch the epochs ------------------------------------------------------
     # public_only because sub-run .004 releases through 2027-01-15; the proprietary rows
-    # would be returned and then fail to download, which is worse than not asking.
+    # would otherwise be returned and then fail to download.
     t0 = time.time()
     records = ab.bloem_spectra(star, public_only=True)
     if not records:
@@ -126,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
     # --- 3. FITS -> Dataset -------------------------------------------------------
     # Nothing here names GIRAFFE's column layout, its nanometres or its air scale: the
     # reader takes all three from the file. Compare example 03, which passes the same
-    # arguments to a set of FEROS files that agree with these about none of it.
+    # arguments to FEROS files that share none of those three conventions.
     t0 = time.time()
     dataset = ab.read_dataset(
         str(data_dir / "*.fits"),
@@ -135,10 +134,10 @@ def main(argv: list[str] | None = None) -> int:
         region_pad_angstrom=40.0,
         smooth_angstrom=60.0,
     )
-    # No share_wavelength_grid() here, and the contrast with example 03 is worth the line.
-    # FEROS shifts before resampling, so its 51 epochs sit on grids that agree to 0.007
-    # km/s and can be relabelled onto one. GIRAFFE's differ by 5.3 km/s — most of a model
-    # pixel — so those are real wavelength solutions, not sub-pixel bookkeeping, and
+    # No share_wavelength_grid() here, in contrast with example 03. FEROS shifts before
+    # resampling, so its 51 epochs sit on grids that agree to 0.007 km/s and can be
+    # relabelled onto one. GIRAFFE's differ by 5.3 km/s, most of a model pixel, so those
+    # are distinct wavelength solutions rather than sub-pixel bookkeeping, and
     # share_wavelength_grid refuses them. albireo gives each its own rebin operator.
     print(f"[{time.time() - t0:5.1f}s] ingest")
     print(dataset.summary())
@@ -172,8 +171,8 @@ def main(argv: list[str] | None = None) -> int:
         f"half-bandwidth {model.half_bandwidth}"
     )
 
-    # One evaluation, to prove the pipeline is wired end to end. The velocities are a
-    # placeholder: this star has no published orbit, which is the point of the survey.
+    # One evaluation, confirming that the path is wired end to end. The velocities are a
+    # placeholder: this star has no published orbit.
     theta = {
         "velocity": np.zeros((2, len(dataset))),
         "log_tau": np.log(np.array([1.0e4, 1.0e4])),
@@ -185,9 +184,9 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         "\nNext: this is where an analysis begins, not ends. With no published orbit the\n"
-        "honest first move is the free per-epoch RV table (docs/math.md 7.6) rather than a\n"
+        "first step is the free per-epoch RV table (docs/math.md 7.6) rather than a\n"
         "Keplerian, and the Balmer lines need the nebular component of example 04 before\n"
-        "they can be trusted."
+        "they can be used."
     )
     return 0
 

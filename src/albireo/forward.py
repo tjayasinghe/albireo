@@ -5,15 +5,17 @@ parameters (velocities, light fractions, LSF, response):
 
     y_j = r_j ⊙ [ R_j (1 + B_j sum_i l_ij T(delta_ij) d_i) ] + n_j
 
-Epochs are grouped by instrument *and* native wavelength grid so that all epochs in a
+Epochs are grouped by instrument and native wavelength grid, so that all epochs in a
 group share the (static) rebin operator and LSF kernel and can be batched with ``vmap``
-(see :func:`_epoch_groups`). The response enters only
-through effective weights and targets: with ``C_j = R_j B_j sum_i l_ij T_ij`` the normal
-equations use ``C^T diag(r^2 w) C`` and ``C^T (r w z)`` where ``z = y - r ⊙ (R 1)``.
+(see :func:`_epoch_groups`). The response enters only through effective weights and
+targets: with ``C_j = R_j B_j sum_i l_ij T_ij`` the normal equations use
+``C^T diag(r^2 w) C`` and ``C^T (r w z)`` where ``z = y - r ⊙ (R 1)``.
 
-Everything here is linear in the stacked deviation spectra and ships with an exact
-adjoint; masked pixels (ivar = 0, incomplete rebin coverage) carry zero weight
-everywhere.
+The noise model is diagonal by default and AR(1) over each epoch's chain of unmasked
+pixels once :func:`with_ar1` is applied (``docs/math.md`` §1.4a).
+
+Everything here is linear in the stacked deviation spectra and has an exact adjoint;
+masked pixels (ivar = 0, incomplete rebin coverage) carry zero weight everywhere.
 """
 
 from __future__ import annotations
@@ -72,15 +74,15 @@ __all__ = [
 @jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True)
 class EpochGroup:
-    """All epochs sharing one instrument *and* one native grid (one rebin operator, one LSF).
+    """All epochs sharing one instrument and one native grid (one rebin operator, one LSF).
 
     One instrument can own several groups when its exposures do not share a wavelength
     array (:func:`_epoch_groups`); ``instrument`` is then the same string in each, since
     it is the key into the LSF and response tables.
 
     Registered as a pytree so a whole :class:`Problem` can be passed as a ``jax.jit``
-    *argument* — its arrays then enter the graph as runtime parameters rather than
-    embedded constants, which at scale would trigger multi-GB XLA constant folding.
+    argument: its arrays then enter the graph as runtime parameters rather than embedded
+    constants, which at scale would trigger multi-GB XLA constant folding.
     """
 
     instrument: str
@@ -98,7 +100,7 @@ class EpochGroup:
     jitter: jax.Array  # (n_epochs,) noise-inflation factor alpha_j; see effective_w
     row_support: int  # max model-pixel span of a rebin row (bandwidth bookkeeping)
     bary_pix: jax.Array  # (n_epochs,) barycentric shift in model pixels (static)
-    base: jax.Array  # (n_native,) R 1 — response-independent rebinned unit continuum
+    base: jax.Array  # (n_native,) R 1, the response-independent rebinned unit continuum
     cheb_x: jax.Array  # (n_native,) response Chebyshev abscissa 2(l - l_0)/(l_N - l_0) - 1
     ar_phi: jax.Array  # (n_epochs,) AR(1) correlation of the standardized noise (0 = diagonal)
     ar_gap: jax.Array  # (n_epochs, n_native) int link table: distance to the previous good
@@ -122,14 +124,14 @@ class EpochGroup:
 
     @property
     def effective_w(self):
-        """The weights the likelihood actually uses: ``w / alpha_j^2`` (docs/math.md §1.4).
+        """The weights the likelihood uses: ``w / alpha_j^2`` (``docs/math.md`` §1.4).
 
-        Every consumer of the weights reads *this*, never :attr:`w`, so a jitter factor
-        enters the normal equations, the right-hand side, and the ``sum log w`` term of
-        the marginal likelihood consistently — which is what makes it identifiable
-        (inflating the noise buys misfit at the cost of that determinant term).
-        :attr:`w` stays the measurement's own inverse variance, so applying a jitter is
-        idempotent rather than cumulative.
+        Every consumer of the weights reads this property, never :attr:`w`, so a jitter
+        factor enters the normal equations, the right-hand side, and the ``sum log w``
+        term of the marginal likelihood consistently. That consistency is what makes the
+        jitter identifiable: inflating the noise reduces the misfit term at the cost of
+        the determinant term. :attr:`w` stays the measurement's own inverse variance, so
+        applying a jitter is idempotent rather than cumulative.
         """
         return self.w / self.jitter[:, None] ** 2
 
@@ -234,7 +236,7 @@ class Problem:
     telluric: bool = False
     # Static: True once with_ar1 has been applied (even with numerically zero phi).
     # The assembly reads it to include the chain's link terms and widen the
-    # bandwidth — a *structural* decision, so it cannot depend on traced values.
+    # bandwidth. This is a structural decision, so it cannot depend on traced values.
     correlated: bool = False
     nebular: bool = False
 
@@ -268,7 +270,7 @@ class Problem:
 
     @property
     def n_stellar(self) -> int:
-        """Stellar components — the ones an orbit moves (component order is stellar,
+        """Stellar components, the ones an orbit moves (component order is stellar,
         telluric, nebular, so the non-stellar columns are always the trailing ones)."""
         return self.n_components - (1 if self.telluric else 0) - (1 if self.nebular else 0)
 
@@ -295,11 +297,11 @@ class Problem:
 
         A noise precision that is tridiagonal over the observed chain couples rebin
         rows up to ``ar1_max_gap`` native pixels apart, so ``A^T W A`` widens by the
-        largest model-pixel offset between any stored link's row supports —
-        ``EpochGroup.ar_step``, computed exactly at build time. Zero when no links
-        were stored. Read it even for a diagonal problem when a later
-        :func:`with_ar1` swap is planned — probing with the widened bandwidth is
-        exact either way (D21: an overestimate costs time, an underestimate silently
+        largest model-pixel offset between any stored link's row supports. That offset
+        is :attr:`EpochGroup.ar_step`, computed exactly at build time, and is zero when
+        no links were stored. Read it even for a diagonal problem when a later
+        :func:`with_ar1` swap is planned: probing with the widened bandwidth is exact
+        either way (D21: an overestimate costs time, an underestimate silently
         corrupts).
         """
         return max(g.ar_step for g in self.groups)
@@ -314,12 +316,12 @@ class Problem:
     def half_bandwidth_bound(self, v_rel_max_kms: float) -> int:
         """Static upper bound on :attr:`natural_half_bandwidth` given a velocity bound.
 
-        ``v_rel_max_kms`` must bound the largest *relative* radial velocity between any
-        two model components at any epoch — for an SB2, ``(K_1 + K_2)(1 + e)`` plus, if
+        ``v_rel_max_kms`` must bound the largest relative radial velocity between any
+        two model components at any epoch: for an SB2, ``(K_1 + K_2)(1 + e)`` plus, if
         a telluric component is present, the stellar velocity relative to the telluric
         frame (which includes the barycentric motion, up to ~30 km/s). A nebular
-        component (D40) adds ``|nebular_v_kms| + max K`` against the stars, and — since
-        the two sit in opposite frames — the barycentric motion again against the
+        component (D40) adds ``|nebular_v_kms| + max K`` against the stars and, since
+        the two sit in opposite frames, the barycentric motion again against the
         telluric column.
 
         Because the bound is static (independent of the velocity values), it can be
@@ -336,18 +338,17 @@ class Problem:
 def _warn_if_row_support_is_an_artifact(instrument, wave_native, per_row, row_support):
     """Flag a rebin row support set by a few anomalously wide native pixels.
 
-    ``row_support`` is a *max* over native pixels and it propagates straight into the
-    solver half-bandwidth, whose cost is quadratic in the block size. A handful of wide
-    rows therefore taxes the whole run. In real spectra they are usually not wide pixels
-    at all but *deleted* samples — telluric windows, cosmic-ray hits, order or chip gaps
-    — because :func:`albireo.operators.bin_edges_from_centers` places edges at
-    midpoints, so dropping samples makes the two bracketing pixels absorb half the gap
-    each. Masking (``ivar = 0``) keeps the sampling regular; deleting does not.
+    ``row_support`` is a maximum over native pixels and it propagates into the solver
+    half-bandwidth, whose cost is quadratic in the block size, so a handful of wide rows
+    taxes the whole run. In real spectra such rows are usually not wide pixels but
+    deleted samples (telluric windows, cosmic-ray hits, order or chip gaps):
+    :func:`albireo.operators.bin_edges_from_centers` places edges at midpoints, so
+    dropping samples makes the two bracketing pixels absorb half the gap each. Masking
+    (``ivar = 0``) keeps the sampling regular; deleting does not.
     """
-    # Only rows the operator actually touches: a native pixel lying entirely outside the
-    # model grid has no rebin entries at all, and counting it as support 0 would drag the
-    # median down (it used to do worse — the empty rows carried a sentinel, so a
-    # region-selected epoch could produce a warning quoting int64 minimum as the median).
+    # Only rows the operator touches: a native pixel lying entirely outside the model
+    # grid has no rebin entries at all, and counting it as support 0 would drag the
+    # median down.
     covered = per_row > 0
     if not covered.any():
         return
@@ -362,7 +363,7 @@ def _warn_if_row_support_is_an_artifact(instrument, wave_native, per_row, row_su
         f"{row_support}, median {med:.0f}). The solver bandwidth follows this maximum, so "
         f"the run costs roughly ({row_support / max(med, 1.0):.0f}x)^2 more than it need. "
         "This pattern almost always means samples were *deleted* (telluric window, bad "
-        "pixels, order or chip gap) rather than genuinely wide pixels: keep the pixels and "
+        "pixels, order or chip gap) rather than physically wide pixels: keep the pixels and "
         "set their ivar to 0 instead, or give the disjoint segments distinct instrument "
         "labels.",
         RuntimeWarning,
@@ -374,11 +375,12 @@ def _warn_if_data_extends_past_grid(instrument, dataset, idx, covered) -> None:
     """Flag weighted native pixels that the model grid does not fully cover.
 
     Such pixels are silently zero-weighted (``w = 0`` where ``coverage < 1``), so the fit
-    quietly discards data the user believes it is using. It is also the visible end of a
-    more damaging condition: near a grid edge the shift and LSF operators zero-fill, so
-    the *covered* pixels within a shift-plus-kernel-radius of the boundary are modelled
-    with missing flux while still carrying full weight. :meth:`albireo.grids.LogGrid.covering`
-    sizes the margin correctly; this warning catches the case where it was not used.
+    discards data the caller believes it is using. It is also the visible end of a more
+    damaging condition: near a grid edge the shift and LSF operators zero-fill, so the
+    covered pixels within a shift-plus-kernel-radius of the boundary are modelled with
+    missing flux while still carrying full weight.
+    :meth:`albireo.grids.LogGrid.covering` sizes the margin correctly; this warning
+    catches the case where it was not used.
     """
     weighted_outside = 0
     for j in idx:
@@ -387,7 +389,7 @@ def _warn_if_data_extends_past_grid(instrument, dataset, idx, covered) -> None:
         return
     warnings.warn(
         f"instrument {instrument!r}: {weighted_outside} pixel(s) with positive weight lie "
-        "outside the model grid and have been zero-weighted. Widen the grid — and by more "
+        "outside the model grid and have been zero-weighted. Widen the grid: and by more "
         "than the bare data range: it must also clear the largest component shift plus the "
         "LSF kernel radius, or the pixels just *inside* the edge are modelled with "
         "zero-filled flux at full weight. LogGrid.covering(dataset, dv_kms, "
@@ -400,22 +402,21 @@ def _warn_if_data_extends_past_grid(instrument, dataset, idx, covered) -> None:
 def _epoch_groups(dataset: Dataset) -> list[tuple[str, list[int]]]:
     """Partition epoch indices into ``(instrument, indices)`` sharing one native grid.
 
-    A group is the unit that shares static operators, so it must be an instrument *and*
-    a single wavelength array — one rebin operator serves the whole group. Instruments
+    A group is the unit that shares static operators, so it must be one instrument and
+    one wavelength array: a single rebin operator serves the whole group. Instruments
     whose epochs sit on a common grid (simulations, and any pipeline that resamples every
     exposure onto one wavelength solution) therefore give exactly one group each, batched
-    by ``vmap`` as before.
+    by ``vmap``.
 
-    Pipelines that apply the barycentric correction by shifting *before* rebinning do not:
+    Pipelines that apply the barycentric correction by shifting before rebinning do not.
     ESO Phase-3 FEROS spectra, for instance, carry a per-exposure grid whose start moves
     with the correction, so 51 epochs can have 51 grids differing in length and in
-    sub-pixel phase. Splitting them here is exact — each epoch keeps its own grid and its
-    own operator, per ``docs/design.md`` D4 — and costs one operator per distinct grid,
-    which is small next to the solve. The alternative available to callers, relabelling
-    the epochs as distinct *instruments*, would also fork the LSF width and response
-    tables, so widths that are physically one number would have to be inferred (or
-    supplied) once per exposure. The instrument key is what identifies the LSF, so it
-    stays shared across the subgroups here.
+    sub-pixel phase. Splitting them here is exact, each epoch keeping its own grid and
+    operator (``docs/design.md`` D4), and costs one operator per distinct grid, which is
+    small next to the solve. Relabelling the epochs as distinct instruments would instead
+    fork the LSF width and response tables, so widths that are physically one number
+    would have to be inferred or supplied once per exposure. The instrument key
+    identifies the LSF, so it stays shared across the subgroups here.
 
     Grids are matched by content hash, so the partition costs one pass over the data
     rather than a comparison against every group seen so far.
@@ -440,9 +441,9 @@ def _lsf_bank(instrument, lsf_sigma_v, lsf_anchors_angstrom, lsf_h3, grid):
     without anchors, else the ``(grid.n, 2r+1)`` per-model-pixel profiles from
     per-anchor Gauss-Hermite kernels (pure Gaussians when ``lsf_h3`` carries nothing
     for this instrument) through the static interpolation tables. The radius follows
-    the *largest* width (truncate at 4 sigma, as :func:`albireo.operators.gaussian_kernel`),
-    so every later :func:`with_lsf` swap bounded by the build widths stays untruncated;
-    ``h3`` does not change the support.
+    the largest width (truncated at 4 sigma, as in
+    :func:`albireo.operators.gaussian_kernel`), so every later :func:`with_lsf` swap
+    bounded by the build widths stays untruncated; ``h3`` does not change the support.
     """
     sig = np.atleast_1d(np.asarray(lsf_sigma_v[instrument], dtype=np.float64))
     if sig.ndim != 1 or np.any(sig <= 0):
@@ -453,11 +454,11 @@ def _lsf_bank(instrument, lsf_sigma_v, lsf_anchors_angstrom, lsf_h3, grid):
         if sig.size != 1:
             raise ValueError(
                 f"instrument {instrument!r}: {sig.size} LSF widths supplied but no "
-                "anchors — per-anchor widths need lsf_anchors_angstrom for this instrument."
+                "anchors: per-anchor widths need lsf_anchors_angstrom for this instrument."
             )
         if h3 is not None:
             raise ValueError(
-                f"instrument {instrument!r}: lsf_h3 needs lsf_anchors_angstrom — a "
+                f"instrument {instrument!r}: lsf_h3 needs lsf_anchors_angstrom: a "
                 "stationary asymmetric LSF is absorbed by the free spectra "
                 "(docs/math.md §1.3); only its wavelength variation is identified."
             )
@@ -468,7 +469,7 @@ def _lsf_bank(instrument, lsf_sigma_v, lsf_anchors_angstrom, lsf_h3, grid):
     if sig.size != len(anchor_wave):
         raise ValueError(
             f"instrument {instrument!r}: {sig.size} LSF widths for "
-            f"{len(anchor_wave)} anchors — supply one per anchor (or one scalar)."
+            f"{len(anchor_wave)} anchors: supply one per anchor (or one scalar)."
         )
     if h3 is not None:
         h3 = np.atleast_1d(np.asarray(h3, dtype=np.float64))
@@ -477,7 +478,7 @@ def _lsf_bank(instrument, lsf_sigma_v, lsf_anchors_angstrom, lsf_h3, grid):
         if h3.size != len(anchor_wave):
             raise ValueError(
                 f"instrument {instrument!r}: {h3.size} h3 values for "
-                f"{len(anchor_wave)} anchors — supply one per anchor (or one scalar)."
+                f"{len(anchor_wave)} anchors: supply one per anchor (or one scalar)."
             )
     profiles = gaussian_lsf_profiles(sig / grid.dv_kms, anchor_wave, grid.wave, h3=h3)
     return jnp.asarray(profiles), anchor_wave
@@ -514,8 +515,8 @@ def build_problem(
     light_fractions
         ``(n_stellar,)`` or ``(n_stellar, n_epochs)``; must sum to 1 per epoch.
     lsf_sigma_v
-        Per-instrument Gaussian LSF width (km/s): a scalar for a stationary LSF, or —
-        with matching ``lsf_anchors_angstrom`` — one width per anchor for a
+        Per-instrument Gaussian LSF width (km/s): a scalar for a stationary LSF, or,
+        with matching ``lsf_anchors_angstrom``, one width per anchor for a
         wavelength-dependent LSF (a scalar then broadcasts to every anchor). The
         largest width fixes the kernel radius, so build-time widths are the upper
         bounds a later :func:`with_lsf` swap must respect.
@@ -524,59 +525,58 @@ def build_problem(
         given, the instrument's LSF varies across the grid: per-anchor Gaussian
         kernels are linearly interpolated (in log-wavelength, clamped beyond the end
         anchors) into a per-model-pixel profile bank applied by
-        :func:`albireo.operators.convolve_varying` — the tabulated-LSF slot of
+        :func:`albireo.operators.convolve_varying`, the tabulated-LSF form of
         design.md D8. Instruments absent from the mapping stay stationary.
     lsf_h3
         Optional per-instrument Gauss-Hermite skewness (D38): a scalar or one value
-        per anchor, requiring ``lsf_anchors_angstrom`` for that instrument (a
-        *stationary* asymmetric LSF is absorbed by the free spectra — only the
-        wavelength variation of the asymmetry is identified, docs/math.md §1.3).
+        per anchor, requiring ``lsf_anchors_angstrom`` for that instrument. A
+        stationary asymmetric LSF is absorbed by the free spectra, so only the
+        wavelength variation of the asymmetry is identified (``docs/math.md`` §1.3).
         Absent instruments (or None) keep pure Gaussian anchors.
     response_coeffs
         Optional per-epoch Chebyshev response coefficients (empty/None = unit response).
     telluric
         If True, append a telluric component (light fraction 1) whose velocity law is
-        the topocentric one — static for topocentric-frame data, ``+v_bary`` for
+        the topocentric one: static for topocentric-frame data, ``+v_bary`` for
         barycentric-frame data.
     nebular
-        If True, append a nebular component (D40): static in the *barycentric* frame —
-        the opposite convention from the telluric one — with a **free per-epoch
-        amplitude** rather than a light fraction. Component order is stellar,
-        telluric, nebular, so enabling it adds one trailing column and one more entry
-        to the spectral prior.
+        If True, append a nebular component (D40), static in the barycentric frame (the
+        opposite convention from the telluric one) and carrying a free per-epoch
+        amplitude rather than a light fraction. Component order is stellar, telluric,
+        nebular, so enabling it adds one trailing column and one more entry to the
+        spectral prior.
 
-        The physics it encodes: nebular emission is added on top of the total stellar
-        continuum and takes no light from the stars, so its amplitude is outside the
-        simplex the light fractions live on, and its night-to-night variation (seeing,
-        slit losses, sky subtraction) is a scale on one fixed shape. Leaving it in the
-        data instead is not neutral — a static emission feature sitting on a moving
-        absorption line is absorbed by the stellar components as a spurious core-fill,
-        narrowing the disentangled profile and biasing every temperature and gravity
-        derived from it.
+        Nebular emission is added on top of the total stellar continuum and takes no
+        light from the stars, so its amplitude lies outside the simplex the light
+        fractions live on, and its night-to-night variation (seeing, slit losses, sky
+        subtraction) is a scale on one fixed shape. Left in the data, a static emission
+        feature sitting on a moving absorption line is absorbed by the stellar
+        components as a spurious core-fill, which narrows the disentangled profile and
+        biases every temperature and gravity derived from it.
     nebular_v_kms
         Velocity of the nebula, in the frame the stellar velocities are measured in
-        (km/s). It is **not identified by the data**: the shift is the same at every
-        epoch (barycentric-frame data) or differs only by ``v_bary`` (topocentric),
-        and a constant shift of a *free* spectrum is a reparameterization
-        ``d -> T(delta) d``, exactly as the systemic velocity is for the stellar
-        components (D14). What it decides is where the component's lines land on the
-        model grid — which matters as soon as the prior confines it to windows
+        (km/s). It is not identified by the data: the shift is the same at every epoch
+        (barycentric-frame data) or differs only by ``v_bary`` (topocentric), and a
+        constant shift of a free spectrum is a reparameterization ``d -> T(delta) d``,
+        exactly as the systemic velocity is for the stellar components (D14). What it
+        decides is where the component's lines land on the model grid, which matters as
+        soon as the prior confines it to windows
         (:func:`albireo.priors.window_profile`), since the windows and the shift must
         agree. Pass the same value to :func:`albireo.priors.nebular_windows`.
     nebular_amplitudes
         Per-epoch amplitudes ``(n_epochs,)`` for the nebular component (default: all
         ones). Only the product ``amplitude * spectrum`` is observable, so the overall
-        scale is degenerate with the component spectrum and is fixed by convention —
+        scale is degenerate with the component spectrum and is fixed by convention:
         :func:`albireo.inference.nebular_amplitudes` normalizes the geometric mean to
-        1. Must be positive here; the traced swap
-        (:func:`with_nebular_amplitudes`) cannot check.
+        1. Must be positive here; the traced swap (:func:`with_nebular_amplitudes`)
+        cannot check.
     ar1_max_gap
         Longest masked gap (in native pixels) an AR(1) noise link may span
-        (:func:`with_ar1`). Links between good pixels ``gap`` apart carry correlation
-        ``phi**gap``; beyond the cap the chain restarts — the physically honest choice
-        for short-range resampling correlation, and what keeps the coupling's
-        bandwidth cost (:attr:`Problem.ar_bandwidth_extra`) bounded. The tables are
-        always built (cheap, static); they cost nothing unless :func:`with_ar1` is
+        (:func:`with_ar1`, ``docs/math.md`` §1.4a). Links between good pixels ``gap``
+        apart carry correlation ``phi**gap``; beyond the cap the chain restarts, which
+        matches the short-range character of resampling correlation and bounds the
+        coupling's bandwidth cost (:attr:`Problem.ar_bandwidth_extra`). The tables are
+        static and always built; they enter the model only when :func:`with_ar1` is
         applied.
     """
     vel = np.atleast_2d(np.asarray(velocities, dtype=np.float64))
@@ -644,7 +644,7 @@ def build_problem(
                 f"instrument {instrument!r}: the model grid ({grid.wave[0]:.3f}-"
                 f"{grid.wave[-1]:.3f}) does not overlap this epoch's wavelengths "
                 f"({wave_native[0]:.3f}-{wave_native[-1]:.3f}), so there is nothing to fit. "
-                "Build the grid from the data — LogGrid.covering(dataset, dv_kms, ...)."
+                "Build the grid from the data: LogGrid.covering(dataset, dv_kms, ...)."
             )
         coverage = np.asarray(rebin.coverage)
         covered = coverage > 1.0 - 1e-10
@@ -670,9 +670,9 @@ def build_problem(
             r = chebyshev_response(ep.wave, response_coeffs[j])
             w = np.where(covered, ep.effective_ivar, 0.0)
             # Zero-weight pixels are allowed to hold anything, including nan and inf
-            # (albireo.data: a masked pixel's flux "is never read"). Every consumer of z
-            # multiplies it by w, so zeroing it here changes nothing — except that
-            # `0 * nan` is `nan`, and one such pixel takes the whole marginal likelihood
+            # (albireo.data: a masked pixel's flux is never read). Every consumer of z
+            # multiplies it by w, so zeroing it here changes no value, except that
+            # `0 * nan` is `nan` and one such pixel takes the whole marginal likelihood
             # to nan. Real data reaches this path routinely: albireo.preprocess.normalize
             # marks pixels where the fitted continuum collapses by writing nan.
             flux = np.where(np.isfinite(ep.flux), ep.flux, 0.0)
@@ -755,27 +755,26 @@ def build_problem(
 def with_data(problem: Problem, z_per_group) -> Problem:
     """Return ``problem`` with the data term ``z`` replaced, everything else untouched.
 
-    ``z = y - r (R 1)`` is the only place the *observed fluxes* enter the problem, so
+    ``z = y - r (R 1)`` is the only place the observed fluxes enter the problem, so
     swapping it re-points the whole operator stack at a different realization of the
-    same experiment. That is what makes a parametric bootstrap cheap: the rebin
-    operators, pair tables, LSF bank, weights, masks and response are all built once and
+    same experiment. This is what makes a parametric bootstrap cheap: the rebin
+    operators, pair tables, LSF bank, weights, masks and response are built once and
     reused, and each trial costs one forward apply instead of a fresh
     :func:`build_problem`. :func:`albireo.simulate.resimulate` draws the replacement,
     and :mod:`albireo.calibrate` runs the loop.
 
-    What must *not* change is anything the structure was built from: the native
-    wavelength grids, the masks (``w == 0`` pattern), and the AR(1) link tables derived
-    from them. Those are all static here, so this is a swap of numbers into a fixed
-    graph — which is exactly its value, and exactly its constraint. Passing data with a
-    different mask silently reuses the old one.
+    Nothing the structure was built from may change: the native wavelength grids, the
+    masks (the ``w == 0`` pattern), and the AR(1) link tables derived from them are all
+    static here, so this is a swap of numbers into a fixed graph. Data with a different
+    mask silently reuses the old one.
 
     Parameters
     ----------
     problem
         Output of :func:`build_problem`.
     z_per_group
-        One ``(n_epochs, n_native)`` array per group, in ``problem.groups`` order —
-        the layout :func:`apply_model` returns and :attr:`EpochGroup.z` stores.
+        One ``(n_epochs, n_native)`` array per group, in ``problem.groups`` order: the
+        layout :func:`apply_model` returns and :attr:`EpochGroup.z` stores.
 
     Returns
     -------
@@ -791,7 +790,7 @@ def with_data(problem: Problem, z_per_group) -> Problem:
                 f"group {g.instrument!r}: z must have shape {g.z.shape}; got {z.shape}"
             )
         # Masked pixels are allowed to hold anything upstream (albireo.data), and every
-        # consumer multiplies z by w — but 0 * nan is nan, so zero them here as
+        # consumer multiplies z by w, but 0 * nan is nan, so zero them here as
         # build_problem does rather than trust the caller.
         groups.append(replace(g, z=jnp.where(g.w > 0.0, z, 0.0)))
     return replace(problem, groups=tuple(groups))
@@ -801,7 +800,7 @@ def with_velocities(problem: Problem, velocities) -> Problem:
     """Return ``problem`` with the stellar velocities replaced (differentiable in them).
 
     This is the θ-dependent path for joint inference: only the per-epoch shift columns
-    are recomputed — with the same frame composition as :func:`build_problem` — while
+    are recomputed, with the same frame composition as :func:`build_problem`, while
     every static piece (rebin operators, kernels, weights, targets, response) is reused
     unchanged. Safe to call inside ``jax.jit`` with traced ``velocities``; combine with
     :meth:`Problem.half_bandwidth_bound` for a static solver bandwidth.
@@ -829,18 +828,18 @@ def with_shifts(problem: Problem, star_pix) -> Problem:
     """Return ``problem`` with the stellar shifts replaced, in *model pixels*.
 
     The pixel-space core of :func:`with_velocities`, which is a one-line wrapper over it.
-    Two things want this layer rather than the velocity one.
+    Two uses call for this layer rather than the velocity one.
 
-    First, pixel shifts are where the model's shift *composition* is exact: with the
-    relativistic mapping ``xi = artanh(v/c)`` the log-wavelength shift turns relativistic
-    velocity addition into ordinary addition, so adding a constant here is exactly a
-    translation, while adding a constant to a velocity is not. Anything that needs to
-    add, subtract or center shifts — the free-velocity table's zero point
-    (:func:`albireo.inference.relative_velocities`) above all — has to do it here to be
-    exact rather than first-order.
+    First, shift composition is exact in pixels: with the relativistic mapping
+    ``xi = artanh(v/c)`` the log-wavelength shift turns relativistic velocity addition
+    into ordinary addition, so adding a constant here is exactly a translation, while
+    adding a constant to a velocity is not. Anything that adds, subtracts or centers
+    shifts, above all the free-velocity table's zero point
+    (:func:`albireo.inference.relative_velocities`), must do it here to be exact rather
+    than first-order.
 
-    Second, it is the natural entry point for a shift the caller computed some other way:
-    a template cross-correlation lag, a per-epoch offset read off a line centroid.
+    Second, it is the entry point for a shift the caller computed some other way: a
+    template cross-correlation lag, or a per-epoch offset read off a line centroid.
 
     Parameters
     ----------
@@ -848,7 +847,7 @@ def with_shifts(problem: Problem, star_pix) -> Problem:
         Output of :func:`build_problem` (any velocities).
     star_pix
         Stellar shifts in model pixels, shape ``(n_stellar, n_epochs)``, in the
-        *barycentric* frame — the frame composition (the per-epoch ``-v_bary`` term on
+        barycentric frame. The frame composition (the per-epoch ``-v_bary`` term on
         topocentric data) is applied here, exactly as :func:`build_problem` applies it.
         Telluric and nebular columns are carried over unchanged.
     """
@@ -872,14 +871,14 @@ def with_shifts(problem: Problem, star_pix) -> Problem:
 def with_light_fractions(problem: Problem, light_fractions) -> Problem:
     """Return ``problem`` with the stellar light fractions replaced (differentiable).
 
-    The θ-dependent path for light-fraction inference: only the *stellar* light
-    columns are swapped. The telluric column (if present) keeps light fraction 1 and
-    the nebular column keeps whatever amplitudes it carries — the nebular amplitude is
-    outside the simplex by construction and has its own swap
+    The θ-dependent path for light-fraction inference: only the stellar light columns
+    are swapped. The telluric column (if present) keeps light fraction 1 and the nebular
+    column keeps whatever amplitudes it carries, since the nebular amplitude is outside
+    the simplex by construction and has its own swap
     (:func:`with_nebular_amplitudes`). Safe inside ``jax.jit`` with traced values. The
     simplex constraint (non-negative, sum to 1 per epoch) cannot be checked on traced
-    input — it is the caller's responsibility (in the numpyro model it is guaranteed
-    by a Dirichlet prior).
+    input and is the caller's responsibility; in the numpyro model it is guaranteed by
+    a Dirichlet prior.
 
     Parameters
     ----------
@@ -912,11 +911,11 @@ def with_nebular_amplitudes(problem: Problem, amplitudes) -> Problem:
     and the stellar simplex and the telluric column are untouched. Differentiable and
     safe inside ``jax.jit`` with traced values.
 
-    **The scale is a convention, not a measurement.** The model sees only the products
-    ``a_j * d_neb``, so ``(c a_j, d_neb / c)`` is the same fit for any ``c > 0`` — the
-    amplitudes carry the epoch-to-epoch *variation* and the spectrum carries the level.
-    The prior on ``d_neb`` breaks the tie weakly rather than not at all, which is worse
-    than either extreme for sampling, so pin the scale explicitly:
+    The overall scale is a convention, not a measurement. The model sees only the
+    products ``a_j * d_neb``, so ``(c a_j, d_neb / c)`` is the same fit for any
+    ``c > 0``: the amplitudes carry the epoch-to-epoch variation and the spectrum
+    carries the level. The prior on ``d_neb`` breaks the tie weakly rather than not at
+    all, which samples worse than either extreme, so the scale is pinned explicitly.
     :func:`albireo.inference.nebular_amplitudes` normalizes the geometric mean to 1,
     and that is what the ``log_nebular_amp`` site feeds through here.
 
@@ -928,12 +927,12 @@ def with_nebular_amplitudes(problem: Problem, amplitudes) -> Problem:
     problem
         Output of :func:`build_problem` with ``nebular=True``.
     amplitudes
-        Scalar (one amplitude shared by every epoch — i.e. a *static* nebular
+        Scalar (one amplitude shared by every epoch, i.e. a static nebular
         contribution) or ``(n_epochs,)``.
     """
     if not problem.nebular:
         raise ValueError(
-            "this problem has no nebular component — rebuild it with "
+            "this problem has no nebular component: rebuild it with "
             "build_problem(..., nebular=True). Enabling it adds a component, so it "
             "changes the linear system's size and the spectral prior's length; it "
             "cannot be a traced swap."
@@ -955,33 +954,33 @@ def with_nebular_amplitudes(problem: Problem, amplitudes) -> Problem:
 def with_jitter(problem: Problem, jitter) -> Problem:
     """Return ``problem`` with per-epoch noise-inflation factors ``alpha_j`` (differentiable).
 
-    ``docs/math.md`` §1.4 / ``docs/design.md`` D15: the weights become
+    ``docs/math.md`` §1.4 and ``docs/design.md`` D15: the weights become
     ``w_j -> w_j / alpha_j^2``, so ``alpha = 1`` is exactly the unmodified problem and
     ``alpha > 1`` says this epoch's quoted inverse variances are optimistic by that
     factor. The marginal likelihood keeps its ``+1/2 sum log w`` term, which is what
-    makes ``alpha`` identifiable rather than a free knob, and it supplies the right
-    denominator for free. In the data-dominated limit ``-1/2 log det(Lambda + A^T W A)``
+    makes ``alpha`` identifiable rather than a free knob, and it supplies the correct
+    denominator. In the data-dominated limit ``-1/2 log det(Lambda + A^T W A)``
     contributes ``+p_eff log alpha`` against that term's ``-N log alpha``, so profiling
-    gives ``alpha^2 = chi2 / (N - p_eff)`` with ``p_eff = tr[(Lambda + A^T W A)^-1 A^T W A]``
-    the effective number of parameters the marginalized spectra consume. Whitening the
-    residuals by hand and reading off their standard deviation instead gives ``chi2 / N``,
-    low by ``sqrt(1 - p_eff/N)``. How much that matters is a property of the run, and
-    ``p_eff`` is the *effective* count, not ``n_comp * n_pix``: an oversampled model grid
-    with a fitted smoothness prior can put it an order of magnitude below the pixel count
-    (measured on HR 6819: ~2900 against 19,876 pixels, so the correction was 0.4% — while
-    the weak-prior fixture in ``tests/test_jitter.py`` sees 4.6%). Being joint with the
-    orbit, the widened uncertainties then propagate.
+    gives ``alpha^2 = chi2 / (N - p_eff)`` with
+    ``p_eff = tr[(Lambda + A^T W A)^-1 A^T W A]`` the effective number of parameters the
+    marginalized spectra consume. Whitening the residuals by hand and reading off their
+    standard deviation instead gives ``chi2 / N``, low by ``sqrt(1 - p_eff/N)``. The size
+    of that difference is a property of the run, since ``p_eff`` is an effective count
+    rather than ``n_comp * n_pix``: an oversampled model grid with a fitted smoothness
+    prior can put it an order of magnitude below the pixel count (measured on HR 6819,
+    ~2900 against 19,876 pixels, for a 0.4% correction, while the weak-prior fixture in
+    ``tests/test_jitter.py`` sees 4.6%). Being joint with the orbit, the widened
+    uncertainties propagate.
 
-    Two things this is and is not. It is the right handle for archival spectra whose
-    inverse variances were *estimated* rather than measured
-    (:func:`albireo.preprocess.estimate_ivar`), where a scale error is expected and
-    unknowable a priori. It is **not** a repair for unmodelled structure: a jitter fitted
-    against systematics (imperfect continuum, LSF mismatch, line-profile variability)
-    reports a wider — but still wrong — orbit, because inflating a diagonal noise model
-    cannot represent a residual that is correlated across pixels. Check
-    :func:`data_residual_zscores` for structure before trusting the widening; on real
-    data the honest error bar is usually still the scatter between independent
-    wavelength windows.
+    The jitter is the appropriate handle for archival spectra whose inverse variances
+    were estimated rather than measured (:func:`albireo.preprocess.estimate_ivar`),
+    where a scale error is expected and unknowable a priori. It is not a repair for
+    unmodelled structure: a jitter fitted against systematics (imperfect continuum, LSF
+    mismatch, line-profile variability) reports a wider but still biased orbit, because
+    inflating a diagonal noise model cannot represent a residual correlated across
+    pixels. Check :func:`data_residual_zscores` for structure before trusting the
+    widening; on real data the reliable error bar is usually still the scatter between
+    independent wavelength windows.
 
     Parameters
     ----------
@@ -1011,10 +1010,10 @@ def _ar1_links(g: EpochGroup):
 
     Link ``i`` connects pixel ``i`` to ``prev_i = i - gap_i`` with correlation
     ``rho_i = phi**gap_i`` (0 where there is no link): a subset of an AR(1) chain is
-    still Markov, with the correlation across a masked gap being the process
-    correlation at that index distance — so masking is exact, not approximate
+    still Markov, with the correlation across a masked gap equal to the process
+    correlation at that index distance, so masking is exact rather than approximate
     (``docs/math.md`` §1.4a). ``a = rho^2/(1-rho^2)`` and ``c = rho/(1-rho^2)`` are
-    the precision increments: on top of the identity, each link adds ``a`` to *both*
+    the precision increments: on top of the identity, each link adds ``a`` to both
     endpoints' diagonal and ``-c`` to their off-diagonal pair. The gap-1 branch uses
     ``phi`` directly so the gradient at ``phi = 0`` is exact (``jnp.power`` has a nan
     gradient at a zero base); multi-gap links go through a zero-guarded base, whose
@@ -1034,15 +1033,15 @@ def _ar1_links(g: EpochGroup):
 def ar1_band_weights(g: EpochGroup):
     """Diagonal and link weights of ``diag(r) W diag(r)`` for direct band assembly.
 
-    The chain precision splits into a diagonal part — the pixel's own weight scaled
-    by the chain diagonal ``1 + sum of the a's of the links touching it`` — and one
-    symmetric off-diagonal term per link, ``-c sqrt(w_n w_p) r_n r_p / alpha^2``
-    (:func:`apply_noise_precision` is the matrix-free form of the same split).
-    Returns ``(wp, wl)``, each ``(n_epochs, n_native)``: ``wp`` feeds the diagonal
-    pair tables exactly where ``effective_w * r**2`` does on the diagonal path, and
-    ``wl[.., n]`` weights the link whose *later* endpoint is ``n`` (zero where the
-    epoch has none), consumed against the static cross-row tables
-    (:func:`albireo.operators.rebin_link_pair_tables`).
+    The chain precision (``docs/math.md`` §1.4a) splits into a diagonal part, the
+    pixel's own weight scaled by the chain diagonal ``1 + sum of the a's of the links
+    touching it``, and one symmetric off-diagonal term per link,
+    ``-c sqrt(w_n w_p) r_n r_p / alpha^2``. :func:`apply_noise_precision` is the
+    matrix-free form of the same split. Returns ``(wp, wl)``, each
+    ``(n_epochs, n_native)``: ``wp`` feeds the diagonal pair tables exactly where
+    ``effective_w * r**2`` does on the diagonal path, and ``wl[.., n]`` weights the link
+    whose later endpoint is ``n`` (zero where the epoch has none), consumed against the
+    static cross-row tables (:func:`albireo.operators.rebin_link_pair_tables`).
     """
     _, a, c, prev = _ar1_links(g)
 
@@ -1059,11 +1058,12 @@ def ar1_band_weights(g: EpochGroup):
 def apply_noise_precision(g: EpochGroup, x):
     """``W x`` for one group's noise model, ``W = D^{1/2} R^{-1} D^{1/2} / alpha^2``.
 
-    ``D = diag(w)``, ``R`` the AR(1) correlation of the standardized residuals over
-    the masked chain (:func:`_ar1_links`), ``alpha`` the jitter. Rows and columns at
-    masked pixels are exactly zero (``sqrt(w) = 0`` on both sides). With ``rho = 0``
-    this is ``effective_w * x`` up to floating-point ordering — callers on the
-    diagonal path keep the direct product, gated by :attr:`Problem.correlated`.
+    ``D = diag(w)``, ``R`` the AR(1) correlation of the standardized residuals over the
+    masked chain (:func:`_ar1_links`, ``docs/math.md`` §1.4a), ``alpha`` the jitter.
+    Rows and columns at masked pixels are exactly zero (``sqrt(w) = 0`` on both sides).
+    With ``rho = 0`` this is ``effective_w * x`` up to floating-point ordering; callers
+    on the diagonal path keep the direct product, gated by
+    :attr:`Problem.correlated`.
     """
     s = jnp.sqrt(g.w)
     u = s * x
@@ -1120,41 +1120,40 @@ def _whiten_residuals(g: EpochGroup, resid):
 def with_ar1(problem: Problem, phi) -> Problem:
     """Return ``problem`` with AR(1)-correlated noise (differentiable in ``phi``).
 
-    The noise model D15 could not express and D31 measured the need for: per epoch,
-    the noise covariance is ``C = alpha^2 D^{-1/2} R_phi D^{-1/2}`` with
-    ``D = diag(w)`` and ``R_phi`` the AR(1) correlation in native-pixel index —
-    adjacent pixels of the *standardized* residual share correlation ``phi``, the
-    physically expected shape when a pipeline resamples spectra onto a common step
-    (each output pixel mixes the same input pixels as its neighbours). ``phi = 0``
-    is exactly the D31 model; the jitter ``alpha`` continues to scale, ``phi``
-    correlates, and the two compose (``with_jitter`` and this swap are independent
-    and each *replaces* its own parameter).
+    The noise model D15 could not express and D31 measured the need for. Per epoch the
+    noise covariance is ``C = alpha^2 D^{-1/2} R_phi D^{-1/2}`` with ``D = diag(w)``
+    and ``R_phi`` the AR(1) correlation in native-pixel index: adjacent pixels of the
+    standardized residual share correlation ``phi``, the expected shape when a pipeline
+    resamples spectra onto a common step (each output pixel mixes the same input pixels
+    as its neighbours). ``phi = 0`` is exactly the D31 model. The jitter ``alpha``
+    scales and ``phi`` correlates, and the two compose: ``with_jitter`` and this swap
+    are independent, and each replaces its own parameter.
 
-    Everything stays closed-form (docs/math.md §1.4a). The precision
+    Everything stays closed-form (``docs/math.md`` §1.4a). The precision
     ``W = D^{1/2} R^{-1} D^{1/2} / alpha^2`` is tridiagonal over the observed chain
-    with per-link entries; masked pixels are handled *exactly*, because a subset of
-    a Markov chain is Markov — a link across a gap of ``d`` pixels carries
-    ``phi**d`` — up to ``build_problem``'s ``ar1_max_gap``, beyond which the chain
-    restarts (short-range noise does not span a chip gap, and the cap bounds the
-    solver-bandwidth cost). ``log det W`` needs one extra term,
-    ``-sum_links log(1 - rho^2)``, which is what makes ``phi`` identifiable in the
-    marginal rather than a free knob — the same logdet discipline as the jitter.
+    with per-link entries. Masked pixels are handled exactly, because a subset of a
+    Markov chain is Markov and a link across a gap of ``d`` pixels carries ``phi**d``,
+    up to ``build_problem``'s ``ar1_max_gap``, beyond which the chain restarts
+    (short-range noise does not span a chip gap, and the cap bounds the solver-bandwidth
+    cost). ``log det W`` needs one extra term, ``-sum_links log(1 - rho^2)``, which is
+    what makes ``phi`` identifiable in the marginal rather than a free knob: the same
+    logdet discipline as the jitter.
 
     Two structural consequences, both static:
 
     * the D28 band assembly carries the chain's off-diagonal terms through static
-      *cross-row* link pair tables built at :func:`build_problem` time (D35,
+      cross-row link pair tables built at :func:`build_problem` time (D35,
       :func:`albireo.operators.rebin_link_pair_tables`), so the correlated marginal
       stays on the fast path; global comb probing remains the reference
       implementation (``assembly="probe"``) and the ``validate`` oracle;
-    * ``A^T W A`` widens by :attr:`Problem.ar_bandwidth_extra` model pixels —
+    * ``A^T W A`` widens by :attr:`Problem.ar_bandwidth_extra` model pixels.
       :attr:`Problem.natural_half_bandwidth` includes it once this swap is applied,
-      and a static ``half_bandwidth`` chosen *before* the swap must add it
+      and a static ``half_bandwidth`` chosen before the swap must add it
       (:class:`albireo.inference.MarginalOrbitModel` does, behind its ``ar1`` flag).
 
-    Applying this swap marks the problem correlated even at ``phi = 0`` (a traced
-    value cannot make structural decisions); the result then equals the diagonal
-    model to floating-point ordering, just with the widened bandwidth.
+    Applying this swap marks the problem correlated even at ``phi = 0``, since a traced
+    value cannot make structural decisions; the result then equals the diagonal model to
+    floating-point ordering, with the widened bandwidth.
 
     Parameters
     ----------
@@ -1203,15 +1202,15 @@ def _chebval_traced(x, c):
 def with_response(problem: Problem, response_coeffs) -> Problem:
     """Return ``problem`` with the multiplicative per-epoch response replaced (differentiable).
 
-    The θ-dependent path for response/continuum inference — the swap D7 deferred,
-    because the response enters the *targets* ``z_j = y_j - r_j (R 1)`` and the
-    normal-matrix weights ``w r^2``, not just the forward operator. The stored
-    ``base = R 1`` is response-independent, which gives the target update in place:
-    ``z_new = z_old + (r_old - r_new) * base``, exact and with no need to carry the raw
+    The θ-dependent path for response and continuum inference, the swap D7 deferred:
+    the response enters the targets ``z_j = y_j - r_j (R 1)`` and the normal-matrix
+    weights ``w r^2``, not only the forward operator. The stored ``base = R 1`` is
+    response-independent, which gives the target update in place,
+    ``z_new = z_old + (r_old - r_new) * base``, exactly and without carrying the raw
     fluxes. Masked pixels stay exactly zero (every ``z`` entry at ``w = 0`` was zeroed
-    at build time and the update is re-masked), so the D30 ``0 * nan`` trap cannot
-    resurface here. *Replaces* rather than compounds, like :func:`with_jitter`; the
-    ``sum log w`` term is untouched because the noise lives on the data, not on the
+    at build time and the update is re-masked), so the D30 ``0 * nan`` failure cannot
+    resurface here. This replaces rather than compounds, as :func:`with_jitter` does;
+    the ``sum log w`` term is untouched because the noise lives on the data, not on the
     response-divided data.
 
     The convention matches :func:`albireo.simulate.chebyshev_response` and
@@ -1219,12 +1218,12 @@ def with_response(problem: Problem, response_coeffs) -> Problem:
     wavelength grid scaled to [-1, 1] (per group, so mixed instruments each use their
     own abscissa); an all-zero coefficient vector is exactly the unit response.
 
-    Identifiability is the ``docs/design.md`` §5 response row: a low-order response
-    trades against the components' *broad* spectral features, so the epoch-*shared*
-    part of a free response is only weakly identified while the epoch-to-epoch
-    differences — the thing a per-epoch continuum treatment is for — are well
-    constrained. Keep the order low and the priors tight and zero-centered; the
-    honest-anchor policy of D13/D25 applies.
+    Identifiability follows the ``docs/design.md`` §5 response row: a low-order response
+    trades against the components' broad spectral features, so the epoch-shared part of
+    a free response is only weakly identified, while the epoch-to-epoch differences,
+    which are what a per-epoch continuum treatment is for, are well constrained. Keep
+    the order low and the priors tight and zero-centered; the anchor policy of D13 and
+    D25 applies.
 
     Parameters
     ----------
@@ -1257,12 +1256,12 @@ def with_response(problem: Problem, response_coeffs) -> Problem:
 def with_lsf(problem: Problem, lsf_sigma_v: Mapping, lsf_h3: Mapping | None = None) -> Problem:
     """Return ``problem`` with the Gaussian LSF widths replaced (differentiable).
 
-    The θ-dependent path for LSF inference: each group's kernel *values* are
-    recomputed from the traced width while the kernel *radius* stays the one fixed
-    at :func:`build_problem` time — so the ``lsf_sigma_v`` passed at build time must
-    be an upper bound on any width used here (a larger width would be truncated by
-    the fixed radius; the inference model rejects that region). Safe inside
-    ``jax.jit``; widths must be positive (enforce via the prior's support).
+    The θ-dependent path for LSF inference: each group's kernel values are recomputed
+    from the traced width while the kernel radius stays the one fixed at
+    :func:`build_problem` time. The ``lsf_sigma_v`` passed at build time must therefore
+    be an upper bound on any width used here (a larger width would be truncated by the
+    fixed radius; the inference model rejects that region). Safe inside ``jax.jit``;
+    widths must be positive (enforce via the prior's support).
 
     Parameters
     ----------
@@ -1271,15 +1270,15 @@ def with_lsf(problem: Problem, lsf_sigma_v: Mapping, lsf_h3: Mapping | None = No
     lsf_sigma_v
         Per-instrument Gaussian LSF width in km/s (traced values allowed); must
         cover every instrument in the problem. For a group built with LSF anchors
-        (``lsf_anchors_angstrom``), one width per anchor — the traced bank is
-        re-interpolated into the per-pixel profiles through the same static tables
-        the build used — or a scalar, which broadcasts to every anchor. A group
-        built without anchors takes a scalar only.
+        (``lsf_anchors_angstrom``), one width per anchor, in which case the traced bank
+        is re-interpolated into the per-pixel profiles through the same static tables
+        the build used, or a scalar, which broadcasts to every anchor. A group built
+        without anchors takes a scalar only.
     lsf_h3
-        Optional per-instrument Gauss-Hermite skewness (traced values allowed;
-        D38): one value per anchor or a scalar, anchored instruments only —
-        instruments absent from the mapping keep pure Gaussian anchors. Keep
-        ``|h3|`` within the inference bound (0.2); the kernel radius is unchanged.
+        Optional per-instrument Gauss-Hermite skewness (traced values allowed; D38):
+        one value per anchor or a scalar, for anchored instruments only. Instruments
+        absent from the mapping keep pure Gaussian anchors. Keep ``|h3|`` within the
+        inference bound (0.2); the kernel radius is unchanged.
     """
     lsf_h3 = lsf_h3 or {}
     groups = []
@@ -1291,12 +1290,12 @@ def with_lsf(problem: Problem, lsf_sigma_v: Mapping, lsf_h3: Mapping | None = No
         if not g.lsf_anchor_wave:
             if sigma_px.shape[0] != 1:
                 raise ValueError(
-                    f"instrument {g.instrument!r} was built without LSF anchors — "
+                    f"instrument {g.instrument!r} was built without LSF anchors: "
                     "with_lsf takes a scalar width for it."
                 )
             if g.instrument in lsf_h3:
                 raise ValueError(
-                    f"instrument {g.instrument!r}: lsf_h3 needs LSF anchors — a "
+                    f"instrument {g.instrument!r}: lsf_h3 needs LSF anchors: a "
                     "stationary asymmetric LSF is absorbed by the free spectra "
                     "(docs/math.md §1.3)."
                 )
@@ -1309,7 +1308,7 @@ def with_lsf(problem: Problem, lsf_sigma_v: Mapping, lsf_h3: Mapping | None = No
         if sigma_px.shape[0] != n_anchor:
             raise ValueError(
                 f"instrument {g.instrument!r}: {sigma_px.shape[0]} LSF widths for "
-                f"{n_anchor} anchors — supply one per anchor (or one scalar)."
+                f"{n_anchor} anchors: supply one per anchor (or one scalar)."
             )
         if g.instrument in lsf_h3:
             h3 = jnp.atleast_1d(jnp.asarray(lsf_h3[g.instrument]))
@@ -1318,7 +1317,7 @@ def with_lsf(problem: Problem, lsf_sigma_v: Mapping, lsf_h3: Mapping | None = No
             if h3.shape[0] != n_anchor:
                 raise ValueError(
                     f"instrument {g.instrument!r}: {h3.shape[0]} h3 values for "
-                    f"{n_anchor} anchors — supply one per anchor (or one scalar)."
+                    f"{n_anchor} anchors: supply one per anchor (or one scalar)."
                 )
             bank = jax.vmap(partial(gauss_hermite_kernel_traced, radius=radius))(sigma_px, h3)
         else:
@@ -1430,13 +1429,13 @@ def weighted_data_terms(problem: Problem):
 def data_residual_zscores(problem: Problem, d_stack, *, per_epoch: bool = False):
     """Whitened data residuals over unmasked pixels, under the assumed noise model.
 
-    Whitened by what the model *assumes* — jitter and AR(1) correlation included —
-    so a standard deviation of 1 always means "the noise model matches the
-    residuals". With no fitted noise parameters that is a statement about the
-    supplied inverse variances; with fitted ones it is close to 1 by construction,
-    and the diagnostic that still bites is the *shape* of the distribution. For the
-    correlated model the whitener is the exact Markov factorization
-    (:func:`_whiten_residuals`), so surviving structure means the correlation is not
+    The whitening uses the noise model as assumed, jitter and AR(1) correlation
+    included, so a standard deviation of 1 means the noise model matches the residuals.
+    With no fitted noise parameters that is a statement about the supplied inverse
+    variances; with fitted ones it is close to 1 by construction, and the informative
+    diagnostic is then the shape of the distribution. For the correlated model the
+    whitener is the exact Markov factorization (:func:`_whiten_residuals`,
+    ``docs/math.md`` §1.4a), so surviving structure means the correlation is not
     AR(1)-shaped (longer-range, line-locked, or epoch-outlier structure).
 
     Parameters
@@ -1446,12 +1445,12 @@ def data_residual_zscores(problem: Problem, d_stack, *, per_epoch: bool = False)
     d_stack
         Component deviation spectra, shape ``(n_comp, n_pix)``.
     per_epoch
-        If True, return a list of 1-D arrays — one per epoch, ordered as in the
-        :class:`~albireo.data.Dataset` — instead of one concatenated array. Per-epoch
-        structure is what makes an outlying exposure or a drifting night visible at all,
-        and it is what the lag-1 autocorrelation test needs: the lag-1 statistic is only
-        meaningful within a single spectrum, since consecutive pixels of *different*
-        epochs are unrelated.
+        If True, return a list of 1-D arrays, one per epoch and ordered as in the
+        :class:`~albireo.data.Dataset`, instead of one concatenated array. Per-epoch
+        structure is what makes an outlying exposure or a drifting night visible, and it
+        is what the lag-1 autocorrelation test needs: the lag-1 statistic is meaningful
+        only within a single spectrum, since consecutive pixels of different epochs are
+        unrelated.
 
     Returns
     -------

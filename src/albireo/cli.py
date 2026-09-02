@@ -1,17 +1,15 @@
 """The ``albireo`` command: ``init``, ``run``, ``demo`` and ``fetch``.
 
-A command line was deferred until the façade existed, because the façade is the
-configuration schema and a CLI built first would have frozen a second one
-(``docs/roadmap.md``). Now that it does, the command is a thin rendering of it:
-``albireo init`` writes an annotated TOML whose tables are the façade's own vocabulary
-plus the label and velocity stages, ``albireo run`` hands that file to
-:func:`albireo.pipeline.run_pipeline`, ``albireo demo`` runs the same pipeline on two
-simulated stars whose answers are known, and ``albireo fetch`` downloads a BLOeM star's
+The command is a thin layer over :mod:`albireo.pipeline`, whose configuration schema is
+the façade's own vocabulary plus the label and velocity stages. ``albireo init`` writes an
+annotated TOML configuration; ``albireo run`` passes such a file to
+:func:`albireo.pipeline.run_pipeline`; ``albireo demo`` runs the same pipeline on two
+simulated stars with known answers; and ``albireo fetch`` downloads a BLOeM star's public
 epochs and prints the ``[[stars]]`` entry that would analyse them.
 
-Nothing scientific lives here. Every default the pipeline applies is stated in the
-template it writes, and every claim it cannot make -- a light fraction, a wavelength
-medium -- is required by the schema rather than defaulted by the command.
+No scientific decision is made here. Every default the pipeline applies is stated in the
+template it writes, and the quantities the pipeline cannot infer (a light fraction, a
+wavelength medium) are required by the schema rather than defaulted by the command.
 """
 
 from __future__ import annotations

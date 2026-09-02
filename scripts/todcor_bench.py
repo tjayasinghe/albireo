@@ -1,14 +1,14 @@
-"""Measure what the TODCOR mode delivers, and what it costs (D56).
+"""What the TODCOR mode delivers, and what it costs (D56).
 
 Produces the numbers ``docs/benchmarks.md`` records for ``albireo.todcor``:
 
-1. precision, bias and error calibration against signal-to-noise — the Zucker (2003)
+1. precision, bias and error calibration against signal-to-noise: the Zucker (2003)
    test, ``(v - v_true) / sigma`` over many noise realizations;
 2. the pixel-locking bias of the linear shift operator against the template sampling,
-   measured on noiseless data simulated on a *finer* grid than the templates (so the
+   measured on noiseless data simulated on a finer grid than the templates (so the
    template interpolation error is real rather than an inverse crime);
-3. two-dimensional against one-dimensional correlation as the components blend — the
-   reason the method exists;
+3. two-dimensional against one-dimensional correlation as the components blend, which
+   is the case the method addresses;
 4. wall clock per epoch against pixel count and search range, plus the compile;
 5. three components.
 
@@ -139,7 +139,7 @@ def bench_pixel_locking():
             Template(n, grid, c, v_zero_kms=0.0) for n, c in zip("AB", coarse, strict=True)
         ]
         with warnings.catch_warnings():
-            warnings.simplefilter("ignore")  # the coarse grids are the point of this test
+            warnings.simplefilter("ignore")  # the coarse grids are intentional here
             result = todcor(dataset, templates, **RUN)
         err = result.velocity - truth.velocities
         sigma_px = LSF / dv
@@ -210,7 +210,7 @@ def bench_timing():
         (5000.0, 5060.0, 0.2, 40),
         (5000.0, 5060.0, 0.05, 40),
         (5000.0, 5060.0, 0.0125, 40),
-        (4500.0, 6500.0, 0.05, 1200),  # a whole optical range: an echelle's worth of orders
+        (4500.0, 6500.0, 0.05, 1200),  # a whole optical range, spanning many echelle orders
     )
     rows = []
     for lo, hi, step, n_lines in cases:

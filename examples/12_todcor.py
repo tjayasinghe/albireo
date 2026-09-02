@@ -1,32 +1,36 @@
-"""Epoch radial velocities for both stars by TODCOR, and the orbit from them (``docs/math.md`` §10)
+"""Epoch velocities for both stars by TODCOR, and the orbit from them (``docs/math.md`` §10).
 
-Everything before this example infers the orbit from the spectra directly. This one makes
-the artifact the rest of the binary-star toolchain expects instead — one velocity per
-component per epoch — by correlating each spectrum against a combination of two templates
-with independent shifts (Zucker & Mazeh 1994), then fits a Keplerian to the table, then
-closes the loop by using the disentangled components themselves as the templates.
+The preceding examples infer the orbit from the spectra directly. This one produces the
+product the rest of the binary-star toolchain expects, one velocity per component per
+epoch, by correlating each spectrum against a combination of two templates with
+independent shifts (Zucker & Mazeh 1994). It then fits a Keplerian orbit to the table and
+closes the loop by using the disentangled components themselves as templates.
 
-Four things to watch in the output.
+Four results to check in the output.
 
-1. **Both velocities from every single spectrum**, with errors that mean what they say. The
-   templates here are the injected component spectra — the best case — and the pull
-   ``(v - v_true) / sigma`` comes out near unit variance.
-2. **Why two dimensions.** The same spectra correlated against the primary alone — the
-   one-dimensional CCF — carry a bias that grows as the two stars' lines approach each
-   other; the two-dimensional fit does not, because the second template is in the model.
-3. **The orbit from the table**, with the period found by a periodogram, against the
-   injected elements — and ``to_theta()`` handing it back to the disentangler as a warm
-   start.
-4. **The loop closed**: a quick MAP disentangling of the same epochs, its two components
-   turned into templates, and the epochs measured against *them*. Those velocities are
-   differential — a disentangled component's rest frame is not identified — so the orbit is
-   fitted with one systemic velocity per component, and the semi-amplitudes still come back.
+1. Both velocities from every spectrum, with calibrated errors. The templates are the
+   injected component spectra (the best case), and the pull ``(v - v_true) / sigma`` has
+   variance close to one.
+2. The one-dimensional CCF of the same spectra against the primary alone carries a bias
+   that grows as the two stars' lines approach each other. The two-dimensional fit does
+   not, because the second template is part of the model.
+3. The orbit from the table, with the period found by a periodogram, compared with the
+   injected elements. ``to_theta()`` returns it in the form the disentangler accepts as a
+   warm start.
+4. A MAP disentangling of the same epochs, its two components used as templates, and the
+   epochs measured against them. Those velocities are differential, because a
+   disentangled component's rest frame is not identified, so the orbit is fitted with one
+   systemic velocity per component; the semi-amplitudes are still recovered.
 
-Then a batch of two stars, because a survey does not call this once.
+A batch of two stars follows, as a survey would call it.
 
 Environment
 -----------
-``ALBIREO_EXAMPLE_FAST=1`` trims the disentangling's optimizer budget for CI.
+``ALBIREO_EXAMPLE_FAST=1`` reduces the disentangling's optimizer budget for CI.
+
+References
+----------
+Zucker, S. & Mazeh, T. 1994, ApJ, 420, 806
 """
 
 from __future__ import annotations
@@ -47,10 +51,10 @@ def perfect_templates(grid, truth, factor: int = 3):
     """The injected component spectra as templates, upsampled for the correlation.
 
     The packaged truth grid samples the DEMO instrument's LSF at about one pixel per sigma,
-    which is fine for the solver and coarse for a correlation template: the linear shift
-    operator's pixel-locking ripple is of order ``0.1 / sigma_px^2`` pixels
-    (``docs/math.md`` §10.3). Linear upsampling by an integer factor costs nothing and puts
-    three pixels under the sigma — the same thing ``Fit.templates()`` does.
+    which is adequate for the solver but coarse for a correlation template: the linear
+    shift operator's pixel-locking ripple is of order ``0.1 / sigma_px^2`` pixels
+    (``docs/math.md`` §10.3). Linear upsampling by an integer factor puts three pixels
+    under the sigma, as ``Fit.templates()`` does.
     """
     fine = ab.LogGrid(x0=grid.x0, dx=grid.dx / factor, n=(grid.n - 1) * factor + 1)
     return [
@@ -81,7 +85,7 @@ def main() -> None:
             f"pull rms {np.sqrt(np.mean(pull[i] ** 2)):.2f}"
         )
 
-    # 2. Why two dimensions: the one-dimensional CCF of the same spectra ------------------
+    # 2. The one-dimensional CCF of the same spectra, for comparison ----------------------
     one_d = ab.todcor(dataset, templates[:1], v_range=(-120.0, 120.0), light=[1.0], lsf_sigma_v=LSF)
     separation = np.abs(v_true[0] - v_true[1])
     order = np.argsort(separation)
@@ -109,7 +113,7 @@ def main() -> None:
     theta = orbit.to_theta()
     print(
         f"   to_theta(): period {float(theta['period']):.4f}, k {np.asarray(theta['k']).round(3)} "
-        "- the warm start Disentangler(orbit=...) would take"
+        "- the warm start that Disentangler(orbit=...) accepts"
     )
 
     # 4. The loop closed: disentangle, then measure against the components ----------------
@@ -164,7 +168,7 @@ def main() -> None:
     written = batch.write("todcor_tables")
     print(f"   wrote {[p.name for p in written]} to todcor_tables/")
 
-    # 6. Figures, only if matplotlib happens to be installed ------------------------------
+    # 6. Figures, if matplotlib is installed ----------------------------------------------
     if importlib.util.find_spec("matplotlib") is not None:
         import matplotlib
 

@@ -1,19 +1,18 @@
-"""Example datasets, so the first thing you run needs no data of your own.
+"""Example datasets for running albireo without supplying data.
 
-:func:`load_example` returns a ready :class:`~albireo.data.Dataset` — continuum-normalized,
-with inverse variances and masks already set — plus a dictionary describing where it came
-from and what was done to it.
+:func:`load_example` returns a ready :class:`~albireo.data.Dataset` (continuum-normalized,
+with inverse variances and masks already set) and, on request, the injected truth for a
+simulated example. :func:`example_info` reports the provenance of each entry.
 
-One example ships inside the wheel and needs no network, no astropy, and no archive
-account. That is deliberate: the quickstart has to work offline, in a fresh Colab notebook,
-and in CI, and the fastest way to lose a new user is to make their first command a
-download. Larger examples are fetched on demand from a public archive and cached under
-``$ALBIREO_DATA_DIR`` (or the platform cache directory), verified against a recorded SHA-256
-so a truncated download fails loudly instead of producing a subtly wrong spectrum.
+One example, ``sb2_sim``, ships inside the wheel and requires no network access, no
+astropy and no archive account. Larger examples are fetched on demand from a public
+archive and cached under ``$ALBIREO_DATA_DIR``, or under the platform cache directory
+(:func:`cache_dir`). Each cached file is verified against a recorded SHA-256 digest and is
+moved into place only after the digest matches, so a truncated or altered download is
+rejected rather than read as a spectrum.
 
-Nothing here uses astropy: the cached files are ``.npz``, so :func:`numpy.load` is the whole
-reader. Reading *FITS* needs astropy, but that is :mod:`albireo.io`'s job, and a user
-learning the package should not have to install anything to see it work.
+The cached files are ``.npz`` and are read with :func:`numpy.load`, so this module has no
+astropy dependency; reading FITS is the job of :mod:`albireo.io`.
 """
 
 from __future__ import annotations
@@ -45,7 +44,7 @@ _PACKAGED_DIR = Path(__file__).parent / "data_files"
 
 @dataclass(frozen=True)
 class _Example:
-    """One example dataset: where it lives, how big it is, and what it is."""
+    """Registry entry for one example dataset: its location, size, contents and citation."""
 
     name: str
     description: str
@@ -78,7 +77,24 @@ def example_names() -> list[str]:
 
 
 def example_info(name: str) -> dict:
-    """What an example contains, where it comes from, and whether it needs a download."""
+    """What an example contains, where it comes from, and whether it must be downloaded.
+
+    Parameters
+    ----------
+    name
+        One of :func:`example_names`.
+
+    Returns
+    -------
+    dict
+        The registry entry: ``name``, ``description``, ``packaged``, ``citation``, ``url``,
+        ``size_bytes`` and ``cached``.
+
+    Raises
+    ------
+    ValueError
+        If ``name`` is not a registered example.
+    """
     example = _lookup(name)
     return {
         "name": example.name,
@@ -101,26 +117,36 @@ def _lookup(name: str) -> _Example:
 
 
 def load_example(name: str = "sb2_sim", *, with_truth: bool = False, progress: bool = True):
-    """Load a bundled or cached example dataset.
+    """Load a packaged or cached example dataset.
+
+    A packaged example is read from the installation. Any other example is downloaded once
+    into :func:`cache_dir`, verified against its recorded SHA-256 digest, and read from the
+    cache thereafter.
 
     Parameters
     ----------
     name
         One of :func:`example_names`. The default, ``"sb2_sim"``, is packaged with albireo
-        and never touches the network.
+        and requires no network access.
     with_truth
         Also return the injected truth, for simulated examples: the component deviation
         spectra, the orbital elements, and the light fractions used to generate the data.
-        Raises for an observed dataset, where there is no truth to return.
+        Raises for an observed dataset, which has no injected truth.
     progress
         Print download progress for examples that are not yet cached.
 
     Returns
     -------
     Dataset, or (Dataset, dict)
-        The dataset, plus the truth dictionary when ``with_truth`` is set. Every example
-        also carries its provenance: ``dataset.metadata`` is not a thing, so read
-        :func:`example_info` for that.
+        The dataset, and the truth dictionary when ``with_truth`` is set. A
+        :class:`~albireo.data.Dataset` carries no provenance attribute; the provenance of
+        an example is reported by :func:`example_info`.
+
+    Raises
+    ------
+    ValueError
+        If ``name`` is not a registered example, or ``with_truth`` is requested for an
+        observed dataset.
 
     Examples
     --------
@@ -178,7 +204,7 @@ def _read_npz(path: Path):
 def cache_dir() -> Path:
     """Where downloaded examples are kept.
 
-    ``$ALBIREO_DATA_DIR`` wins if it is set. Otherwise the platform convention:
+    ``$ALBIREO_DATA_DIR`` takes precedence when set. Otherwise the platform convention:
     ``%LOCALAPPDATA%\\albireo\\Cache`` on Windows, ``~/Library/Caches/albireo`` on macOS,
     and ``$XDG_CACHE_HOME/albireo`` (default ``~/.cache/albireo``) elsewhere.
     """
@@ -199,10 +225,19 @@ def _cache_path(example: _Example) -> Path:
 
 
 def clear_example_cache(name: str | None = None) -> list[Path]:
-    """Delete cached example downloads; returns the paths removed.
+    """Delete cached example downloads and return the paths removed.
 
-    Packaged examples are part of the installation and are never touched. Use this if a
-    download was interrupted in a way the checksum did not catch, or to reclaim the space.
+    Packaged examples are part of the installation and are never removed.
+
+    Parameters
+    ----------
+    name
+        Clear only this example. ``None`` clears every cached example.
+
+    Returns
+    -------
+    list of pathlib.Path
+        The files deleted.
     """
     targets = [_lookup(name)] if name else list(_EXAMPLES.values())
     removed = []
@@ -229,8 +264,8 @@ def _fetch(example: _Example, progress: bool) -> Path:
         size = f" ({example.n_bytes / 1e6:.1f} MB)" if example.n_bytes else ""
         print(f"albireo: downloading example {example.name!r}{size} to {path.parent}")
 
-    # Written to a .part file and moved into place only after the checksum passes, so an
-    # interrupted download can never be mistaken for a cached one.
+    # Written to a .part file and moved into place only after the digest matches, so an
+    # interrupted download cannot be mistaken for a cached one.
     tmp = path.with_name(path.name + ".part")
     _download_with_retries(example.url, tmp)
 
@@ -262,8 +297,7 @@ def _download_with_retries(url: str, destination: Path, attempts: int = 4) -> No
                     handle.write(chunk)
             return
         except urllib.error.HTTPError as exc:
-            # A 404 or a 403 will not fix itself; only rate limits and server errors are
-            # worth waiting out.
+            # A 404 or 403 is not transient; only 429 and 5xx responses are retried.
             if exc.code != 429 and exc.code < 500:
                 destination.unlink(missing_ok=True)
                 raise

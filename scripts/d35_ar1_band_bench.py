@@ -1,13 +1,13 @@
 """Probe vs band assembly for the correlated (AR(1)) marginal (D35).
 
-D34 ran HR 6819's AR(1) fits on the probe path — the D28 band sandwich assumed
-diagonal weights — at ~15x the per-step cost of the D33 fits, with plain reverse-mode
+D34 ran HR 6819's AR(1) fits on the probe path (the D28 band sandwich assumed
+diagonal weights) at ~15x the per-step cost of the D33 fits, with plain reverse-mode
 gradients through 2p + 1 comb-probe operator applications. D35 extends the band
 assembly to the tridiagonal chain precision via static link pair tables, restoring
 the D28/D29 fast path (closed-form solve VJP included) for correlated problems.
 
-This script measures ``value`` and ``value+grad`` of the correlated marginal — the
-work of one L-BFGS step, gradients taken in velocities, phi and the jitter — at
+This script measures ``value`` and ``value+grad`` of the correlated marginal, the
+work of one L-BFGS step with gradients taken in velocities, phi and the jitter, at
 HR-window scale (51 epochs, ~9.8k model px, ~374k native px, the HR runs'
 half-bandwidth) on one assembly path per invocation: the peak-working-set counter is
 per-process and monotone, so the two paths must not share a process.

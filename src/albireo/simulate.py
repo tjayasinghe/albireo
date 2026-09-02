@@ -1,17 +1,24 @@
-"""Synthetic spectroscopic-binary datasets — the test harness for everything downstream.
+"""Synthetic spectroscopic-binary datasets, the test harness for the inference code.
 
-Milestone M1 (``docs/design.md`` §8). Composite epochs are generated through the same
-operator stack the inference code uses — shift → LSF convolution → rebin-to-native →
-multiplicative response — so closed-loop tests exercise the real pipeline, including
-every advertised pathology: chip gaps, cosmic hits, mixed instruments/resolutions,
-tellurics, nebular emission with a per-epoch amplitude, barycentric frames, and
-per-epoch light fractions.
+Milestone M1 (``docs/design.md`` §8). :func:`simulate_dataset` generates composite epochs
+through the same operator stack the inference code uses: shift, LSF convolution, rebin to
+the native grid, then multiplicative response. Closed-loop tests therefore exercise the
+forward model itself, under the pathologies the model claims to handle: chip gaps, cosmic
+hits, mixed instruments and resolutions, tellurics, nebular emission with a per-epoch
+amplitude, barycentric frames, and per-epoch light fractions.
 
-Component spectra are *deviation* spectra ``d = s - 1`` on the model :class:`~albireo.grids.LogGrid`
-(zero in the continuum, negative dips for absorption). Frame conventions follow
-``docs/math.md`` §1.2: with ``frame="topocentric"`` the stellar log-shift is
-``xi(v_star) - xi(v_bary)`` and tellurics are static; with ``frame="barycentric"`` the
-stellar shift is ``xi(v_star)`` and tellurics move by ``+xi(v_bary)``.
+Component spectra are deviation spectra ``d = s - 1`` on the model
+:class:`~albireo.grids.LogGrid`, zero in the continuum and negative in absorption. Frame
+conventions follow ``docs/math.md`` §1.2: with ``frame="topocentric"`` the stellar
+log-shift is ``xi(v_star) - xi(v_bary)`` and tellurics are static; with
+``frame="barycentric"`` the stellar shift is ``xi(v_star)`` and tellurics move by
+``+xi(v_bary)``.
+
+:func:`resimulate` redraws the data of an existing :class:`~albireo.forward.Problem` from
+its own forward model, which is the parametric bootstrap :mod:`albireo.calibrate` runs.
+:func:`synthetic_library` builds a small spectral library standing in for a published
+synthetic grid, and :func:`library_component` renders one of its nodes as a component
+spectrum, so the label-fitting and template modes can be exercised offline.
 """
 
 from __future__ import annotations
@@ -64,10 +71,10 @@ class InstrumentSpec:
     wave
         Native wavelength grid (Å), strictly increasing; must lie inside the model grid.
     sigma_v_lsf
-        Gaussian LSF width in km/s: a scalar for a stationary LSF, or — with
-        ``lsf_anchors_angstrom`` — one width per anchor for a wavelength-dependent
-        LSF (D37), linearly interpolated across the grid exactly as the forward
-        model realizes it (:func:`albireo.operators.gaussian_lsf_profiles`).
+        Gaussian LSF width in km/s: a scalar for a stationary LSF, or, together with
+        ``lsf_anchors_angstrom``, one width per anchor for a wavelength-dependent LSF
+        (D37), linearly interpolated across the grid exactly as the forward model
+        realizes it (:func:`albireo.operators.gaussian_lsf_profiles`).
     snr
         Per-pixel continuum signal-to-noise (noise sigma = 1/snr on normalized flux).
     lsf_anchors_angstrom
@@ -87,7 +94,23 @@ class InstrumentSpec:
 
 @dataclasses.dataclass(frozen=True)
 class OrbitParams:
-    """Keplerian SB2 orbit for the simulator (component 2 uses ``omega + pi``)."""
+    """Keplerian orbit for the simulator; components 2, 4, ... use ``omega + pi``.
+
+    Attributes
+    ----------
+    period
+        Orbital period [d].
+    t_peri
+        Time of periastron passage [d].
+    ecc
+        Eccentricity.
+    omega
+        Argument of periastron of component 1 [rad].
+    k
+        One radial-velocity semi-amplitude [km/s] per stellar component.
+    gamma
+        Systemic velocity [km/s].
+    """
 
     period: float
     t_peri: float
@@ -119,7 +142,12 @@ class OrbitParams:
 
 @dataclasses.dataclass(frozen=True)
 class SimulationTruth:
-    """Everything that was injected — the oracle for closed-loop tests."""
+    """Everything :func:`simulate_dataset` injected: the reference for closed-loop tests.
+
+    Component, telluric and nebular spectra are deviation spectra on the model grid, and
+    the stellar velocities are recorded in the barycentric frame whatever frame the
+    returned :class:`~albireo.data.Dataset` declares.
+    """
 
     grid: LogGrid
     components: tuple[np.ndarray, ...]  # deviation spectra on the model grid
@@ -199,12 +227,12 @@ def synthetic_nebular_spectrum(
     margin: float = 0.02,
     seed: int = 2,
 ) -> np.ndarray:
-    """Nebular-like *emission* deviation spectrum: narrow positive lines at fixed wavelengths.
+    """Nebular emission deviation spectrum: narrow positive lines at fixed wavelengths.
 
-    Unlike the stellar and telluric generators, the line positions here are physical
-    rather than random — a nebular component is only interesting insofar as its lines
-    coincide with the stellar features it contaminates (Balmer, He I), which is exactly
-    what a randomly placed line would miss.
+    The line positions are physical rather than random, unlike those of the stellar and
+    telluric generators. A nebular component contaminates the stellar features its lines
+    coincide with (Balmer, He I), so randomly placed lines would not reproduce the effect
+    the component exists to describe.
 
     Parameters
     ----------
@@ -215,9 +243,9 @@ def synthetic_nebular_spectrum(
     amplitude_range
         Uniform range for each line's peak deviation (positive = emission).
     sigma_v_kms
-        Intrinsic Gaussian width. Nebular lines are thermally narrow — ~10 km/s at
-        10⁴ K including turbulence — and the observed width is set by the instrument,
-        which the simulator applies downstream.
+        Intrinsic Gaussian width [km/s]. Nebular lines are thermally narrow, about
+        10 km/s at 10⁴ K including turbulence; the observed width is set by the
+        instrument, which the simulator applies downstream.
     v_kms
         Velocity of the nebula in the model grid's frame; must match the
         ``nebular_v_kms`` the fit is built with.
@@ -230,6 +258,11 @@ def synthetic_nebular_spectrum(
     -------
     numpy.ndarray
         ``(grid.n,)`` non-negative deviation spectrum.
+
+    Raises
+    ------
+    ValueError
+        If no line falls inside the grid with the requested edge margin.
     """
     from albireo.grids import C_KMS
     from albireo.priors import NEBULAR_LINES
@@ -310,6 +343,13 @@ def simulate_dataset(
 ) -> tuple[Dataset, SimulationTruth]:
     """Generate a synthetic multi-epoch dataset plus the injected truth.
 
+    Each epoch is built through the operator stack of ``docs/math.md`` §1: the component
+    deviation spectra are shifted to their velocities and summed with the light fractions
+    of that epoch, the telluric and nebular spectra are added at their own shifts, the sum
+    is convolved with the instrument LSF, rebinned onto the instrument's native
+    wavelength grid, multiplied by the epoch's Chebyshev response, and finally given
+    white or AR(1) noise. Chip gaps and cosmic hits are then applied by zeroing ``ivar``.
+
     Parameters
     ----------
     grid
@@ -318,50 +358,51 @@ def simulate_dataset(
         Stellar deviation spectra on ``grid`` (one array of shape ``(grid.n,)`` per
         component).
     bjd
-        Epoch times, shape ``(n_ep,)``.
+        Epoch times [d], shape ``(n_ep,)``.
     instruments
         Named instrument specs; each epoch is observed with one of them.
     light_fractions
         ``(n_comp,)`` constant or ``(n_comp, n_ep)`` per-epoch; must sum to 1 per epoch.
     orbit, velocities
         Either a Keplerian :class:`OrbitParams` (with ``len(orbit.k) == n_comp``) or an
-        explicit ``(n_comp, n_ep)`` velocity array (free-velocity mode). Exactly one
-        must be given.
+        explicit ``(n_comp, n_ep)`` velocity array [km/s] (free-velocity mode). Exactly
+        one must be given.
     epoch_instruments
         Instrument name per epoch; defaults to the first instrument for all epochs.
     v_bary
         Barycentric correction velocities per epoch [km/s]; default: uniform random in
         ±30 km/s.
     frame
-        ``"topocentric"`` (default) or ``"barycentric"`` — the frame of the emitted
-        wavelength grids, with shift conventions from ``docs/math.md`` §1.2.
+        ``"topocentric"`` (default) or ``"barycentric"``: the frame of the emitted
+        wavelength grids, with the shift conventions of ``docs/math.md`` §1.2.
     telluric
         Optional telluric deviation spectrum on ``grid`` (light fraction 1, additive).
     nebular
         Optional nebular deviation spectrum on ``grid``
-        (:func:`synthetic_nebular_spectrum`): additive, static in the *barycentric*
-        frame, and scaled per epoch by ``nebular_amplitudes`` — the D40 component.
+        (:func:`synthetic_nebular_spectrum`): additive, static in the barycentric frame,
+        and scaled per epoch by ``nebular_amplitudes``. This is the D40 component.
     nebular_amplitudes
         Per-epoch amplitude of the nebular component, ``(n_ep,)`` or a scalar
-        (default 1). This is the seeing/slit-loss variation the component exists to
-        absorb; the recovered amplitudes are only comparable to these up to one
-        overall scale (see :func:`albireo.forward.with_nebular_amplitudes`).
+        (default 1), representing the seeing and slit-loss variation the component
+        absorbs. Recovered amplitudes match these only up to one overall scale (see
+        :func:`albireo.forward.with_nebular_amplitudes`).
     nebular_v_kms
-        Velocity of the nebula in the model grid's frame, matching
+        Velocity of the nebula [km/s] in the model grid's frame, matching
         :func:`albireo.forward.build_problem`.
     response_order, response_amplitude
         Per-epoch multiplicative Chebyshev response ``1 + sum_{m<=order} c_m T_m`` with
         ``c_m ~ N(0, response_amplitude^2)``. Amplitude 0 disables it (r = 1).
     ar1_phi
-        AR(1) correlation of the pixel noise (``|phi| < 1``): the noise is a
-        stationary AR(1) process over the native pixel index with marginal standard
-        deviation ``1/snr`` — the model of :func:`albireo.forward.with_ar1`, so
-        closed-loop tests can inject and recover it. The process runs over *all*
-        pixels (masked ones included), which is what makes the observed subset carry
-        ``phi**gap`` correlations across masked gaps. 0 = white noise (default).
+        AR(1) correlation of the pixel noise (``|phi| < 1``): the noise is a stationary
+        AR(1) process over the native pixel index with marginal standard deviation
+        ``1/snr``. This is the model of :func:`albireo.forward.with_ar1`, so closed-loop
+        tests can inject and recover it. The process runs over all pixels, masked ones
+        included, which is what makes the observed subset carry ``phi**gap`` correlations
+        across masked gaps. 0 = white noise (default).
     gap_fraction
-        Fraction of each epoch's pixels lost to one contiguous chip gap (ivar = 0 and
-        flux overwritten with garbage, so downstream code MUST honor the mask).
+        Fraction of each epoch's pixels lost to one contiguous chip gap. The gap is given
+        ivar = 0 and its flux is overwritten with unusable values, so downstream code must
+        honor the mask.
     cosmic_fraction
         Fraction of pixels hit by cosmics (large positive spikes, ivar = 0).
     seed
@@ -370,6 +411,13 @@ def simulate_dataset(
     Returns
     -------
     (Dataset, SimulationTruth)
+        The simulated dataset, tagged with ``frame``, and the injected truth.
+
+    Raises
+    ------
+    ValueError
+        If the shapes, the light fractions, the frame or the instrument grids are
+        inconsistent, or if neither or both of ``orbit`` and ``velocities`` are given.
     """
     rng = np.random.default_rng(seed)
     components = tuple(np.asarray(c, dtype=np.float64) for c in components)
@@ -521,7 +569,7 @@ def simulate_dataset(
             start = rng.integers(0, n_native - width + 1)
             gap = slice(start, start + width)
             ivar[gap] = 0.0
-            flux[gap] = rng.normal(0.0, 10.0, size=width)  # garbage: mask must be honored
+            flux[gap] = rng.normal(0.0, 10.0, size=width)  # unusable: mask must be honored
         if cosmic_fraction > 0:
             n_hit = max(1, round(cosmic_fraction * n_native))
             hits = rng.choice(n_native, size=n_hit, replace=False)
@@ -562,11 +610,11 @@ def simulate_dataset(
 def _model_applier():
     """Jitted :func:`albireo.forward.apply_model`, built once and reused.
 
-    ``resimulate`` is called once per bootstrap trial with the same problem structure
-    every time, so the forward apply wants to be one compiled graph rather than a few
-    hundred eagerly dispatched ops per call. Cached at module level because a fresh
-    ``jax.jit`` wrapper per call would recompile every trial. Imported lazily: see the
-    ``TYPE_CHECKING`` note at the top of this module.
+    :func:`resimulate` is called once per bootstrap trial with the same problem structure,
+    so the forward apply is one compiled graph rather than a few hundred eagerly
+    dispatched operations per call. The cache is at module level because a fresh
+    ``jax.jit`` wrapper per call would recompile on every trial. The import is local; see
+    the ``TYPE_CHECKING`` note at the top of this module.
     """
     from albireo.forward import apply_model
 
@@ -587,30 +635,30 @@ def _ar1_noise(rng, n: int, phi: float) -> np.ndarray:
 
 
 def resimulate(problem: Problem, d_stack, *, seed: int = 0) -> Problem:
-    """Redraw ``problem``'s data from its own forward model — a parametric bootstrap.
+    """Redraw ``problem``'s data from its own forward model: a parametric bootstrap.
 
-    The observed dataset fixes an enormous amount of structure that a from-scratch
-    simulation has to guess at: which epochs exist and when, each one's barycentric
-    velocity and signal-to-noise, where the chip gaps and cosmics fell, the native
-    wavelength solutions, the response. All of that already lives in ``problem``, so a
-    *matched* trial dataset is one forward apply plus a noise draw:
+    The observed dataset fixes structure that a from-scratch simulation would have to
+    assume: which epochs exist and when, each one's barycentric velocity and
+    signal-to-noise, where the chip gaps and cosmics fell, the native wavelength
+    solutions, and the response. All of that already lives in ``problem``, so a matched
+    trial dataset is one forward apply plus a noise draw:
 
         ``z' = r (R B sum_i l_ij T(delta_ij) d_i) + n,   n ~ N(0, W^-1)``
 
-    with the same weights, the same masks, and the same operators — only the noise and
-    the injected spectra differ. This is what :mod:`albireo.calibrate` runs in its inner
-    loop, and it is why an injection-recovery calibration on real data costs scan time
-    rather than build time (:func:`albireo.forward.with_data`).
+    with the same weights, masks and operators; only the noise and the injected spectra
+    differ. :mod:`albireo.calibrate` runs this in its inner loop, which is why an
+    injection-recovery calibration on real data costs scan time rather than build time
+    (:func:`albireo.forward.with_data`).
 
-    The velocities, light fractions, LSF and response are read from ``problem`` as it is
-    handed over, so inject at the *truth* by passing a problem already evaluated there
-    (:meth:`albireo.inference.MarginalOrbitModel.problem_at`) — the returned problem
-    keeps those same velocities, and it is the caller's job to move the data onto
-    whatever base problem the analysis then uses.
+    The velocities, light fractions, LSF and response are read from ``problem`` as passed,
+    so injecting at the truth requires a problem already evaluated there
+    (:meth:`albireo.inference.MarginalOrbitModel.problem_at`). The returned problem keeps
+    those velocities; moving the data onto whatever base problem the analysis then uses is
+    left to the caller.
 
     Noise follows the problem's own model: standard deviation ``1/sqrt(w/alpha^2)`` per
-    good pixel (so a fitted jitter is honored), and, where ``ar_phi`` is nonzero, an
-    AR(1) process on the *standardized* noise — the model of
+    good pixel, so a fitted jitter is honored, and, where ``ar_phi`` is nonzero, an AR(1)
+    process on the standardized noise. That is the model of
     :func:`albireo.forward.with_ar1`, run over all native pixels so that the observed
     subset carries ``phi**gap`` correlations across masked gaps. Masked pixels come back
     exactly zero.
@@ -620,9 +668,9 @@ def resimulate(problem: Problem, d_stack, *, seed: int = 0) -> Problem:
     problem
         The problem to draw from. Only its data term is replaced.
     d_stack
-        Injected deviation spectra, ``(n_components, grid.n)`` — the same layout
+        Injected deviation spectra, ``(n_components, grid.n)``: the layout
         :attr:`albireo.likelihood.MarginalResult.d_hat` returns, so a fit can be
-        bootstrapped from its own solution. Zero a row to leave that component out.
+        bootstrapped from its own solution. A zeroed row leaves that component out.
     seed
         Seed for the noise draw.
 
@@ -630,6 +678,11 @@ def resimulate(problem: Problem, d_stack, *, seed: int = 0) -> Problem:
     -------
     Problem
         ``problem`` with the redrawn data.
+
+    Raises
+    ------
+    ValueError
+        If ``d_stack`` does not have shape ``(problem.n_components, problem.grid.n)``.
 
     Examples
     --------
@@ -656,7 +709,7 @@ def resimulate(problem: Problem, d_stack, *, seed: int = 0) -> Problem:
 
 
 # ---------------------------------------------------------------------------
-# A toy spectral library: the simulator's stand-in for BOSZ or POLLUX
+# A small spectral library: the simulator's stand-in for BOSZ or POLLUX
 # ---------------------------------------------------------------------------
 
 _LIBRARY_DEFAULT_TEFF = tuple(float(t) for t in range(4000, 5751, 250))
@@ -665,14 +718,13 @@ _LIBRARY_DEFAULT_MH = (-1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5)
 
 
 def _library_line_depths(teff, logg, mh, n_lines: int) -> list[float]:
-    """Line depths as functions of the labels, each label owning lines of its own.
+    """Line depths as functions of the labels, each label driving lines of its own.
 
-    That ownership is load-bearing. If two labels moved the same lines the same way they
-    would be exactly interchangeable, and a fit would drive the chi-square to zero along a
-    curve through label space while "failing" to recover the injected values -- the
-    degenerate-fixture trap that D53 recorded. Here Teff, log g and [M/H] each drive lines
-    that the others do not, so the map from labels to spectrum is invertible and a
-    recovery test is a statement about the code rather than about the fixture.
+    Two labels that moved the same lines in the same way would be interchangeable, and a
+    fit would then drive the chi-square to zero along a curve through label space without
+    recovering the injected values (the degenerate fixture recorded under D53). Teff,
+    log g and [M/H] each drive lines the others do not, so the map from labels to spectrum
+    is invertible and a recovery test measures the code rather than the fixture.
     """
     t = (teff - 4800.0) / 600.0
     g = logg - 4.0
@@ -706,16 +758,16 @@ def synthetic_library(
 ):
     """A small, complete-box spectral library standing in for BOSZ or POLLUX.
 
-    Every synthetic-grid feature above the grid itself -- interpolation, broadening, the
-    dilution model, the additive nuisance, the label optimizer, and the templates
-    :func:`albireo.todcor` correlates against -- is exercised unchanged by this stand-in,
-    which is what lets the label mode and the pipeline be tested and demonstrated
-    offline. The real grids are hundreds of megabytes (:func:`albireo.fetch_library`).
+    The stand-in exercises every part of the synthetic-grid machinery above the grid
+    itself: interpolation, broadening, the dilution model, the additive nuisance, the
+    label optimizer, and the templates :mod:`albireo.todcor` correlates against. The label
+    mode and the pipeline can therefore be tested and demonstrated offline; the published
+    grids run to hundreds of megabytes (:func:`albireo.fetch_library`).
 
     Each node is a set of Gaussian absorption lines at fixed wavelengths whose depths
-    depend on the labels, with each label owning lines of its own so that the map from
-    labels to spectrum is invertible (see :func:`_library_line_depths`), and a continuum
-    that falls with Teff across the window -- the wavelength dependence that makes a
+    depend on the labels, with each label driving lines of its own so that the map from
+    labels to spectrum is invertible (see :func:`_library_line_depths`), plus a continuum
+    that falls with Teff across the window. That wavelength dependence is what makes a
     light ratio measurable.
 
     Parameters
@@ -727,19 +779,33 @@ def synthetic_library(
     n_lines
         Lines per spectrum, spread across the window with an 8% margin at each edge.
     teff, logg, mh
-        The node axes. The default box matches the BOSZ FGK spacing (250 K, 0.5 dex).
+        The node axes: effective temperature [K], surface gravity [dex] and metallicity
+        [dex]. The default box matches the BOSZ FGK spacing (250 K, 0.5 dex).
     medium
-        The wavelength scale to declare. Required by the container; there is no default
-        in the real thing either.
+        The wavelength scale to declare, ``"air"`` or ``"vacuum"``. Required by the
+        container; the published grids carry no default either.
     line_width_angstrom
-        Intrinsic Gaussian sigma of every line. Rotation is applied by a kernel afterwards,
-        never here.
+        Intrinsic Gaussian sigma of every line [Å]. Rotational broadening is applied by a
+        kernel afterwards, never here.
     seed
         Seeds the jitter of the line positions.
 
     Returns
     -------
     albireo.library.SpectralLibrary
+        A library on a complete Teff-log g-[M/H] box, with normalized flux and a
+        log continuum at every node.
+
+    Raises
+    ------
+    ValueError
+        If ``wave_range`` is not increasing.
+
+    References
+    ----------
+    Bohlin, R. C., Mészáros, Sz., Fleming, S. W., et al. 2017, AJ, 153, 234
+
+    Palacios, A., Gebran, M., Josselin, E., et al. 2010, A&A, 516, A13
     """
     from albireo.library import SpectralLibrary
 
@@ -795,23 +861,41 @@ def library_component(
 ) -> np.ndarray:
     """A library spectrum at ``labels`` as a deviation on ``grid``, rotationally broadened.
 
-    The component a simulated star is built from when its labels are meant to be
-    recoverable: interpolate the library at the labels (the same interpolator the label
-    fit uses), subtract the unit continuum, and broaden with the pixel-integrated Gray
-    kernel. Hand the result to :func:`simulate_dataset` as one of its ``components``.
+    This is the component a simulated star is built from when its labels are to be
+    recovered. The library is resampled onto ``grid``, interpolated at ``labels`` with the
+    same interpolator the label fit uses, reduced to a deviation by subtracting the unit
+    continuum, and broadened with the pixel-integrated limb-darkened rotation kernel of
+    Gray (2005). The result is passed to :func:`simulate_dataset` as one of its
+    ``components``.
 
     Parameters
     ----------
     library
         A :class:`~albireo.library.SpectralLibrary`, e.g. :func:`synthetic_library`.
     labels
-        ``{"teff": ..., "logg": ..., "mh": ...}`` -- every axis the library has.
+        ``{"teff": ..., "logg": ..., "mh": ...}``: every axis the library has.
     grid
         The model grid to render on.
     medium
-        The wavelength scale of ``grid`` (the library is converted onto it).
+        The wavelength scale of ``grid``; the library is converted onto it.
     vsini_kms, epsilon
-        Rotational broadening and the limb-darkening coefficient.
+        Projected rotational velocity [km/s] and the linear limb-darkening coefficient.
+        A ``vsini_kms`` of 0 leaves the spectrum unbroadened.
+
+    Returns
+    -------
+    numpy.ndarray
+        ``(grid.n,)`` deviation spectrum ``d = s - 1``.
+
+    Raises
+    ------
+    ValueError
+        If ``labels`` omits a library axis, or if ``vsini_kms`` is negative.
+
+    References
+    ----------
+    Gray, D. F. 2005, The Observation and Analysis of Stellar Photospheres, 3rd ed.
+    (Cambridge: Cambridge University Press)
     """
     from albireo.library import library_interpolator
     from albireo.operators import rotational_kernel

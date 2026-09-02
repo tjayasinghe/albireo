@@ -1,17 +1,16 @@
 """Sparse linear operators: Doppler shift, interpolation, and flux-conserving rebinning.
 
-Every operator here is *linear* in the flux vector and ships with an exact adjoint
-(verified in the tests against ``jax.linear_transpose``). Conventions (``docs/math.md``
-§1.1):
+Every operator here is linear in the flux vector and has an exact adjoint, verified in
+the tests against ``jax.linear_transpose``. Conventions follow ``docs/math.md`` §1.1:
 
-- Operators act on **deviation** spectra ``d = s - 1`` and zero-fill outside their input
+- Operators act on deviation spectra ``d = s - 1`` and zero-fill outside their input
   domain, which is exact for signals that vanish in the continuum.
-- The shift operator acts on a *uniform* log-wavelength grid, where a Doppler shift is a
+- The shift operator acts on a uniform log-wavelength grid, where a Doppler shift is a
   translation by ``delta`` pixels; it is differentiable with respect to ``delta``.
 - Grid-to-grid operators (:class:`InterpOperator`, :class:`RebinOperator`) are static:
   their sparsity pattern and weights are precomputed once in NumPy and applied as
-  gathers / segment-sums in JAX. Data are never resampled — these operators project the
-  *model* onto each epoch's native grid.
+  gathers or segment-sums in JAX. Data are never resampled; these operators project the
+  model onto each epoch's native grid.
 """
 
 from __future__ import annotations
@@ -66,7 +65,7 @@ def shift_spectrum(flux, shift_pix):
     Parameters
     ----------
     flux
-        Input spectrum on the uniform grid, shape ``(n,)``. Should be a *deviation*
+        Input spectrum on the uniform grid, shape ``(n,)``. Should be a deviation
         spectrum (zero in the continuum) so that zero padding is exact.
     shift_pix
         Shift in pixels (scalar). Differentiable; the derivative of the output with
@@ -134,15 +133,15 @@ def gaussian_kernel(sigma_px, *, truncate: float = 4.0):
 
 
 def gaussian_kernel_traced(sigma_px, radius: int):
-    """Normalized Gaussian kernel with a *static* radius and a traced ``sigma_px``.
+    """Normalized Gaussian kernel with a static radius and a traced ``sigma_px``.
 
-    The jit-safe counterpart of :func:`gaussian_kernel` for inference over LSF
-    widths: the kernel length ``2*radius + 1`` is fixed at trace time while the
-    values are differentiable in ``sigma_px``. The caller must ensure
-    ``radius >= truncate * sigma_px`` (build the radius from an upper bound on
-    sigma) — a radius too small for the realized sigma truncates the Gaussian and
-    degrades accuracy, which is why the inference model guards the bound.
-    ``sigma_px`` must be positive (enforce via the prior's support).
+    The jit-safe counterpart of :func:`gaussian_kernel` for inference over LSF widths:
+    the kernel length ``2*radius + 1`` is fixed at trace time while the values are
+    differentiable in ``sigma_px``. The caller must ensure
+    ``radius >= truncate * sigma_px``, building the radius from an upper bound on sigma.
+    A radius too small for the realized sigma truncates the Gaussian and degrades
+    accuracy, so the inference model guards the bound. ``sigma_px`` must be positive
+    (enforce via the prior's support).
     """
     offsets = jnp.arange(-radius, radius + 1, dtype=jnp.float64)
     kernel = jnp.exp(-0.5 * (offsets / sigma_px) ** 2)
@@ -158,13 +157,17 @@ def gauss_hermite_kernel_traced(sigma_px, h3, radius: int):
     ``H3(u) = (2*sqrt(2)*u^3 - 3*sqrt(2)*u) / sqrt(6)``,   ``u = offset / sigma_px``,
 
     normalized to unit sum. ``h3 = 0`` reproduces :func:`gaussian_kernel_traced`
-    exactly. Positive ``h3`` skews the profile redward: the kernel's first moment
-    (the centroid shift an unmodeled asymmetry imprints on every line) is
-    ``~ sqrt(3) * h3 * sigma`` for small ``h3``. Keep ``|h3|`` modest (the inference
-    model clips at 0.2): the series goes slightly negative in the far tail beyond
-    that, and real instrument profiles sit well below it. Radius contract as in
-    :func:`gaussian_kernel_traced` (fixed by the build-time width bound; ``h3``
-    does not change the support).
+    exactly. Positive ``h3`` skews the profile redward: the kernel's first moment (the
+    centroid shift an unmodeled asymmetry imprints on every line) is
+    ``~ sqrt(3) * h3 * sigma`` for small ``h3``. The series goes slightly negative in
+    the far tail for large ``|h3|``, so the inference model clips at 0.2; real
+    instrument profiles sit well below that bound. The radius contract is that of
+    :func:`gaussian_kernel_traced` (fixed by the build-time width bound; ``h3`` does not
+    change the support).
+
+    References
+    ----------
+    van der Marel, R. P. & Franx, M. 1993, ApJ, 407, 525
     """
     offsets = jnp.arange(-radius, radius + 1, dtype=jnp.float64)
     u = offsets / sigma_px
@@ -187,16 +190,16 @@ def _rotational_antiderivative(x, epsilon, xp):
     ``g(x) = [2 (1 - eps) sqrt(1 - x^2) + (pi eps / 2) (1 - x^2)] / [pi (1 - eps/3)]``,
 
     and ``A`` integrates it in closed form. ``g(±1) = 0``, so ``A`` is C^1 across the
-    edge of the support — which is what makes the *pixel-integrated* kernel below
-    differentiable in ``v sin i`` (see :func:`rotational_kernel_traced`).
+    edge of the support, which makes the pixel-integrated kernel below differentiable
+    in ``v sin i`` (see :func:`rotational_kernel_traced`).
 
     ``xp`` is the array module (``numpy`` or ``jax.numpy``); the two kernel builders
     share this one definition so the static and traced kernels cannot drift apart.
     """
     # Evaluate only inside the support and splice the constant tails on. The naive form
-    # is +inf - inf in the derivative at |x| = 1 (the sqrt and the arcsin each blow up,
-    # and only their sum is finite), so gradients would be NaN exactly at the clipped
-    # pixels — which is most of them. The inner `where` keeps a safe argument under the
+    # gives +inf - inf in the derivative at |x| = 1 (the sqrt and the arcsin each
+    # diverge and only their sum is finite), so gradients would be NaN at every clipped
+    # pixel, which is most of them. The inner `where` keeps a safe argument under the
     # derivative; the outer one selects the true value.
     inside = xp.abs(x) < 1.0
     x_safe = xp.where(inside, x, 0.0)
@@ -216,23 +219,28 @@ def _rotational_radius(vsini_px) -> int:
 def rotational_kernel(vsini_px, *, epsilon: float = 0.6):
     """Pixel-integrated limb-darkened rotation kernel, half-width ``vsini_px`` pixels.
 
-    On the uniform log-wavelength grid rotational broadening is stationary — the
-    profile's width in velocity is constant — so ``vsini_px = vsini_kms /
-    grid.dv_kms``, exactly as ``sigma_px`` works for :func:`gaussian_kernel`.
+    On the uniform log-wavelength grid rotational broadening is stationary (the
+    profile's width in velocity is constant), so ``vsini_px = vsini_kms / grid.dv_kms``,
+    exactly as ``sigma_px`` works for :func:`gaussian_kernel`.
 
-    Each tap is the *integral* of the Gray profile over its pixel,
-    ``K_p = A((p + 1/2)/vsini_px) - A((p - 1/2)/vsini_px)``, not a point sample. That
-    is not a refinement: the profile has a square-root edge, so point sampling puts a
-    kink with unbounded slope wherever the support boundary crosses a pixel, and an
-    optimizer differentiating through it stalls. The integral is C^1 in ``v sin i``
-    because ``g(±1) = 0`` — which is what L-BFGS and NUTS need. It is *not* C^2 at
-    half-integer ``vsini_px``, where the support edge lands exactly on a pixel edge and
-    the tap picks up a ``|delta|^{3/2}`` term; the tests measure both facts.
+    Each tap is the integral of the Gray (2005) profile over its pixel,
+    ``K_p = A((p + 1/2)/vsini_px) - A((p - 1/2)/vsini_px)``, not a point sample. The
+    profile has a square-root edge, so point sampling puts a kink with unbounded slope
+    wherever the support boundary crosses a pixel, and an optimizer differentiating
+    through it stalls. The pixel integral is C^1 in ``v sin i`` because ``g(±1) = 0``,
+    which is what L-BFGS and NUTS require. It is not C^2 at half-integer ``vsini_px``,
+    where the support edge lands exactly on a pixel edge and the tap picks up a
+    ``|delta|^{3/2}`` term; the tests measure both facts.
 
     The kernel has odd length ``2 * radius + 1`` with ``radius = ceil(vsini_px) + 1``,
     and sums to exactly 1. ``epsilon`` is the linear limb-darkening coefficient
     (default 0.6, Gray's canonical optical value); it changes the profile's shape by a
     few percent and is not identifiable alongside ``v sin i`` at survey resolution.
+
+    References
+    ----------
+    Gray, D. F. 2005, The Observation and Analysis of Stellar Photospheres, 3rd ed.
+    (Cambridge University Press)
     """
     vsini = float(vsini_px)
     if vsini <= 0:
@@ -248,20 +256,24 @@ def rotational_kernel(vsini_px, *, epsilon: float = 0.6):
 
 
 def rotational_kernel_traced(vsini_px, radius: int, *, epsilon: float = 0.6):
-    """Rotation kernel with a *static* radius and a traced ``vsini_px``.
+    """Rotation kernel with a static radius and a traced ``vsini_px``.
 
-    The jit-safe counterpart of :func:`rotational_kernel`, for inference over
-    ``v sin i``: the length ``2 * radius + 1`` is fixed at trace time while the taps
-    are differentiable in ``vsini_px``. Build the radius from the *upper bound* of the
-    ``v sin i`` prior — :func:`rotational_radius_for` does exactly that — since a
-    radius short of the realized half-width truncates the profile, and renormalization
-    then quietly redistributes the missing wings.
+    The jit-safe counterpart of :func:`rotational_kernel` for inference over
+    ``v sin i``: the length ``2 * radius + 1`` is fixed at trace time while the taps are
+    differentiable in ``vsini_px``. Build the radius from the upper bound of the
+    ``v sin i`` prior, which is what :func:`rotational_radius_for` returns: a radius
+    short of the realized half-width truncates the profile, and renormalization then
+    redistributes the missing wings with no diagnostic.
 
-    Degenerates gracefully as ``vsini_px -> 0``: all the weight collects in the central
-    tap and the kernel becomes a delta, with a vanishing gradient. That is the honest
-    identifiability floor rather than a failure — rotation far below the pixel scale
-    leaves no imprint to fit — and the caller is expected to report it (a fitted
-    ``v sin i`` below the instrumental width is not a measurement).
+    As ``vsini_px -> 0`` all the weight collects in the central tap, the kernel becomes
+    a delta and the gradient vanishes. This is the identifiability floor, not a failure:
+    rotation far below the pixel scale leaves no imprint to fit, and a fitted
+    ``v sin i`` below the instrumental width is not a measurement.
+
+    References
+    ----------
+    Gray, D. F. 2005, The Observation and Analysis of Stellar Photospheres, 3rd ed.
+    (Cambridge University Press)
     """
     if radius < 1:
         raise ValueError("radius must be at least 1")
@@ -280,8 +292,8 @@ def rotational_kernel_traced(vsini_px, radius: int, *, epsilon: float = 0.6):
 def rotational_radius_for(vsini_max_kms: float, dv_kms: float) -> int:
     """Static kernel radius covering every ``v sin i`` up to ``vsini_max_kms``.
 
-    The bound the traced kernel's contract asks for, in the units a caller actually
-    has: the upper end of the ``v sin i`` prior and the grid's pixel width.
+    Expresses the traced kernel's radius contract in the quantities a caller has: the
+    upper end of the ``v sin i`` prior and the grid's pixel width.
     """
     if not vsini_max_kms > 0 or not dv_kms > 0:
         raise ValueError("vsini_max_kms and dv_kms must be positive")
@@ -308,10 +320,10 @@ def convolve_varying(flux, profiles):
 
     so a ``profiles`` whose rows are all equal to ``kernel`` reproduces
     ``convolve_spectrum(flux, kernel)`` exactly. The matrix realized is banded,
-    ``K[m, c] = profiles[m, m - c + r]`` for ``|m - c| <= r`` — the "banded matrix"
-    slot design.md D8 reserved for a tabulated LSF. Zero-padded at the grid edges
-    (exact for deviation spectra); linear in ``flux`` *and* in ``profiles``, so a
-    traced profile bank (LSF inference) differentiates through it.
+    ``K[m, c] = profiles[m, m - c + r]`` for ``|m - c| <= r``: the banded-matrix form
+    design.md D8 reserved for a tabulated LSF. Zero-padded at the grid edges (exact for
+    deviation spectra) and linear in ``flux`` as well as in ``profiles``, so a traced
+    profile bank (LSF inference) differentiates through it.
     """
     flux = jnp.asarray(flux)
     profiles = jnp.asarray(profiles)
@@ -328,8 +340,8 @@ def convolve_varying(flux, profiles):
 def convolve_varying_adjoint(flux, profiles):
     """Exact adjoint of :func:`convolve_varying` (same ``profiles`` argument).
 
-    ``out[c] = sum_d profiles[c + d, d + r] * flux[c + d]`` — each *input* pixel
-    scatters back through the rows that read it. Verified in the tests against
+    ``out[c] = sum_d profiles[c + d, d + r] * flux[c + d]``: each input pixel scatters
+    back through the rows that read it. Verified in the tests against
     ``jax.linear_transpose``.
     """
     flux = jnp.asarray(flux)
@@ -350,14 +362,18 @@ def convolve_varying_adjoint(flux, profiles):
 def gaussian_lsf_profiles(sigma_px, anchor_wave, grid_wave, h3=None):
     """Per-pixel LSF profiles from per-anchor Gaussian widths (build time, NumPy).
 
-    Builds one normalized Gaussian kernel per anchor — the radius follows the
-    *largest* width (truncate at 4 sigma, as :func:`gaussian_kernel`) — and linearly
+    Builds one normalized Gaussian kernel per anchor, with the radius following the
+    largest width (truncated at 4 sigma, as in :func:`gaussian_kernel`), and linearly
     interpolates them onto the grid through :func:`lsf_anchor_tables`. Rows are convex
     combinations of unit-sum kernels, so every row sums to exactly 1. Shape
     ``(len(grid_wave), 2 * radius + 1)``, ready for :func:`convolve_varying`.
     ``sigma_px`` must supply one positive width per anchor. Optional ``h3`` (one
     skewness per anchor) makes each anchor kernel the Gauss-Hermite profile of
     :func:`gauss_hermite_kernel_traced` (D38); None or all-zero is exactly Gaussian.
+
+    References
+    ----------
+    van der Marel, R. P. & Franx, M. 1993, ApJ, 407, 525
     """
     sigma_px = np.atleast_1d(np.asarray(sigma_px, dtype=np.float64))
     idx, t = lsf_anchor_tables(anchor_wave, grid_wave)
@@ -541,8 +557,8 @@ def rebin_operator(
 ) -> RebinOperator:
     """Build a :class:`RebinOperator` from input to output bins.
 
-    Provide either pixel centers (``x_in``/``x_out`` — edges are taken at midpoints via
-    :func:`bin_edges_from_centers`) or explicit ``edges_in``/``edges_out``.
+    Provide either pixel centers (``x_in``/``x_out``, whose edges are taken at midpoints
+    via :func:`bin_edges_from_centers`) or explicit ``edges_in``/``edges_out``.
     """
     if edges_in is None:
         if x_in is None:
@@ -633,18 +649,19 @@ def rebin_link_pair_tables(rebin: RebinOperator, link_row, link_gap, width: int)
     """Static pair tables for the AR(1) cross-row band of ``R^T W R``.
 
     An AR(1) link between native rows ``n`` and ``p = n - g`` contributes
-    ``w_link (R[n]^T R[p] + R[p]^T R[n])`` to ``H`` — the symmetrized outer product of
-    two *different* rebin rows, which :func:`rebin_pair_tables` (equal rows only)
-    cannot express. ``(link_row, link_gap)`` lists the realized links — the union over
-    epochs of ``ar_gap[e, n] == g`` — because only realized links are covered by the
-    build-time ``ar_step`` bound that sizes ``width``. For every listed link and every
-    ordered entry pair ``(t1 in row n, t2 in row p)``, the product ``v1 v2`` lands on
-    the upper band entry ``(min(c1, c2), |c1 - c2|)``: the two orderings supply the
-    two transposes of each off-diagonal entry, and coincide on the diagonal, where the
-    value is doubled instead. Returns ``(link_val, link_sid, link_row, link_gap)``
-    with ``sid = cmin * width + o``; per epoch the band increment is one
-    ``segment_sum(link_val * wl[link_row] * (gap_row[link_row] == link_gap), link_sid)``
-    — the gap test keeps each epoch's own realized links, since masks differ by epoch.
+    ``w_link (R[n]^T R[p] + R[p]^T R[n])`` to ``H``: the symmetrized outer product of
+    two different rebin rows, which :func:`rebin_pair_tables` (equal rows only) cannot
+    express. ``(link_row, link_gap)`` lists the realized links, the union over epochs of
+    ``ar_gap[e, n] == g``, since only realized links are covered by the build-time
+    ``ar_step`` bound that sizes ``width``. For every listed link and every ordered
+    entry pair ``(t1 in row n, t2 in row p)``, the product ``v1 v2`` lands on the upper
+    band entry ``(min(c1, c2), |c1 - c2|)``: the two orderings supply the two transposes
+    of each off-diagonal entry, and coincide on the diagonal, where the value is doubled
+    instead. Returns ``(link_val, link_sid, link_row, link_gap)`` with
+    ``sid = cmin * width + o``; per epoch the band increment is one
+    ``segment_sum(link_val * wl[link_row] * (gap_row[link_row] == link_gap), link_sid)``,
+    where the gap test keeps each epoch's own realized links, since masks differ by
+    epoch.
 
     NumPy-only (concrete arrays): call at build time, never under trace.
     """

@@ -1,9 +1,12 @@
 """Differentiable Keplerian orbits and radial-velocity laws.
 
-The eccentric-anomaly solver uses a fixed-count Newton iteration wrapped in
-``jax.custom_jvp`` with the implicit-function-theorem tangent rule, so gradients are
-exact at the converged solution regardless of the iteration count (``docs/math.md``
-§1.2). All functions are vectorized over time and differentiable in every parameter.
+The module provides Kepler's equation, the true anomaly, the Keplerian radial-velocity
+law of ``docs/math.md`` §1.2, and the conversion from a time of conjunction to a time of
+periastron. All functions are vectorized over time and differentiable in every parameter.
+
+The eccentric-anomaly solver is a fixed-count Newton iteration wrapped in
+``jax.custom_jvp`` with the implicit-function tangent rule (``docs/math.md`` §1.2), so
+gradients are exact at the converged solution regardless of the iteration count.
 
 Angle convention: ``omega`` is the argument of periastron of the component whose radial
 velocity is being computed, in radians; component 2 of a binary uses ``omega + pi``.
@@ -41,6 +44,13 @@ def solve_kepler(mean_anomaly, ecc):
     jax.Array
         Eccentric anomaly ``E`` on the same branch as ``M`` (i.e. ``E - M`` is
         2π-periodic in ``M``).
+
+    Notes
+    -----
+    The iteration starts from the third-order series in ``e`` and takes a fixed number of
+    Newton steps on the principal branch of ``M``. The tangent is the implicit-function
+    rule ``dE = (dM + sin(E) de) / (1 - e cos(E))`` (``docs/math.md`` §1.2), evaluated at
+    the returned ``E``, so the gradient does not depend on the iteration count.
     """
     m = jnp.asarray(mean_anomaly, dtype=jnp.result_type(float, mean_anomaly))
     e = jnp.asarray(ecc)
@@ -60,7 +70,7 @@ def solve_kepler(mean_anomaly, ecc):
 
 @solve_kepler.defjvp
 def _solve_kepler_jvp(primals, tangents):
-    # Implicit differentiation of E - e sin(E) = M:
+    # Implicit differentiation of E - e sin(E) = M (docs/math.md section 1.2):
     #   dE = (dM + sin(E) de) / (1 - e cos(E))
     m, e = primals
     dm, de = tangents
@@ -82,6 +92,9 @@ def true_anomaly(ecc_anomaly, ecc):
 
 def radial_velocity(t, *, period, t_peri, ecc, omega, k, gamma=0.0):
     """Keplerian radial velocity ``v(t) = gamma + K [cos(nu + omega) + e cos(omega)]``.
+
+    The radial-velocity law of ``docs/math.md`` §1.2, with the true anomaly ``nu`` from
+    :func:`solve_kepler` and :func:`true_anomaly`.
 
     Parameters
     ----------
@@ -106,9 +119,9 @@ def radial_velocity(t, *, period, t_peri, ecc, omega, k, gamma=0.0):
 def t_peri_from_t_conj(t_conj, *, period, ecc, omega):
     """Time of periastron from a time of conjunction.
 
-    The conjunction convention is ``nu(t_conj) + omega = pi/2`` — the inferior
-    conjunction of the component whose ``omega`` is given (for eclipsing systems: the
-    time this component passes in front). Inverse mapping: ``nu -> E -> M -> t``.
+    The conjunction convention is ``nu(t_conj) + omega = pi/2``, the inferior conjunction
+    of the component whose ``omega`` is given (for an eclipsing system, the time at which
+    that component passes in front). The inverse mapping is ``nu -> E -> M -> t``.
     """
     nu_conj = 0.5 * jnp.pi - omega
     e_conj = 2.0 * jnp.arctan2(

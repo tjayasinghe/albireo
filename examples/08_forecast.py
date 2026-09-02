@@ -1,46 +1,43 @@
-"""Which twelve nights should you ask for? (``docs/math.md`` §5.5)
+"""Observing-strategy forecast: which twelve nights to request (``docs/math.md`` §5.5).
 
-Every other example in this directory analyses data that exist. This one is the question
-that comes *before* the data: you have eight epochs, the time allocation committee will
-give you twelve more, and you have to say which phases and why.
+Every other example in this directory analyses data that exist. This one addresses the
+question that comes before the data: eight epochs are in hand, twelve more have been
+allocated, and the phases have to be chosen and justified.
 
-It is answerable exactly, and by nothing else in the field, because the posterior
-covariance of the component spectra
+The question is answerable exactly, because the posterior covariance of the component
+spectra
 
     Sigma = (Lambda_p + A^T W A)^-1
 
-contains no fluxes at all. Only the epoch times (through the velocities, hence the
+contains no fluxes. It depends only on the epoch times (through the velocities, hence the
 shifts), the weights, the masks, the line-spread function, the light fractions and the
-prior. The observed fluxes move the posterior *mean* and the evidence; they never touch
-the covariance. So a night that has not happened has a computable error bar.
+prior. The observed fluxes move the posterior mean and the evidence; they never enter the
+covariance. An epoch that has not been observed therefore has a computable error bar.
 
-The script builds one system and puts three plans of twelve nights against it:
+The script builds one system and evaluates three plans of twelve nights against it:
 
-* **aliased** — nights spaced at half the orbital period. This is what a naive reading of
-  ``docs/math.md`` §5.1 recommends, because it maximizes the spread of the differential
-  velocity ``Var_j(Delta)``, and it is the trap: those nights visit the *two* extreme
-  values of ``Delta`` over and over, and two values leave the separation degenerate at a
-  whole comb of feature scales.
-* **quadrature** — nights spread evenly over orbital phase.
-* **more of the same** — twelve nights continuing the existing cadence, the plan that gets
-  written when nobody checks.
+* aliased: nights spaced at half the orbital period. This is what a direct reading of
+  ``docs/math.md`` §5.1 suggests, because it maximizes the spread of the differential
+  velocity ``Var_j(Delta)``. Those nights visit the two extreme values of ``Delta``
+  repeatedly, and two values leave the separation degenerate at a comb of feature scales.
+* quadrature: nights spread evenly over orbital phase.
+* more of the same: twelve nights continuing the existing cadence.
 
-Three things to watch in the output.
+Three features of the output:
 
-1. The aliased plan wins on RMS differential velocity and loses on everything that
-   matters. That is the correction to §5.1's own reading, and it is why albireo computes
-   the exact covariance rather than the closed-form proxy.
-2. The **worst-determined mode barely moves** under any plan, and sits at ~1x the prior.
-   That is not a failure — it is the ``k = 0`` exchange mode, degenerate for *every*
-   design, and the forecast reports it rather than hiding it. What a good plan does is
-   drag the *rest* of the mode ladder down.
-3. Every number is quoted against the same quantity under the prior alone. A forecast
-   band that has relaxed onto the prior looks exactly as convincing as one the data
-   earned, which is the whole reason the comparison is printed.
+1. The aliased plan wins on RMS differential velocity and loses on every other measure.
+   That is the correction to the reading of §5.1 above, and the reason albireo computes the
+   exact covariance rather than the closed-form proxy.
+2. The worst-determined mode barely moves under any plan and sits at ~1x the prior. It is
+   the ``k = 0`` exchange mode, degenerate for every design, and the forecast reports it
+   rather than dropping it. A good plan lowers the rest of the mode ladder.
+3. Every number is quoted against the same quantity under the prior alone. A forecast band
+   that has relaxed onto the prior is indistinguishable from one the data determined unless
+   that comparison is made.
 
-What this deliberately does not forecast is the orbit. The Fisher information for a
-velocity runs through the derivative of the component spectrum, so an error bar on K_2
-needs the line depths — the thing that has not been measured yet.
+The orbit is not forecast. The Fisher information for a velocity runs through the derivative
+of the component spectrum, so an error bar on K_2 requires the line depths, which have not
+been measured yet.
 
 Environment
 -----------
@@ -76,7 +73,7 @@ PRIOR = ab.SmoothnessPrior(tau=np.array([3e2, 3e2]), eta=np.array([1e-2, 1e-2]))
 N_MODES = 3 if FAST else 4
 N_PLANNED = 12
 
-# Eight nights already taken, in four tight pairs a fortnight apart — the cadence a
+# Eight nights already taken, in four tight pairs a fortnight apart: the cadence a
 # service-mode queue produces on its own, and it is aliased to the period.
 HAVE_BJD = np.array([0.1, 0.3, 6.9, 7.1, 13.8, 14.0, 20.7, 20.9])
 
@@ -86,9 +83,9 @@ ORBIT = ab.OrbitParams(period=PERIOD, t_peri=T_PERI, ecc=ECC, omega=OMEGA, k=(K1
 def observed() -> ab.Dataset:
     """The eight epochs in hand.
 
-    Simulated here so the example runs offline, but note that *nothing below reads the
-    flux*: the forecast needs this dataset only for its wavelength grid, its inverse
-    variances, its times and its barycentric velocities.
+    Simulated here so that the example runs offline. Nothing below reads the flux: the
+    forecast uses this dataset only for its wavelength grid, its inverse variances, its
+    times and its barycentric velocities.
     """
     wave = np.arange(4490.0, GRID.wave[-1] - 12.0, 0.05)
     dataset, _ = ab.simulate_dataset(
@@ -178,7 +175,7 @@ def main() -> None:
     print(f"\nBest by information gain     : {best}")
     print(f"Best by RMS differential dv  : {naive}  <- the proxy, and it disagrees")
 
-    # 4. Figure, only if matplotlib happens to be installed -----------------------------
+    # 4. Figure, if matplotlib is installed ---------------------------------------------
     if importlib.util.find_spec("matplotlib") is not None:
         plot(results[best], "forecast.png")
         print("\nwrote forecast.png")

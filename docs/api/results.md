@@ -1,10 +1,13 @@
 # Results and plotting
 
-Saving a fit, converting it for arviz, exporting the disentangled spectra, and the figures.
+Saving a fit, converting it for arviz, exporting the disentangled spectra, and producing
+the figures.
 
-`albireo.plotting` needs matplotlib and `plot_corner` needs arviz; both come with
-`pip install "albireo[plots]"`. Writing FITS or ECSV needs astropy (`albireo[io]`);
-`write_ascii` needs nothing beyond NumPy.
+`albireo.plotting` requires matplotlib and `plot_corner` requires arviz; both are installed
+by `pip install "albireo[plots]"`. Writing FITS or ECSV requires astropy (`albireo[io]`);
+`write_ascii` requires only NumPy.
+
+Background and references: [science overview](../science.md).
 
 ::: albireo.results
 

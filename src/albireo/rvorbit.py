@@ -1,27 +1,36 @@
-"""Keplerian orbits from a velocity table: the classic radial-velocity fit.
+"""Keplerian orbits fitted to a velocity table.
 
-albireo's main path infers the orbit from the spectra directly (``docs/math.md`` §7) and
-does not need this module. It exists because :mod:`albireo.todcor` produces the artifact
-the rest of the binary-star toolchain starts from — one velocity per component per epoch —
-and the next thing anyone does with such a table is fit a Keplerian to it. Doing that here,
-with the same Kepler solver and the same angle conventions as the joint model
-(:mod:`albireo.kepler`, :func:`albireo.orbit_velocities`), means the two routes can be
-compared element for element rather than modulo a convention.
+The main path of albireo infers the orbit from the spectra directly (``docs/math.md`` §7)
+and does not use this module. :mod:`albireo.todcor` produces one velocity per component
+per epoch, and this module fits a Keplerian to such a table with the same Kepler solver
+and angle conventions as the joint model (:mod:`albireo.kepler`,
+:func:`albireo.orbit_velocities`), so that the two routes can be compared element by
+element (``docs/math.md`` §10.6).
 
-The fit is weighted nonlinear least squares over the sampled elements — period, time of
+The fit is weighted nonlinear least squares over the sampled elements: period, time of
 conjunction, ``(sqrt(e) cos w, sqrt(e) sin w)``, one semi-amplitude per component and a
-systemic velocity — with the Jacobian from JAX rather than finite differences. The systemic
-velocity is one number when every component's velocities are absolute, and one number *per
-component* otherwise: a table built from disentangled templates carries one unidentified zero
-point per component (``docs/math.md`` §7.6), and a shared gamma would then be forced to
-absorb two different constants and would bias both semi-amplitudes. :class:`RVOrbit` says
-which was used.
+systemic velocity, with the Jacobian computed by JAX. The systemic velocity is a single
+parameter when every component's velocities are absolute and one parameter per component
+otherwise: a table built from disentangled templates carries one unidentified zero point
+per component (``docs/math.md`` §7.6), and a shared gamma would then absorb two different
+constants and bias both semi-amplitudes. :class:`RVOrbit` records which was used in
+``gamma_mode``.
 
-Uncertainties are from the curvature at the optimum, scaled by the reduced chi-square: the
-per-epoch errors from :func:`albireo.todcor` are curvature errors on a template fit, and the
-scatter of a real table about a Keplerian is always somewhat larger than they say — template
-mismatch, line-profile variability, a third body. The rescaling is what every orbit code
-does; it is stated here so that it is not mistaken for a claim that the errors were right.
+Uncertainties are the curvature errors at the optimum scaled by the reduced chi-square. The
+per-epoch errors from :func:`albireo.todcor` are curvature errors of a template fit and
+exclude template mismatch, line-profile variability and any third body, so the scatter of a
+table about a Keplerian is generally larger than they imply.
+
+Minimum masses and projected semi-axes follow Hilditch (2001), eqs. 3.17 and 3.18, with the
+IAU 2015 nominal constants. :func:`find_period` is a Lomb-Scargle periodogram (Lomb 1976;
+Scargle 1982; VanderPlas 2018).
+
+References
+----------
+Hilditch, R. W. 2001, An Introduction to Close Binary Stars (Cambridge University Press)
+Lomb, N. R. 1976, Ap&SS, 39, 447
+Scargle, J. D. 1982, ApJ, 263, 835
+VanderPlas, J. T. 2018, ApJS, 236, 16
 """
 
 from __future__ import annotations
@@ -65,12 +74,14 @@ def find_period(
     n_frequencies: int = 20_000,
     components=None,
 ) -> dict:
-    """A Lomb-Scargle search for the orbital period of a velocity table.
+    """Lomb-Scargle search for the orbital period of a velocity table.
 
-    For two or more components the periodogram is run on the *difference* of the first
-    two components' velocities: it is free of both systemic velocities and both template
-    zero points, and its amplitude is ``K_1 + K_2``. A single component is searched as it
-    is, with its weighted mean removed.
+    For two or more components the periodogram is computed on the difference of the first
+    two components' velocities, which is free of both systemic velocities and both
+    template zero points and has amplitude ``K_1 + K_2``. A single component is searched
+    as it is. In either case the weighted mean is removed, the series is scaled by the
+    square root of its weights, and the normalized periodogram of
+    ``scipy.signal.lombscargle`` is evaluated on a grid uniform in frequency.
 
     Parameters
     ----------
@@ -87,9 +98,16 @@ def find_period(
     Returns
     -------
     dict
-        ``period`` (best, days), ``periods`` and ``power`` (the periodogram), and the
-        ``aliases`` — the five next-best distinct peaks — because a sparsely sampled
-        table's periodogram is rarely unambiguous and the caller should look.
+        ``period`` (best, days), ``periods`` and ``power`` (the periodogram), and
+        ``aliases``, the five next-best peaks whose periods differ from each other and
+        from the best by more than 2%. The periodogram of a sparsely sampled table is
+        rarely unambiguous, and the aliases should be inspected.
+
+    References
+    ----------
+    Lomb, N. R. 1976, Ap&SS, 39, 447
+    Scargle, J. D. 1982, ApJ, 263, 835
+    VanderPlas, J. T. 2018, ApJS, 236, 16
     """
     from scipy.signal import lombscargle
 
@@ -148,6 +166,8 @@ class RVOrbit:
     gamma
         Systemic velocity [km/s]: one value repeated when it was shared, one per component
         when each carried its own zero point.
+    gamma_mode
+        ``"shared"`` or ``"one per component"``.
     errors
         Standard errors for every fitted quantity, keyed like the attributes (``k`` and
         ``gamma`` hold arrays), after the reduced-chi-square rescaling.
@@ -157,6 +177,8 @@ class RVOrbit:
         ``(n_comp, n_epochs)`` observed minus model [km/s], NaN where an epoch was unused.
     rms
         Per-component RMS of the residuals over the used epochs.
+    used
+        Per epoch: whether the epoch entered the fit.
     """
 
     names: tuple[str, ...]
@@ -192,7 +214,15 @@ class RVOrbit:
         return float(self.k[0] / self.k[1])
 
     def minimum_masses(self) -> dict[str, float]:
-        """``M_i sin^3 i`` in solar masses for the first two components (double-lined only)."""
+        """``M_i sin^3 i`` in solar masses for the first two components (double-lined only).
+
+        ``M_{1,2} sin^3 i = 1.0361e-7 (1 - e^2)^{3/2} (K_1 + K_2)^2 K_{2,1} P`` with ``K``
+        in km/s and ``P`` in days (``docs/math.md`` §10.6).
+
+        References
+        ----------
+        Hilditch, R. W. 2001, An Introduction to Close Binary Stars (Cambridge University Press)
+        """
         if self.k.size < 2:
             return {}
         k1, k2 = float(self.k[0]), float(self.k[1])
@@ -200,7 +230,15 @@ class RVOrbit:
         return {self.names[0]: factor * k2, self.names[1]: factor * k1}
 
     def projected_semiaxes(self) -> dict[str, float]:
-        """``a_i sin i`` in solar radii for every component."""
+        """``a_i sin i`` in solar radii for every component.
+
+        ``a_i sin i = K_i P sqrt(1 - e^2) / (2 pi)`` with ``K`` in km/s and ``P`` in days,
+        converted to solar radii.
+
+        References
+        ----------
+        Hilditch, R. W. 2001, An Introduction to Close Binary Stars (Cambridge University Press)
+        """
         return {
             name: _ASINI_COEFF * float(k) * self.period * math.sqrt(1.0 - self.ecc**2)
             for name, k in zip(self.names, self.k, strict=True)
@@ -229,8 +267,8 @@ class RVOrbit:
     def to_theta(self) -> dict:
         """The elements as the ``theta`` dictionary :func:`albireo.orbit_velocities` takes.
 
-        What to hand to ``Disentangler(orbit=...)`` or a low-level prior as a warm start —
-        the loop closing in the other direction.
+        The result can be passed to ``Disentangler(orbit=...)`` or to a low-level prior as
+        a starting point for the joint fit.
         """
         return {
             "period": jnp.asarray(self.period),
@@ -241,6 +279,7 @@ class RVOrbit:
         }
 
     def summary(self) -> str:
+        """A text report: the elements with their errors, and the derived quantities."""
         e = self.errors
         rescale = self.chi2 / max(self.n_points - self.n_parameters, 1)
         lines = [
@@ -284,6 +323,13 @@ def fit_rv_orbit(
 ) -> RVOrbit:
     """Fit a Keplerian to a velocity table by weighted least squares.
 
+    The parameters are the period, the time of conjunction, ``(sqrt(e) cos w,
+    sqrt(e) sin w)``, one semi-amplitude per component and the systemic velocity or
+    velocities (``docs/math.md`` §10.6). The Jacobian is computed by JAX; the optimizer is
+    ``scipy.optimize.least_squares`` with the bounds ``0.5 P_0 <= P <= 2 P_0``,
+    ``|sqrt(e) cos w| <= 0.95``, ``|sqrt(e) sin w| <= 0.95`` and ``K_i >= 0``, where
+    ``P_0`` is the starting period.
+
     Parameters
     ----------
     table
@@ -291,7 +337,7 @@ def fit_rv_orbit(
         or with non-finite velocities are left out.
     period
         Starting period [d]. Required: a least-squares fit finds the nearest local optimum,
-        so the period has to be known to within a few percent — from the literature, from
+        so the period must be known to within a few percent, from the literature, from
         :func:`find_period`, or from an eclipse ephemeris.
     t_conj, ecc, omega, k
         Optional starting values; defaults are derived from the table (``k`` from the
@@ -299,14 +345,15 @@ def fit_rv_orbit(
     gamma
         ``"shared"`` fits one systemic velocity; ``"per-component"`` fits one per
         component. Default: shared when every component's velocities are absolute, per
-        component otherwise — see the module docstring for why that is not a style choice.
+        component otherwise (see the module docstring).
     circular
-        Hold ``e = 0``. Fitted directly in ``(e cos w, e sin w) = (0, 0)`` rather than at
-        the singular origin of the ``sqrt(e)`` parameterization.
+        Hold ``e = 0`` and ``omega = 0``. The two eccentricity parameters are removed from
+        the fit rather than held at the singular origin of the ``sqrt(e)``
+        parameterization.
     components
         Component names to fit (default all).
     max_iterations
-        Cap on the least-squares iterations.
+        Cap on the number of least-squares function evaluations.
 
     Returns
     -------
@@ -496,7 +543,10 @@ def fit_rv_orbit(
 
 
 def relativistic_add(v_kms, u_kms):
-    """Compose two velocities the way a shift in log-wavelength does (``docs/math.md`` §7.6)."""
+    """Relativistic addition of two velocities, the composition law of log-wavelength shifts.
+
+    See ``docs/math.md`` §7.6.
+    """
     b1 = np.asarray(v_kms, dtype=np.float64) / C_KMS
     b2 = np.asarray(u_kms, dtype=np.float64) / C_KMS
     return C_KMS * (b1 + b2) / (1.0 + b1 * b2)

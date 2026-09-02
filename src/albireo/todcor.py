@@ -1,63 +1,54 @@
 """Epoch radial velocities of every component by N-dimensional correlation (TODCOR).
 
-Everything upstream of this module infers the orbit from the composite spectra directly
-and never measures a per-epoch velocity. That is the right thing to do when the component
-spectra are unknown. It is not the *only* thing a binary-star study needs: eclipsing-binary
-analyses, survey pipelines and the orbit-fitting codes people already trust all consume a
-table of one velocity per component per epoch, and the standard way to make one from a
-double-lined spectrum is TODCOR — the TwO-Dimensional CORrelation of Zucker & Mazeh (1994,
-ApJ 420, 806). Correlate the observed spectrum against a *combination* of two templates,
-each with its own shift, and read both velocities off the location of the maximum. Because
-the two templates are fitted together, a blended pair of peaks no longer pulls each other
-(the failure the one-dimensional CCF suffers near conjunction), and a companion far fainter
-than the primary can still be measured. Zucker et al. (1995) and Torres et al. (2007)
-extended it to three and four components; Zucker (2003, MNRAS 342, 1291) showed that the
-correlation is a maximum-likelihood estimator, which is what gives it an error bar and a
-principled way to combine orders.
-
-This module implements that estimator in albireo's own vocabulary, and the two differ in a
-way worth stating precisely. TODCOR is written for zero-mean spectra on a uniform
-log-wavelength grid with uniform weights, because that is what lets the two-dimensional
-function be assembled from three one-dimensional correlations computed by FFT. albireo
-instead evaluates the **weighted least-squares fit of N shifted templates to the observed
-pixels** — the model of ``docs/math.md`` §1.4 with the component spectra *given* rather
-than marginalized:
+The estimator is the weighted least-squares fit of N shifted, LSF-convolved, rebinned
+templates to each epoch's pixels, with the amplitudes held at declared light fractions or
+profiled, and an additive low-order nuisance polynomial (``docs/math.md`` §10.1). The
+epoch model is that of ``docs/math.md`` §1.4 with the component spectra given rather than
+marginalized:
 
     y_j = 1 + sum_i a_ij R_j B_j T(delta_ij) t_i + (nuisance) + noise,   Var = 1 / w
 
-with ``t_i`` the templates, ``T`` the shift, ``B_j`` the instrument's line-spread
-function, ``R_j`` the projection onto the epoch's native pixels (never the reverse: data are
-not resampled, ``docs/design.md`` D4), and ``w`` the inverse variances with masks folded
-in. For every candidate set of shifts the amplitudes ``a_i`` — which are the light fractions
-when the templates are normalized to their own continua — are either held at declared values
-or solved in closed form, and the chi-square surface over the shifts is what gets minimized.
-On a uniform grid with uniform weights and free amplitudes this is *exactly* Zucker &
-Mazeh's ``R(s_1, s_2)`` (their symmetric expression is ``1 - chi^2 / |y|^2``), and with a
-fixed light ratio it is their original ``R(s_1, s_2; alpha)``; the test suite pins both
-identities to 1e-10. What the least-squares form adds is that masks, chip gaps, cosmic
-rays, per-pixel weights, mixed instruments and mixed samplings cost nothing and change no
-formula, and that the templates can be intrinsic spectra convolved with each instrument's
-own LSF rather than something pre-broadened by hand.
+with ``t_i`` the templates normalized to their own continua, ``T`` the shift, ``B_j`` the
+instrument's line-spread function, ``R_j`` the projection onto the epoch's native pixels
+(data are never resampled, ``docs/design.md`` D4), and ``w`` the inverse variances with
+masks folded in. For every set of shifts the amplitudes are either held or solved in
+closed form; the chi-square is minimized over the integer shifts of the template grid and
+then refined below a pixel.
 
-Three things this module is *for*:
+On a uniform grid with uniform weights and free amplitudes the chi-square surface is
+identical to the two-dimensional correlation of Zucker & Mazeh (1994),
+``R^2 = 1 - chi^2 / |z|^2`` with ``z = y - 1``, and with a fixed light ratio to their
+``R(s_1, s_2; alpha)``; the test suite pins both identities to 1e-10 (``docs/math.md``
+§10.2). The three- and four-component extensions (Zucker, Torres & Mazeh 1995; Torres,
+Latham & Stefanik 2007) are the same block solve with more templates. The uncertainties
+are the maximum-likelihood curvature errors of Zucker (2003), rescaled by the reduced
+chi-square (§10.4). The least-squares form admits masks, chip gaps, cosmic rays, per-pixel
+weights, mixed instruments and mixed samplings without change to the formulae, applies
+each instrument's LSF to intrinsic templates in quadrature above their own resolution, and
+evaluates the chi-square exactly at fractional shifts (§10.3). The residual pixel-locking
+error of the linear shift operator is of order ``0.1 / sigma_px^2`` pixels; it is below
+0.01 px when the template grid samples the narrowest LSF with three or more pixels per
+sigma.
 
-- **Closing the loop on a disentangling.** The disentangled components are the best
-  templates that exist for a system, because they are the system. :meth:`albireo.Fit.templates`
-  turns a fit's components into :class:`Template` objects and
-  :meth:`albireo.Fit.measure_velocities` runs them back through the epochs — velocities
-  measured against the star's own spectrum, with one caveat recorded on every table: the
-  disentangled frame has an arbitrary zero point per component (§5.3, §7.6), so those
-  velocities are differential unless a label match (:mod:`albireo.match`) has pinned them.
-- **Synthetic templates.** :meth:`Template.from_library` renders a published grid at
-  fitted or assumed labels, rotationally broadened, in an *absolute* rest frame.
-- **Batch work.** :func:`todcor_batch` runs many stars with one call, records failures
-  instead of stopping on them, and writes one table per star.
+Templates come from :meth:`albireo.Fit.templates` (disentangled components),
+:meth:`Template.from_library` (a synthetic grid rendered at given labels) or
+:meth:`Template.from_labels` (the model spectrum of a label match);
+:meth:`albireo.Fit.measure_velocities` runs a fit's components back through its epochs, and
+:func:`todcor_batch` measures many stars in one call. Velocities are reported barycentric
+(§10.5). A disentangled component has an unidentified zero point (``docs/math.md`` §5.3,
+§7.6), so velocities measured against it are differential, with one arbitrary constant per
+component, unless a label match (:mod:`albireo.match`) has determined the offset;
+``VelocityTable.absolute`` records the status of each component. A per-epoch table
+discards the phase coherence that lets disentangling separate components whose lines never
+resolve, and its accuracy is bounded by the agreement between templates and stars; where
+the components are unknown, disentangling comes first.
 
-And one thing it is not: it does not replace the joint fit. A per-epoch table throws away
-the phase coherence that lets disentangling separate stars whose lines never resolve, and
-its accuracy is bounded by how well the templates match the stars. Where the components are
-unknown, disentangle first. Where they are known, this is faster, simpler, and works on a
-single spectrum — which is exactly the split Zucker (2011) drew between the two methods.
+References
+----------
+Zucker, S. & Mazeh, T. 1994, ApJ, 420, 806
+Zucker, S., Torres, G. & Mazeh, T. 1995, ApJ, 452, 863
+Torres, G., Latham, D. W. & Stefanik, R. P. 2007, ApJ, 662, 602
+Zucker, S. 2003, MNRAS, 342, 1291
 """
 
 from __future__ import annotations
@@ -108,30 +99,30 @@ _EPS = 1e-12
 
 @dataclass(frozen=True)
 class Template:
-    """One component's spectrum, as the thing the epochs are correlated against.
+    """One component's spectrum, in the form the epochs are correlated against.
 
     Parameters
     ----------
     name
         The component's name; it labels every column of the velocity table.
     grid
-        The :class:`~albireo.grids.LogGrid` the template lives on. Every template handed to
-        one :func:`todcor` call must share it, and it must extend beyond the data by the
-        velocity range being searched (:meth:`LogGrid.covering` builds one that does).
+        The :class:`~albireo.grids.LogGrid` the template is sampled on. Every template
+        passed to one :func:`todcor` call must share it, and it must extend beyond the data
+        by the velocity range searched (:meth:`LogGrid.covering` builds such a grid).
     deviation
-        ``flux - 1`` on ``grid``, normalized to the template's **own** continuum — so the
-        amplitude the fit assigns it is a light fraction, not an arbitrary scale.
+        ``flux - 1`` on ``grid``, normalized to the template's own continuum, so that the
+        amplitude assigned by the fit is a light fraction rather than an arbitrary scale.
     sigma_kms
         Gaussian broadening already present in the template, as a sigma in km/s: zero for
-        an intrinsic (deconvolved or synthetic-at-infinite-resolution) spectrum, the
-        library's own resolution for a synthetic grid. The instrument's LSF is applied in
-        quadrature *above* it, so a template rendered at R = 20,000 is not broadened twice.
+        an intrinsic (deconvolved, or synthetic at infinite resolution) spectrum, the
+        library's own resolution for a synthetic grid. The instrument LSF is applied in
+        quadrature above it, so a template rendered at R = 20,000 is not broadened twice.
     v_zero_kms
         Velocity of the template's rest frame relative to the star's true rest frame, when
-        known, so that the velocities measured against it can be reported as absolute. A
-        synthetic spectrum is at zero. A disentangled component is at an unknown offset —
-        its own zero point is unidentified (``docs/math.md`` §5.3) — so ``None`` is the
-        honest value, and every table built from it says so.
+        known, so that velocities measured against it can be reported as absolute. A
+        synthetic spectrum is at zero. A disentangled component is at an unknown offset,
+        because its zero point is unidentified (``docs/math.md`` §5.3); ``None`` declares
+        the offset unknown, and every table built from the template records that.
     meta
         Free-form provenance (library name, labels, the fit it came from).
     """
@@ -200,8 +191,8 @@ class Template:
 
         The grid is interpolated at ``labels`` (``docs/math.md`` §9.3), the deviation is
         rotationally broadened by ``vsini_kms`` with the pixel-integrated Gray kernel, any
-        fixed macroturbulence is folded in as a Gaussian, and the result is placed at rest
-        (``v_zero_kms = 0``) — an absolute template.
+        fixed macroturbulence is applied as a Gaussian, and the result is placed at rest
+        (``v_zero_kms = 0``), i.e. it is an absolute template.
 
         Parameters
         ----------
@@ -209,25 +200,26 @@ class Template:
             Component name.
         library
             The grid, e.g. from :func:`albireo.fetch_library`. It is resampled onto
-            ``grid`` in the data's ``medium`` first, so the wavelength scale is handled
-            explicitly rather than assumed (the two differ by ~83 km/s).
+            ``grid`` in the data's ``medium`` first, so that the wavelength scale is
+            handled explicitly (air and vacuum wavelengths differ by about 83 km/s).
         labels
-            ``{"teff": ..., "logg": ..., "mh": ...}`` — whatever axes the library has, in any
-            order. The fitted values from :attr:`albireo.LabelMatch.labels` work directly.
+            ``{"teff": ..., "logg": ..., "mh": ...}``: whichever axes the library has, in
+            any order. The fitted values in :attr:`albireo.LabelMatch.labels` can be
+            passed directly.
         grid, medium
-            The template grid and the wavelength scale the *data* are on.
+            The template grid and the wavelength scale of the data.
         vsini_kms, macro_kms, epsilon
-            Rotational broadening, Gaussian macroturbulence and the limb-darkening
-            coefficient.
+            Rotational broadening [km/s], Gaussian macroturbulence [km/s] and the
+            limb-darkening coefficient.
         resolving_power
             The library's own resolving power (``R = lambda / FWHM``), recorded as
-            :attr:`sigma_kms` so that the instrument LSF is applied above it rather than
-            on top of it. ``None`` declares an intrinsic-resolution grid.
+            :attr:`sigma_kms` so that the instrument LSF is applied in quadrature above
+            it. ``None`` declares an intrinsic-resolution grid.
         method
             Interpolation method, as :func:`albireo.library_interpolator`.
         v_zero_kms
-            Rest-frame velocity of the rendered template. The default of zero is what a
-            synthetic spectrum means; pass ``None`` only to declare it unknown.
+            Rest-frame velocity of the rendered template. The default of zero is the
+            meaning of a synthetic spectrum; ``None`` declares it unknown.
         """
         from albireo.library import library_interpolator
 
@@ -276,15 +268,15 @@ class Template:
     def from_labels(cls, match, name: str) -> Template:
         """The MAP model spectrum of one component of a :class:`~albireo.LabelMatch`.
 
-        Rendered as the label fit rendered it — interpolated, rotationally broadened, and
-        shifted by the fitted ``v_kms`` so that it sits in the *disentangled component's*
-        frame — with that shift recorded as :attr:`v_zero_kms`. Velocities measured
-        against it therefore come out absolute: the label fit is precisely the measurement
-        of the disentangled frame's zero point (``docs/math.md`` §9), and this is where it
-        pays off.
+        The spectrum is rendered as the label fit rendered it: interpolated, rotationally
+        broadened, and shifted by the fitted ``v_kms`` so that it sits in the disentangled
+        component's frame, with that shift recorded as :attr:`v_zero_kms`. Velocities
+        measured against it are therefore absolute, since the label fit measures the zero
+        point of the disentangled frame (``docs/math.md`` §9).
 
         If the match was run with ``compare="matched"`` the model already carries the
-        instrument LSF, which is recorded in :attr:`sigma_kms` so it is not applied twice.
+        instrument LSF, which is recorded in :attr:`sigma_kms` so that it is not applied
+        twice.
         """
         if name not in match.names:
             raise ValueError(f"unknown component {name!r}; the match has {list(match.names)}")
@@ -343,11 +335,11 @@ def _epoch_terms(t_stack, rows, cols, vals, z, w, deltas, basis, chunk: int):
 
     ``t_stack`` holds the templates (already convolved with this instrument's LSF) on the
     model grid, ``(rows, cols, vals)`` is the epoch's rebin operator, ``deltas`` is an
-    ``(n_tmpl, n_shift)`` table of *integer* shifts (one row per template), and ``basis``
+    ``(n_tmpl, n_shift)`` table of integer shifts (one row per template), and ``basis``
     the additive nuisance basis on the native pixels. Returns the projections ``b``, the
     full Gram tensor ``G`` (including each template against itself at every pair of
-    shifts, which is what makes the chi-square exact at fractional shifts later on), the
-    template-nuisance cross terms, and the data scalars.
+    shifts, which is what makes the chi-square exact at fractional shifts), the
+    template-nuisance cross terms, and the data scalars (``docs/math.md`` §10.1).
 
     A shifted template projected onto the native grid is one gather of the template at
     ``cols - delta`` weighted by the rebin values, so all shifts are built by one
@@ -396,8 +388,8 @@ def _chi2_grid_fixed(b, gram, pwa, pwp, pwz, zwz, amps, free_scale: bool = False
     """Chi-square over the full integer-shift grid with the amplitudes held at ``amps``.
 
     With ``free_scale`` the amplitudes are ``a * amps`` with one overall ``a`` solved per
-    point — the classic TODCOR with a known light ratio, whose correlation is invariant to
-    the composite's scale.
+    point: the original TODCOR with a known light ratio, whose correlation is invariant to
+    the composite's scale (``docs/math.md`` §10.2).
     """
     n_tmpl = b.shape[0]
     m = pwp.shape[0]
@@ -497,10 +489,11 @@ class _Terms:
         """The terms at fractional window positions, by the linear-interpolation identity.
 
         A template shifted by ``n + f`` is ``(1 - f)`` times the template shifted by ``n``
-        plus ``f`` times the one shifted by ``n + 1`` — the shift operator is linear in the
-        template — so every inner product at a fractional shift is a bilinear combination
-        of the integer-shift ones. This makes the chi-square *exact* at any fractional
-        position inside the window, for the same shift operator the forward model uses.
+        plus ``f`` times the template shifted by ``n + 1``, because the shift operator is
+        linear in the template, so every inner product at a fractional shift is a bilinear
+        combination of the integer-shift ones. The chi-square is therefore exact at any
+        fractional position inside the window, for the same shift operator the forward
+        model uses (``docs/math.md`` §10.3).
         """
         pos = np.asarray(pos, dtype=np.float64)
         n = np.clip(np.floor(pos).astype(int), 0, self.n_shift - 2)
@@ -522,7 +515,7 @@ class _Terms:
         return _chi2_from_terms(b, gram, pwa, self.pwp, self.pwz, self.zwz, amps, free_scale)
 
     def null_chi2(self) -> float:
-        """Chi-square with no template at all — the nuisance alone."""
+        """Chi-square with no template, i.e. with the nuisance alone."""
         if self.m == 0:
             return float(self.zwz)
         return float(self.zwz - self.pwz @ np.linalg.solve(self.pwp, self.pwz))
@@ -632,10 +625,10 @@ def _minimize_box_quadratic(g: np.ndarray, hess: np.ndarray, x0: np.ndarray, low
 def _refine_cell(terms: _Terms, corner: np.ndarray, amps):
     """Exact minimum of the chi-square over one unit cell of the fine window.
 
-    With the amplitudes fixed the chi-square is *exactly* a quadratic in the fractional
+    With the amplitudes fixed the chi-square is exactly a quadratic in the fractional
     shifts inside a cell (every term is bilinear in them), so it is reconstructed from
     ``3^N`` exact evaluations and minimized in closed form, with the box constraint
-    handled by coordinate descent. Returns ``(chi2, position)``.
+    handled by coordinate descent (``docs/math.md`` §10.3). Returns ``(chi2, position)``.
     """
     n_dim = terms.n_tmpl
     grid = np.meshgrid(*[np.array([0.0, 0.5, 1.0])] * n_dim, indexing="ij")
@@ -662,8 +655,8 @@ def _refine(terms: _Terms, start: np.ndarray, amps, mode: str):
 
     Every unit cell touching ``start`` is minimized exactly with the amplitudes held; when
     they are profiled (``mode`` ``"free"`` or ``"scale"``) the amplitude solve and the cell
-    minimization alternate until the position settles. Falls back to ``start`` — flagged —
-    if the minimum is not interior to the window.
+    minimization alternate until the position settles. Falls back to ``start``, flagged as
+    unrefined, if the minimum is not interior to the window.
     """
     n_dim = terms.n_tmpl
     hi = terms.n_shift - 1
@@ -852,7 +845,7 @@ def _velocity_from_shift(grid: LogGrid, shift, frame: str, bary_pix: float):
 
 
 def _dv_dpix(grid: LogGrid, total_pix) -> np.ndarray:
-    """Jacobian ``dv/d(pixel)`` at the given total shift — the exact one, per D2."""
+    """Exact Jacobian ``dv/d(pixel)`` at the given total shift (D2)."""
     xi = np.asarray(total_pix, dtype=np.float64) * grid.dx
     if grid.relativistic:
         return C_KMS * grid.dx / np.cosh(xi) ** 2
@@ -860,7 +853,10 @@ def _dv_dpix(grid: LogGrid, total_pix) -> np.ndarray:
 
 
 def _compose(v_kms, v_zero_kms: float | None, relativistic: bool):
-    """Relativistic velocity addition, which is what a rest-frame offset is (§7.6)."""
+    """Compose a velocity with a rest-frame offset by relativistic velocity addition.
+
+    The composition law of shifts in log-wavelength (``docs/math.md`` §7.6, §10.5).
+    """
     if v_zero_kms is None or v_zero_kms == 0.0:
         return v_kms
     xi = np.asarray(log_doppler_shift(v_kms, relativistic=relativistic)) + float(
@@ -879,11 +875,11 @@ class VelocityTable:
     """Per-epoch velocities of every component, with the diagnostics that qualify them.
 
     Rows are epochs in the dataset's order; component axes follow ``names``. Every array
-    is NumPy. Velocities are **barycentric** whatever frame the data were declared in, and
-    **absolute** for a component only where ``absolute`` says so — a template whose rest
-    frame is unknown (a disentangled component) yields velocities that carry that
-    component's own unidentified zero point, exactly as ``docs/math.md`` §7.6 describes
-    for the free-velocity table.
+    is NumPy. Velocities are barycentric whatever frame the data were declared in, and
+    absolute for a component only where ``absolute`` says so: a template whose rest frame
+    is unknown (a disentangled component) yields velocities that carry that component's
+    own unidentified zero point, as ``docs/math.md`` §7.6 describes for the free-velocity
+    table (§10.5).
 
     Attributes
     ----------
@@ -896,34 +892,35 @@ class VelocityTable:
     sigma
         ``(n_comp, n_epochs)`` km/s, the quoted uncertainty: the curvature of the
         chi-square surface at its minimum, rescaled by the reduced chi-square so that the
-        noise level is *measured* from the residuals rather than trusted from ``ivar`` —
-        the estimator of Zucker (2003). ``sigma_ivar`` is the same curvature with the
-        declared weights trusted.
+        noise level is estimated from the residuals rather than taken from ``ivar``; this
+        is the estimator of Zucker (2003) (``docs/math.md`` §10.4). ``sigma_ivar`` is the
+        same curvature with the declared weights trusted.
     covariance
         ``(n_epochs, n_comp, n_comp)`` in km/s², on the ``sigma`` scale. Its off-diagonal
         is the blending diagnostic: velocities that are highly correlated were measured
-        along a ridge, not at a peak.
+        along a ridge rather than at a peak.
     light
-        ``(n_comp, n_epochs)`` amplitudes assigned to the templates — the light fractions
+        ``(n_comp, n_epochs)`` amplitudes assigned to the templates: the light fractions
         as declared (``light_mode == "fixed"``), or as measured per epoch or globally.
     chi2, chi2_null, n_pixels
         The minimum chi-square, the chi-square with no template (the nuisance alone), and
         the number of pixels that carried weight.
     r_squared
-        ``1 - chi2 / chi2_null`` — Zucker & Mazeh's correlation ``R^2`` at the maximum.
+        ``1 - chi2 / chi2_null``, the correlation ``R^2`` of Zucker & Mazeh (1994) at the
+        maximum.
     delta_chi2
-        ``(n_comp, n_epochs)``: how much the chi-square rises when that component is
-        removed and the rest refitted. The per-epoch detection statistic — small for a
-        companion the epoch does not actually see.
+        ``(n_comp, n_epochs)``: the rise in chi-square when that component is removed and
+        the rest refitted. This is the per-epoch detection statistic; it is small for a
+        companion the epoch does not detect.
     blended
-        Per epoch: the velocities sit on a ridge (a covariance correlation above 0.9, or a
+        Per epoch: the velocities lie on a ridge (a covariance correlation above 0.9, or a
         curvature that is not positive definite).
     at_edge
-        ``(n_comp, n_epochs)``: the minimum sat at the edge of the search range. Widen
-        ``v_range``.
+        ``(n_comp, n_epochs)``: the minimum lay at the edge of the search range, and
+        ``v_range`` should be widened.
     refined
-        Per epoch: the sub-pixel refinement succeeded (else the integer-grid minimum is
-        reported, with its curvature).
+        Per epoch: the sub-pixel refinement succeeded (otherwise the integer-grid minimum
+        is reported, with its curvature).
     absolute
         Per component: whether the velocities have an absolute zero point.
     """
@@ -958,13 +955,19 @@ class VelocityTable:
 
     @property
     def r_squared(self) -> np.ndarray:
-        """Zucker & Mazeh's correlation at the maximum, ``1 - chi2 / chi2_null``, per epoch."""
+        """``1 - chi2 / chi2_null`` per epoch.
+
+        This is the correlation ``R^2`` of Zucker & Mazeh (1994) evaluated at the maximum.
+        """
         with np.errstate(divide="ignore", invalid="ignore"):
             return np.where(self.chi2_null > 0, 1.0 - self.chi2 / self.chi2_null, np.nan)
 
     @property
     def reduced_chi2(self) -> np.ndarray:
-        """``chi2 / (n_pixels - n_parameters)`` per epoch — the scale ``sigma`` was rescaled by."""
+        """``chi2 / (n_pixels - n_parameters)`` per epoch.
+
+        ``sigma`` is ``sigma_ivar`` multiplied by the square root of this value.
+        """
         dof = np.maximum(self.n_pixels - self.settings.get("n_parameters", 0), 1)
         return self.chi2 / dof
 
@@ -975,7 +978,7 @@ class VelocityTable:
         return finite & ~self.blended & ~np.any(self.at_edge, axis=0)
 
     def component(self, name: str) -> dict[str, np.ndarray]:
-        """Everything per epoch for one named component."""
+        """The per-epoch columns of one named component."""
         if name not in self.names:
             raise KeyError(f"no component {name!r}; this table has {list(self.names)}")
         i = self.names.index(name)
@@ -991,9 +994,9 @@ class VelocityTable:
     def wilson(self) -> tuple[float, float] | None:
         """Slope and intercept of component 2 against component 1 over the good epochs.
 
-        The slope is ``-K_2 / K_1``, the inverse mass ratio, and it survives both unknown
-        zero points because a slope is not a location. ``None`` for fewer than two
-        components or fewer than three usable epochs.
+        The slope is ``-K_2 / K_1``, the inverse mass ratio, and is unaffected by either
+        zero point. Returns ``None`` for fewer than two components or fewer than three
+        usable epochs.
         """
         if self.n_components < 2:
             return None
@@ -1004,7 +1007,10 @@ class VelocityTable:
         return float(slope), float(intercept)
 
     def to_dict(self) -> dict[str, np.ndarray]:
-        """Flat columns keyed like the written table — ``pandas.DataFrame(table.to_dict())``."""
+        """Flat columns keyed like the written table.
+
+        ``pandas.DataFrame(table.to_dict())`` builds a data frame from them.
+        """
         out: dict[str, np.ndarray] = {"bjd": self.bjd, "instrument": np.asarray(self.instrument)}
         for i, name in enumerate(self.names):
             out[f"v_{name}"] = self.velocity[i]
@@ -1050,7 +1056,7 @@ class VelocityTable:
         return path
 
     def summary(self) -> str:
-        """A report that states the frame, the zero points and the failures first."""
+        """A text report: frame, zero points per component, flags and the Wilson slope."""
         lines = [
             f"TODCOR velocities: {self.n_components} components x {self.n_epochs} epochs, "
             f"{int(self.good.sum())} usable "
@@ -1197,61 +1203,69 @@ def todcor(
 ) -> VelocityTable:
     """Measure every component's velocity in every epoch by N-dimensional correlation.
 
+    The estimator is the weighted least-squares fit of ``docs/math.md`` §10.1: the
+    chi-square of the shifted, LSF-convolved and rebinned templates against each epoch's
+    pixels is minimized over the shifts, on the integer grid first and then exactly below
+    a pixel (§10.3). On a uniform grid with uniform weights and free amplitudes the surface
+    is the two-dimensional correlation of Zucker & Mazeh (1994) (§10.2).
+
     Parameters
     ----------
     dataset
         The epochs, continuum-normalized, with their masks in ``ivar`` (``0`` = ignored).
-        Never resampled: the shifted templates are projected onto each epoch's own pixels.
+        The data are never resampled: the shifted templates are projected onto each
+        epoch's own pixels.
     templates
-        One :class:`Template` per component, all on one grid. Two give TODCOR, three the
-        triple-lined generalization, and so on; the search grid grows as the power of the
-        count, so beyond three components narrow ``v_range`` and coarsen ``coarse_step``.
+        One :class:`Template` per component, all on one grid. Two give TODCOR, three and
+        four the extensions of Zucker, Torres & Mazeh (1995) and Torres, Latham &
+        Stefanik (2007), and so on. The search grid grows as a power of the number of
+        templates, so beyond three components ``v_range`` should be narrowed and
+        ``coarse_step`` increased.
     v_range
         Barycentric velocity range to search, km/s: one ``(lo, hi)`` for all components or
-        one per template. The grid the templates live on must extend beyond the data by
-        this much (:meth:`LogGrid.covering`), or a warning says how far short it falls.
+        one per template. The template grid must extend beyond the data by this much
+        (:meth:`LogGrid.covering`); otherwise a warning reports the shortfall.
     light
-        How the templates' amplitudes — their light fractions — are treated.
+        Treatment of the templates' amplitudes, i.e. their light fractions.
         ``"global"`` (default) fits them freely in every epoch, takes the weighted median
         over the well-detected, unblended epochs of each instrument, and re-measures with
-        them held fixed: the standard practice, because a per-epoch light ratio is noisy
-        and a ratio fitted at a blended phase is not a measurement. ``"free"`` reports the
-        per-epoch fit itself. A sequence or a ``{name: fraction}`` mapping, summing to one,
-        holds them fixed — what to pass when the fractions were assumed by a disentangling
+        them held fixed; a per-epoch light ratio is noisy, and a ratio fitted at a blended
+        phase is not a measurement. ``"free"`` reports the per-epoch fit itself. A
+        sequence or a ``{name: fraction}`` mapping, summing to one, holds them fixed. Fixed
+        fractions are the appropriate choice when they were assumed by a disentangling
         whose components are the templates, since that is the only choice consistent with
-        what those components are (``docs/math.md`` §9.1).
+        the definition of those components (``docs/math.md`` §9.1).
     lsf_sigma_v
-        Per-instrument Gaussian LSF sigma in km/s, exactly as :func:`albireo.build_problem`
-        takes it (a scalar, or one width per anchor with ``lsf_anchors_angstrom``). Applied
-        to each template in quadrature above the template's own ``sigma_kms``. ``None``
-        means the templates are already at the instruments' resolution — the classic
-        practice of correlating against an observed single-star spectrum from the same
-        spectrograph.
+        Per-instrument Gaussian LSF sigma in km/s, as :func:`albireo.build_problem` takes
+        it (a scalar, or one width per anchor with ``lsf_anchors_angstrom``). Applied to
+        each template in quadrature above the template's own ``sigma_kms``. ``None``
+        means the templates are already at the instruments' resolution, as when the
+        template is an observed single-star spectrum from the same spectrograph.
     lsf_anchors_angstrom
         Optional per-instrument anchors for a wavelength-dependent LSF (D37).
     nuisance_order
         Order of an additive Chebyshev polynomial fitted alongside the templates in every
-        epoch — ``0`` (default) a constant, which absorbs the residual of the continuum
-        normalization; ``None`` for none. Additive rather than multiplicative for the
-        reason ``albireo.match`` gives: the thing it absorbs lives in the continuum, where
-        a multiplicative term is identically zero.
+        epoch: ``0`` (default) a constant, which absorbs the residual of the continuum
+        normalization; ``None`` for none. The term is additive rather than multiplicative
+        for the reason given in :mod:`albireo.match`: what it absorbs lies in the
+        continuum, where a multiplicative term is identically zero.
     coarse_step
         Stride of the global search, in template pixels. Default: the narrowest effective
         LSF sigma in pixels (at least one), which cannot step over a correlation peak.
         The minimum found is then refined at full resolution and below a pixel.
     errors
         ``"profiled"`` (default) rescales the curvature error by the reduced chi-square,
-        so the noise level is measured from the residuals — Zucker's (2003)
-        maximum-likelihood estimator, and the right choice when ``ivar`` is only known to a
-        scale. ``"ivar"`` trusts the declared weights.
+        so that the noise level is estimated from the residuals; this is the
+        maximum-likelihood estimator of Zucker (2003) and the appropriate choice when
+        ``ivar`` is known only to a scale. ``"ivar"`` trusts the declared weights.
     scale
         With fixed or global light fractions, ``"fixed"`` (default) holds the composite at
-        the fractions exactly — continuum-normalized data pin its scale — while ``"free"``
-        solves one overall scale per epoch on top of the fixed *ratios*, which is TODCOR's
-        original form with a known light ratio (its correlation is scale-invariant). Use
-        ``"free"`` when the normalization is uncertain; the fitted scale is then the sum of
-        the reported ``light`` row, and its departure from one is a normalization
-        diagnostic. Ignored when ``light="free"``.
+        the fractions exactly, since continuum-normalized data pin its scale, while
+        ``"free"`` solves one overall scale per epoch on top of the fixed ratios, which is
+        the original form of TODCOR with a known light ratio (its correlation is
+        scale-invariant). ``"free"`` is appropriate when the normalization is uncertain;
+        the fitted scale is then the sum of the reported ``light`` row, and its departure
+        from one is a normalization diagnostic. Ignored when ``light="free"``.
     progress
         Print one line per epoch.
 
@@ -1261,19 +1275,26 @@ def todcor(
 
     Notes
     -----
-    **Accuracy.** The estimator is the weighted least-squares fit, which Zucker (2003)
-    showed is the maximum-likelihood one, and its per-epoch error is the curvature of the
-    chi-square surface. Two systematics are outside that error and are the user's to
-    check: template mismatch, which mostly moves each component by a constant (the zero
-    point), and the pixel-locking ripple of the linear shift operator, of order
+    The estimator is the weighted least-squares fit, which Zucker (2003) showed to be the
+    maximum-likelihood estimator, and its per-epoch error is the curvature of the
+    chi-square surface (``docs/math.md`` §10.4). Two systematics lie outside that error:
+    template mismatch, which mostly moves each component by a constant (the zero point),
+    and the pixel-locking ripple of the linear shift operator, of order
     ``0.1 / sigma_px^2`` pixels (measured: 0.006 px at five pixels per LSF sigma, 0.03 px
-    at one) — negligible when the template grid samples the narrowest LSF with three or
-    more pixels per sigma. :meth:`albireo.Fit.templates` upsamples to that; build a
-    library template's grid the same way.
+    at one), which is negligible when the template grid samples the narrowest LSF with
+    three or more pixels per sigma (§10.3). :meth:`albireo.Fit.templates` upsamples to
+    that; a library template's grid should be built the same way.
 
-    **Frames.** Velocities are barycentric. For topocentric data the shift searched is
-    ``xi(v) - xi(v_bary)`` in log-wavelength (``docs/math.md`` §1.2), the composition being
-    exact because log-shifts add.
+    Velocities are barycentric. For topocentric data the shift searched is
+    ``xi(v) - xi(v_bary)`` in log-wavelength (``docs/math.md`` §1.2); the composition is
+    exact because log-shifts add (§10.5).
+
+    References
+    ----------
+    Zucker, S. & Mazeh, T. 1994, ApJ, 420, 806
+    Zucker, S., Torres, G. & Mazeh, T. 1995, ApJ, 452, 863
+    Torres, G., Latham, D. W. & Stefanik, R. P. 2007, ApJ, 662, 602
+    Zucker, S. 2003, MNRAS, 342, 1291
     """
     if not isinstance(dataset, Dataset):
         raise TypeError("dataset must be an albireo Dataset")
@@ -1470,7 +1491,7 @@ def _run(
             at_edge[i, j] = coarse_idx[i] == 0 or coarse_idx[i] >= valid_count[i] - 1
         centre = deltas[np.arange(n_tmpl), coarse_idx]
 
-        # Fine pass: full resolution around the coarse minimum, widened if it sits on the edge.
+        # Fine pass: full resolution around the coarse minimum, moved if the minimum is on its edge.
         fine_start = centre - radius
         for _attempt in range(4):
             fine = np.stack([fine_start[i] + np.arange(n_fine) for i in range(n_tmpl)]).astype(
@@ -1597,7 +1618,7 @@ def _run(
 
 
 # ---------------------------------------------------------------------------
-# The surface, for looking at
+# The two-dimensional surface, for plotting
 # ---------------------------------------------------------------------------
 
 
@@ -1614,7 +1635,7 @@ class TodcorSurface:
     chi2
         ``(len(v1), len(v2))`` chi-square at every pair of integer shifts.
     r_squared
-        ``1 - chi2 / chi2_null`` on the same grid — the TODCOR correlation.
+        ``1 - chi2 / chi2_null`` on the same grid, the TODCOR correlation ``R^2``.
     """
 
     names: tuple[str, str]
@@ -1710,7 +1731,7 @@ def todcor_surface(
 
 @dataclass(frozen=True)
 class TodcorBatch:
-    """Velocity tables for many stars, plus the failures that did not stop the batch."""
+    """Velocity tables for many stars, and the failures recorded per star."""
 
     tables: dict[str, VelocityTable]
     failures: dict[str, str]
@@ -1731,6 +1752,7 @@ class TodcorBatch:
         return written
 
     def summary(self) -> str:
+        """A text report: one line per star with its usable epochs and median uncertainty."""
         lines = [f"todcor batch: {len(self.tables)} stars measured, {len(self.failures)} failed"]
         for star, table in self.tables.items():
             good = int(table.good.sum())
@@ -1762,16 +1784,16 @@ def todcor_batch(
         ``{star: Dataset}``.
     templates
         Either one sequence of :class:`Template` used for every star, or
-        ``{star: sequence}``. Sharing templates across stars is what a survey of similar
-        objects does with a synthetic grid; per-star templates are what the disentangling
-        route produces.
+        ``{star: sequence}``. Shared templates suit a survey of similar objects measured
+        against a synthetic grid; per-star templates are what the disentangling route
+        produces.
     on_error
         ``"record"`` (default) catches an exception in one star, records its message in
-        :attr:`TodcorBatch.failures`, and carries on; ``"raise"`` stops at the first.
+        :attr:`TodcorBatch.failures`, and continues; ``"raise"`` stops at the first.
     progress
         Print one line per star.
     **kwargs
-        Passed to :func:`todcor` — ``v_range``, ``light``, ``lsf_sigma_v``, …
+        Passed to :func:`todcor` (``v_range``, ``light``, ``lsf_sigma_v``, and so on).
     """
     if on_error not in ("record", "raise"):
         raise ValueError("on_error must be 'record' or 'raise'")
@@ -1783,7 +1805,7 @@ def todcor_batch(
         t0 = time.perf_counter()
         try:
             tables[star] = todcor(dataset, per_star, **kwargs)
-        except Exception as exc:  # a batch must survive one bad star
+        except Exception as exc:  # record the failure and continue with the next star
             if on_error == "raise":
                 raise
             failures[star] = f"{type(exc).__name__}: {exc}"

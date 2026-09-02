@@ -1,25 +1,25 @@
-"""Gaussian priors on the component deviation spectra (banded precision).
+"""Gaussian priors on the component deviation spectra, with banded precision.
 
 The default prior (``docs/math.md`` §2) on each deviation spectrum is
 
     Lambda_i = tau_i * D2^T D2 + eta_i * I
 
-where ``D2`` is the second-difference operator: a curvature (smoothness) penalty whose
-affine nullspace — exactly the low-frequency separation degeneracy — is made proper by
-the weak ridge ``eta_i`` anchoring the spectrum to the continuum. Precisions are always
-banded (half-bandwidth 2); dense kernels are deliberately avoided.
+where ``D2`` is the second-difference operator. The curvature penalty ``tau_i`` is a
+smoothness prior whose affine nullspace (constant plus slope per component) coincides
+with the low-frequency separation degeneracy of ``docs/math.md`` §5.1; the weak ridge
+``eta_i`` makes those directions proper by anchoring the spectrum to the continuum.
+Precisions are banded (half-bandwidth 2); dense covariance kernels are not used.
 
-Either strength may additionally carry a **per-pixel profile** (D40),
+Either strength may carry a static per-pixel profile (D40),
 
     Lambda_i = D2^T diag(tau_i * p^tau_i) D2 + diag(eta_i * p^eta_i),
 
-with the profiles static and the scalars ``tau_i, eta_i`` still the inferred (ML-II)
-hyperparameters — so a profile changes *where* a component is allowed to deviate from
-the continuum without adding a single sampled parameter. The motivating use is confining
-a component to a handful of line windows (:func:`window_profile`): a nebular emission
-component has structure only at the Balmer, He I and forbidden lines, and a huge ridge
-everywhere else says so. Curvature rows are weighted by their *center* pixel, so a
-profile is indexed like the spectrum it regularizes.
+with the scalars ``tau_i, eta_i`` remaining the inferred (ML-II) hyperparameters. A
+profile sets where a component may deviate from the continuum without adding a sampled
+parameter. The main use is confining a component to line windows
+(:func:`window_profile`): a nebular emission component has structure only at the Balmer,
+He I and forbidden lines, and a large ridge elsewhere encodes that. Curvature rows are
+weighted by their center pixel, so a profile is indexed like the spectrum it regularizes.
 """
 
 from __future__ import annotations
@@ -41,13 +41,14 @@ __all__ = [
 ]
 
 
-# Optical emission lines of an H II region, in *air* angstrom. Wavelengths from the
-# usual nebular references (Osterbrock & Ferland 2006 tables; NIST/Atomic Line List for
-# the recombination lines) rounded to 0.01 A, which is far below the width of any window
-# built around them. Not exhaustive by design: these are the features strong enough to
-# matter in a normalized stellar spectrum, and a window costs bandwidth-free prior
-# freedom, not pixels. Callers with a different line set pass their own to
-# :func:`nebular_windows`.
+# Optical emission lines of an H II region, in air angstrom. Wavelengths are taken from
+# the standard nebular references (the tables of Osterbrock, D. E. & Ferland, G. J. 2006,
+# Astrophysics of Gaseous Nebulae and Active Galactic Nuclei, 2nd ed. (University Science
+# Books); NIST and the Atomic Line List for the recombination lines), rounded to 0.01 A,
+# far below the width of any window built around them. The list is not exhaustive: it
+# holds the features strong enough to matter in a normalized stellar spectrum. A window
+# relaxes the prior locally without changing the precision bandwidth or the pixel count.
+# A different line set can be passed to :func:`nebular_windows`.
 NEBULAR_LINES: Mapping[str, float] = {
     "[O II] 3726": 3726.03,
     "[O II] 3729": 3728.82,
@@ -74,7 +75,16 @@ NEBULAR_LINES: Mapping[str, float] = {
     "[S II] 6731": 6730.82,
     "He I 7065": 7065.19,
 }
-"""Optical H II region emission lines (air angstrom) used by :func:`nebular_windows`."""
+"""Optical H II region emission lines (air angstrom) used by :func:`nebular_windows`.
+
+Wavelengths follow Osterbrock & Ferland (2006), with NIST and the Atomic Line List for
+the recombination lines, rounded to 0.01 A.
+
+References
+----------
+Osterbrock, D. E. & Ferland, G. J. 2006, Astrophysics of Gaseous Nebulae and Active
+    Galactic Nuclei, 2nd ed. (University Science Books)
+"""
 
 
 def second_difference(d):
@@ -103,40 +113,44 @@ def nebular_windows(
 ) -> tuple[tuple[float, float], ...]:
     """Wavelength windows around the nebular lines, merged and sorted.
 
-    The windows are where a nebular component is *allowed* to have structure
-    (:func:`window_profile`), so they should be generous: a window that is too narrow
+    The windows are where a nebular component is allowed to have structure
+    (:func:`window_profile`), so they should be generous. A window that is too narrow
     clips real emission and pushes the residual into the stellar components, which is
-    the failure the component exists to prevent, while a window that is too wide only
-    gives back some of the freedom being taken away. The default half-width of
-    300 km/s covers the nebular line itself, the velocity spread of an H II region, and
-    a comfortable margin.
+    the failure the component exists to prevent; a window that is too wide only returns
+    some of the freedom the profile removes. The default half-width of 300 km/s covers
+    the nebular line, the velocity spread of an H II region, and a margin.
 
     Parameters
     ----------
     lines
-        Rest wavelengths in air angstrom: a mapping (values used) or a sequence.
+        Rest wavelengths in air angstrom: a mapping (its values are used) or a sequence.
         Default :data:`NEBULAR_LINES`.
     halfwidth_kms
-        Half-width of each window in velocity, converted at the line's wavelength.
+        Half-width of each window in velocity [km/s], converted to wavelength at the
+        line.
     v_kms
-        Velocity of the nebula **in the frame of the model grid**. Windows are built
-        at ``lambda * (1 + v_kms / c)``, so this must match the ``nebular_v_kms``
-        passed to :func:`albireo.forward.build_problem`: that shift is what decides
-        where the component's lines land on the model grid, and the profile has to
-        agree with it. Both default to 0 — the component then sits at the observed
-        barycentric wavelengths, the same convention the stellar components follow
-        (their systemic velocity is absorbed into their spectra, D14).
+        Velocity of the nebula in the frame of the model grid [km/s]. Windows are built
+        at ``lambda * (1 + v_kms / c)``, so this value must equal the ``nebular_v_kms``
+        passed to :func:`albireo.forward.build_problem`: that shift decides where the
+        component's lines fall on the model grid, and the profile must agree with it.
+        Both default to 0, which places the component at the observed barycentric
+        wavelengths, the convention the stellar components follow (their systemic
+        velocity is absorbed into their spectra, D14).
     wave_range
         Optional ``(min, max)`` in angstrom; windows disjoint from it are dropped.
-        Pass ``(grid.wave[0], grid.wave[-1])`` to keep only the lines a given model
-        grid can see.
+        ``(grid.wave[0], grid.wave[-1])`` keeps only the lines a given model grid
+        covers.
 
     Returns
     -------
     tuple[tuple[float, float], ...]
-        ``(lambda_min, lambda_max)`` pairs, sorted and with overlaps merged (adjacent
-        doublets such as [O II] 3726/3729 or [S II] 6716/6731 therefore come back as
-        one window).
+        ``(lambda_min, lambda_max)`` pairs, sorted, with overlaps merged (adjacent
+        doublets such as [O II] 3726/3729 or [S II] 6716/6731 return as one window).
+
+    Raises
+    ------
+    ValueError
+        If ``halfwidth_kms`` is not positive.
     """
     from albireo.grids import C_KMS
 
@@ -172,34 +186,40 @@ def window_profile(
 ) -> np.ndarray:
     """Per-pixel prior multiplier: ``inside`` within any window, ``outside`` elsewhere.
 
-    Feed the result to :class:`SmoothnessPrior` as an ``eta_profile`` row. A ridge
-    scaled up by ``outside`` pins the component to the continuum away from the windows
-    with prior standard deviation ``1/sqrt(eta * outside)`` per pixel — the default
-    ``1e6`` is a factor of 1000 in amplitude, which is negligible against any line and
-    leaves the precision comfortably well conditioned. It is a *soft* confinement on
-    purpose: a hard zero would be a constraint, would need a different linear algebra,
-    and would make the model unable to report that it disagrees.
+    The result is passed to :class:`SmoothnessPrior` as an ``eta_profile`` row. A ridge
+    scaled by ``outside`` pins the component to the continuum away from the windows with
+    prior standard deviation ``1/sqrt(eta * outside)`` per pixel. The default ``1e6`` is
+    a factor of 1000 in amplitude, negligible against any line, and leaves the precision
+    well conditioned. The confinement is soft: a hard zero would be a constraint, would
+    require different linear algebra, and would remove the model's ability to report a
+    disagreement with the windows (``docs/math.md`` §2).
 
-    ``window_profile`` is not specific to nebular emission — interstellar bands,
-    diffuse interstellar bands, or a component known a priori to be line-poor take the
-    same treatment.
+    The function is not specific to nebular emission. Interstellar bands, diffuse
+    interstellar bands, or any component known a priori to be line-poor take the same
+    treatment.
 
     Parameters
     ----------
     wave
         Model grid wavelengths, ``(n_pix,)`` angstrom (:attr:`albireo.grids.LogGrid.wave`).
     windows
-        ``(lambda_min, lambda_max)`` pairs; overlaps are fine. An empty sequence gives
-        a uniform ``outside`` profile (nothing is allowed to deviate), which is almost
-        certainly a mistake and raises.
+        ``(lambda_min, lambda_max)`` pairs in angstrom; overlaps are permitted. An empty
+        sequence would give a uniform ``outside`` profile (no pixel allowed to deviate)
+        and raises instead.
     inside, outside
-        Multipliers inside and outside the windows. Both must be positive so the prior
-        stays proper.
+        Multipliers inside and outside the windows. Both must be positive so that the
+        prior stays proper.
 
     Returns
     -------
     numpy.ndarray
         ``(n_pix,)`` float multiplier.
+
+    Raises
+    ------
+    ValueError
+        If ``wave`` is not one-dimensional, a multiplier is not positive, ``windows`` is
+        empty, a window is empty or reversed, or no window overlaps the grid.
     """
     wave = np.asarray(wave, dtype=np.float64)
     if wave.ndim != 1:
@@ -231,24 +251,36 @@ def window_profile(
 @jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True)
 class SmoothnessPrior:
-    """Independent smoothness + continuum-anchor prior per component.
+    """Independent smoothness-plus-continuum-anchor prior per component.
+
+    Implements the banded precision of ``docs/math.md`` §2, with the optional per-pixel
+    profiles of D40.
 
     Attributes
     ----------
     tau
-        Curvature penalty weights, shape ``(n_components,)``. Larger = smoother.
+        Curvature penalty weights, shape ``(n_components,)``. Larger values give smoother
+        spectra.
     eta
         Ridge weights, shape ``(n_components,)``. Anchors the affine nullspace of the
-        curvature penalty to the continuum (d = 0) with variance ~ 1/eta per pixel —
-        an explicit, documented scale for the unavoidable low-frequency uncertainty.
+        curvature penalty to the continuum (``d = 0``) with variance about ``1/eta`` per
+        pixel, which sets the scale of the low-frequency uncertainty (``docs/math.md``
+        §5.1).
     tau_profile, eta_profile
-        Optional ``(n_components, n_pixels)`` **static** per-pixel multipliers on the
-        two strengths (D40): the effective weights are ``tau[i] * tau_profile[i]`` and
-        ``eta[i] * eta_profile[i]``. ``None`` (default) is a uniform profile and the
-        exact v1 prior. Because the scalars stay separate, the ML-II hyperparameter
-        fit is unchanged — a profile says where the freedom lives, the scalar says how
-        much. Build one with :func:`window_profile`. Curvature rows take the weight of
-        their center pixel, so ``tau_profile`` is indexed like the spectrum.
+        Optional static ``(n_components, n_pixels)`` per-pixel multipliers on the two
+        strengths (D40): the effective weights are ``tau[i] * tau_profile[i]`` and
+        ``eta[i] * eta_profile[i]``. ``None`` (default) is a uniform profile and
+        reproduces the v1 prior exactly. The scalars stay separate from the profiles, so
+        the ML-II hyperparameter fit is unchanged: a profile sets where the freedom is,
+        the scalar sets how much. :func:`window_profile` builds one. Curvature rows take
+        the weight of their center pixel, so ``tau_profile`` is indexed like the
+        spectrum.
+
+    Raises
+    ------
+    ValueError
+        If ``tau`` and ``eta`` differ in shape, or a profile has the wrong shape or the
+        two profiles disagree on the pixel count.
     """
 
     tau: jax.Array
@@ -287,7 +319,7 @@ class SmoothnessPrior:
 
     @property
     def n_pixels(self) -> int | None:
-        """Pixel count the profiles were built for, or None if there are none."""
+        """Pixel count the profiles were built for, or ``None`` when there are none."""
         for p in (self.tau_profile, self.eta_profile):
             if p is not None:
                 return int(p.shape[1])
@@ -298,9 +330,9 @@ class SmoothnessPrior:
     def curvature_weights(self, n_pixels: int):
         """Per-row curvature weights, shape ``(n_comp, n_pixels - 2)``.
 
-        Row ``k`` of ``D2`` spans pixels ``k, k+1, k+2``; it takes the profile value of
+        Row ``k`` of ``D2`` spans pixels ``k, k+1, k+2`` and takes the profile value of
         its center pixel ``k+1``, so a window's edge rows are weighted by whether the
-        *center* of the stencil is inside.
+        center of the stencil is inside.
         """
         self._check_pixels(n_pixels)
         if self.tau_profile is None:
@@ -319,7 +351,7 @@ class SmoothnessPrior:
         if own is not None and own != n_pixels:
             raise ValueError(
                 f"prior profiles were built for {own} pixels but the model grid has "
-                f"{n_pixels}. A profile is tied to the grid it was built on — rebuild it "
+                f"{n_pixels}. A profile is tied to the grid it was built on: rebuild it "
                 "with window_profile(grid.wave, ...)."
             )
 

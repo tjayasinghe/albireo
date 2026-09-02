@@ -9,11 +9,10 @@ The files land in ``data/hr6819/`` as ``ADP.<id>.fits`` (~3 MB each, ~153 MB tot
 ``manifest.json`` recording the archive metadata and each download's outcome. Re-running
 skips files already present at the expected size, so an interrupted download resumes.
 
-This script is now a thin wrapper over :mod:`albireo.archive`, which is the same client
-generalized to any ESO programme, instrument or sky position — see
-``docs/api/archive.md``. It is kept because the HR 6819 dataset is the one the benchmark
-record and ``examples/03_hr6819_real_data.py`` are built on, and because a worked, copyable
-invocation is worth more than a paragraph describing one.
+This script is a thin wrapper over :mod:`albireo.archive`, the same client generalized to
+any ESO programme, instrument or sky position (``docs/api/archive.md``). It is kept because
+the HR 6819 dataset is the one the benchmark record and
+``examples/03_hr6819_real_data.py`` are built on, and as a worked invocation.
 
 Usage
 -----
@@ -31,7 +30,7 @@ import sys
 from albireo.archive import download, query, spectra_query
 
 # HR 6819 = HD 167128 = QV Tel (ICRS, J2000). Resolved to coordinates rather than looked up
-# by name because ESO's target_name is PI free text and is not resolver-normalized — this
+# by name because ESO's target_name is PI free text and is not resolver-normalized: this
 # object is filed as 'HR-6819', hyphenated.
 TARGET_RA_DEG = 274.28139
 TARGET_DEC_DEG = -56.02337

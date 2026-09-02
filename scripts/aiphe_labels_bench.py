@@ -1,35 +1,34 @@
 """AI Phoenicis: scoring a label fit against a system whose answer is already known.
 
-`aiphe_bench.py` validates the *disentangling* on this system, because AI Phe's orbit is
-published to better than 0.02 per cent. This script validates the *labels*, and it can,
-because AI Phe is one of the few binaries where every quantity the label fit produces has an
+``aiphe_bench.py`` validates the disentangling on this system, because AI Phe's orbit is
+published to better than 0.02 per cent. This script validates the labels on the same system:
+AI Phe is one of the few binaries where every quantity the label fit produces has an
 independent published value:
 
     Teff       6310 K and 5010 K         Maxted et al. (2020), MNRAS 498, 332
     log g      4.001 and 3.598           derived below from the same solution
     R2/R1      1.6237                    from the fractional radii, run C
 
-The third is the interesting one. `RadiusRatio` fits the two components jointly through one
-shared scalar, so the radius ratio is something the label fit *returns* -- and here there is
-a published number to hold it against, measured photometrically from eclipses rather than
-spectroscopically. Nothing about the fit knows it.
+``RadiusRatio`` fits the two components jointly through one shared scalar, so the radius
+ratio is returned by the label fit, and here it can be held against a published number
+measured photometrically from eclipses rather than spectroscopically. Nothing in the fit is
+told that number.
 
-**log g is derived, not quoted from memory.** For a double-lined eclipsing binary the surface
-gravity follows from the spectroscopic and photometric elements alone, with no absolute
-masses or radii and no distance:
+log g is derived rather than quoted. For a double-lined eclipsing binary the surface gravity
+follows from the spectroscopic and photometric elements alone, with no absolute masses or
+radii and no distance:
 
     g_1 = 2 pi sqrt(1 - e^2) K_2 / (P r_1^2 sin i)
 
 which is Kepler's third law and the mass ratio with everything that cancels cancelled. Every
-symbol on the right is already in `aiphe_bench.py` except the inclination. It reproduces the
-published absolute masses and radii to 0.002 dex, which the script checks rather than asserts.
+symbol on the right is already in ``aiphe_bench.py`` except the inclination. It reproduces
+the published absolute masses and radii to 0.002 dex, which the script checks.
 
-**What is being tested, and what is not.** The disentangling here is not re-derived: the
-velocities are fixed at the published orbit, exactly as `aiphe_bench.py` does, so that what
-is under test is the label fit and not the orbit. The light fractions handed to the
-disentangling are a *blackbody estimate* -- honest to a few per cent at best -- which makes
-this a fair test of the claim that a wrong assumed dilution comes back as dilution rather
-than as temperature.
+Scope. The disentangling is not re-derived: the velocities are fixed at the published orbit,
+exactly as ``aiphe_bench.py`` does, so what is under test is the label fit and not the orbit.
+The light fractions supplied to the disentangling are a blackbody estimate, accurate to a few
+per cent at best, which makes this a test of the claim that a wrong assumed dilution returns
+as dilution rather than as temperature.
 
 Run:  python scripts/aiphe_labels_bench.py --data data/aiphe
       (fetch the spectra first with scripts/download_aiphe.py)
@@ -175,9 +174,9 @@ def main() -> None:
         f"{ell[0]:.4f} / {ell[1]:.4f}"
     )
 
-    # The model grid is deliberately wider than the analysis window -- LogGrid.covering adds
-    # the velocity budget and the LSF radius on both sides -- so the library has to cover the
-    # grid, not the window. Asking for the window itself is the mistake the resampler catches.
+    # The model grid is wider than the analysis window (LogGrid.covering adds the velocity
+    # budget and the LSF radius on both sides), so the library has to cover the grid, not the
+    # window; the resampler rejects a library that covers only the window.
     pad = 2.0
     library = ab.fetch_library(
         LIBRARY,
@@ -213,7 +212,7 @@ def main() -> None:
         max_steps=args.steps,
     )
 
-    # The eclipsing case: log g is known to ~0.003 dex, so declaring it is the whole point.
+    # The eclipsing case: log g is known to ~0.003 dex, so it is declared fixed.
     t0 = time.perf_counter()
     fixed = ab.match_labels(
         grid, d_hat, stars=stars(lambda g: ab.Fixed(g)), dilution=ab.RadiusRatio(), **common
@@ -221,8 +220,8 @@ def main() -> None:
     wall_fixed = time.perf_counter() - t0
     report(fixed, logg_pub, f"log g fixed at the eclipse solution ({wall_fixed:.0f} s)")
 
-    # And the non-eclipsing case, which nobody observing an SB2 for the first time can avoid:
-    # both free, where Teff and log g are expected to correlate at ~0.98 (Tamajo et al. 2011).
+    # The non-eclipsing case: both free, where Teff and log g are expected to correlate at
+    # ~0.98 (Tamajo et al. 2011).
     t0 = time.perf_counter()
     free = ab.match_labels(
         grid,
@@ -233,7 +232,7 @@ def main() -> None:
     )
     report(free, logg_pub, f"log g free ({time.perf_counter() - t0:.0f} s)")
 
-    # What the assumed dilution was doing: freeze it and see which way the temperatures move.
+    # The effect of the assumed dilution: freeze it and record which way the temperatures move.
     rigid = ab.match_labels(
         grid, d_hat, stars=stars(lambda g: ab.Fixed(g)), dilution=ab.FixedDilution(), **common
     )

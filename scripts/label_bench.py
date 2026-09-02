@@ -1,8 +1,9 @@
 """Measure what the label-matching mode costs and what it recovers (D52, D53).
 
-Produces the numbers `docs/benchmarks.md` records: interpolation error against the published
-reference values, closed-loop recovery at a range of signal-to-noise, the wall-clock split
-across the stages of a fit, and the ratio between the formal error and the honest one.
+Produces the numbers ``docs/benchmarks.md`` records: interpolation error against the
+published reference values, closed-loop recovery at a range of signal-to-noise, the
+wall-clock split across the stages of a fit, and the ratio between the formal error and the
+spread over posterior draws.
 
 Nothing here needs the network. The grid is a toy built in this file, at a node density
 matched to the BOSZ subset the mode is designed for (250 K in Teff, 0.5 dex in log g,

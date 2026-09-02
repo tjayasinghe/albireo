@@ -1,20 +1,21 @@
 """Regenerate the executed AI Phoenicis notebook, ``docs/tutorials/aiphe-labels.ipynb``.
 
-Like ``build_showcase_notebook.py``, the docs render this with ``execute: false``: the
-committed outputs are what the site shows, so the docs build stays offline and free of a
-JAX dependency. Unlike the showcase, this notebook **cannot** be re-executed without two
-downloads that are far too large to ship:
+As with ``build_showcase_notebook.py``, the docs render this notebook with
+``execute: false``: the committed outputs are what the site shows, so the docs build stays
+offline and free of a JAX dependency. Unlike the showcase, this notebook cannot be
+re-executed without two downloads that are too large to ship:
 
     python scripts/download_aiphe.py          # 36 HARPS spectra, ~194 MB
     python -c "import albireo; albireo.fetch_library('bosz2024-fgk-r20000')"   # ~645 MB
 
-That is the same reason ``examples/03_hr6819_real_data.py`` and ``06_bloem.py`` are excluded
-from the examples job in CI, and it is why this file exists: so a reader can see the result
+The same download size excludes ``examples/03_hr6819_real_data.py`` and ``06_bloem.py``
+from the examples job in CI. Committing the executed outputs lets a reader see the result
 on real data without acquiring the data.
 
     python scripts/build_aiphe_notebook.py [--postprocess-only]
 
-Expect roughly five minutes, nearly all of it the three label fits. Everything is seeded.
+Wall time is roughly five minutes, nearly all of it the three label fits. The notebook is
+seeded.
 """
 
 from __future__ import annotations
@@ -41,13 +42,14 @@ CELLS: list[tuple[str, str]] = [
         """\
 # Labels on real data: AI Phoenicis
 
-Every other check on `albireo.match` scores it against a spectrum this package injected
+The other checks on `albireo.match` score it against spectra this package injected
 itself. This one scores it against a star.
 
+Background and references: [science overview](../science.md).
+
 AI Phe (HD 6980) is a detached eclipsing binary whose orbit is published to better than
-0.02 per cent, and — the part that matters here — whose components have independently
-known temperatures, gravities and radii. So every quantity the label fit produces has an
-external number waiting for it:
+0.02 per cent and whose components have independently known temperatures, gravities and
+radii, so every quantity the label fit produces has an external value to compare against:
 
 | quantity | published | source |
 |---|---|---|
@@ -55,12 +57,12 @@ external number waiting for it:
 | log g | 4.001 and 3.598 | derived below, from the same solution |
 | R₂/R₁ | 1.6237 | from the fractional radii, run C |
 
-The third is the one to watch. `RadiusRatio` fits both components jointly through a single
-shared scalar, so the radius ratio is something the label fit *returns* — and here it can
-be held against a number measured photometrically, from eclipses, which nothing in the
-spectroscopic fit is told.
+The third is the strongest test. `RadiusRatio` fits both components jointly through a
+single shared scalar, so the radius ratio is a quantity the label fit returns, and here it
+can be compared with a value measured photometrically from the eclipses, which the
+spectroscopic fit is never given.
 
-**This notebook cannot be re-run without the data.** It needs 36 HARPS spectra (~194 MB,
+This notebook cannot be re-run without the data. It requires 36 HARPS spectra (~194 MB,
 `scripts/download_aiphe.py`) and the BOSZ library (~645 MB on first use). The committed
 outputs are the record.""",
     ),
@@ -88,16 +90,16 @@ print(f"albireo {ab.__version__}")""",
     (
         MD,
         """\
-## log g, derived rather than remembered
+## log g from the eclipsing solution
 
 For a double-lined eclipsing binary the surface gravity follows from the spectroscopic and
-photometric elements alone — no absolute masses, no radii, no distance:
+photometric elements alone, without absolute masses, radii or a distance:
 
 $$g_1 = \\frac{2\\pi\\sqrt{1-e^2}\\,K_2}{P\\,r_1^2 \\sin i}$$
 
-which is Kepler's third law and the mass ratio with everything that cancels cancelled. It
-reproduces the published absolute masses and radii to 0.002 dex, which is worth checking
-rather than trusting.""",
+which is Kepler's third law combined with the mass ratio, with the common factors
+cancelled. It reproduces the published absolute masses and radii to 0.002 dex, and the
+next cell checks that.""",
     ),
     (
         PY,
@@ -112,13 +114,13 @@ print(f"Teff   {TEFF1:.0f} K and {TEFF2:.0f} K")""",
         """\
 ## Disentangle at the published orbit
 
-The orbit is not re-derived here. It is known far better than any disentangling could
-recover it, so fixing the velocities at the published solution isolates what is actually
-under test: the label fit.
+The orbit is not re-derived here. It is known far better than disentangling could recover
+it, so fixing the velocities at the published solution isolates the quantity under test,
+the label fit.
 
-Note the light fractions. They are a **blackbody estimate** from the published radii and
-temperatures — honest to a few per cent at best. That makes this a fair test of the claim
-that a wrong assumed dilution comes back as dilution rather than as temperature.""",
+The light fractions are a blackbody estimate from the published radii and temperatures,
+accurate to a few per cent at best. That makes this a test of the claim that a wrong
+assumed dilution is absorbed as dilution rather than as temperature.""",
     ),
     (
         PY,
@@ -150,10 +152,10 @@ fig.set_layout_engine("constrained")""",
         """\
 ## Fit the labels
 
-`log g` is declared, not fitted. On an eclipsing binary it is known to ~0.003 dex, an order
-of magnitude better than any spectroscopic determination — and Teff and log g correlate at
-about 0.98 when both are free. Declaring it is the single most consequential choice on the
-page, and the next cell shows what happens without it.""",
+`log g` is declared rather than fitted. For an eclipsing binary it is known to about
+0.003 dex, an order of magnitude better than any spectroscopic determination, and Teff and
+log g correlate at about 0.98 when both are free. The next cell shows the result when
+log g is left free.""",
     ),
     (
         PY,
@@ -206,18 +208,18 @@ print(f"\\nR2/R1 fitted {fixed.radius_ratio['secondary']:.4f}  "
     (
         MD,
         """\
-## What happens when log g is free
+## The fit with log g free
 
-This is the failure the tutorial warns about, on real data. Teff and log g trade against
-each other; the fit slides down the degeneracy, log g runs to the bottom of its prior, and
-the temperatures follow it down. χ² *improves* while it happens — a better fit and worse
-physics.
+This is the failure mode the tutorial describes, here on real data. Teff and log g trade
+against each other: the fit follows the degeneracy, log g runs to the lower bound of its
+prior, and the temperatures follow it down. χ² improves while this happens, so the lower
+χ² accompanies the worse physical solution.
 
-And note what does **not** catch it: the correlation report comes back empty. Once log g has
-reached the edge of the grid it stops varying, so the curvature at the optimum no longer
-shows the degeneracy that produced the answer. A flagged correlation is evidence; an empty
-one is not absence of evidence. What catches this is having an external log g to compare
-against — which is the whole argument for declaring it.""",
+The correlation report does not detect it. Once log g has reached the edge of the grid it
+stops varying, so the curvature at the optimum no longer shows the degeneracy that
+produced the answer. A flagged correlation is evidence of a degeneracy; an empty report is
+not evidence of its absence. What detects this case is an external log g to compare
+against, which is the argument for declaring it.""",
     ),
     (
         PY,
@@ -234,11 +236,11 @@ print("strong correlations:", free.flagged_correlations())""",
     (
         MD,
         """\
-## What the assumed dilution was doing
+## The effect of the assumed dilution
 
 `FixedDilution` freezes the light fractions at the blackbody estimate. The difference
-between the two fits measures how hard that assumption was bending the temperatures — which
-is the whole reason the dilution is fitted jointly rather than taken on trust.""",
+between the two fits measures how strongly that assumption biases the temperatures, and is
+the reason the dilution is fitted jointly rather than assumed.""",
     ),
     (
         PY,
@@ -257,35 +259,34 @@ print(f"chi2              fitted {fixed.chi2:.0f}   frozen {rigid.chi2:.0f}")"""
     (
         MD,
         """\
-## Reading the result honestly
+## The result
 
-The primary lands within a per cent of its published temperature. The secondary does not:
-it comes back several hundred kelvin hot, outside the 2–3 per cent this mode claims, and
-the fitted radius ratio is about 6 per cent low. Two things were tested and one of them
-explained something.
+The primary lands within one per cent of its published temperature. The secondary does
+not: it comes back several hundred kelvin hot, outside the 2–3 per cent this mode claims,
+and the fitted radius ratio is about 6 per cent low. Two explanations were tested, of which
+one accounts for part of the discrepancy.
 
-**Microturbulence was the obvious suspect, and it is not the answer.** The library is
-pinned at ξ = 2 km s⁻¹, and a K subgiant wants nearer 1.3; too much microturbulence makes
-the model's lines too strong, which the fit could answer by raising Teff. Rebuilding the
-library at ξ = 1 km s⁻¹ moves the lines by 8.5 per cent in equivalent width — the right
-direction — but the secondary's temperature got *worse*, not better, and χ² with it. The
-ξ change went into [M/H] instead (+0.10 dex), which is the documented [M/H]–ξ degeneracy
-doing what it is documented to do.
+Microturbulence is not the explanation. The library is pinned at ξ = 2 km s⁻¹ while a K
+subgiant requires nearer 1.3 km s⁻¹, and excess microturbulence makes the model lines too
+strong, which the fit could compensate by raising Teff. Rebuilding the library at
+ξ = 1 km s⁻¹ changes the equivalent widths by 8.5 per cent, in the expected direction, but
+the secondary's temperature and χ² both became worse. The change in ξ was absorbed by
+[M/H] instead (+0.10 dex), which is the documented [M/H]–ξ degeneracy.
 
-**The comparison mode was not the obvious suspect, and it changed the default.** `matched`
-convolves both the model and the data with the LSF before comparing, on the argument that
-`d_hat` is a partial deconvolution. That argument is right about the deconvolution and
-wrong about the cost: convolving the residuals correlates them, while the likelihood stays
-diagonal. On this dataset it inflated χ² by 4.26× where the kernel predicts 4.91×, and
-`v sin i` absorbed the mis-specification — both components pinned to the floor of their
-prior. `native` returns 2.2 km s⁻¹ for both, which is at least physical. The default is now
-`native`; the closed-loop test never saw this, because its rows have no LSF and no
-disentangling behind them.
+The comparison mode accounts for part of the discrepancy, and the default was changed as a
+result. `matched` convolves both the model and the data with the LSF before comparing, on
+the argument that `d_hat` is a partial deconvolution. That argument is correct about the
+deconvolution but not about the cost: convolving the residuals correlates them while the
+likelihood remains diagonal. On this dataset it inflated χ² by 4.26× where the kernel
+predicts 4.91×, and `v sin i` absorbed the mis-specification, with both components pinned
+to the floor of their prior. `native` returns 2.2 km s⁻¹ for both, which is physical. The
+default is now `native`. The closed-loop test did not detect this, because its rows have no
+LSF and no disentangling behind them.
 
-What is left unexplained is most of the secondary's offset. Candidates in order: a 100 Å
-window carrying far more temperature leverage for an F star than for a K subgiant; the
-published 5010 K itself being a photometric/SED temperature rather than a spectroscopic
-one; and the assumed light fractions, which the radius ratio only partly absorbs.""",
+Most of the secondary's offset remains unexplained. The candidates, in order: a 100 Å
+window carrying more temperature leverage for an F star than for a K subgiant; the
+published 5010 K being a photometric or SED temperature rather than a spectroscopic one;
+and the assumed light fractions, which the radius ratio only partly absorbs.""",
     ),
     (
         PY,
@@ -300,14 +301,15 @@ print(f"\\nnulls   chi2 {fixed.chi2:.4g}   nearest node {fixed.chi2_nearest_node
     (
         MD,
         """\
-## The template, which is the point
+## The template
 
 The labels exist to select a template, and `LabelMatch.template` renders one: the
-interpolated model at the fitted labels, broadened and shifted as fitted, **undiluted** —
-a template is the star, not the star's share of the system's light.
+interpolated model at the fitted labels, broadened and shifted as fitted, and undiluted,
+since a template represents the star rather than the star's share of the system's light.
 
-It comes back as flux on the fit's own grid. Writing it to the file formats the downstream
-cross-correlation codes read is `albireo.handoff`'s job and is not built yet.""",
+It is returned as flux on the fit's own grid. Writing it in the file formats the
+downstream cross-correlation codes read is the role of `albireo.handoff` and is not yet
+implemented.""",
     ),
     (
         PY,
@@ -328,23 +330,22 @@ fig.set_layout_engine("constrained")""",
     (
         MD,
         """\
-## What to take from this
+## Summary
 
-The mode does what it was scoped to do — pick a template — and the validation says how
-well, on a real star, with the failures named rather than tuned away:
+The mode performs the task it was scoped for, template selection, and this run measures
+how well it does so on a real star:
 
-- The **primary** is recovered to within 1 per cent in Teff.
-- The **secondary** is several hundred kelvin hot, outside the claimed accuracy, and the
-  reason is not yet fully established.
-- The **radius ratio**, which the fit was never told, comes back about 5 per cent low —
-  from spectroscopy alone, against a photometric measurement.
-- **log g must be declared** when the system gives it to you. Free, it takes the
+- The primary Teff is recovered to within 1 per cent.
+- The secondary is several hundred kelvin hot, outside the claimed accuracy, and the
+  reason is not yet established.
+- The radius ratio, which the fit is never given, comes back about 5 per cent low, from
+  spectroscopy alone, against a photometric measurement.
+- log g should be declared when the system determines it. Left free, it carries the
   temperatures with it, reports a lower χ² while doing so, and leaves the correlation
-  report empty because it ended up against a bound.
-- Formal errors here are sub-kelvin and should be ignored. They are the curvature of an
-  optimum, not an uncertainty; `refit_draws` is the number to quote.
-
-The last point is not a caveat added for modesty. `summary()` prints it every time.""",
+  report empty because it ends against a bound.
+- The formal errors here are sub-kelvin and should not be quoted. They are the curvature
+  of an optimum, not an uncertainty; `refit_draws` provides the value to quote, and
+  `summary()` states this on every call.""",
     ),
 ]
 

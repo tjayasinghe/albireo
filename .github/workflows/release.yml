@@ -2,7 +2,7 @@ name: Release
 
 # Tagging is the trigger: `git tag v0.1.0 && git push --tags` builds and publishes. The
 # tag must match the version in src/albireo/__init__.py, which the verify step below
-# enforces — publishing a wheel whose version disagrees with its tag is not recoverable,
+# enforces. Publishing a wheel whose version disagrees with its tag is not recoverable,
 # because PyPI will not let that version number be reused.
 on:
   push:
@@ -38,13 +38,13 @@ jobs:
         run: uv build
 
       # Read the version off the built wheel rather than re-parsing the source: the wheel
-      # is what actually gets published, and its name is where hatchling recorded the
-      # version it resolved from src/albireo/__init__.py.
+      # is what gets published, and its name is where hatchling recorded the version it
+      # resolved from src/albireo/__init__.py.
       #
       # CITATION.cff is checked here too, and not only by tests/test_metadata.py, because
-      # this workflow runs no tests at all — so a citation file left at the previous
-      # version would sail past every guard and be the version Zenodo archives and ASCL
-      # indexes. That is unrecoverable in the same way a published wheel is.
+      # this workflow runs no tests at all: a citation file left at the previous version
+      # would pass every other guard and be the version Zenodo archives and ASCL indexes.
+      # That is unrecoverable in the same way a published wheel is.
       - name: Verify the tag matches the package version
         if: startsWith(github.ref, 'refs/tags/')
         run: |
@@ -64,7 +64,7 @@ jobs:
           fi
 
       # A wheel that cannot be installed and imported is worse than no release. This
-      # installs the built artifact itself — not the source tree — and checks that the
+      # installs the built artifact itself, not the source tree, and checks that the
       # packaged example data made it in, since that is the quickstart's first line.
       - name: Smoke-test the built wheel
         run: |

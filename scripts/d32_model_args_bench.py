@@ -1,17 +1,17 @@
 """Closure-captured vs. argument-passed Problem through the numpyro potential (D32).
 
-``MarginalOrbitModel.model()`` used to close over its ``Problem``; the jitted numpyro
+``MarginalOrbitModel.model()`` formerly closed over its ``Problem``; the jitted numpyro
 potential then baked the problem's arrays into the HLO as constants, and XLA's
-compile-time folding of every θ-independent subgraph (the velocity-independent
-kernel-sandwich pre-pass above all — D29 measured it at ~9 GB un-batched at the design
-target) ran at compile time, against compile-time memory. D27 fixed this for
+compile-time folding of every θ-independent subgraph (chiefly the velocity-independent
+kernel-sandwich pre-pass, which D29 measured at ~9 GB un-batched at the design target)
+ran at compile time, against compile-time memory. D27 fixed this for
 ``MarginalOrbitModel.marginal`` by passing the problem as a jit argument; D32 threads
 the same contract through ``run_map`` / ``laplace_inverse_mass`` / ``run_nuts``.
 
-This script measures one ``value_and_grad(potential)`` — the graph L-BFGS and NUTS
-actually compile — in both regimes, on the m5 ladder's synthetic SB2 (50 epochs,
-p = 513). One mode per invocation: the peak-working-set counter is per-process and
-monotone, so the two regimes must not share a process.
+This script measures one ``value_and_grad(potential)``, the graph L-BFGS and NUTS
+compile, in both regimes, on the m5 ladder's synthetic SB2 (50 epochs, p = 513). One
+mode per invocation: the peak-working-set counter is per-process and monotone, so the
+two regimes must not share a process.
 
 Run:  python scripts/d32_model_args_bench.py --mode arg --row 0
       python scripts/d32_model_args_bench.py --mode closure --row 0
@@ -37,7 +37,7 @@ N_EP = 50
 ORBIT = ab.OrbitParams(period=11.3, t_peri=2.0, ecc=0.3, omega=0.8, k=(45.0, 70.0))
 ELL = np.array([0.6, 0.4])
 
-# (wave_lo, wave_hi, native_step): the scripts/m5_scale_bench.py ladder —
+# (wave_lo, wave_hi, native_step): the scripts/m5_scale_bench.py ladder,
 # ~31.7k, 74.3k, 135k, 203k model px at dv = 3 km/s.
 ROWS = [
     (4000.0, 5495.0, 0.114),

@@ -1,18 +1,31 @@
-"""The analytically-marginalized likelihood (Strategy A) and conditional spectra.
+"""The analytically marginalized likelihood (Strategy A) and the conditional spectra.
 
-Implements ``docs/math.md`` §3: with the component spectra marginalized in closed form,
+Implements ``docs/math.md`` §3. Conditional on the nonlinear parameters the model is
+linear-Gaussian in the stacked deviation spectra, so the spectra integrate out in closed
+form (Rasmussen & Williams 2006):
 
     log p(y | theta) = -1/2 [ z^T W z - b^T Lt^{-1} b ] - 1/2 log det(Lt)
                        + 1/2 log det(Lp) + 1/2 sum log(w/2pi)
 
-where ``Lt = Lp + A^T W A`` is the posterior precision of the stacked deviation
-spectra, ``b = A^T W z``, and both determinants come from block-tridiagonal Cholesky
-factorizations (``docs/math.md`` §4.2) assembled by exact comb probing of the
-matrix-free operators.
+where ``Lt = Lp + A^T W A`` is the posterior precision of the stacked deviation spectra,
+``Lp`` the prior precision, ``z`` the data with the offset term removed
+(``docs/math.md`` §3.1), and ``b = A^T W z``. Both determinants come from
+block-tridiagonal Cholesky factorizations (``docs/math.md`` §4.2). The band of ``Lt`` is
+assembled per epoch from its analytic structure by default (``docs/math.md`` §4.5, D28);
+exact comb probing of the matrix-free operators is retained as the reference path. The
+pointwise posterior variance of the spectra, and the selected inverse required by the
+closed-form gradient, come from the Takahashi recursion on the block factor (Takahashi
+et al. 1973).
 
 Component interleaving: the stacked vector uses index ``q * n_comp + i`` (pixel-major),
 which keeps the posterior precision banded with half-bandwidth
 ``n_comp * b_natural + n_comp - 1``.
+
+References
+----------
+Rasmussen, C. E. & Williams, C. K. I. 2006, Gaussian Processes for Machine Learning
+    (MIT Press)
+Takahashi, K., Fagan, J. & Chin, M.-S. 1973, in Proc. 8th PICA Conference, 63
 """
 
 from __future__ import annotations
@@ -58,34 +71,33 @@ def _unpack(v, n_comp: int, n_pix: int):
 
 @jax.custom_vjp
 def _solve_stage(bt: BlockTridiagonal, b_pad):
-    """Cholesky + solves with a closed-form reverse pass (``docs/math.md`` §3).
+    """Cholesky and solves with a closed-form reverse pass (``docs/math.md`` §3, §4.5).
 
-    Returns ``(logdet, quad, d_pad)`` for the posterior precision ``bt`` and
-    right-hand side ``b_pad``. The custom VJP replaces reverse-mode through the
-    Cholesky/solve scans with the analytic identities
+    Returns ``(logdet, quad, d_pad)`` for the posterior precision ``bt`` and right-hand
+    side ``b_pad``. The custom VJP replaces reverse mode through the Cholesky and solve
+    scans with the analytic identities
 
         d(logdet)/d(Lambda) = Sigma,      d(quad)/d(Lambda) = -d d^T,
         cotangent(d_pad) = g  ->  b_bar += Sigma g,  Lambda_bar += -(u d^T)|_band,
 
-    where only the *banded* part of ``Sigma`` is ever formed — the perturbation is
-    block-tridiagonal, so nothing else contributes — and it is contracted into the
+    where only the banded part of ``Sigma`` is formed (the perturbation is
+    block-tridiagonal, so no other entries contribute) and is contracted into the
     cotangent inside the Takahashi sweep that produces it
-    (:func:`albireo.solver.selected_inverse_cotangent`). This removes the stored
-    backward pass of both scans (memory ~ the factor itself) and costs about one
-    extra Cholesky-equivalent instead of two to three.
+    (:func:`albireo.solver.selected_inverse_cotangent`). This removes the stored backward
+    pass of both scans, whose memory is of the order of the factor itself, and costs
+    about one extra Cholesky-equivalent instead of two to three.
 
-    The Cholesky factor is deliberately *not* an output: a cotangent on it could
-    not be honoured by this rule (propagating it is exactly the reverse-mode pass
-    through the factorization that the rule exists to avoid), and returning it
-    would make gradients of any factor-derived quantity silently zero.
-    :attr:`MarginalResult.chol` therefore rebuilds it outside this boundary, where
-    plain autodiff applies.
+    The Cholesky factor is not an output. A cotangent on it could not be honoured by this
+    rule (propagating it is the reverse-mode pass through the factorization that the rule
+    avoids), and returning it would make gradients of any factor-derived quantity zero
+    without warning. :attr:`MarginalResult.chol` therefore rebuilds the factor outside
+    this boundary, where plain autodiff applies.
 
-    ``diag_bar`` is intentionally left unsymmetrized: ``BlockTridiagonal.diag[k]``
-    stores both triangles of a symmetric block, each read exactly once by the band
-    packing, so mirror entries receive the two halves of ``u d^T + d u^T``
-    separately and the assembled parameter gradient is the same. (The off-diagonal
-    blocks *are* stored once for two triangles, hence their factor of 2.)
+    ``diag_bar`` is left unsymmetrized: ``BlockTridiagonal.diag[k]`` stores both
+    triangles of a symmetric block, each read once by the band packing, so mirror entries
+    receive the two halves of ``u d^T + d u^T`` separately and the assembled parameter
+    gradient is the same. The off-diagonal blocks are stored once for two triangles,
+    hence their factor of 2.
     """
     chol = block_cholesky(bt)
     y = solve_lower(chol, b_pad)
@@ -95,11 +107,11 @@ def _solve_stage(bt: BlockTridiagonal, b_pad):
 
 
 def _solve_stage_fwd(bt, b_pad):
-    # Recompute inline rather than calling _solve_stage: the fwd trace must contain
-    # only plain operations, so that a second reverse differentiation (Hessians via
+    # Recompute inline rather than calling _solve_stage: the forward trace must contain
+    # only plain operations, so that a second reverse differentiation (Hessians by
     # jacrev-of-jacrev, as in laplace_inverse_mass) walks ordinary graphs instead of
-    # re-entering the custom boundary — where the chol cotangent is dropped by
-    # contract and second derivatives would silently lose the chol-mediated terms
+    # re-entering the custom boundary, where the chol cotangent is dropped by contract
+    # and second derivatives would lose the chol-mediated terms without warning
     # (measured 8e-3 relative before this change; equal to plain autodiff after).
     chol = block_cholesky(bt)
     y = solve_lower(chol, b_pad)
@@ -129,7 +141,19 @@ _solve_stage.defvjp(_solve_stage_fwd, _solve_stage_bwd)
 @jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True)
 class MarginalResult:
-    """Marginal log-likelihood plus everything needed to recover the spectra."""
+    """Marginal log-likelihood and the quantities needed to recover the spectra.
+
+    Attributes
+    ----------
+    log_likelihood
+        The marginal log-likelihood ``log p(y | theta)``.
+    d_hat
+        ``(n_comp, n_pix)`` posterior-mean deviation spectra.
+    precision
+        The interleaved, padded posterior precision ``Lt`` in block storage.
+    n_components, n_pixels
+        Dimensions of ``d_hat``.
+    """
 
     log_likelihood: jax.Array
     d_hat: jax.Array  # (n_comp, n_pix) posterior-mean deviation spectra
@@ -141,19 +165,20 @@ class MarginalResult:
     def chol(self) -> BlockCholesky:
         """Cholesky factor of :attr:`precision`, built on demand.
 
-        The likelihood's own factorization lives inside a ``custom_vjp`` whose
-        reverse rule cannot carry a cotangent on the factor, so returning that one
-        would make gradients of anything derived from it (spectral uncertainties,
-        draws) silently zero. Refactorizing here keeps those paths on plain
-        autodiff — at the price of one extra block Cholesky, paid only by callers
-        that actually want the factor. The sampling hot path reads
-        :attr:`log_likelihood` and :attr:`d_hat` and never triggers it.
+        The likelihood's own factorization is computed inside a ``custom_vjp`` whose
+        reverse rule cannot carry a cotangent on the factor, so returning that factor
+        would make gradients of anything derived from it (spectral uncertainties, draws)
+        zero without warning. Refactorizing here keeps those paths on plain autodiff, at
+        the cost of one extra block Cholesky, paid only by callers that use the factor.
+        The sampling path reads :attr:`log_likelihood` and :attr:`d_hat` and never
+        triggers it.
 
         Raises
         ------
         ValueError
-            If the result carries no precision, which happens only for one read back by
-            :func:`albireo.results.load_fit` and saved without ``precision=True``.
+            If the result carries no precision, which happens only for a result read
+            back by :func:`albireo.results.load_fit` from a file saved without
+            ``precision=True``.
         """
         if self.precision is None:
             raise ValueError(
@@ -189,39 +214,57 @@ def marginal_loglikelihood(
     validate: bool = False,
     assembly: str | None = None,
 ) -> MarginalResult:
-    """Evaluate the marginal log-likelihood for a fixed-parameter :class:`Problem`.
+    """Evaluate the marginal log-likelihood of a fixed-parameter :class:`Problem`.
+
+    Implements the marginal log-likelihood of ``docs/math.md`` §3.1 and returns with it
+    the posterior-mean deviation spectra and the posterior precision from which the
+    conditional spectra are recovered (§3.3).
 
     Parameters
     ----------
     problem
         Output of :func:`albireo.forward.build_problem`.
     prior
-        Spectral prior with one (tau, eta) pair per component — including the
-        telluric and nebular components when they are enabled, in that trailing
-        order. Per-pixel profiles, if present, must match the model grid.
+        Spectral prior with one ``(tau, eta)`` pair per component, including the
+        telluric and nebular components when they are enabled, in that trailing order.
+        Per-pixel profiles, if present, must match the model grid.
     block_size
-        Solver block size; default = the required half-bandwidth.
+        Solver block size; the default is the required half-bandwidth.
     half_bandwidth
         Static override for the per-component half-bandwidth ``b_natural``. Required
-        under ``jax.jit`` with traced shifts (where :attr:`Problem.natural_half_bandwidth`
-        cannot be computed); use :meth:`Problem.half_bandwidth_bound`. Probing with any
-        value >= the true bandwidth is exact, so an overestimate costs time, not
-        accuracy; an *underestimate* silently corrupts the result — hence ``validate``.
+        under ``jax.jit`` with traced shifts, where :attr:`Problem.natural_half_bandwidth`
+        cannot be computed; use :meth:`Problem.half_bandwidth_bound`. Assembly with any
+        value at or above the true bandwidth is exact, so an overestimate costs time but
+        not accuracy. An underestimate corrupts the result without raising an error; see
+        ``validate``.
     validate
-        If True, verify the assembled matrix reproduces the matrix-free operator on a
-        random vector (guards against a bandwidth underestimate and any assembly
-        defect) — raises AssertionError on mismatch. Cheap relative to assembly;
-        enabled in tests. Not jit-compatible.
+        If True, verify that the assembled matrix reproduces the matrix-free operator on
+        a random vector, which guards against a bandwidth underestimate and any assembly
+        defect; raises ``AssertionError`` on mismatch. Cheap relative to assembly and
+        enabled in the tests. Not jit-compatible.
     assembly
-        ``None`` (default) selects ``"band"`` — direct per-epoch band assembly
-        (:func:`albireo.assembly.band_block_tridiagonal`), O(band width) work per
-        epoch instead of O(bandwidth) operator applications, >10x faster at survey
-        bandwidths, identical result up to floating-point summation order. Correlated
-        (AR(1)) noise runs on the same path since D35: the chain's cross-row terms
-        enter through static link pair tables
-        (:func:`albireo.operators.rebin_link_pair_tables`). ``"probe"`` — the
-        original global comb probing — is retained as the reference implementation
-        and the ``validate`` oracle's independent construction.
+        ``None`` (default) selects ``"band"``: direct per-epoch band assembly
+        (:func:`albireo.assembly.band_block_tridiagonal`, ``docs/math.md`` §4.5, D28),
+        O(band width) work per epoch instead of O(bandwidth) operator applications, more
+        than 10x faster at survey bandwidths, with an identical result up to
+        floating-point summation order. Correlated AR(1) noise runs on the same path
+        (D35): the chain's cross-row terms enter through static link pair tables
+        (:func:`albireo.operators.rebin_link_pair_tables`). ``"probe"`` selects global
+        comb probing, retained as the reference implementation and as the independent
+        construction behind the ``validate`` oracle.
+
+    Returns
+    -------
+    MarginalResult
+        Log-likelihood, posterior-mean spectra and posterior precision.
+
+    Raises
+    ------
+    ValueError
+        If the prior's component count or profile length does not match the problem,
+        or ``assembly`` is neither ``"band"`` nor ``"probe"``.
+    AssertionError
+        If ``validate`` is True and the assembled matrix disagrees with the operator.
     """
     n_comp, n_pix = problem.n_components, problem.grid.n
     if prior.n_components != n_comp:
@@ -231,13 +274,13 @@ def marginal_loglikelihood(
         raise ValueError(
             f"prior has {prior.n_components} components, problem has {n_comp}"
             + (f" (including the {' and '.join(extra)} component(s))" if extra else "")
-            + " — one (tau, eta) pair per model component, in the order stellar,"
+            + ": one (tau, eta) pair per model component, in the order stellar,"
             " telluric, nebular"
         )
     if prior.n_pixels is not None and prior.n_pixels != n_pix:
         raise ValueError(
             f"prior profiles cover {prior.n_pixels} pixels, the model grid has {n_pix}. "
-            "Per-pixel profiles are tied to the grid they were built on — rebuild with "
+            "Per-pixel profiles are tied to the grid they were built on: rebuild with "
             "albireo.priors.window_profile(grid.wave, ...)."
         )
     if assembly is None:
@@ -254,10 +297,10 @@ def marginal_loglikelihood(
     def prior_matvec(v):
         return _pack(prior.apply(_unpack(v, n_comp, n_pix)), n_comp, n_pix)
 
-    # The prior's bandwidth is tiny (2 per component) and it is block diagonal over
-    # components, so its determinant comes from a scalar banded recursion rather than
-    # a block factorization (assembly.prior_logdet). The probe path keeps the blocked
-    # route as its reference.
+    # The prior's bandwidth is 2 per component and it is block diagonal over components,
+    # so its determinant comes from a scalar banded recursion rather than a block
+    # factorization (assembly.prior_logdet). The probe path keeps the blocked route as
+    # its reference.
     prior_block = max(2 * n_comp, 64)
     if assembly == "band":
         bt = band_block_tridiagonal(problem, prior, b_nat, block_size)
@@ -279,7 +322,7 @@ def marginal_loglikelihood(
             f"assembled matrix disagrees with the matrix-free operator (rel err "
             f"{float(err):.2e}) using assembly={assembly!r}. Most likely an "
             "underestimated half_bandwidth (use Problem.half_bandwidth_bound); "
-            "otherwise an assembly defect — note that the operator is symmetric, so "
+            "otherwise an assembly defect: note that the operator is symmetric, so "
             "checking the assembled matrix against its own transpose separates the two."
         )
 
@@ -304,8 +347,25 @@ def marginal_loglikelihood(
 def draw_spectra(result: MarginalResult, key, num_draws: int):
     """Draw conditional posterior spectra, shape ``(num_draws, n_comp, n_pix)``.
 
-    Draws are ``d_hat + L^{-T} z`` with standard-normal ``z`` (``docs/math.md`` §3.3);
-    pad coordinates are independent standard normals and are sliced away.
+    Draws are ``d_hat + L^{-T} z`` with standard-normal ``z`` (``docs/math.md`` §3.3),
+    where ``L`` is the block Cholesky factor of the posterior precision. Pad coordinates
+    are independent standard normals and are sliced away. The draws are conditional on
+    the parameters of ``result``; :func:`albireo.inference.posterior_spectra` mixes them
+    over the parameter posterior.
+
+    Parameters
+    ----------
+    result
+        A :class:`MarginalResult` carrying its posterior precision.
+    key
+        JAX PRNG key.
+    num_draws
+        Number of draws.
+
+    Returns
+    -------
+    jax.Array
+        ``(num_draws, n_comp, n_pix)`` deviation spectra.
     """
     n = result.n_components * result.n_pixels
     z = jax.random.normal(key, (num_draws, result.n_padded))
@@ -315,6 +375,17 @@ def draw_spectra(result: MarginalResult, key, num_draws: int):
 
 
 def spectra_std(result: MarginalResult):
-    """Pointwise posterior standard deviation, shape ``(n_comp, n_pix)`` (Takahashi)."""
+    """Pointwise posterior standard deviation of the spectra, shape ``(n_comp, n_pix)``.
+
+    The variances are the diagonal of the posterior covariance ``Lt^{-1}``, computed by
+    the Takahashi selected-inverse recursion on the block Cholesky factor
+    (:func:`albireo.solver.selected_inverse_diag`; ``docs/math.md`` §3.3) without a
+    dense inversion. This is the uncertainty conditional on the parameters of
+    ``result``.
+
+    References
+    ----------
+    Takahashi, K., Fagan, J. & Chin, M.-S. 1973, in Proc. 8th PICA Conference, 63
+    """
     var = selected_inverse_diag(result.chol)
     return jnp.sqrt(_unpack(var, result.n_components, result.n_pixels))

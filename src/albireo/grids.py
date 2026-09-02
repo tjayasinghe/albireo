@@ -1,8 +1,17 @@
-"""Log-wavelength grids and the Doppler shift ↔ log-shift mapping.
+"""Log-wavelength grids and the mapping between radial velocity and log-wavelength shift.
 
-The model grid is uniform in ``x = ln(lambda)``, so that a Doppler shift is a pure
-translation in ``x`` (see ``docs/math.md`` §1.1). All velocity/pixel conversions go
-through :func:`log_doppler_shift`, which is the single place the Doppler convention lives.
+The model grid is uniform in ``x = ln(lambda)``, so a Doppler shift is a pure translation in
+``x`` (``docs/math.md`` §1.1). All velocity and pixel conversions go through
+:func:`log_doppler_shift`, which is the single place the Doppler convention is defined.
+
+The module also provides the IAU-adopted air/vacuum conversions, :func:`vacuum_to_air` and
+:func:`air_to_vacuum`.
+
+References
+----------
+Edlén, B. 1966, Metrologia, 2, 71
+Birch, K. P. & Downs, M. J. 1994, Metrologia, 31, 315
+Morton, D. C. 2000, ApJS, 130, 403
 """
 
 from __future__ import annotations
@@ -30,10 +39,10 @@ def log_doppler_shift(v_kms, *, relativistic: bool = True):
     v_kms
         Radial velocity in km/s. May be a scalar or array; differentiable under JAX.
     relativistic
-        If True (default), use the exact radial-Doppler mapping ``xi = artanh(v/c)``,
-        which is exactly antisymmetric — shifts compose and invert exactly, and
-        barycentric corrections are exact additive compositions in ``x``. If False,
-        use the classical ``xi = ln(1 + v/c)`` (wrong by ~0.6 km/s at 600 km/s).
+        If True (default), use the exact radial-Doppler mapping ``xi = artanh(v/c)``. It is
+        antisymmetric, so shifts compose and invert exactly and barycentric corrections are
+        exact additive compositions in ``x``. If False, use the classical
+        ``xi = ln(1 + v/c)`` (wrong by ~0.6 km/s at 600 km/s).
 
     Returns
     -------
@@ -47,11 +56,11 @@ def log_doppler_shift(v_kms, *, relativistic: bool = True):
 
 
 def _iau_n_minus_one(sigma2):
-    """Edlen (1966) / Birch & Downs (1994) refractivity, as adopted by the IAU.
+    """Edlén (1966) and Birch & Downs (1994) refractivity, as adopted by the IAU.
 
     ``sigma2`` is the squared vacuum wavenumber in um^-2. This is the form Morton (2000)
-    tabulates and the one SDSS, VALD and the NIST tables use, so line lists converted
-    with it agree to well below a m/s.
+    tabulates and the one SDSS, VALD and the NIST tables use, so line lists converted with it
+    agree to well below 1 m/s.
     """
     return 1e-8 * (8342.13 + 2406030.0 / (130.0 - sigma2) + 15997.0 / (38.9 - sigma2))
 
@@ -60,16 +69,15 @@ def vacuum_to_air(wave_vacuum):
     """Convert vacuum wavelengths [Angstrom] to standard air.
 
     Air wavelengths are what most optical spectrographs report and what most optical line
-    lists are tabulated in; vacuum is what the UV, the IR, ESPRESSO and Gaia RVS use. The
-    difference is 0.87 Angstrom at 3000 A rising to 2.74 A at 10000 A — but the number
-    that matters here is the *velocity*, which is nearly constant at **83 km/s** across
-    the whole optical (87.4 at 3000 A, 82.8 at Halpha, 82.2 at 10000 A). That is the same
-    order as the orbital semi-amplitudes albireo exists to measure, so mixing the two
-    scales is not a rounding error but a first-order mistake, and it does not average out.
+    lists are tabulated in; vacuum is used in the UV and the IR and by ESPRESSO and Gaia RVS.
+    The difference is 0.87 Angstrom at 3000 A, rising to 2.74 A at 10000 A. Expressed as a
+    velocity it is nearly constant at 83 km/s across the optical (87.4 at 3000 A, 82.8 at
+    Halpha, 82.2 at 10000 A), the same order as the orbital semi-amplitudes albireo measures,
+    and it does not average out over epochs.
 
-    Uses the IAU-adopted Edlen (1966) refractivity in the Birch & Downs (1994)
-    parameterization, evaluated at the *vacuum* wavenumber, which is the convention
-    Morton (2000) tabulates and therefore what published air line lists agree with.
+    The conversion uses the IAU-adopted Edlén (1966) refractivity in the Birch & Downs (1994)
+    parameterization, evaluated at the vacuum wavenumber. That is the convention Morton (2000)
+    tabulates, and therefore the one published air line lists agree with.
 
     Parameters
     ----------
@@ -85,6 +93,12 @@ def vacuum_to_air(wave_vacuum):
     --------
     air_to_vacuum : the inverse.
     albireo.data.EpochData : declares which scale an epoch is on.
+
+    References
+    ----------
+    Edlén, B. 1966, Metrologia, 2, 71
+    Birch, K. P. & Downs, M. J. 1994, Metrologia, 31, 315
+    Morton, D. C. 2000, ApJS, 130, 403
     """
     wave = jnp.asarray(wave_vacuum, dtype=float)
     sigma2 = (1e4 / wave) ** 2
@@ -92,13 +106,33 @@ def vacuum_to_air(wave_vacuum):
 
 
 def air_to_vacuum(wave_air):
-    """Convert standard-air wavelengths [Angstrom] to vacuum — the inverse of :func:`vacuum_to_air`.
+    """Convert standard-air wavelengths [Angstrom] to vacuum, the inverse of :func:`vacuum_to_air`.
 
-    The refractivity is defined at the vacuum wavenumber, so inverting it is not a closed
-    form. Two fixed-point iterations are used, which is not a compromise: the refractivity
-    changes by ~1e-8 over the 0.03% the wavelength moves, so the first iteration is already
-    correct to ~1e-11 Angstrom and the second is there to make the round trip exact to
-    float64. Verified in the suite to 1e-10 Angstrom over 3000-10000 Angstrom.
+    The refractivity is defined at the vacuum wavenumber, so the inverse has no closed form.
+    Two fixed-point iterations are used. The refractivity changes by ~1e-8 over the 0.03% by
+    which the wavelength moves, so the first iteration is already correct to ~1e-11 Angstrom
+    and the second makes the round trip exact to float64. The test suite verifies the round
+    trip to 1e-10 Angstrom over 3000-10000 Angstrom.
+
+    Parameters
+    ----------
+    wave_air
+        Standard-air wavelengths in Angstrom. Any shape; differentiable under JAX.
+
+    Returns
+    -------
+    jax.Array
+        Vacuum wavelengths, same shape.
+
+    See Also
+    --------
+    vacuum_to_air : the forward conversion.
+
+    References
+    ----------
+    Edlén, B. 1966, Metrologia, 2, 71
+    Birch, K. P. & Downs, M. J. 1994, Metrologia, 31, 315
+    Morton, D. C. 2000, ApJS, 130, 403
     """
     wave = jnp.asarray(wave_air, dtype=float)
     vac = wave * (1.0 + _iau_n_minus_one((1e4 / wave) ** 2))
@@ -164,35 +198,28 @@ class LogGrid:
         extra_pixels: int = 4,
         relativistic: bool = True,
     ) -> LogGrid:
-        """Build a model grid that covers a dataset *with the margin the solver needs*.
+        """Build a model grid covering a dataset, with the margin the solver requires.
 
-        The model grid must be wider than the data, and by a specific amount. Two effects
-        set it:
+        The model grid must be wider than the data by an amount set by two effects, plus a
+        few pixels of slack:
 
-        - **Velocity.** A component shifted by ``v`` maps model pixel ``q`` onto data at
-          ``q + xi(v)/dx``, so the grid has to extend beyond the data by the largest shift
-          any component will ever take — the orbital semi-amplitudes, plus the barycentric
-          motion when the data are topocentric or a telluric component is in play.
-          Without it the shifted model runs off the end of the grid and the fit quietly
-          loses the flux there.
-        - **The LSF.** Convolution mixes a further ``truncate * sigma`` pixels in from each
-          side. This one is sharper than it sounds: a margin smaller than the kernel
-          radius was the trigger for a real defect in albireo's band assembly, in which
-          the convolution wrote entries at columns off the model grid and the shift
-          sandwich read them back (fixed, and now guarded — but the margin is what keeps
-          the situation from arising).
-
-        Together with a few pixels of slack, that is the whole rule, and this method
-        applies it so callers do not have to rediscover it.
+        - Velocity. A component shifted by ``v`` maps model pixel ``q`` onto data at
+          ``q + xi(v)/dx``, so the grid must extend beyond the data by the largest shift any
+          component takes: the orbital semi-amplitudes, plus the barycentric motion when the
+          data are topocentric or a telluric component is present. Otherwise the shifted
+          model runs off the end of the grid and the flux there is lost without a warning.
+        - The LSF. Convolution mixes a further ``truncate * sigma`` pixels in from each side.
+          A margin smaller than the kernel radius lets the convolution address columns off
+          the model grid, which the shift operators would then read back.
 
         Parameters
         ----------
         dataset : Dataset
             Epochs to cover; only the wavelength extremes are used.
         dv_kms : float
-            Grid pixel width as a velocity. Make it no coarser than the finest native
-            sampling in the data — for a spectrograph delivering a constant *wavelength*
-            step, that is at the blue end.
+            Grid pixel width as a velocity. It should be no coarser than the finest native
+            sampling in the data, which for a spectrograph delivering a constant wavelength
+            step is at the blue end.
         v_margin_kms : float
             Largest velocity by which any component will be shifted relative to the data
             frame. For an SB2 in barycentric-frame data: ``max(K_i) * (1 + e)``, with
@@ -259,23 +286,21 @@ class LogGrid:
         return C_KMS * math.expm1(self.dx)
 
     def velocity_to_pixels(self, v_kms):
-        """Shift in *pixels* corresponding to radial velocity ``v_kms``.
+        """Shift in pixels corresponding to radial velocity ``v_kms``.
 
-        Differentiable under JAX; this is what feeds the shift operators.
+        This is the quantity consumed by the shift operators. Differentiable under JAX.
         """
         return log_doppler_shift(v_kms, relativistic=self.relativistic) / self.dx
 
     def pixels_to_velocity(self, pixels):
-        """Radial velocity [km/s] corresponding to a shift of ``pixels`` — the exact inverse.
+        """Radial velocity [km/s] corresponding to a shift of ``pixels``, the exact inverse.
 
         With the default relativistic mapping ``xi = artanh(v/c)`` the inverse is
-        ``v = c tanh(xi)``, and because ``xi`` turns relativistic velocity addition into
-        ordinary addition, *differences* of pixel shifts come back as the correct
-        relative velocities rather than as approximations of them. That is what makes a
-        per-epoch velocity table expressible as an exactly-identified quantity
-        (:func:`albireo.inference.relative_velocities`): the arbitrary zero point is
-        removed by subtraction in pixel space, and this maps the remainder back to km/s
-        with nothing lost on the way.
+        ``v = c tanh(xi)``. Because ``xi`` turns relativistic velocity addition into ordinary
+        addition, differences of pixel shifts map to exact relative velocities rather than to
+        approximations of them. A per-epoch velocity table is therefore exactly identified
+        (:func:`albireo.inference.relative_velocities`): the arbitrary zero point is removed
+        by subtraction in pixel space, and this method maps the remainder back to km/s.
 
         Differentiable under JAX.
         """

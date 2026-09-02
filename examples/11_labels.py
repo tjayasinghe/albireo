@@ -1,45 +1,41 @@
-"""From a disentangled component to a usable RV template (``docs/math.md`` §9)
+"""Fit stellar labels to disentangled components for template selection (``docs/math.md`` §9).
 
-Disentangling gives you two spectra. It does not tell you *which* synthetic template to
-cross-correlate the individual epochs against — and that choice is where the next tool in
-the pipeline starts. This example closes that gap: simulate an SB2, disentangle it,
-recover Teff, log g, [M/H] and v sin i for each component, and check the answers against
-the injected truth.
+Disentangling returns component spectra but not the synthetic template each should be
+cross-correlated against. This example simulates an SB2, disentangles it, recovers Teff,
+log g, [M/H] and v sin i for each component, and checks the results against the injected
+values.
 
-It runs offline. The synthetic grid here is a toy built in this file, because the real
-libraries (BOSZ, POLLUX) are hundreds of megabytes and this has to work in CI and on a
-laptop with no network. Everything above the grid — the interpolation, the broadening, the
-dilution model, the nuisance, the optimizer, the uncertainty story — is the production code
-path, unmodified.
+It runs offline. The synthetic grid is a toy built in this file, because the published
+libraries (BOSZ, POLLUX) are hundreds of megabytes and the example must run in CI and
+without a network. Everything above the grid (interpolation, broadening, the dilution
+model, the nuisance, the optimizer, the two error estimates) is the production code path.
 
-Three things to watch in the output, because each is a place this is easy to get wrong.
+Three results to check in the output.
 
-1. **The wrong assumed light fraction goes into the dilution, not the temperature.** The
-   disentangler is deliberately given light fractions that are wrong by a factor of ~1.3.
-   Because the likelihood only ever saw the products ``l_i d_i`` (``docs/math.md`` §5.2),
-   that error rescales every line depth and is *indistinguishable* from a temperature
-   error — unless the fit is given somewhere else to put it. The run compares a joint
-   radius-ratio fit against one with the dilution frozen, and the temperatures move.
+1. A wrong assumed light fraction is absorbed by the dilution, not by the temperature. The
+   disentangler is given light fractions that are wrong by a factor of about 1.3. The
+   likelihood sees only the products ``l_i d_i`` (``docs/math.md`` §5.2), so the error
+   rescales every line depth and is indistinguishable from a temperature error unless the
+   fit has a dilution parameter to absorb it. The run compares a joint radius-ratio fit
+   against one with the dilution frozen; the temperatures differ.
 
-2. **The k = 0 zero point is fitted and reported, not absorbed.** Each component's constant
-   offset is in the null space of the disentangling problem (§5.1). The additive Chebyshev
-   nuisance catches it; the fitted value is printed, because a large one is a statement
-   about the disentangling and not a nuisance to be hidden.
+2. The k = 0 zero point is fitted and reported. Each component's constant offset lies in
+   the null space of the disentangling problem (§5.1). The additive Chebyshev nuisance
+   absorbs it, and the fitted value is printed, because a large value is a statement about
+   the disentangling.
 
-3. **Two error bars, and the ratio between them.** The formal Laplace error is the
-   curvature at the optimum, which is the wrong question on correlated residuals — the
-   literature finds it optimistic by five to ten times. The honest number comes from
-   refitting the labels once per joint posterior draw of the component spectra. Both are
-   printed side by side.
+3. Two error bars and the ratio between them. The formal Laplace error is the curvature at
+   the optimum, which underestimates the error on correlated residuals; the literature finds
+   it optimistic by five to ten times. The second estimate refits the labels once per joint
+   posterior draw of the component spectra. Both are printed side by side.
 
-The accuracy bar is the one in §9.6, and it is looser than instinct suggests: Teff to
-2-3%, log g and [M/H] to 0.15 dex, v sin i to 10%. Past that, the epoch RVs stop caring
-which template you picked. Labels from this mode are template coordinates, not an
-abundance table.
+The accuracy target is that of §9.6: Teff to 2-3%, log g and [M/H] to 0.15 dex, v sin i to
+10%. Beyond that, the epoch velocities are insensitive to the choice of template. Labels
+from this mode are template coordinates, not an abundance table.
 
 Environment
 -----------
-``ALBIREO_EXAMPLE_FAST=1`` trims the draw count and the optimizer budget for CI.
+``ALBIREO_EXAMPLE_FAST=1`` reduces the draw count and the optimizer budget for CI.
 """
 
 from __future__ import annotations
@@ -53,14 +49,14 @@ import albireo as ab
 
 FAST = bool(os.environ.get("ALBIREO_EXAMPLE_FAST"))
 
-# The injected system: an F-ish primary and a cooler, faster-rotating secondary.
+# The injected system: a 5180 K primary and a cooler, faster-rotating secondary.
 TRUTH = {
     "A": {"teff": 5180.0, "logg": 4.05, "mh": -0.15, "vsini": 11.0},
     "B": {"teff": 4460.0, "logg": 4.55, "mh": -0.15, "vsini": 27.0},
 }
 TRUE_LIGHT = np.array([0.62, 0.38])
-# What the disentangling was told. Wrong on purpose — this is the normal situation, since
-# a light ratio without eclipses is an assumption, and the point is that it is recoverable.
+# The light fractions given to the disentangling. They are wrong by design: without eclipses
+# a light ratio is an assumption, and the example shows that the error is recoverable.
 ASSUMED_LIGHT = np.array([0.72, 0.28])
 
 WAVE_MIN, WAVE_MAX = 5150.0, 5250.0
@@ -75,11 +71,11 @@ MH_AXIS = np.arange(-1.0, 0.51, 0.25)
 def toy_spectrum(teff, logg, mh, wave):
     """A stand-in for a synthetic spectrum, with each label driving its own lines.
 
-    That last part matters more than it looks. If two labels move the same lines the same
-    way, they are exactly interchangeable, and a fit will drive the chi-square to zero along
-    a curve through label space while "failing" to recover the injected values. Here Teff,
-    log g and [M/H] each own a line, so the map from labels to spectrum is invertible — and
-    the recovery below is a statement about the code rather than about the fixture.
+    If two labels moved the same lines in the same way they would be interchangeable, and a
+    fit would drive the chi-square to zero along a curve through label space without
+    recovering the injected values. Here Teff, log g and [M/H] each control their own lines,
+    so the map from labels to spectrum is invertible and the recovery below tests the code
+    rather than the fixture.
     """
     t = (teff - 4800.0) / 600.0
     g = logg - 4.0
@@ -95,7 +91,7 @@ def toy_spectrum(teff, logg, mh, wave):
     for center, depth in lines:
         flux = flux - depth * np.exp(-0.5 * ((wave - center) / 0.25) ** 2)
     # A real grid's continuum falls with Teff across the optical; that wavelength
-    # dependence is exactly what makes the light ratio measurable.
+    # dependence is what makes the light ratio measurable.
     log_continuum = 30.0 + 4.0 * np.log(teff / 5000.0) - 0.025 * (wave - wave[0]) / 100.0
     return flux, log_continuum
 
@@ -117,9 +113,10 @@ def build_library():
         normalized=np.asarray(normalized),
         log_continuum=np.asarray(continua),
         wave=wave,
-        # Required, never defaulted: air and vacuum differ by ~83 km/s, and the upstream
-        # documentation is not reliable (BOSZ flipped convention between 2017 and 2024
-        # under one name). A real library declares this after `line_core_medium` measures it.
+        # Required, with no default: air and vacuum differ by ~83 km/s, and the upstream
+        # documentation is not reliable (BOSZ changed convention between 2017 and 2024
+        # under one name). For a real library, `line_core_medium` measures it before it is
+        # declared.
         medium="air",
         meta={"grid": "toy (examples/11_labels.py)", "vmicro": "n/a", "citation": "none"},
     )
@@ -134,8 +131,8 @@ def inject(library, grid):
         deviation = np.asarray(normalized) - 1.0
         kernel = np.asarray(ab.rotational_kernel(labels["vsini"] / grid.dv_kms))
         broadened = np.convolve(deviation, kernel, mode="same")
-        # What the disentangler recovers is (w / l0) * t: the true light fraction over the
-        # assumed one (math.md §9.1). This is the whole reason the ratio is recoverable.
+        # The disentangler recovers (w / l0) * t: the true light fraction over the assumed
+        # one (math.md §9.1). This scaling is what makes the ratio recoverable.
         rows.append(broadened * TRUE_LIGHT[i] / ASSUMED_LIGHT[i])
     rows = np.stack(rows)
     return rows + np.random.default_rng(20260827).normal(0.0, NOISE, rows.shape)
@@ -221,7 +218,7 @@ def main():
         0.0, NOISE, (8 if FAST else 24, *rows.shape)
     )
     propagated = ab.refit_draws(tied, draws, max_steps=40)
-    print("\nFormal error against the honest one:")
+    print("\nFormal error against the draws spread:")
     formal, spread = propagated.errors("laplace"), propagated.errors("draws")
     for name in propagated.labels:
         ratio = spread[name]["teff"] / max(formal[name]["teff"], 1e-12)
@@ -241,7 +238,7 @@ def main():
         assert abs(got["logg"] - truth["logg"]) < 0.15, f"{name}: log g outside 0.15 dex"
         assert abs(got["mh"] - truth["mh"]) < 0.15, f"{name}: [M/H] outside 0.15 dex"
         assert abs(got["vsini"] - truth["vsini"]) < 0.1 * truth["vsini"], f"{name}: v sin i off"
-        # the dilution model has to beat the frozen one on the very error it exists for
+        # the dilution model must do at least as well as the frozen one on the error it absorbs
         assert abs(got["teff"] - truth["teff"]) <= abs(
             rigid.labels[name]["teff"] - truth["teff"]
         ), f"{name}: freezing the dilution should not have helped"

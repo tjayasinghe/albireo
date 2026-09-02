@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it using the metadata from this file."
 title: albireo
-abstract: "GPU-accelerated Bayesian spectral disentangling of double- and multiple-lined spectroscopic binaries. albireo jointly infers the orbital elements and the individual component spectra from a time series of composite spectra, marginalizing the component spectra analytically so that only the low-dimensional orbit is sampled, and reporting honest uncertainties on both."
+abstract: "GPU-accelerated Bayesian spectral disentangling of double- and multiple-lined spectroscopic binaries. albireo jointly infers the orbital elements and the individual component spectra from a time series of composite spectra, marginalizing the component spectra analytically so that only the low-dimensional orbit is sampled, and reporting posterior uncertainties on both."
 type: software
 authors:
   - family-names: Jayasinghe

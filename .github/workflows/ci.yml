@@ -1,27 +1,27 @@
 name: CI
 
-# The routine loop: one job, one runner, one Python. It exists to catch the things that
-# break on every commit — a lint slip, a broken import, a failing fast test — and it is
-# deliberately *not* the whole test plan. The matrix, the acceptance gates and the example
-# scripts live in `full.yml`, which is run on demand.
+# The routine loop: one job, one runner, one Python. It catches the failures that can occur
+# on every commit: a lint slip, a broken import, a failing fast test. It is not the whole
+# test plan. The matrix, the acceptance gates and the example scripts live in `full.yml`,
+# which is run on demand.
 #
 # The reason is billing. Actions minutes are free and unlimited on public repositories, but
 # metered on private ones (2,000/month on the free tier), where Windows runners bill at 2x
 # and macOS at 10x. The previous shape of this file was eight jobs including a four-way
-# matrix — about 120 billed minutes per push, or sixteen pushes a month. This is one job,
+# matrix, about 120 billed minutes per push, or sixteen pushes a month. This is one job,
 # on Linux, at about a seventh of that.
 #
-# Linux specifically, because the developer works on Windows: local runs already are the
-# Windows signal, and what CI adds is the platform nobody is testing by hand — which is
-# also the one most users will install on.
+# Linux specifically, because development happens on Windows: local runs already supply the
+# Windows signal, so CI covers the platform that is not tested by hand, which is also the
+# one most users will install on.
 
 on:
   push:
     branches: [main]
     # A README or docs-only edit cannot break the test suite, and the Docs workflow still
-    # runs on these to catch a broken link or an unresolvable docstring reference. Note
-    # for later: if `check` ever becomes a required status check, a skipped run counts as
-    # pending, so branch protection and this filter need deciding together.
+    # runs on these to catch a broken link or an unresolvable docstring reference. If
+    # `check` ever becomes a required status check, a skipped run counts as pending, so
+    # branch protection and this filter need deciding together.
     paths-ignore: ["**.md", "docs/**", "paper/**"]
   pull_request:
     branches: [main]
@@ -36,21 +36,20 @@ jobs:
   check:
     name: Lint, guards, fast tests
     runs-on: ubuntu-latest
-    # The cap is for hangs, so it has to sit well clear of the real thing. The fast suite
-    # alone measures 12-16 minutes on the development machine, and this job also pays for
-    # two cold `uv pip install` runs (the second venv for the bare-install guard) and an
+    # The cap guards against hangs, so it sits well clear of the real runtime. The fast
+    # suite alone measures 12-16 minutes on the development machine, and this job also pays
+    # for two cold `uv pip install` runs (the second venv for the bare-install guard) and an
     # uncached mypy pass, on a 4-vCPU runner that is slower per core. 25 was inside that
-    # envelope, and a timeout kill reports no test output at all — the one failure mode
-    # that costs a whole debugging cycle to read.
+    # envelope, and a timeout kill reports no test output at all.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
 
-      # Pinned to a point release on purpose. astral-sh/setup-uv publishes floating
-      # major-version tags only up to `v7` — there is no `v8`, `v9` or `v10` ref of any
-      # kind — and an unresolvable `uses:` fails the job during "Set up job", before a
-      # single step runs and with no useful log. Bump this deliberately; do not "simplify"
-      # it to a major alias that does not exist.
+      # Pinned to a point release. astral-sh/setup-uv publishes floating major-version tags
+      # only up to `v7` (there is no `v8`, `v9` or `v10` ref of any kind), and an
+      # unresolvable `uses:` fails the job during "Set up job", before a single step runs
+      # and with no useful log. Bump this pin explicitly rather than replacing it with a
+      # major alias that does not exist.
       - name: Install uv
         uses: astral-sh/setup-uv@v10.0.1
         with:
@@ -64,7 +63,7 @@ jobs:
           uv venv --python 3.13
           uv pip install -e ".[dev]"
 
-      # Lint first: it is seconds, and a formatting failure should not wait behind ten
+      # Lint first: it takes seconds, and a formatting failure should not wait behind ten
       # minutes of tests to be reported.
       - name: Ruff
         run: |
@@ -78,12 +77,12 @@ jobs:
         continue-on-error: true
         run: uv run --no-sync mypy src/albireo
 
-      # A second environment with *no* extras, so astropy and matplotlib are absent. This
-      # is what proves the optional-dependency guards are real: `import albireo` must work,
-      # and the optional surfaces must raise an actionable error naming the extra rather
-      # than an ImportError from somewhere deep inside a figure or a FITS writer. It is a
-      # separate venv but not a separate job — the checkout and the uv setup are already
-      # paid for here.
+      # A second environment with no extras, so astropy and matplotlib are absent. This
+      # checks that the optional-dependency guards hold: `import albireo` must work, and
+      # the optional surfaces must raise an actionable error naming the extra rather than
+      # an ImportError from somewhere inside a figure or a FITS writer. It is a separate
+      # venv but not a separate job, since the checkout and the uv setup are already paid
+      # for here.
       - name: Bare install (no extras)
         run: |
           uv venv --python 3.13 /tmp/bare
@@ -97,7 +96,7 @@ jobs:
           import albireo as ab
           print("albireo", ab.__version__)
 
-          # The quickstart's first line, on a bare install. This is also what proves the
+          # The quickstart's first line, on a bare install. This also checks that the
           # packaged .npz made it into the distribution.
           dataset = ab.load_example()
           assert len(list(dataset)) == 12, dataset
@@ -116,7 +115,7 @@ jobs:
               else:
                   raise AssertionError(f"expected a guard mentioning {needle}")
 
-          # ... and the no-dependency export path must actually work.
+          # The no-dependency export path must work as well.
           ab.write_ascii("spectra.txt", grid, spectra)
           print("bare install OK")
           PY

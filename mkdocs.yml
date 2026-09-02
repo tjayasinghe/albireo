@@ -32,6 +32,7 @@ theme:
 nav:
   - Home: index.md
   - Quickstart: quickstart.md
+  - Scientific background: science.md
   - Tutorials:
       - Tour the outputs in one notebook: tutorials/showcase.ipynb
       - Disentangle an SB2 end to end: tutorials/sb2-end-to-end.md
@@ -78,7 +79,7 @@ plugins:
   - search
   # Renders docs/tutorials/showcase.ipynb. `execute: false` because the outputs are
   # committed with the notebook: the docs build must stay cheap, offline, and free of a
-  # JAX + sampling dependency — re-executing it is a release-time step, not a build step.
+  # JAX + sampling dependency; re-executing it is a release-time step, not a build step.
   - mkdocs-jupyter:
       execute: false
       include_source: true

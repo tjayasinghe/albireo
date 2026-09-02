@@ -1,28 +1,26 @@
 """Persisting and exporting fits.
 
-A converged fit is expensive — the HR 6819 runs are hours — and until this module existed
-the only thing that left the process was printed text. Three jobs:
+:func:`save_fit` and :func:`load_fit` round-trip result objects through ``.npz`` with a
+JSON header. Every result type is a set of flat arrays plus a few scalars, so the reader
+reconstructs an object by calling its constructor with keywords: nothing is pickled, and
+no pytree aux-data serialization has to be kept in step with the classes. NumPy is the
+only hard dependency that can write a container, since netCDF would require xarray and
+h5netcdf and FITS would require astropy. The header records a format version, and
+:func:`load_fit` raises rather than reading a file written by an incompatible version.
 
-**Save and load.** :func:`save_fit` and :func:`load_fit` round-trip the result objects
-through ``.npz`` with a JSON header. The format is deliberately dull: every result type is
-"flat arrays plus a few scalars", so the reader reconstructs by calling the constructor with
-keywords and there is no pickling and no pytree aux-data serialization to keep in step with
-the classes. NumPy is the only hard dependency that can write a container — netCDF would
-pull in xarray and h5netcdf, and FITS would pull in astropy — so ``.npz`` it is.
+:func:`to_inference_data` converts a NUTS run to arviz, which provides the convergence
+diagnostics, the plotting, and the on-disk netCDF format the rest of the Bayesian Python
+ecosystem reads. albireo does not reimplement any of that.
 
-**arviz.** :func:`to_inference_data` hands a NUTS run to arviz, which is where the
-convergence diagnostics, the plotting, and the on-disk netCDF format the rest of the
-Bayesian ecosystem reads all live. albireo does not reimplement any of that.
+:func:`write_ascii` writes the disentangled spectra and their uncertainty band as plain
+text, with no optional dependency; :func:`albireo.io.write_spectra` writes FITS and ECSV
+and requires astropy.
 
-**Export.** :func:`write_ascii` writes the disentangled spectra as plain text with no
-optional dependency at all. :func:`albireo.io.write_spectra` writes FITS and ECSV and needs
-astropy. The disentangled spectrum plus its uncertainty band is the product; it has to be
-able to leave.
-
-Loaded results are plain data. A :class:`~albireo.likelihood.MarginalResult` read back from
-disk is no longer differentiable in the orbital parameters, and — unless it was saved with
-``precision=True`` — no longer carries the posterior precision, so it cannot generate new
-draws. That is the intended trade: what you save is the answer, not the machinery.
+A loaded result is plain data. A :class:`~albireo.likelihood.MarginalResult` read back
+from disk is no longer differentiable in the orbital parameters, and, unless it was saved
+with ``precision=True``, no longer carries the posterior precision, so it cannot generate
+new spectrum draws. What the file holds is the inference result, not the machinery that
+produced it.
 """
 
 from __future__ import annotations
@@ -80,7 +78,10 @@ def _unflatten_mapping(prefix: str, arrays: Mapping[str, np.ndarray]) -> dict[st
 
 
 def save_fit(result, path, *, precision: bool = False, compress: bool = True) -> Path:
-    """Write a fit result to ``path`` as ``.npz``.
+    """Write a fit result to ``path`` as ``.npz`` with a JSON header.
+
+    The header records the result type, the format version and the albireo version that
+    wrote the file; the arrays are stored flat, one entry per field.
 
     Parameters
     ----------
@@ -90,11 +91,11 @@ def save_fit(result, path, *, precision: bool = False, compress: bool = True) ->
     precision
         :class:`~albireo.likelihood.MarginalResult` only. If True, store the posterior
         precision blocks so that the loaded result can still draw spectra and compute
-        pointwise uncertainties. This is the large object — at survey scale the blocks run
-        to gigabytes — so the default stores the posterior mean and, if it can be computed,
-        the pointwise standard deviation instead.
+        pointwise uncertainties. The blocks are the largest object in the result and reach
+        gigabytes at survey scale, so the default instead stores the posterior mean and,
+        where it can be computed, the pointwise standard deviation.
     compress
-        Use ``np.savez_compressed``. Spectra compress well; turn it off for speed on very
+        Use ``np.savez_compressed``. Spectra compress well; disable it for speed on very
         large arrays.
 
     Returns
@@ -102,12 +103,17 @@ def save_fit(result, path, *, precision: bool = False, compress: bool = True) ->
     pathlib.Path
         The path written, with the ``.npz`` suffix applied if it was missing.
 
+    Raises
+    ------
+    TypeError
+        If ``result`` is not one of the supported result types.
+
     Notes
     -----
     A :class:`~albireo.scan.K2ScanResult` carries the
-    :class:`~albireo.inference.MarginalOrbitModel` it was produced by; that model holds the
-    dataset and JAX-traced structure and is *not* saved. Loading gives back a result whose
-    ``model`` is None. Rebuild it from the same dataset if you need to continue.
+    :class:`~albireo.inference.MarginalOrbitModel` it was produced by. That model holds the
+    dataset and the JAX-traced structure and is not saved, so loading returns a result whose
+    ``model`` is None; continuing the analysis requires rebuilding it from the same dataset.
     """
     path = Path(path)
     if path.suffix != ".npz":
@@ -144,8 +150,23 @@ def save_fit(result, path, *, precision: bool = False, compress: bool = True) ->
 def load_fit(path):
     """Read a fit written by :func:`save_fit`.
 
-    Returns an object of the same class it was saved from, with the caveats in the module
-    docstring: it is plain data, not a live JAX computation.
+    Parameters
+    ----------
+    path
+        Path to an ``.npz`` file written by :func:`save_fit`.
+
+    Returns
+    -------
+    object
+        An instance of the class the result was saved from. It is plain data rather than a
+        live JAX computation; the module docstring states what a loaded result can and
+        cannot do.
+
+    Raises
+    ------
+    ValueError
+        If the file carries no albireo header, records a format version this release does
+        not read, or names an unknown result type.
     """
     path = Path(path)
     with np.load(path, allow_pickle=False) as data:
@@ -262,8 +283,8 @@ def _save_marginal(result, header, arrays, *, precision: bool = False):
         header["has_precision"] = True
     else:
         header["has_precision"] = False
-        # One Takahashi sweep now saves the user from discovering at read time that the
-        # uncertainty band is the one thing they did not keep.
+        # One Takahashi sweep, so that the loaded result still carries the pointwise
+        # uncertainty band even though the precision blocks are dropped.
         from albireo.likelihood import spectra_std
 
         arrays["d_std"] = _as_numpy(spectra_std(result))
@@ -314,13 +335,13 @@ _LOADERS = {
 def to_inference_data(mcmc, *, coords=None, dims=None, component_names=None):
     """Convert a NUTS run to arviz's inference-data container.
 
-    This is the bridge to the rest of the Bayesian Python ecosystem: R-hat and effective
-    sample size, trace and pair plots, and ``.to_netcdf()`` for on-disk storage.
+    The container is the bridge to the rest of the Bayesian Python ecosystem: R-hat and
+    effective sample size, trace and pair plots, and ``.to_netcdf()`` for on-disk storage.
 
-    The exact type returned is whatever the installed arviz builds — its own
-    ``InferenceData`` up to arviz 0.x, an xarray ``DataTree`` from arviz 1.0 onwards. Both
-    expose the ``.posterior`` group and the plotting entry points, so code that reads
-    groups rather than checking the class works across the change.
+    The type returned is whatever the installed arviz builds: its own ``InferenceData`` up
+    to arviz 0.x, an xarray ``DataTree`` from arviz 1.0 onwards. Both expose the
+    ``.posterior`` group and the plotting entry points, so code that reads groups rather
+    than checking the class works across the change.
 
     Parameters
     ----------
@@ -328,20 +349,24 @@ def to_inference_data(mcmc, *, coords=None, dims=None, component_names=None):
         The :class:`numpyro.infer.MCMC` returned by :func:`albireo.inference.run_nuts`.
     coords, dims
         Passed through to arviz. By default the vector-valued sites are labelled by
-        component (``k[K_1]``, ``k[K_2]``, ...) rather than by integer index, which is the
-        difference between a readable summary table and a cryptic one.
+        component (``k[K_1]``, ``k[K_2]``, ...) rather than by integer index, so that the
+        arviz summary table names the components.
     component_names
         Labels for the stellar components; defaults to ``K_1, K_2, ...`` sized from the
         posterior itself.
 
+    Returns
+    -------
+    object
+        The inference-data container built by the installed arviz.
+
     Notes
     -----
-    albireo's likelihood enters the numpyro model as a
-    :func:`numpyro.factor`, not as an observed site, so arviz cannot extract a pointwise
-    log-likelihood group and none is requested. That means the information criteria that
-    need pointwise values (LOO, WAIC) are not available from this object — which is
-    correct rather than unfortunate, since the component spectra have been marginalized
-    out and there is no per-observation factorization left to point at.
+    albireo's likelihood enters the numpyro model as a :func:`numpyro.factor` rather than
+    as an observed site, so arviz cannot extract a pointwise log-likelihood group and none
+    is requested. Information criteria that require pointwise values (LOO, WAIC) are
+    therefore unavailable from this object. The component spectra have been marginalized
+    out, so no per-observation factorization of the likelihood remains in any case.
     """
     az = _require_arviz()
 
@@ -367,8 +392,8 @@ def to_inference_data(mcmc, *, coords=None, dims=None, component_names=None):
         return az.from_numpyro(mcmc, coords=coords, dims=dims, log_likelihood=False)
     except Exception:
         # `run_nuts` passes the Problem pytree as a traced model argument, and arviz
-        # inspects model args to pick up constant data. If that inspection trips over the
-        # pytree, fall back to the posterior itself, which is all we actually need.
+        # inspects model args to pick up constant data. If that inspection fails on the
+        # pytree, fall back to the posterior itself, which is the group the caller needs.
         posterior = mcmc.get_samples(group_by_chain=True)
         stats = {
             name: np.asarray(value)
@@ -388,11 +413,11 @@ def to_inference_data(mcmc, *, coords=None, dims=None, component_names=None):
 
 
 def write_ascii(path, grid, d_hat, std=None, *, component: int | None = None, header: str = ""):
-    """Write disentangled spectra as plain text. No optional dependency.
+    """Write disentangled spectra as plain text, with no optional dependency.
 
-    Columns are ``wavelength``, ``flux``, and — when ``std`` is given — ``flux_err``. The
-    flux written is ``1 + d``, the normalized component spectrum, not the deviation ``d``:
-    that is what an atmosphere-fitting code expects to read.
+    Columns are ``wavelength``, ``flux`` and, where ``std`` is given, ``flux_err``. The
+    flux written is ``1 + d``, the normalized component spectrum, rather than the deviation
+    ``d``, since that is the convention an atmosphere-fitting code reads.
 
     Parameters
     ----------
@@ -415,10 +440,17 @@ def write_ascii(path, grid, d_hat, std=None, *, component: int | None = None, he
     Returns
     -------
     pathlib.Path or list[pathlib.Path]
+        The path written, or one path per component when several are written.
+
+    Raises
+    ------
+    ValueError
+        If the pixel count of ``d_hat`` does not match ``grid``, or if ``std`` does not
+        have the same shape as ``d_hat``.
 
     Notes
     -----
-    The recovered quantity is the *light-weighted* contribution ``l_i * d_i``; the split
+    The recovered quantity is the light-weighted contribution ``l_i * d_i``; the split
     between the light fraction and the deviation depth is set by the light fractions used
     in the fit. If those were assumed rather than inferred, the line depths written here
     inherit that assumption. See ``docs/math.md`` §5.2.

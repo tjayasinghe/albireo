@@ -1,16 +1,16 @@
 """fd3 comparison harness (M5): export, run both codes, compare (docs/design.md §1).
 
-Simulates an SB2 on a common ln-lambda grid (fd3's required sampling — the native
-grid IS the model grid here, so neither code resamples), writes fd3 v3.1 input
+Simulates an SB2 on a common ln-lambda grid (fd3's required sampling; the native
+grid is the model grid here, so neither code resamples), writes fd3 v3.1 input
 files (format verified against the official examples; see docs/benchmarks.md M5),
-runs the albireo fixed-orbit solve, and — when an fd3 binary is available — runs
+runs the albireo fixed-orbit solve, and, when an fd3 binary is available, runs
 fd3 in separation mode on identical data and compares recovered component spectra
 and wall time.
 
-Without an fd3 binary the export + albireo side still runs and writes everything
-needed; point --fd3 at the binary once built (source:
+Without an fd3 binary the export and the albireo side still run and write
+everything needed; point --fd3 at the binary once built (source:
 http://sail.zpf.fer.hr/fdbinary/fd3.tar.gz, ~1.9 MB, needs GSL; no license stated
-on the page — contact the author before redistribution).
+on the page, so contact the author before redistribution).
 
 fd3 format facts this exporter respects (all verified against the fd3 v3.1 source
 and official example files):
@@ -152,15 +152,14 @@ def run_albireo(ds, truth):
 
 
 def _time_in_fresh_process(obs: np.ndarray, shifts_pix: np.ndarray, n_iter: int) -> float:
-    """Wall time for `disentangle` from a child interpreter, because this process is
-    not a fair arena.
+    """Wall time for ``disentangle`` measured in a child interpreter.
 
-    Timed here, after the XLA solve, the identical call reads 40-80% slower: the solve's
-    allocation storm leaves the Windows CRT heap serving shift-and-add's ~35 KB
-    temporaries through microsecond free-list walks — allocating ufuncs slow ~4x while
-    their `out=` twins are unchanged (measured; docs/benchmarks.md "D50 re-run"). Both
-    previously recorded walls were taken through that convention. A child process starts
-    with a clean heap and never imports jax.
+    Timed in this process, after the XLA solve, the identical call reads 40-80% slower: the
+    solve's allocations leave the Windows CRT heap serving shift-and-add's ~35 kB temporaries
+    through microsecond free-list walks, so allocating ufuncs slow by ~4x while their ``out=``
+    counterparts are unchanged (measured; docs/benchmarks.md "D50 re-run"). Both previously
+    recorded walls were taken through that convention. A child process starts with a clean
+    heap and never imports jax.
     """
     child = (
         "import sys, time\n"
@@ -190,11 +189,10 @@ def _time_in_fresh_process(obs: np.ndarray, shifts_pix: np.ndarray, n_iter: int)
 
 
 def run_shift_and_add(ds, truth, truth_d, n_iter: int = 7):
-    """The third code: the clean-room shift-and-add of `scripts/shift_and_add.py`.
+    """The third code: the clean-room shift-and-add of ``scripts/shift_and_add.py``.
 
-    Run on the same data, with the same velocities, and — deliberately — with the same
-    linear shift operator albireo uses, so what is being compared is the algorithm rather
-    than two interpolators.
+    Run on the same data, with the same velocities and with the same linear shift operator
+    albireo uses, so that what is compared is the algorithm rather than two interpolators.
     """
     from shift_and_add import disentangle  # local module, not part of the package
 
@@ -210,7 +208,7 @@ def run_shift_and_add(ds, truth, truth_d, n_iter: int = 7):
 
     print(f"\nshift-and-add (clean-room, {n_iter} sweeps):")
     for i in range(2):
-        # The iteration's fixed point is the LIGHT-WEIGHTED l_i * d_i, because that is what
+        # The iteration's fixed point is the light-weighted l_i * d_i, because that is what
         # the composite contains. Undilute before comparing with the undiluted truth.
         comp = rec[i] / ELL[i]
         spectrum_metrics(comp, truth_d[i], f"shift-and-add comp {i + 1}")

@@ -8,59 +8,58 @@ and the (i, j) component block of one epoch's term is
 
     l_ie l_je T(delta_ie)^T G_e T(delta_je),   G_e = K^T (R^T W'_e R) K,
 
-a *narrow* band: G_e has half-bandwidth (s - 1) + 2r (rebin row support s, kernel
-radius r) regardless of the velocities, and the T-sandwich only translates it to the
-epoch's relative-shift offset and mixes 2x2 neighboring entries (linear-interpolation
-tent weights). Global comb probing (``docs/math.md`` §4.2, ``solver.py``) instead pays
-for the *union* of those offsets over all epochs: 2p + 1 full matvecs with
-p ~ max relative shift. Assembling per epoch replaces O(p) operator applications with
-O(w) banded work per epoch (w = band width ~ 2s + 4r + 3), a >10x flop reduction at
-survey bandwidths — with the identical exact result (same matrix, different summation
-order; agreement is verified against probing and dense construction in the tests).
+a narrow band: G_e has half-bandwidth (s - 1) + 2r (rebin row support s, kernel radius
+r) regardless of the velocities, and the T-sandwich only translates it to the epoch's
+relative-shift offset and mixes 2x2 neighboring entries (linear-interpolation tent
+weights). Global comb probing (``docs/math.md`` §4.2, ``solver.py``) instead pays
+for the union of those offsets over all epochs: 2p + 1 full matvecs with p ~ max
+relative shift. Assembling per epoch replaces O(p) operator applications with O(w)
+banded work per epoch (w = band width ~ 2s + 4r + 3), a >10x flop reduction at survey
+bandwidths, for the identical exact result (same matrix, different summation order;
+agreement is verified against probing and dense construction in the tests).
 
-Stages per epoch (all exact, all differentiable in shifts / lights / kernel / weights):
+Stages per epoch (all exact, all differentiable in shifts, lights, kernel and weights):
 
-1. ``H = R^T W' R`` via static *pair tables* precomputed from the rebin sparsity at
+1. ``H = R^T W' R`` via static pair tables precomputed from the rebin sparsity at
    build time (``forward.build_problem``): one ``segment_sum`` per epoch for the
-   diagonal part ``diag(w r^2)``, and — when the problem carries AR(1) correlated
-   noise (``forward.with_ar1``) — a second ``segment_sum`` over *cross-row* link
-   tables for the tridiagonal chain terms, which widen ``H`` by the group's static
+   diagonal part ``diag(w r^2)``, plus, when the problem carries AR(1) correlated
+   noise (``forward.with_ar1``), a second ``segment_sum`` over cross-row link tables
+   for the tridiagonal chain terms, which widen ``H`` by the group's static
    ``ar_step`` (``operators.rebin_link_pair_tables``; the traced link weights carry
    phi, so the whole band stays differentiable in it).
 2. ``G = K^T H K`` as the band-image form of the two convolutions. The first
-   application translates *rows*, so it stays an unrolled accumulation over the
-   2r + 1 taps (static slices only); the second translates columns alone, which
-   makes it a contraction of the band image against a static ``(w_u, w_g)`` banded
-   matrix — one GEMM rather than 2r + 1 more read-modify-write passes over the
-   widest image in the assembly (D49). Like the rest of this module the equality is
-   up to summation order (measured 0.5 ulp; XLA does not promise a GEMM's
-   accumulation order, even though it matched the loop's exactly on the benchmark
-   configurations). A wavelength-dependent LSF
-   (``forward.build_problem(lsf_anchors_angstrom=...)``, D37) keeps the identical
-   structure with the scalar kernel taps replaced by row-shifted profile columns;
-   there both applications translate rows, so both stay loops — the second runs
-   against the band-transpose of the first, since only *left* applications
-   broadcast on a row-major band image and ``G`` is symmetric:
-   ``G = K^T (K^T H)^T``. ``G`` is a matrix on the model
-   grid, so its off-grid columns — which the kernel populates by smearing in-grid
-   mass outward — are masked; the sandwich would otherwise read them whenever a
-   shift places a component's support against a grid edge. Being
-   velocity-independent, this whole stage is a pre-pass over epochs, batched by
-   ``epoch_chunk`` (memory only; see :func:`_epoch_chunk_default`).
+   application translates rows, so it stays an unrolled accumulation over the 2r + 1
+   taps (static slices only); the second translates columns alone, which makes it a
+   contraction of the band image against a static ``(w_u, w_g)`` banded matrix, one
+   GEMM rather than 2r + 1 further read-modify-write passes over the widest image in
+   the assembly (D49). As elsewhere in this module the equality holds up to summation
+   order (measured 0.5 ulp; XLA does not promise a GEMM's accumulation order, although
+   it matched the loop's exactly on the benchmark configurations). A
+   wavelength-dependent LSF (``forward.build_problem(lsf_anchors_angstrom=...)``, D37)
+   keeps the identical structure with the scalar kernel taps replaced by row-shifted
+   profile columns; there both applications translate rows, so both stay loops, and
+   the second runs against the band-transpose of the first, since only left
+   applications broadcast on a row-major band image and ``G`` is symmetric,
+   ``G = K^T (K^T H)^T``. ``G`` is a matrix on the model grid, so its off-grid columns,
+   which the kernel populates by smearing in-grid mass outward, are masked; the
+   sandwich would otherwise read them whenever a shift places a component's support
+   against a grid edge. Being velocity-independent, this whole stage is a pre-pass
+   over epochs, batched by ``epoch_chunk`` (memory only; see
+   :func:`_epoch_chunk_default`).
 3. The T-sandwich: column q of ``T(delta)`` has entries at rows ``floor(q + delta)``
    (weight ``1 - frac(delta)``) and ``floor(q + delta) + 1`` (weight ``frac(delta)``),
    so each block band is a 4-term tent-weighted combination of row-translated copies
-   of ``G`` — one dynamic row-gather per (component, 0/1), static column slices.
+   of ``G``: one dynamic row-gather per (component, 0/1), with static column slices.
 4. Accumulation into a global band tensor ``BAND[q, i, k, d]`` holding the interleaved
-   band entry at row ``q * nc + i``, column offset ``k * nc + d`` — the per-epoch
+   band entry at row ``q * nc + i``, column offset ``k * nc + d``. The per-epoch
    integer offset enters as a traced ``dynamic_update_slice`` start, so no scatter is
    needed. The update is ``band + place(f)``, the identity in ``band``, but reverse
    mode reassembles that identity out of three whole-tensor passes unless told
-   otherwise, so it goes through the closed-form :func:`_band_accumulate`
-   (D49 — 3.5 s of a 5.9 s backward at the ladder's first row). The epoch loop is a
+   otherwise, so it goes through the closed-form :func:`_band_accumulate` (D49: 3.5 s
+   of a 5.9 s backward at the benchmark ladder's first row). The epoch loop is a
    ``lax.scan`` with the band tensor as carry (buffer reuse; the body is
-   rematerialized in reverse mode — recomputing one epoch's band is far cheaper than
-   storing 50 of them).
+   rematerialized in reverse mode, since recomputing one epoch's band is much cheaper
+   than storing 50 of them).
 
 The bandwidth contract is inherited from probing: entries beyond the static
 half-bandwidth ``p`` are dropped (out of contract; the inference model guards the
@@ -96,21 +95,20 @@ _GP_CHUNK_BYTES = 512 * 1024**2
 def _band_accumulate(band, f, start, comp: int, d: int):
     """``band`` with ``f`` added at ``[:, comp, start : start + f.shape[1], d]``.
 
-    Mathematically ``band + place(f)``: linear in both arguments and the *identity*
-    in ``band``. The forward is one in-place slice update either way; the reason
-    this is a ``custom_vjp`` is the reverse pass. Written as nested dynamic slices,
-    reverse mode transposes the two primitives separately and reassembles the
-    identity as
+    Mathematically ``band + place(f)``: linear in both arguments and the identity in
+    ``band``. The forward is one in-place slice update either way; the ``custom_vjp``
+    is there for the reverse pass. Written as nested dynamic slices, reverse mode
+    transposes the two primitives separately and reassembles the identity as
 
         ``band_bar = dus(out_bar, 0, idx) + dus(zeros_like(band), ds(out_bar, idx), idx)``
 
-    — three passes over the *whole* band tensor to reproduce its own input, once per
-    (i, j) block per epoch. At the benchmark ladder's first row that is 4 x 50 x 3
-    passes over 522 MB = 313 GB of traffic, measured at 3.5 s of a 5.9 s backward,
-    and it grows with the band tensor rather than with the slice actually touched.
-    The closed form is exact and costs nothing: the operand cotangent *is* the
-    output cotangent, and ``f``'s is the corresponding slice of it. Values and
-    gradients are bit-identical to the nested-slice route (``test_assembly.py``).
+    which is three passes over the whole band tensor to reproduce its own input, once
+    per (i, j) block per epoch. At the benchmark ladder's first row that is 4 x 50 x 3
+    passes over 522 MB = 313 GB of traffic, measured at 3.5 s of a 5.9 s backward, and
+    it grows with the band tensor rather than with the slice touched (D49). The closed
+    form here is exact: the operand cotangent is the output cotangent, and ``f``'s is
+    the corresponding slice of it. Values and gradients are bit-identical to the
+    nested-slice route (``test_assembly.py``).
 
     ``comp`` and ``d`` are Python ints (the component and interleave-offset loop
     counters), hence static; only ``start`` is traced, and being an integer it
@@ -129,9 +127,9 @@ def _band_accumulate_fwd(band, f, start, comp: int, d: int):
     # hold only plain operations, so that a second reverse differentiation
     # (jacrev-of-jacrev, as in laplace_inverse_mass) walks an ordinary graph instead
     # of re-entering the custom boundary. Calling the custom function here is
-    # first-order exact but returns the *transpose* of the true Hessian (measured,
-    # test_second_order_reverse_matches_plain_autodiff) — the same re-entry defect
-    # D28 found in _solve_stage_fwd.
+    # first-order exact but returns the transpose of the true Hessian (measured by
+    # test_second_order_reverse_matches_plain_autodiff): the same re-entry defect D28
+    # found in _solve_stage_fwd.
     idx = (jnp.int32(0), jnp.int32(comp), start, jnp.int32(d))
     out = jax.lax.dynamic_update_slice(
         band,
@@ -161,21 +159,21 @@ def _band_offsets(p: int, nc: int):
 def _epoch_chunk_default(n_ep: int, n_pix: int, w_gp: int, n_groups: int = 1) -> int:
     """Epochs per G batch: hoist the whole pre-pass while it is cheap, else batch it.
 
-    The velocity-independent stage ``G_e`` is computed once per epoch either way, so
-    *any* chunking below ``n_ep`` costs exactly one extra G pass in the backward
-    (the chunk body is rematerialized); the chunk size only trades live bytes against
-    ``vmap`` width. Hence the two-regime policy: keep every epoch's G live while that
-    is under ``_GP_HOIST_BYTES`` (small and gate-scale problems pay nothing), and
-    otherwise batch to about ``_GP_CHUNK_BYTES`` — which at the design target is
-    4.5 GB of ``gp_all`` reduced to under 0.5 GB, the difference between a gradient
-    that fits in 32 GB and one that does not.
+    The velocity-independent stage ``G_e`` is computed once per epoch either way, so any
+    chunking below ``n_ep`` costs exactly one extra G pass in the backward (the chunk
+    body is rematerialized); the chunk size only trades live bytes against ``vmap``
+    width. Hence the two-regime policy: keep every epoch's G live while that is under
+    ``_GP_HOIST_BYTES``, and otherwise batch to about ``_GP_CHUNK_BYTES``, which at the
+    design target reduces 4.5 GB of ``gp_all`` to under 0.5 GB and is the difference
+    between a gradient that fits in 32 GB and one that does not.
 
     The budgets are shared out over ``n_groups``, because the group loop is unrolled into
     a single jit graph: every group's pre-pass is live in the same buffer-assignment plan,
     so a per-group budget would be multiplied by the group count. That count is 1 for
     simulations and for any pipeline delivering one wavelength solution, but real archival
     data routinely gives one group per exposure (:func:`albireo.forward._epoch_groups`),
-    and there the un-divided budget was measured at 40 GB where the shared grid needs 11.
+    where the un-divided budget was measured at 40 GB against the 11 GB a shared grid
+    needs.
     """
     per_epoch = n_pix * w_gp * 8
     groups = max(1, int(n_groups))
@@ -220,7 +218,7 @@ def _epoch_band_scan(
             + (f" + AR(1) step {group.ar_step}" if correlated else "")
             + f", kernel radius {r}) even at zero "
             "relative shift, and in general that plus the maximum relative shift in pixels "
-            "— use Problem.half_bandwidth_bound."
+            "; use Problem.half_bandwidth_bound."
         )
 
     pair_val, pair_sid, pair_row = group.pair_val, group.pair_sid, group.pair_row
@@ -237,12 +235,12 @@ def _epoch_band_scan(
     q_pix = jnp.arange(n_pix, dtype=jnp.int32)
 
     # G lives on the model grid, so entry (x, y) exists only for y in [0, n_pix). The
-    # band image is built by convolving H along its columns, which happily writes
-    # entries at |y| beyond the grid — H itself is clean there (no rebin pairs), but the
-    # kernel smears in-grid mass outward. Those phantom columns are read by the
-    # T-sandwich whenever an epoch's shift places a component's support against a grid
-    # edge, so mask them here, once, for every epoch. Rows are already zero-filled by
-    # the translation in `shift_rows`; this is the same guard on the other index.
+    # band image is built by convolving H along its columns, which writes entries at
+    # |y| beyond the grid: H itself is clean there (no rebin pairs), but the kernel
+    # smears in-grid mass outward. Those phantom columns are read by the T-sandwich
+    # whenever an epoch's shift places a component's support against a grid edge, so
+    # mask them here, once, for every epoch. Rows are already zero-filled by the
+    # translation in `shift_rows`; this is the same guard on the other index.
     # (Fixtures whose native grid stops short of the model grid never see it: the
     # weights vanish there, so the phantom entries are multiplied by zero.)
     gp_offsets = jnp.arange(w_g + 4, dtype=jnp.int32) - jnp.int32(h_g + 2)
@@ -252,14 +250,14 @@ def _epoch_band_scan(
     def epoch_g(ws):
         """G = K^T (R^T W' R) K for one epoch, as a band image (n_pix, w_g + 4).
 
-        Depends only on the weights and the LSF kernel — not on the velocities — so
-        it is computed in a ``vmap``ped pre-pass rather than inside the accumulation
-        body. How *many* epochs' worth are kept live at once is the ``chunk`` policy
-        of :func:`_epoch_chunk_default`. ("Static" weights here still means traced
-        values — jitter, response and phi all flow through them.)
+        Depends only on the weights and the LSF kernel, not on the velocities, so it
+        is computed in a ``vmap``ped pre-pass rather than inside the accumulation
+        body. How many epochs' worth are kept live at once is the ``chunk`` policy of
+        :func:`_epoch_chunk_default`. The weights are velocity-independent but still
+        traced: jitter, response and phi all flow through them.
         """
         # 1. H = R^T W' R, upper diagonals (n_pix, h_eff): the diagonal part through
-        # the equal-row pair tables, plus — on a correlated problem — one symmetrized
+        # the equal-row pair tables, plus, on a correlated problem, one symmetrized
         # cross-row term per AR(1) link through the link tables. The gap test keeps
         # each epoch's own realized links: the tables hold the union over epochs,
         # because masks differ by epoch.
@@ -284,8 +282,8 @@ def _epoch_band_scan(
 
         # 3. G = K^T H K. Stationary: two unrolled shifted accumulations with scalar
         # kernel taps (the v1 path, unchanged). Wavelength-dependent (D37): the left
-        # application K^T M generalizes tap by tap — the scalar becomes a row-shifted
-        # profile column, K[c + d, c] = P[c + d, d + r] — but a *right* application's
+        # application K^T M generalizes tap by tap, the scalar becoming a row-shifted
+        # profile column, K[c + d, c] = P[c + d, d + r], but a right application's
         # taps would vary along the band image's columns, which the row-major layout
         # cannot broadcast. H (hence G) is symmetric, so compute G = K^T (K^T H)^T
         # instead: band-transpose U = K^T H (a static column-slice shuffle) and run
@@ -297,18 +295,18 @@ def _epoch_band_scan(
                 u = u.at[:, r + d1 : r + d1 + w_h].add(
                     kernel[0, d1 + r] * jax.lax.slice(bhp, (r + d1, 0), (r + d1 + n_pix, w_h))
                 )
-            # The second application translates *columns* only — unlike the first, it
-            # has no row shift — so it is a contraction of the band image against a
-            # static (w_u, w_g) banded matrix instead of 2r + 1 accumulate passes over
-            # the whole image. The loop form re-read and rewrote the (n_pix, w_g)
-            # output once per tap, which at survey scale is the single largest block
-            # of memory traffic in the assembly (measured 0.55 s of a 0.88 s G
-            # pre-pass at the ladder's first row, against 0.03 s here). Column k of
-            # the output collects tap s = k' + 2r - k. Equality is to summation order,
-            # as everywhere else in this module: increasing k' *is* increasing s, so
-            # the ideal orders agree, but XLA may block a GEMM's accumulation however
-            # it likes (measured 0.5 ulp against the loop on a random kernel, and
-            # bit-identical log-likelihoods on the benchmark configurations).
+            # The second application translates columns only (unlike the first, it has
+            # no row shift), so it is a contraction of the band image against a static
+            # (w_u, w_g) banded matrix instead of 2r + 1 accumulate passes over the
+            # whole image. The loop form re-read and rewrote the (n_pix, w_g) output
+            # once per tap, the largest block of memory traffic in the assembly at
+            # survey scale (measured 0.55 s of a 0.88 s G pre-pass at the benchmark
+            # ladder's first row, against 0.03 s here; D49). Column k of the output
+            # collects tap s = k' + 2r - k. Equality is to summation order, as
+            # everywhere else in this module: increasing k' is increasing s, so the
+            # ideal orders agree, but XLA may block a GEMM's accumulation as it likes
+            # (measured 0.5 ulp against the loop on a random kernel, and bit-identical
+            # log-likelihoods on the benchmark configurations).
             tap = jnp.arange(w_u)[:, None] + 2 * r - jnp.arange(w_g)[None, :]
             g = u @ jnp.where((tap >= 0) & (tap <= 2 * r), kernel[0, jnp.clip(tap, 0, 2 * r)], 0.0)
         else:
@@ -345,7 +343,7 @@ def _epoch_band_scan(
         # A translation's adjoint is the opposite translation, so implement it as a
         # clip-safe dynamic_slice of a zero-padded copy (pads of n_pix rows make any
         # clamped start land the window in an all-zero region, reproducing zero-fill
-        # exactly for arbitrary shifts) — reverse mode then costs a contiguous copy
+        # exactly for arbitrary shifts). Reverse mode then costs a contiguous copy
         # instead of the general scatter that a gather-based translation would pay.
         gpp = jnp.pad(gp, ((n_pix, n_pix), (0, 0)))
         w_gp = w_g + 4
@@ -436,7 +434,7 @@ def _prior_diagonals(prior: SmoothnessPrior, n_pix: int):
         ``d1_a = -2 (t_a + t_{a-1})``,
         ``d2_a = t_a``,
 
-    with ``t`` read as zero outside ``[0, n_pix - 3]`` — which is where the boundary
+    with ``t`` read as zero outside ``[0, n_pix - 3]``, which is where the boundary
     corrections come from. Uniform weights recover the Toeplitz form (main diagonal 6
     with ends 1, 5; first diagonal -4 with ends -2; second diagonal 1). The per-pixel
     profiles of D40 enter entirely through ``t`` and ``e``
@@ -475,12 +473,12 @@ def _pack_band(band, n_pix: int, nc: int, p: int, block_size: int) -> BlockTridi
     col = jnp.arange(bs)[None, :]
 
     # The column offset m = cc - rr, and therefore the band's (slot, d) coordinates and
-    # the bandwidth mask, depend only on the *within-block* (row, col) — not on which
-    # block is being read. Hoisting them out of the loop body keeps the per-iteration
+    # the bandwidth mask, depend only on the within-block (row, col), not on which block
+    # is being read. Hoisting them out of the loop body keeps the per-iteration
     # residuals at O(B) instead of O(B^2): reverse mode stacks a scanned body's live
     # intermediates over all K iterations, so leaving the (B, B) index and mask arrays
-    # inside cost K * B^2 of stacked int32/bool residuals (several GB at the design
-    # target) purely to re-derive numbers that never varied.
+    # inside costs K * B^2 of stacked int32/bool residuals (several GB at the design
+    # target) to re-derive numbers that never varied.
     def band_coords(m):
         d = m % nc
         slot = off0 + (m - d) // nc
@@ -529,7 +527,7 @@ def band_block_tridiagonal(
 
     Drop-in replacement for probing the full operator: returns the same
     :class:`BlockTridiagonal` (to floating-point reordering) at a fraction of the
-    cost. ``half_bandwidth`` is the *per-component* bound ``b_nat`` (as in
+    cost. ``half_bandwidth`` is the per-component bound ``b_nat`` (as in
     :func:`albireo.likelihood.marginal_loglikelihood`); the stacked bandwidth is
     ``p = nc * b_nat + nc - 1``.
 
@@ -570,9 +568,9 @@ def band_block_tridiagonal(
 
 
 def prior_logdet(prior: SmoothnessPrior, n_pix: int):
-    """``log det(Lambda_p)`` by scalar banded Cholesky — no block factorization.
+    """``log det(Lambda_p)`` by scalar banded Cholesky, without block factorization.
 
-    ``Lambda_p`` is block diagonal over components and *pentadiagonal* within each
+    ``Lambda_p`` is block diagonal over components and pentadiagonal within each
     (half-bandwidth 2), so its determinant needs only the three Cholesky diagonals
 
         ``a_i = L[i, i-2]``, ``b_i = L[i, i-1]``, ``c_i = L[i, i]``
@@ -585,11 +583,11 @@ def prior_logdet(prior: SmoothnessPrior, n_pix: int):
         ``c_i = sqrt(gamma_i - a_i^2 - b_i^2)``,
 
     with ``log det = 2 sum_i log c_i`` accumulated in the carry. Routing this through
-    :func:`prior_block_tridiagonal` + :func:`albireo.solver.block_cholesky` instead
+    :func:`prior_block_tridiagonal` and :func:`albireo.solver.block_cholesky` instead
     pads the bandwidth-2 matrix out to dense blocks of size 64 and factorizes
-    ``n_comp * n_pix / 64`` of them — 0.78 GB of live blocks at the design target for
-    a quantity that is exactly this ``O(n_pix)`` recursion. Components are carried as
-    a leading ``vmap``-free axis, so the scan is one pass regardless of ``n_comp``.
+    ``n_comp * n_pix / 64`` of them, 0.78 GB of live blocks at the design target, for a
+    quantity that is exactly this ``O(n_pix)`` recursion. Components are carried as a
+    leading ``vmap``-free axis, so the scan is one pass regardless of ``n_comp``.
     """
     d0, d1, d2 = _prior_diagonals(prior, n_pix)  # (nc, n), (nc, n-1), (nc, n-2)
     nc = d0.shape[0]
@@ -604,10 +602,11 @@ def prior_logdet(prior: SmoothnessPrior, n_pix: int):
         b = (be - a * b1) / c1
         # The pivot is positive for any positive (tau, eta), but it is a difference of
         # like-sized quantities: below eta/tau ~ 1e-13 it rounds to <= 0 and the sqrt
-        # returns nan, taking the whole likelihood with it. ML-II walks there on its own
-        # — nothing bounds log_eta from below, and a component with little signal in the
-        # data has no reason to stay away. Flooring keeps the recursion finite and the
-        # value monotone, so the optimizer is pushed back rather than derailed.
+        # returns nan, taking the whole likelihood with it. ML-II reaches that region on
+        # its own, since nothing bounds log_eta from below and a component with little
+        # signal in the data has no reason to stay away. Flooring keeps the recursion
+        # finite and the value monotone, so the optimizer is pushed back rather than
+        # derailed.
         c = jnp.sqrt(jnp.maximum(ga - a * a - b * b, jnp.finfo(ga.dtype).tiny))
         return (c, c1, b, acc + jnp.log(c)), None
 

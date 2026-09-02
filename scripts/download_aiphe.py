@@ -5,16 +5,15 @@ HARPS on the ESO 3.6 m. They are public, so no ESO login is required.
 
 AI Phe is the validation target with an external answer. It is a detached eclipsing binary
 whose orbit is published to 0.02 per cent (Maxted et al. 2020, MNRAS 498, 332) and whose
-component temperatures are known independently -- 6310 K and 5010 K -- which is what lets
-``scripts/aiphe_labels_bench.py`` score a label fit against something other than its own
-posterior.
+component temperatures are known independently, 6310 K and 5010 K, so that
+``scripts/aiphe_labels_bench.py`` can score a label fit against values external to the fit.
 
 The files land in ``data/aiphe/`` as ``ADP.<id>.fits`` (~5 MB each, ~194 MB total) with a
 ``manifest.json`` recording the archive metadata and each download's outcome. Re-running
 skips files already present at the expected size, so an interrupted download resumes.
 
-Like ``download_hr6819.py`` this is a thin wrapper over :mod:`albireo.archive`; it exists
-because a worked, copyable invocation is worth more than a paragraph describing one.
+Like ``download_hr6819.py``, this is a thin wrapper over :mod:`albireo.archive`, kept as a
+worked invocation of it.
 
 Usage
 -----

@@ -1,4 +1,4 @@
-"""M3 injection-coverage study: is the marginal orbital posterior calibrated?
+"""M3 injection-coverage study: calibration of the marginal orbital posterior.
 
 For each injection, a truth θ* is drawn from the *sampling priors* (including the
 disk constraint and the bandwidth-guard truncation, replicated exactly), a dataset is
@@ -6,11 +6,11 @@ simulated at θ*, hyperparameters are refit by ML-II (MAP), and NUTS samples the
 orbital posterior. Recorded per site: the SBC rank of the truth among the posterior
 draws, the z-score of the posterior mean, and central-interval coverage hits.
 
-This is deliberately *not* strict SBC over the full joint model: the injected spectra
-are random line lists, not draws from the smoothness prior — i.e. the spectral prior
-is realistically misspecified and (tau, eta) are refit per injection. Rank uniformity
-for the orbital sites is still the calibration target; a plug-in (empirical Bayes)
-optimism of a few percent in coverage is the known, documented trade (math.md §7.3).
+This is not strict SBC over the full joint model: the injected spectra are random line
+lists rather than draws from the smoothness prior, so the spectral prior is
+realistically misspecified and (tau, eta) are refit per injection. Rank uniformity for
+the orbital sites remains the calibration target; a plug-in (empirical Bayes) optimism
+of a few percent in coverage is the documented trade (math.md §7.3).
 
 Usage:  python scripts/m3_coverage.py --n-inj 24 --out coverage.json
 """

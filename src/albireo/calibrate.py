@@ -1,49 +1,43 @@
 """Injection-recovery calibration of the faint-companion detection statistic.
 
-:func:`albireo.scan.k2_scan` answers "is there a companion, and at what semi-amplitude".
-It does not answer the question a referee asks next: *how often would noise alone have
-produced that peak*, and *what would I have found if it were there*. Those need a null
-distribution and a completeness curve, and for this statistic neither has a closed form.
+:func:`albireo.scan.k2_scan` reports the detection statistic ``D`` and the semi-amplitude
+at its peak. Interpreting the peak requires the null distribution of ``D`` (how often noise
+alone produces a peak of that size) and the completeness (how often a companion of a given
+brightness would have been detected). Neither has a closed form. ``D`` is not
+asymptotically chi-squared: the companion is a boundary hypothesis whose nuisance parameter
+is a prior-regularized function, so Wilks' theorem does not apply, and ``D`` depends on the
+companion's prior scale ``(tau_2, eta_2)``, on the epoch sampling, on the masks and on the
+per-pixel weights (``docs/math.md`` section 6.2).
 
-``D`` is not asymptotically chi-squared. The companion's spectrum is marginalized under a
-smoothness prior, so ``D`` depends on ``(tau_2, eta_2)`` — on how much freedom the
-companion was given — and on the epoch sampling, the masks, and the per-pixel weights.
-Wilks' theorem does not apply to a boundary hypothesis with a prior-regularized nuisance
-function, and albireo makes no such claim. What it does instead is measure the
-distribution directly: draw many datasets from the fitted model with no companion in
-them, scan each one exactly as the real data were scanned, and read off how large ``D``
-gets by chance. Injecting a companion at a ladder of light fractions and repeating gives
-the completeness curve, and the two together give the sentence the Gaia BH and
-stripped-star communities actually have to write —
-
-    *any companion contributing more than X% of the light would have been detected at
-    95% confidence.*
-
-Each trial is drawn through the observed data's own operators
+Both distributions are therefore measured. Companion-free datasets are drawn from the
+fitted model and scanned exactly as the observed data were scanned, which gives the null
+distribution of the peak ``D``; a companion injected at a ladder of light fractions gives
+the completeness curve. Together they give a completeness limit at a stated confidence: the
+light fraction above which a companion would have been detected at, for example, 95%
+confidence. Each trial is drawn through the observed dataset's own operators
 (:func:`albireo.simulate.resimulate`), so the epoch times, barycentric velocities, chip
-gaps, cosmics, native wavelength solutions, response and per-pixel weights are the real
-ones rather than a plausible imitation of them. Only the noise and the injected spectra
-change, and the swap is a data-term replacement (:func:`albireo.forward.with_data`) that
-reuses the rebin operators and pair tables — which is what keeps thousands of scans to
-scan time rather than build time.
+gaps, cosmics, native wavelength solutions, response and per-pixel weights are those of the
+data. Only the noise and the injected spectra change, and the replacement is a data-term
+swap (:func:`albireo.forward.with_data`) that reuses the rebin operators and pair tables,
+so thousands of trials cost scan time rather than build time.
 
-**This calibrates against noise, not against a wrong model.** The null trials are drawn
-at the same ``K_1``, orbit and light fractions the scan assumes, so the threshold is
-self-consistent with those assumptions and cannot detect that any of them is wrong. That
-matters most for ``K_1``, because getting it wrong does not merely blur the answer — it
-*inflates* ``D``: unremoved primary signal is coherent, the companion's free spectrum
-absorbs it, and the peak grows. Measured (``docs/benchmarks.md`` D41): a ``K_1`` 10% high
-took the recovered companion's line pattern from 0.96 correlation with truth to 0.49
-while more than tripling the detection statistic. A calibrated threshold would not have
-flagged it; ``k1_sigma=`` would have. The two are complementary, and neither substitutes
-for the other.
+The detection threshold is the smallest ``D`` whose estimated false-alarm probability
+``(1 + #{null >= D}) / (N + 1)`` is within budget, so the realized null exceedance never
+exceeds the nominal rate, and no false-alarm probability below ``1 / (N + 1)`` is reported.
 
-**The limit is conditional on the assumed companion spectrum, and cannot not be.** The
-observable is ``ell_2 * d_2``: a companion with no lines is invisible at any light
-fraction, and one with deeper lines than assumed is found below the quoted limit. The
-default template is the primary's own recovered spectrum — "a companion with lines like
-the star we can see" — which is the usual assumption in the literature and is at least
-an explicit one. Quote it alongside the number.
+The calibration is conditional on the assumed ``K_1``, orbit, light fractions and
+companion spectrum. The null trials are drawn at the same ``K_1``, orbit and light
+fractions the scan assumes, so the threshold is self-consistent with those assumptions and
+cannot detect that any of them is wrong. ``K_1`` matters most, because an error in it
+inflates ``D``: unremoved primary signal is coherent across epochs, the companion's free
+spectrum absorbs it, and the peak grows. Measured (``docs/benchmarks.md`` D41): a ``K_1``
+10% high tripled the detection statistic and reduced the recovered companion's line
+pattern from 0.96 correlation with the truth to 0.49. A calibrated threshold does not flag
+this; marginalizing ``K_1`` (``k1_sigma=``) addresses it, and the two are complementary.
+The observable is ``ell_2 * d_2``, so a companion with no lines is invisible at any light
+fraction and one with deeper lines than assumed is found below the quoted limit. The
+default template is the primary's own recovered spectrum, the usual assumption in the
+literature; the assumption should be quoted with the limit.
 """
 
 from __future__ import annotations
@@ -67,13 +61,13 @@ __all__ = ["DetectionLimit", "detection_limit"]
 
 @dataclass(frozen=True)
 class DetectionLimit:
-    """Result of :func:`detection_limit` — a null distribution and a completeness curve.
+    """Result of :func:`detection_limit`: a null distribution and a completeness curve.
 
     ``null_peaks`` is the largest ``D`` reached anywhere on ``k2_grid`` in each
-    companion-free trial; that maximum, not ``D`` at one trial ``K_2``, is the statistic
-    a search actually reports, and calibrating the wrong one is the classic way to
-    understate a false-alarm rate. ``signal_peaks`` is the same quantity with a companion
-    injected, one row per rung of ``ell2_grid``.
+    companion-free trial. That maximum, not ``D`` at one trial ``K_2``, is the statistic
+    a search reports, and calibrating the pointwise statistic instead understates the
+    false-alarm rate. ``signal_peaks`` is the same quantity with a companion injected,
+    one row per rung of ``ell2_grid``.
     """
 
     ell2_grid: np.ndarray  # injected companion light fractions
@@ -97,16 +91,16 @@ class DetectionLimit:
     def false_alarm_probability(self, d: float) -> float:
         """Probability that a companion-free dataset yields a peak at least as large as ``d``.
 
-        The estimator is ``(1 + #{null >= d}) / (n_null + 1)``, which never returns zero:
-        with a finite number of trials, "no null trial reached it" is evidence for a
-        small false-alarm rate, not for none. When the answer equals
-        :attr:`fap_floor`, the honest reading is "below the resolution of this
-        calibration" — run more null trials to say anything sharper.
+        The estimator is ``(1 + #{null >= d}) / (n_null + 1)``, which never returns
+        zero: with a finite number of trials, the absence of a null trial above ``d`` is
+        evidence for a small false-alarm rate, not for none. A value equal to
+        :attr:`fap_floor` means the rate is below the resolution of this calibration;
+        more null trials are needed to say anything sharper.
         """
         return float((1 + np.count_nonzero(self.null_peaks >= d)) / (self.n_null + 1))
 
     def summary(self) -> str:
-        """The one-paragraph statement of the result, ready to quote."""
+        """One-paragraph statement of the result."""
         pct = 100.0 * self.confidence
         if np.isfinite(self.ell2_limit) and self.limit_is_bracketed:
             limit = (
@@ -114,10 +108,10 @@ class DetectionLimit:
                 f"the light would have been detected at {pct:.0f}% confidence"
             )
         elif np.isfinite(self.ell2_limit):
-            # The faintest rung was already fully recovered: this bounds the limit, it
-            # does not measure it. Say which, and say how to fix it.
+            # The faintest rung was already recovered at the requested confidence: the
+            # ladder bounds the limit but does not measure it.
             limit = (
-                f"The limit is at most {100.0 * self.ell2_limit:.2f}% of the light — the "
+                f"The limit is at most {100.0 * self.ell2_limit:.2f}% of the light: the "
                 f"faintest rung tested, and it was recovered {100.0 * self.completeness[0]:.0f}% "
                 f"of the time, so the search is more sensitive than this ladder resolves. "
                 f"Extend ell2_grid downward to measure the {pct:.0f}% crossing"
@@ -141,18 +135,18 @@ class DetectionLimit:
 def _threshold_at(null_peaks: np.ndarray, false_alarm: float) -> float:
     """The smallest ``D`` whose estimated false-alarm probability is at most ``false_alarm``.
 
-    Defined *through* :meth:`DetectionLimit.false_alarm_probability` rather than as a
-    sample quantile, so the two agree by construction: anything the calibration calls a
-    detection is guaranteed to carry a reported FAP within budget.
+    Defined through :meth:`DetectionLimit.false_alarm_probability` rather than as a
+    sample quantile, so the two agree by construction: every detection the calibration
+    reports carries a false-alarm probability within budget (``docs/math.md`` section
+    6.2).
 
-    An interpolating quantile does not have that property, and the direction it errs in
-    is the wrong one. ``np.quantile(null, 0.95)`` lands *between* order statistics, so
-    with 24 trials it can leave two of them above the threshold — an 8% empirical
-    false-alarm rate sold as 5%. Here the threshold is the ``(c+1)``-th largest null
-    peak with ``c = floor(fa (n+1)) - 1``, which makes the strict exceedance count at
-    most ``c``, hence ``FAP <= fa``. When ``fa`` is below the resolution floor
-    ``1/(n+1)`` the rule degrades to "must exceed every null trial" instead of
-    inventing precision the trials do not support.
+    An interpolating quantile lacks that property and errs in the anti-conservative
+    direction. ``np.quantile(null, 0.95)`` falls between order statistics, so with 24
+    trials it can leave two of them above the threshold, an 8% empirical false-alarm
+    rate reported as 5%. Here the threshold is the ``(c+1)``-th largest null peak with
+    ``c = floor(fa (n+1)) - 1``, which bounds the strict exceedance count by ``c`` and
+    hence gives ``FAP <= fa``. When ``fa`` is below the resolution floor ``1/(n+1)`` the
+    rule reduces to exceeding every null trial.
     """
     c = max(0, int(np.floor(false_alarm * (null_peaks.size + 1))) - 1)
     ordered = np.sort(null_peaks)[::-1]
@@ -162,17 +156,17 @@ def _threshold_at(null_peaks: np.ndarray, false_alarm: float) -> float:
 def _interpolate_limit(
     ell2: np.ndarray, completeness: np.ndarray, confidence: float
 ) -> tuple[float, bool]:
-    """Smallest ell_2 whose completeness reaches ``confidence``, linear between rungs.
+    """Smallest ``ell_2`` whose completeness reaches ``confidence``, linear between rungs.
 
-    Takes the *first* upcrossing rather than the global one: completeness is monotone in
-    principle but estimated from a finite number of trials, so a later dip below the line
-    is noise and should not move the limit outward.
+    Takes the first upcrossing rather than the global one: completeness is monotone in
+    principle but is estimated from a finite number of trials, so a later dip below the
+    line is noise and does not move the limit outward.
 
-    Returns the limit and whether the ladder actually *brackets* it. It does not when the
-    faintest rung is already complete — then the search is more sensitive than anything
-    tested and the honest reading is "at most this", not "this". Reporting the first rung
-    as the answer would understate the instrument's reach and, worse, would look
-    identical to a measured crossing.
+    Returns the limit and whether the ladder brackets it. It does not when the faintest
+    rung is already complete; the search is then more sensitive than any rung tested,
+    and the value is an upper bound on the limit rather than a measurement of it.
+    Reporting the first rung as a measured crossing would understate the sensitivity
+    and would be indistinguishable from a real crossing.
     """
     hits = np.nonzero(completeness >= confidence)[0]
     if hits.size == 0:
@@ -218,13 +212,15 @@ def detection_limit(
     sweep_batch: int | None = None,
     progress: Callable[[int, int], None] | None = None,
 ) -> DetectionLimit:
-    """Calibrate the K2 scan by injection and recovery on the observed data's own structure.
+    """Calibrate the K2 scan by injection and recovery through the observed data's operators.
 
-    Runs ``n_null`` companion-free trials to get the null distribution of the scan's peak
-    ``D``, then ``n_trials`` trials at each rung of ``ell2_grid`` to get completeness.
-    Every trial is a full :func:`albireo.scan.k2_scan` over ``k2_grid`` — the same grid,
-    the same prior, the same ``K_1`` treatment as the real analysis, because a threshold
-    calibrated for a different search does not apply to this one.
+    Runs ``n_null`` companion-free trials to obtain the null distribution of the scan's
+    peak ``D``, then ``n_trials`` trials at each rung of ``ell2_grid`` to obtain the
+    completeness. Every trial is a full :func:`albireo.scan.k2_scan` over ``k2_grid``
+    with the same grid, the same prior and the same ``K_1`` treatment as the real
+    analysis; a threshold calibrated for a different search does not apply to this one.
+    The output is a completeness limit at a stated confidence (``docs/math.md`` section
+    6.2 and the module docstring).
 
     Parameters
     ----------
@@ -232,51 +228,51 @@ def detection_limit(
     block_size, sweep_batch
         As in :func:`albireo.scan.k2_scan`.
     orbit, k1, k2_grid, light_fractions, prior, v_rel_max_kms, k1_sigma, k1_nodes
-        As in :func:`albireo.scan.k2_scan`, and they must match what the real scan used.
-        ``light_fractions`` is the *assumed* pair the analysis scans with (D13); the
-        injected amplitude is ``ell2_grid`` and is varied independently, which is the
-        right split — the assumption belongs to the analysis, the truth is what the
-        limit is about.
+        As in :func:`albireo.scan.k2_scan`; they must match the real scan.
+        ``light_fractions`` is the assumed pair the analysis scans with (D13). The
+        injected amplitude is set by ``ell2_grid`` and varies independently: the
+        assumption belongs to the analysis, and the limit is a statement about the truth.
     k2_true
-        Semi-amplitude to inject the companion at [km/s]. In an SB2 the components move
-        in *antiphase*, so their relative velocity never drops below roughly ``K_1``, and
-        the limit turns out to be nearly flat in ``K_2`` whenever ``K_1`` is itself large:
-        measured 0.292 / 0.296 / 0.297% at ``K_2`` = 20 / 40 / 65 km/s with
-        ``K_1`` = 55 km/s (``docs/benchmarks.md`` D41). Expect a real dependence only when
-        ``K_1`` is small enough that the pair is barely resolved at any phase — there,
-        calibrate at several ``K_2`` and quote the worst.
+        Semi-amplitude [km/s] at which the companion is injected. In an SB2 the
+        components move in antiphase, so their relative velocity never drops below
+        roughly ``K_1``, and the limit is nearly flat in ``K_2`` whenever ``K_1`` is
+        large: measured 0.292 / 0.296 / 0.297% at ``K_2`` = 20 / 40 / 65 km/s with
+        ``K_1`` = 55 km/s (``docs/benchmarks.md`` D41). A real dependence is expected
+        only when ``K_1`` is small enough that the pair is barely resolved at any phase;
+        there, calibrate at several ``K_2`` and quote the worst.
     ell2_grid
-        Ladder of injected companion light fractions, ascending, in ``(0, 1)``. Costs
-        ``n_trials`` scans per rung.
+        Ladder of injected companion light fractions, ascending, in ``(0, 1)``. Each rung
+        costs ``n_trials`` scans.
     primary_template
         Deviation spectrum injected for the primary, ``(grid.n,)``. Default: the
-        no-companion fit to the *observed* data, which makes the whole calibration a
-        parametric bootstrap of the real analysis rather than a simulation resembling it.
+        no-companion fit to the observed data, which makes the calibration a parametric
+        bootstrap of the real analysis.
     companion_template
         Deviation spectrum injected for the companion, ``(grid.n,)``. Default: the
-        primary template — "a companion with lines like the star we can see". The limit
-        is conditional on this choice; see the module docstring, and quote the assumption
-        with the number.
+        primary template, i.e. a companion with the same line pattern as the primary.
+        The limit is conditional on this choice (see the module docstring), and the
+        assumption should be quoted with the limit.
     extra_templates
         Deviation spectra injected for the non-stellar components, ``(n_extra, grid.n)``
-        in the order telluric, nebular — whichever are enabled. Default: their rows of
-        the same no-companion fit, so the trials carry the sky the data actually show.
+        in the order telluric, nebular, for whichever are enabled. Default: their rows of
+        the same no-companion fit, so the trials carry the sky at the strength the data
+        show.
     n_null, n_trials
-        Companion-free trials, and trials per rung. ``n_null`` sets the resolution floor
-        on the false-alarm probability at ``1 / (n_null + 1)``: 100 trials cannot
-        substantiate a claim below ~1%.
+        Number of companion-free trials, and of trials per rung. ``n_null`` sets the
+        resolution floor on the false-alarm probability at ``1 / (n_null + 1)``: 100
+        trials cannot substantiate a claim below about 1%.
     false_alarm
-        False-alarm probability the detection threshold is placed at (default 0.01). The
-        threshold is conservative by construction (:func:`_threshold_at`): the realized
-        rate over the null trials is at most this, never above it.
+        False-alarm probability at which the detection threshold is placed (default
+        0.01). The threshold is conservative by construction (:func:`_threshold_at`):
+        the realized rate over the null trials is at most this value.
     confidence
-        Completeness the reported limit is quoted at (default 0.95).
+        Completeness at which the reported limit is quoted (default 0.95).
     seed
-        Base seed. Every trial gets its own derived seed, so the whole calibration is
+        Base seed. Every trial receives its own derived seed, so the calibration is
         reproducible and no two trials share a noise draw.
     progress
         Optional ``callback(done, total)``, called after each trial. A full calibration
-        is thousands of linear solves; this is the only feedback there is.
+        is thousands of linear solves and produces no other feedback.
 
     Returns
     -------
@@ -339,12 +335,11 @@ def detection_limit(
     )
 
     # Everything injected other than the companion comes from the no-companion fit to
-    # the *real* data, so the trials bootstrap the analysis rather than resemble it —
-    # and so a telluric or nebular component, if the scan models one, is present in the
-    # trials at the strength the data actually show. Injecting zero for those would
-    # calibrate against a cleaner sky than the one observed, and quietly understate the
-    # false-alarm rate (an unmodelled static residual is exactly what the scan
-    # mistakes for a companion).
+    # the observed data, so the trials are a parametric bootstrap of the analysis, and a
+    # telluric or nebular component, if the scan models one, is present in the trials
+    # at the strength the data show. Injecting zero for those would calibrate against a
+    # cleaner sky than the one observed and understate the false-alarm rate: an
+    # unmodelled static residual is exactly what the scan mistakes for a companion.
     n_extra = model.problem.n_components - 2
     fit = None
     if primary_template is None or (n_extra and extra_templates is None):
@@ -366,14 +361,14 @@ def detection_limit(
             extras = np.atleast_2d(np.asarray(extra_templates, dtype=np.float64))
         if extras.shape != (n_extra, grid.n):
             raise ValueError(
-                f"extra_templates must have shape ({n_extra}, {grid.n}) — one row per "
+                f"extra_templates must have shape ({n_extra}, {grid.n}); one row per "
                 f"non-stellar component, in the order " + ", ".join(extra) + f"; got {extras.shape}"
             )
     else:
         extras = np.zeros((0, grid.n))
 
-    # Injection problem: the two-component model at the *true* orbit. Only its light
-    # fractions move between rungs — the companion's amplitude is what the ladder is.
+    # Injection problem: the two-component model at the true orbit. Only its light
+    # fractions change between rungs; the companion's amplitude is the ladder variable.
     d_inject = np.concatenate([primary_template[None], companion_template[None], extras], axis=0)
     inject_at = model.problem_at({**orbit, "k": jnp.asarray([k1, float(k2_true)])})
 
@@ -383,7 +378,7 @@ def detection_limit(
     def run(ell2: float, trial_seed: int) -> float:
         """One trial: inject at ell2, redraw the noise, scan, return the peak D."""
         # Stellar columns only; with_light_fractions carries the telluric and nebular
-        # ones through untouched, which is what they need (fraction 1, amplitude 1).
+        # columns through unchanged (fraction 1, amplitude 1).
         stellar = jnp.asarray([1.0 - ell2, ell2])
         drawn = resimulate(with_light_fractions(inject_at, stellar), d_inject, seed=trial_seed)
         z = [g.z for g in drawn.groups]

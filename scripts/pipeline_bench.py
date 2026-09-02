@@ -1,14 +1,14 @@
-"""How a batch scales with worker processes, and what the thread cap is worth (D58).
+"""Batch scaling with worker processes, and what the thread cap is worth (D58).
 
 The pipeline runs stars in a spawn-based process pool with each worker's XLA and BLAS
-threads capped at ``cpu_count // jobs``. This script measures whether that is a speedup:
-the same batch of simulated stars, in-process and with 2, 4 and 8 workers, with the cap on
-and -- for one point -- off, so that the record says what oversubscription actually costs
-on this machine rather than asserting it.
+threads capped at ``cpu_count // jobs``. This script measures the resulting speedup: the
+same batch of simulated stars, in-process and with 2, 4 and 8 workers, with the cap on and,
+for one point, off, so that the record carries a measured cost of oversubscription on this
+machine.
 
 The fixture is the pipeline's own toy star (a two-component SB2 drawn from the synthetic
 library, 8 epochs, 725 native pixels) with the label stage off, so that what is timed is
-the disentangling, the velocity table and the orbit -- the stages every star pays for.
+the disentangling, the velocity table and the orbit, the stages every star pays for.
 Every star is identical up to its noise seed.
 
     python scripts/pipeline_bench.py                 # 8 stars; jobs 1, 2, 4, 8

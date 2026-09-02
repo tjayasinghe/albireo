@@ -1,65 +1,52 @@
-"""One command from a list of stars to spectra, labels, velocities and orbits (D58).
+"""Run every stage of the analysis for a list of stars, from one declaration (D58).
 
-Everything this package can do to a spectroscopic binary already exists as a function:
-read the epochs (:mod:`albireo.io`), disentangle them (:class:`albireo.Disentangler`), fit
-atmospheric labels to the components so they can become templates (:mod:`albireo.match`),
-measure one velocity per component per epoch against those templates
-(:mod:`albireo.todcor`), fit the Keplerian to the table (:mod:`albireo.rvorbit`), and
-write the lot out with figures. What did not exist was the thing a survey actually runs:
-*all of that, for every star in a list, from one declaration, with the failures recorded
-and the results in a shape a spreadsheet can read*. This module is that driver, and
-``albireo run config.toml`` is its command line.
+For each star the driver reads the epochs (:mod:`albireo.io`), disentangles them
+(:class:`albireo.Disentangler`), fits atmospheric labels to the components so that each
+can serve as a radial-velocity template (:mod:`albireo.match`), measures one velocity per
+component per epoch by TODCOR against those templates (:mod:`albireo.todcor`), fits a
+Keplerian to the resulting table (:mod:`albireo.rvorbit`), and writes the products with
+figures. A stage that cannot be run (a label fit on data whose wavelength medium is
+undeclared, an orbit from too few usable epochs) is recorded as a flag on the star's
+report, and a failure in one star does not stop the batch. ``albireo run config.toml`` is
+the command line.
 
-It is a driver, not a new method. Every scientific decision is still made by the stage
-that owns it, and the two rules those stages enforce are enforced here unchanged: **light
-fractions are declared, never defaulted**, because with constant light the likelihood sees
-only ``l_i * d_i`` and no fit can tell you the number was wrong; and **the wavelength
-medium is declared before a synthetic grid is consulted**, because air and vacuum differ
-by a nearly constant 83 km/s. Where the pipeline cannot honour a request -- a label fit
-on a dataset whose medium no file declared, an orbit from four usable epochs -- it records
-a flag on the star's report and carries on, rather than guessing or stopping the batch.
+Two rules of the underlying stages are enforced unchanged. Light fractions must be
+declared and have no default: with constant light the likelihood constrains only
+``l_i * d_i``, so the data cannot detect a wrong value (``docs/math.md`` §5.2). The
+wavelength medium must be declared before a synthetic grid is consulted, because air and
+vacuum wavelengths differ by a nearly constant 83 km/s.
 
-**Declare the components in order of decreasing mass** -- for a main-sequence pair, the
-brighter star first. The likelihood cannot tell which spectrum belongs to which star: a
-symmetric semi-amplitude prior gives the conjunction scan two equally deep troughs, the
-declared assignment and its mirror with the spectra swapped and rescaled by the light
-ratio. The pipeline resolves that by *starting* the fit with ``K_1 < K_2 < ...`` (the
-first star moves least), which is a convention rather than a constraint, and the label
-stage checks it afterwards: a fitted light fraction far from the declared one is flagged
-as the signature of an order declared the wrong way round.
+Components are declared in order of decreasing mass (for a main-sequence pair, the
+brighter star first). The likelihood is symmetric under swapping the components with their
+spectra rescaled by the light ratio, so a symmetric semi-amplitude prior gives the
+conjunction scan two equally deep minima. The fit is therefore started with
+``K_1 < K_2 < ...`` (the first star moves least). This is a starting convention, not a
+constraint, and the label stage checks the outcome: a fitted light fraction far from the
+declared one is flagged as the signature of a reversed order.
 
-Three routes into the orbit, because three situations exist:
+There are three routes into the orbit:
 
-- ``period = [lo, hi]`` (or a value): the usual case. The Keplerian is inferred from the
-  spectra directly, the components come out, and the epochs are measured back against
-  them (:meth:`albireo.Fit.measure_velocities`).
-- ``period = "search"``: no period is known but a synthetic library is. Library templates
-  at the declared starting labels measure a first velocity table, a Lomb-Scargle search
-  finds the period, an orbit is fitted to the table, and the disentangling is warm-started
-  from it (:meth:`albireo.RVOrbit.to_theta`). Template mismatch costs a constant per
-  component here, which the period and the semi-amplitudes do not care about.
-- ``velocities = "file"``: measured per-epoch velocities from elsewhere (cross-correlation,
+- ``period = [lo, hi]`` (or a value): the Keplerian is inferred from the spectra directly,
+  and the epochs are then measured against the disentangled components
+  (:meth:`albireo.Fit.measure_velocities`).
+- ``period = "search"``: no period is known but a synthetic library is declared. Library
+  templates at the declared starting labels measure a first velocity table, a
+  Lomb-Scargle search proposes the period, an orbit is fitted to the table, and the
+  disentangling is warm-started from it (:meth:`albireo.RVOrbit.to_theta`). Template
+  mismatch shifts each component's velocities by a constant, which leaves the period and
+  the semi-amplitudes unchanged.
+- ``velocities = "file"``: per-epoch velocities measured elsewhere (cross-correlation,
   line splitting). The free per-epoch table is fitted instead of a Keplerian
-  (``Disentangler(velocities=...)``), and the period comes from the table afterwards.
+  (``Disentangler(velocities=...)``), and the period is found from the table afterwards.
 
-**The zero point is the thing to read on every report.** A disentangled component's rest
-frame is not identified (``docs/math.md`` §5.3), so velocities measured against it are
-differential -- semi-amplitudes, eccentricity and mass ratio exact, systemic velocity
-meaningless -- unless the label fit has measured that frame's offset, in which case the
-pipeline applies it to the templates and the velocities come out absolute. Every table
-says which it got, and so does ``result.json``.
+A disentangled component's rest frame is not identified (``docs/math.md`` §5.3), so
+velocities measured against it are differential: the semi-amplitudes, eccentricity and
+mass ratio are exact, and the systemic velocity is not defined. When the label fit has
+measured the frame offset, the pipeline applies it to the templates and the velocities
+are absolute. Every velocity table and ``result.json`` state which case applies.
 
-**Batches run in worker processes.** Stars are independent, so ``jobs > 1`` runs them in
-a spawn-based process pool. Measured on the development desktop (16 cores, eight
-simulated stars): four workers finish the batch 2.0x faster than one process and eight
-2.5x -- sub-linear, because a single star already keeps several cores busy, so what the
-workers overlap is the serial part of each star (compilation, the Python-side scans, the
-orbit fit, the writing). Each worker's XLA and BLAS thread counts are capped at
-``cpu_count // jobs`` as a precaution against oversubscription; on that benchmark the cap
-made no measurable difference (``docs/benchmarks.md``, D58). A worker returns a
-plain-data report; the live objects (the :class:`~albireo.Fit`, the table, the label
-match) are kept only on an in-process run, since they carry compiled JAX programs that
-do not cross a pipe.
+Stars are independent, so a batch run with ``jobs > 1`` distributes them over worker
+processes; see :func:`run_pipeline`.
 """
 
 from __future__ import annotations
@@ -134,8 +121,8 @@ def _spec(value: Any, what: str) -> Spec | None:
 
     ``None`` stays ``None`` (the stage's own default applies); a number is ``Fixed``; a
     two-element list is ``Between``; a mapping with ``value`` and ``sigma`` is ``Known``.
-    A :class:`~albireo.facade.Spec` passes through, so the Python API accepts exactly what
-    the façade does.
+    A :class:`~albireo.facade.Spec` passes through, so the Python API accepts the façade's
+    own specs.
     """
     if value is None or isinstance(value, Spec):
         return value
@@ -183,26 +170,29 @@ def _lsf(value: Any, key: str) -> LSF:
 
 @dataclass(frozen=True)
 class ComponentConfig:
-    """One stellar component of a star, as the pipeline declares it.
+    """One stellar component of a star, as declared to the pipeline.
 
     Parameters
     ----------
     name
-        The component's name, used everywhere a row index would otherwise be.
+        The component's name, used wherever a row index would otherwise be.
     light
-        Its light fraction. **Required, and an assumption**: the star lights must sum to
-        one, and no part of the fit can tell you the value was wrong (``docs/math.md``
-        §5.2). Quote it beside every result derived from the spectra.
+        Its light fraction. Required, with no default, because it is an assumption: the
+        light fractions of a star must sum to one, and no part of the fit can detect a
+        wrong value (``docs/math.md`` §5.2). It should be quoted beside every result
+        derived from the spectra.
     teff, logg, vsini
-        Label priors for the template-identification stage: a number to hold, a
-        ``[lo, hi]`` range, or ``None`` for the library's own range (``0-vsini_max`` for
-        ``vsini``). ``logg`` is the one worth fixing when an eclipse solution gives it.
+        Label priors for the template-identification stage, in K, cgs dex and km/s: a
+        number to hold, a ``[lo, hi]`` range, or ``None`` for the library's own range
+        (``0-vsini_max`` for ``vsini``). ``logg`` is the label to fix when an eclipse
+        solution provides it.
     k
-        Optional semi-amplitude prior for this component, overriding the star's
-        ``k_min``/``k_max``. Give every component the same kind (all ranges, or all values).
+        Optional semi-amplitude prior for this component in km/s, overriding the star's
+        ``k_min``/``k_max``. Every component must use the same kind (all ranges, or all
+        values).
     smoothness_tau0
-        Where this component's smoothness hyperparameter starts. A rotationally broadened
-        star wants a much larger value than a sharp-lined one.
+        Starting value of this component's smoothness hyperparameter. A rotationally
+        broadened star needs a much larger value than a sharp-lined one.
     """
 
     name: str
@@ -241,29 +231,30 @@ class Analysis:
     Parameters
     ----------
     region
-        Wavelength window to analyse, in Angstrom. Strongly recommended for echelle data:
-        the solve cost grows with every pixel.
+        Wavelength window to analyse, in Angstrom. Recommended for echelle data, since the
+        solve cost grows with the number of pixels.
     smooth_angstrom
-        Continuum smoothing scale for :func:`albireo.io.to_epoch`.
+        Continuum smoothing scale in Angstrom, for :func:`albireo.io.to_epoch`.
     mask
-        Extra wavelength ranges to zero-weight.
+        Extra wavelength ranges to zero-weight, in Angstrom.
     k_min, k_max
-        The semi-amplitude prior ``Between(k_min, k_max)`` for every component that does
-        not declare its own. ``k_max`` sizes the solver's velocity budget, so a generous
-        value costs time rather than correctness.
+        The semi-amplitude prior ``Between(k_min, k_max)`` in km/s, for every component
+        that does not declare its own. ``k_max`` sets the solver's velocity budget, so a
+        generous value costs time, not correctness.
     ecc_max
         Upper bound of the eccentricity prior; ``circular`` holds ``e = 0`` exactly.
     max_steps
         L-BFGS cap for the disentangling.
     dv_kms
-        Model-grid pixel size; default the data's own finest sampling.
+        Model-grid pixel size in km/s; the default is the finest sampling in the data.
     v_range
         Search half-range in km/s for the library-template velocity table of the
         ``period = "search"`` route.
     vsini_max, v_zero_range
-        Default ``vsini`` prior ceiling, and the half-range of the per-component frame
-        offset the label fit may measure (the disentangled frame sits at the systemic
-        velocity, so this must cover it: 300 km/s reaches the Magellanic Clouds).
+        Default ceiling of the ``vsini`` prior, and the half-range of the per-component
+        frame offset the label fit may measure, both in km/s. The disentangled frame sits
+        at the systemic velocity, so the range must cover it; 300 km/s reaches the
+        Magellanic Clouds.
     label_steps
         L-BFGS cap for the label fit.
     dilution
@@ -275,8 +266,8 @@ class Analysis:
     plots
         Write the diagnostic figures (needs matplotlib).
     fast
-        Trim every optimizer budget for a smoke run. The conclusions survive; the numbers
-        loosen.
+        Trim every optimizer budget for a smoke run. The qualitative result is unchanged;
+        the numbers are less precise.
     """
 
     region: tuple[float, float] | None = None
@@ -350,17 +341,20 @@ class StarConfig:
         A glob, a directory or a list of FITS paths. One of ``spectra``, ``dataset`` and
         ``bloem`` is required.
     dataset
-        An in-memory :class:`~albireo.Dataset` instead of files (the Python API's route).
+        An in-memory :class:`~albireo.Dataset` instead of files (the route of the Python
+        API).
     bloem
         A BLOeM survey identifier; the epochs are fetched from the ESO archive into the
         star's output directory first (network).
     period
-        ``[lo, hi]`` for a uniform prior, a number to hold it, ``{value, sigma}`` for a
-        Gaussian, or ``"search"`` to bootstrap from library templates (needs a library).
+        The orbital period in days: ``[lo, hi]`` for a uniform prior, a number to hold it,
+        ``{value, sigma}`` for a Gaussian, or ``"search"`` to bootstrap from library
+        templates (which needs a library).
     velocities
-        Alternative to ``period``: a text file of measured per-epoch velocities, one
-        column per component (optionally preceded by a BJD column, matched to the epochs),
-        or an ``(n_components, n_epochs)`` array. Fits the free per-epoch table.
+        Alternative to ``period``: a text file of measured per-epoch velocities in km/s,
+        one column per component (optionally preceded by a BJD column, matched to the
+        epochs), or an ``(n_components, n_epochs)`` array. The free per-epoch table is
+        then fitted instead of a Keplerian.
     components
         One :class:`ComponentConfig` per star. Lights must sum to one.
     instrument
@@ -453,7 +447,7 @@ class StarConfig:
         return isinstance(self.period, str) and self.period.lower() == "search"
 
     def settings(self, base: Analysis) -> Analysis:
-        """The batch settings with this star's overrides applied, and ``fast`` honoured."""
+        """The batch settings with this star's overrides and the ``fast`` trims applied."""
         return replace(base, **self.overrides).effective()
 
 
@@ -477,8 +471,8 @@ class PipelineConfig:
         (:func:`albireo.library_names`), a path to a saved library, or a
         :class:`~albireo.SpectralLibrary`. ``None`` skips the stage.
     mh
-        The shared metallicity prior for the label fit (a number, a range, or ``None``
-        for the library's own range).
+        The shared metallicity prior for the label fit, in dex (a number, a range, or
+        ``None`` for the library's own range).
     analysis
         The shared :class:`Analysis` settings.
     read_kwargs
@@ -524,7 +518,7 @@ class PipelineConfig:
         raise KeyError(f"no star called {name!r}; this batch has {[s.name for s in self.stars]}")
 
     def without_stars(self) -> PipelineConfig:
-        """The shared part alone, as handed to a worker process once."""
+        """The shared part alone, as sent to each worker process at initialization."""
         return replace(self, stars=(self.stars[0],))
 
     def to_dict(self) -> dict[str, Any]:
@@ -616,9 +610,9 @@ _TEMPLATE = """# albireo pipeline configuration.
 #     albireo run albireo.toml            # every star below, one after the other
 #     albireo run albireo.toml --jobs 4   # four stars at a time in worker processes
 #
-# Every value here that is a *scientific claim* rather than a convenience is required and
-# has no default: the light fraction of each component, and the wavelength scale where a
-# synthetic grid is consulted. Everything else has a default that the reports state.
+# Two values are required and have no default, because they are assumptions the data
+# cannot check: the light fraction of each component, and the wavelength scale wherever a
+# synthetic grid is consulted. Every other setting has a default, which the reports state.
 
 [output]
 directory = "albireo_results"   # one sub-directory per star is written inside it
@@ -633,10 +627,10 @@ resolving_power = 115000
 # sigma_kms = 2.65             # a Gaussian sigma in km/s, instead of a resolving power
 
 [analysis]
-region = [5000.0, 5300.0]       # Angstrom. Strongly recommended: the solve cost grows per pixel
+region = [5000.0, 5300.0]       # Angstrom. Recommended: the solve cost grows with the pixel count
 smooth_angstrom = 120.0         # continuum smoothing scale for unnormalized spectra
 k_min = 1.0                     # semi-amplitude prior, km/s, for components without their own
-k_max = 120.0                   # sizes the solver's velocity budget; generous costs time only
+k_max = 120.0                   # sets the solver's velocity budget; a large value costs time only
 ecc_max = 0.5                   # eccentricity prior ceiling; `circular = true` holds e = 0
 max_steps = 300                 # L-BFGS cap for the disentangling
 # sample = true                 # NUTS after the MAP: posterior widths, slow
@@ -655,11 +649,12 @@ spectra = "data/aiphe/*.fits"   # a glob, a directory, or a list of files
 period = [24.5, 24.7]           # days: [lo, hi] uniform, a value to hold, or "search"
 # velocities = "aiphe_rv.txt"   # instead of period: measured per-epoch velocities
 
-# Components in order of DECREASING MASS (the brighter star first for a main-sequence
-# pair): the fit is started with K_1 < K_2, which is what resolves which star is which.
+# Components in order of decreasing mass (the brighter star first for a main-sequence
+# pair): the fit is started with K_1 < K_2, which is the convention that assigns the
+# spectra to the stars.
 [[stars.components]]
 name = "primary"
-light = 0.55                    # REQUIRED: the light fractions must sum to 1
+light = 0.55                    # required: the light fractions must sum to 1
 teff = [5500.0, 7000.0]         # label priors: a range, a value to hold, or omit
 logg = 4.0
 
@@ -695,9 +690,9 @@ def write_config_template(path: str | os.PathLike = "albireo.toml", *, overwrite
 def load_config(path: str | os.PathLike) -> PipelineConfig:
     """Read a TOML configuration into a :class:`PipelineConfig`.
 
-    Relative paths inside the file -- the spectra globs, the output directory, a library
-    path -- are resolved against the file's own directory, so a configuration can be run
-    from anywhere.
+    Relative paths inside the file (the spectra globs, the output directory, a library
+    path) are resolved against the file's own directory, so a configuration can be run
+    from any working directory.
     """
     import tomllib
 
@@ -742,7 +737,7 @@ def config_from_dict(data: Mapping[str, Any], *, base_dir: str | os.PathLike | N
     if isinstance(library, str):
         from albireo.library import library_names
 
-        # A registered name is a name, not a path; anything else is a file to resolve.
+        # A registered library name is not a path; any other string is resolved as a file.
         if library not in library_names():
             library = _resolve_path(library, base)
     mh = labels_table.pop("mh", None)
@@ -834,18 +829,18 @@ def config_from_dict(data: Mapping[str, Any], *, base_dir: str | os.PathLike | N
 
 @dataclass
 class StarResult:
-    """What one star produced: plain data that survives a pipe, plus paths.
+    """The products of one star: plain data that can be pickled, plus file paths.
 
     Attributes
     ----------
     name, status, directory
-        The star, ``"ok"`` or ``"failed"``, and where its files are.
+        The star, ``"ok"`` or ``"failed"``, and the directory holding its files.
     seconds
         Wall time per stage, and ``total``.
     flags
         Every caveat the run recorded: a noise model that does not describe the data, a
-        skipped stage and why, an orbit that disagrees with the disentangling. Read them
-        before the numbers.
+        skipped stage and the reason, an orbit that disagrees with the disentangling. They
+        qualify the numbers in ``report``.
     warnings
         Every distinct warning the stages raised.
     files
@@ -855,7 +850,7 @@ class StarResult:
     summary
         The text report (the contents of ``summary.txt``).
     error, traceback
-        On failure, what went wrong.
+        On failure, the exception and its traceback.
     live
         On an in-process run only: the :class:`~albireo.Fit`, the velocity table, the
         label match, the orbit and the posterior, keyed by name. ``None`` from a worker.
@@ -880,8 +875,8 @@ class StarResult:
 
     def to_dict(self) -> dict[str, Any]:
         """Everything but the live objects."""
-        # Not dataclasses.asdict: that would recurse into the live Fit and its compiled
-        # model to deep-copy them, for a dictionary that leaves them out anyway.
+        # dataclasses.asdict is avoided: it would deep-copy the live Fit and its compiled
+        # model, which the dictionary omits.
         out = {f.name: getattr(self, f.name) for f in dataclasses.fields(self) if f.name != "live"}
         return _jsonable(out)
 
@@ -1507,17 +1502,17 @@ def _declared_orbit(star: StarConfig, settings: Analysis) -> Orbit:
 def _k_prior(star: StarConfig, settings: Analysis) -> list[Spec]:
     """One semi-amplitude prior per component, started in the declared order.
 
-    A symmetric prior cannot say which star is which: with every component started at
-    the same semi-amplitude the conjunction scan sees two equally deep troughs -- the
-    declared assignment and its mirror, with the spectra swapped and rescaled by the
-    light ratio -- and L-BFGS keeps whichever it fell into. The data cannot break that
-    tie (only ``l_i * d_i`` is observable), so a convention has to, and the pipeline's is
-    that **components are declared in order of decreasing mass**: the first star moves
-    least. The fit is therefore *started* with ``K_1 < K_2 < ...`` at evenly spaced
-    points of the shared range, which is what the scan then discriminates on. It is a
-    start, not a constraint -- the bounds are the same for every component -- and the
-    label stage checks the outcome: a fitted light fraction far from the declared one is
-    the signature of an order declared the wrong way round.
+    A symmetric prior cannot assign the spectra to the stars: with every component
+    started at the same semi-amplitude the conjunction scan sees two equally deep minima
+    (the declared assignment and its mirror, with the spectra swapped and rescaled by the
+    light ratio), and L-BFGS converges to whichever it started in. The data cannot break
+    the tie, since only ``l_i * d_i`` is observable, so a convention does: components are
+    declared in order of decreasing mass, the first star moves least, and the fit is
+    started with ``K_1 < K_2 < ...`` at evenly spaced points of the shared range, which
+    the scan then discriminates on. The ordering is a starting point, not a constraint
+    (the bounds are the same for every component), and the label stage checks the
+    outcome: a fitted light fraction far from the declared one is the signature of a
+    reversed order.
     """
     n = len(star.components)
     declared = [_spec(c.k, f"component {c.name!r}: k") for c in star.components]
@@ -1595,7 +1590,12 @@ def _read_velocities(star: StarConfig, dataset: Dataset) -> np.ndarray:
 
 
 def _bootstrap(ctx: _Context, dataset: Dataset, lsf, library):
-    """Library templates -> velocity table -> period -> orbit -> a warm Keplerian prior."""
+    """Bootstrap the orbit from library templates for the ``period = "search"`` route.
+
+    Templates at the declared starting labels measure a velocity table, a period search
+    proposes candidates, an orbit is fitted from each, and the best orbit becomes a warm
+    Keplerian prior for the disentangling.
+    """
     from albireo.rvorbit import find_period
     from albireo.todcor import Template, todcor
 
@@ -1720,12 +1720,12 @@ def _bootstrap(ctx: _Context, dataset: Dataset, lsf, library):
 def _orbit_over_candidates(ctx: _Context, table, periods, *, circular: bool):
     """Fit an orbit from every candidate period and keep the lowest chi-square.
 
-    A sparsely sampled table's periodogram is rarely unambiguous -- on the ten-epoch test
-    fixture its highest peak was a 2.25 d alias whose orbit fits at chi-square 73 against
-    16 at the true period, which every other peak converged to -- so the periodogram's
-    peaks are treated as starting points rather than as an answer, and the orbit fit is
-    what decides. A runner-up at a genuinely different period within 9 of the best is
-    flagged as an ambiguity rather than silently resolved.
+    The periodogram of a sparsely sampled table is rarely unambiguous: on the ten-epoch
+    test fixture the highest peak was a 2.25 d alias whose orbit fits at chi-square 73,
+    against 16 at the true period, to which every other peak converged. The periodogram
+    peaks are therefore starting points, and the orbit fit decides. A runner-up at a
+    different period (more than 2% from the best) within a chi-square difference of 9 is
+    flagged as an ambiguity.
     """
     from albireo.rvorbit import fit_rv_orbit
 
@@ -1882,8 +1882,8 @@ def _orbit(ctx: _Context, fit: Fit, table):
         return None, None
     try:
         if fit.mode == "keplerian":
-            # Every Keplerian fit, the bootstrapped ones included: the disentangling's
-            # period is the best starting point there is.
+            # For every Keplerian fit, including a bootstrapped one, the disentangling's
+            # period is the starting point.
             period = float(fit.orbit()["period"])
             source = "the disentangling"
             orbit = fit_rv_orbit(table, period=period, circular=settings.circular)
@@ -2460,13 +2460,13 @@ _WORKER_CONFIG: PipelineConfig | None = None
 def _thread_environment(n_jobs: int) -> dict[str, str]:
     """Environment variables capping each worker's threads at ``cpu_count // n_jobs``.
 
-    XLA's CPU backend and every BLAS size their pools to the whole machine, so N workers
-    run N x cores threads between them. The cap is a precaution against that
-    oversubscription rather than a measured win: on the recorded benchmark eight capped
-    workers and eight uncapped ones finished the same batch in 54.1 and 54.7 s
-    (``docs/benchmarks.md``, D58). It is kept because it costs nothing there and because
-    BLAS-heavy stages are where oversubscription has been seen to bite (the D50 record's
-    32-thread OpenBLAS).
+    XLA's CPU backend and every BLAS size their thread pools to the whole machine, so N
+    workers would run N x cores threads between them. The cap is a precaution against
+    that oversubscription rather than a measured gain: on the recorded benchmark eight
+    capped workers and eight uncapped ones finished the same batch in 54.1 and 54.7 s
+    (``docs/benchmarks.md``, D58). It is kept because it has no measured cost there and
+    because oversubscription has been observed in BLAS-heavy stages (the 32-thread
+    OpenBLAS of the D50 record).
     """
     cores = os.cpu_count() or 1
     threads = max(1, cores // max(1, n_jobs))
@@ -2557,10 +2557,21 @@ def run_pipeline(
 
     Notes
     -----
-    Worker processes are started with the ``spawn`` method on every platform, so a script
-    that calls this with ``jobs > 1`` must do so from under ``if __name__ == "__main__":``
-    -- the workers import the script as a module, and a bare call would start the batch
-    again in each of them. The ``albireo`` command already does.
+    Stars are independent, so with ``jobs > 1`` they run in a process pool started with
+    the ``spawn`` method on every platform. A script that calls this with ``jobs > 1``
+    must therefore do so from under ``if __name__ == "__main__":``: the workers import
+    the script as a module, and an unguarded call would start the batch again in each of
+    them. The ``albireo`` command is guarded.
+
+    The scaling is sub-linear because a single star already occupies several cores, so
+    the workers overlap only the serial part of each star (compilation, the Python-side
+    scans, the orbit fit, the writing). On the development desktop (16 cores, eight
+    simulated stars) four workers finished the batch 2.0x faster than one process and
+    eight 2.5x; capping each worker's XLA and BLAS threads at ``cpu_count // jobs`` made
+    no measurable difference on that benchmark (``docs/benchmarks.md``, D58). A worker
+    returns a plain-data :class:`StarResult`; the live objects (the :class:`~albireo.Fit`,
+    the velocity table, the label match) are kept only on an in-process run, since they
+    carry compiled JAX programs that cannot be pickled.
     """
     if isinstance(config, str | os.PathLike):
         config = load_config(config)
@@ -2658,17 +2669,17 @@ def _star_directories(directory: Path, stars: Sequence[StarConfig]) -> dict[str,
 def demo_config(
     directory: str | os.PathLike = "albireo_demo", *, fast: bool = False, sample: bool = False
 ) -> PipelineConfig:
-    """The batch ``albireo demo`` runs: two simulated stars whose answers are known.
+    """The batch that ``albireo demo`` runs: two simulated stars with known answers.
 
-    The first is the packaged example (:func:`albireo.load_example`), disentangled and
-    measured against its own components -- differential velocities, because its files
-    declare no wavelength medium and no library is consulted for it. The second is a star
-    whose components are drawn from a toy synthetic library
-    (:func:`albireo.simulate.synthetic_library`) at known labels, so the label stage can
-    be shown recovering them and pinning the zero point: its systemic velocity of +12 km/s
-    is something the disentangling alone can never see, and the orbit fitted to the
-    absolute velocities recovers it. Both reports carry an "against the injected truth"
-    block. Nothing here downloads.
+    The first star is the packaged example (:func:`albireo.load_example`), disentangled
+    and measured against its own components. Its velocities are differential, because
+    its files declare no wavelength medium and no library is consulted for it. The second
+    is a star whose components are drawn from a toy synthetic library
+    (:func:`albireo.simulate.synthetic_library`) at known labels, so the label stage
+    recovers them and pins the zero point: its systemic velocity of +12 km/s is not
+    identifiable by the disentangling alone, and the orbit fitted to the absolute
+    velocities recovers it. Both reports carry an "against the injected truth" block.
+    Nothing is downloaded.
     """
     from albireo.examples import load_example
     from albireo.simulate import (

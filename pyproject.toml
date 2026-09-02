@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "albireo"
 # Single-sourced from src/albireo/__init__.py (see [tool.hatch.version]); `albireo.__version__`
 # and the installed distribution metadata can therefore never disagree. tests/test_metadata.py
-# asserts that, and that CITATION.cff — the one copy no build backend can read — agrees too.
+# asserts that, and that CITATION.cff (the one copy no build backend can read) agrees too.
 dynamic = ["version"]
 description = "GPU-accelerated Bayesian spectral disentangling of double- and multiple-lined spectroscopic binaries"
 readme = "README.md"
@@ -34,8 +34,8 @@ classifiers = [
 ]
 dependencies = [
     "numpy>=1.26",
-    # scipy: banded SPD solves for the continuum smoother in albireo.preprocess.
-    # Already a hard dependency of jax, so this costs nothing to declare and is honest.
+    # scipy: banded SPD solves for the continuum smoother in albireo.preprocess. It is
+    # already a hard dependency of jax, so declaring it adds no installation cost.
     "scipy>=1.11",
     "jax>=0.5",
     "numpyro>=0.16",
@@ -47,8 +47,8 @@ dependencies = [
 # imports astropy, so users who already hold arrays in memory need not install it.
 io = ["astropy>=6"]
 # Figures and posterior diagnostics (albireo.plotting, albireo.results.to_inference_data).
-# Optional for the same reason astropy is: a fit running on a headless cluster node should
-# not have to install a plotting stack.
+# Optional for the same reason astropy is: a fit on a headless cluster node does not need a
+# plotting stack.
 plots = ["matplotlib>=3.8", "arviz>=0.18"]
 dev = [
     "pytest>=8",
@@ -59,15 +59,11 @@ dev = [
     "astropy>=6",
     "matplotlib>=3.8",
     "arviz>=0.18",
-    # The netCDF engine xarray falls back to when netCDF4 is absent. It gates exactly one
-    # test — tests/test_results.py::test_inference_data_round_trips_through_netcdf — which
-    # is the only coverage of the arviz export surface, `to_inference_data(...).to_netcdf()`.
-    # Without it that test `importorskip`s away and the bridge's on-disk format is exercised
-    # nowhere. Unrelated to `save_fit`/`load_fit`, which are `.npz` and need nothing extra.
-    #
-    # h5py is not redundant: h5netcdf is a pure-Python *interface* and raises ImportError at
-    # call time without an HDF5 backend. Listing h5netcdf alone converts that skip into a
-    # failure, which is strictly worse than the skip it was meant to remove.
+    # The netCDF engine xarray falls back to when netCDF4 is absent. It gates one test,
+    # tests/test_results.py::test_inference_data_round_trips_through_netcdf, which is the
+    # only coverage of `to_inference_data(...).to_netcdf()`; without it that test is skipped.
+    # `save_fit`/`load_fit` use `.npz` and need nothing extra. h5py is required as well:
+    # h5netcdf is a pure-Python interface and raises ImportError without an HDF5 backend.
     "h5netcdf",
     "h5py",
 ]
@@ -75,11 +71,10 @@ docs = [
     "mkdocs-material>=9.5",
     "mkdocstrings[python]",
     "mkdocs-jupyter",
-    # Not a linter here. mkdocstrings-python line-wraps a `separate_signature:` signature
-    # only if Black or Ruff is importable, and otherwise silently emits it on one line
-    # (`_get_formatter` falls back to the identity function). The dev venv has ruff, so
-    # without this the site built locally and the site deployed from CI differ, and
-    # --strict does not notice.
+    # Not used as a linter here. mkdocstrings-python line-wraps a `separate_signature:`
+    # signature only if Black or Ruff is importable and otherwise emits it on one line, so
+    # without this the site built locally (where ruff is present) and the site built in CI
+    # would differ.
     "ruff>=0.8",
 ]
 
@@ -104,9 +99,8 @@ artifacts = ["src/albireo/data_files/*.npz", "src/albireo/py.typed"]
 line-length = 100
 target-version = "py312"
 # Recent ruff formats Python code blocks inside Markdown as well as .py files. The docs
-# align inline comments deliberately — it is what makes a long argument list readable in a
-# tutorial — and reformatting would collapse that alignment across every page. The prose is
-# reviewed by reading it, not by a formatter.
+# align inline comments in long argument lists for readability, and reformatting would
+# collapse that alignment on every page.
 extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
@@ -115,20 +109,18 @@ ignore = ["E741"]
 
 [tool.ruff.lint.per-file-ignores]
 # The notebook builders hold their pages' Markdown as Python string literals, so RUF001's
-# ambiguous-character rule fires on typography that is correct where it is rendered: a real
-# sigma, a multiplication sign, an en dash. The prose is reviewed by reading it.
+# ambiguous-character rule fires on typography that is correct where it is rendered (a
+# sigma, a multiplication sign, an en dash).
 "scripts/build_*_notebook.py" = ["RUF001"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# `-q` for signal; `--strict-markers` so a typo'd marker is an error rather than a test
-# that silently never runs.
+# `--strict-markers` makes a misspelled marker an error rather than a test that never runs.
 addopts = "-q --strict-markers"
-# tests/ has no __init__.py, so pytest's prepend import mode puts tests/ — not the repo
-# root — on sys.path, and the cross-module helper imports (`from tests.test_likelihood
-# import dense_marginal` in test_ar1/test_lsf_h3/test_lsf_varying) fail to collect under
-# the `pytest` console script. They only worked under `python -m pytest`, which adds the
-# working directory itself. Declaring the path here makes both invocations equivalent.
+# tests/ has no __init__.py, so pytest's prepend import mode puts tests/ rather than the
+# repository root on sys.path, and the cross-module helper imports (`from tests.test_likelihood
+# import dense_marginal` in test_ar1/test_lsf_h3/test_lsf_varying) fail under the `pytest`
+# console script. Declaring the path makes `pytest` and `python -m pytest` equivalent.
 pythonpath = ["."]
 markers = [
     "slow: real sampling or multi-minute closed-loop fits; deselect with -m 'not slow'",

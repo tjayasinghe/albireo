@@ -1,13 +1,12 @@
-"""The five-minute quickstart: load, fit, plot — no data of your own, no network.
+"""Quickstart: load the packaged example, fit the orbit at MAP, and plot the spectra.
 
-This is the shortest thing in albireo that does something real. It loads the example
-dataset that ships inside the package, fits the orbit with the component spectra
-marginalized out, and writes two figures. On a laptop it takes about a minute, most of
-which is JAX compiling the model the first time it is called.
+This is the shortest complete analysis in albireo. It loads the example dataset that
+ships inside the package, fits the orbit with the component spectra marginalized, and
+writes two figures. It runs in about a minute on a laptop, most of which is JAX
+compiling the model on its first call.
 
-It deliberately stops at MAP rather than running NUTS. MAP is enough to show the machinery
-working and to get a picture; the posterior — which is the actual reason to use this
-package — is what ``examples/01_sb2_end_to_end.py`` goes on to do.
+The script stops at the maximum a posteriori fit. The posterior over the orbit, which is
+the purpose of the package, is sampled in ``examples/01_sb2_end_to_end.py``.
 
 Usage
 -----
@@ -29,22 +28,22 @@ import albireo as ab
 def main() -> None:
     print(f"albireo {ab.__version__}")
 
-    # 1. Data. Packaged with albireo, so this works offline and in a fresh notebook.
-    #    `with_truth=True` also hands back what was injected, which is what lets the
-    #    script check itself at the end.
+    # 1. Data. The example is packaged with albireo, so this works offline. With
+    #    `with_truth=True` the injected orbit and component spectra are returned as well,
+    #    which lets the script check its own result at the end.
     dataset, truth = ab.load_example("sb2_sim", with_truth=True)
     print(dataset.summary())
 
-    # 2. The model grid. The example records the grid it was generated on; for your own
-    #    data, build one with `ab.LogGrid.covering(dataset, ...)`, which sizes the margins
-    #    from the velocity budget and the LSF width.
+    # 2. The model grid. The example records the grid it was generated on. For observed
+    #    data, `ab.LogGrid.covering(dataset, ...)` builds one with margins sized from the
+    #    velocity budget and the LSF width.
     grid = ab.LogGrid(x0=truth["grid_x0"], dx=truth["grid_dx"], n=int(truth["grid_n"]))
 
-    # 3. The model. Two things are not inferred here and have to be supplied: the light
-    #    fractions (with a constant light ratio the data only ever constrain the products
-    #    l_i * d_i — docs/math.md 5.2) and the LSF width. `v_rel_max_kms` is the velocity
-    #    budget the static solver structure is built for; exceeding it is guarded, not
-    #    silently wrong.
+    # 3. The model. Two quantities are not inferred and must be supplied: the light
+    #    fractions (with a constant light ratio the data constrain only the products
+    #    l_i * d_i; docs/math.md section 5.2) and the LSF width. `v_rel_max_kms` is the
+    #    velocity budget for which the static solver structure is built; orbits that
+    #    exceed it are rejected with a non-finite log density rather than mis-solved.
     model = ab.MarginalOrbitModel(
         grid,
         dataset,
@@ -53,15 +52,14 @@ def main() -> None:
         v_rel_max_kms=160.0,
     )
 
-    # 4. Priors. Deliberately broad — this is a demonstration, not a well-motivated fit.
-    #    `secosw`/`sesinw` are sqrt(e)*cos(w) and sqrt(e)*sin(w), which samples far better
-    #    than (e, omega) because it has no boundary at e = 0 and no wrap in omega.
+    # 4. Priors. These are broad, as befits a demonstration. `secosw` and `sesinw` are
+    #    sqrt(e) cos(omega) and sqrt(e) sin(omega), which sample better than (e, omega)
+    #    because the pair has no boundary at e = 0 and no wrap in omega.
     #
-    #    One trap worth knowing: that parameterization is singular at *exactly* e = 0,
-    #    where omega is undefined and the gradient is NaN. Never initialize at
-    #    secosw = sesinw = 0 — even for a binary you believe is circular, start slightly
-    #    off the origin, as here. numpyro reports this as "Cannot find valid initial
-    #    parameters", which does not obviously point at the cause.
+    #    The parameterization is singular at exactly e = 0, where omega is undefined and
+    #    the gradient is not finite. Never initialize at secosw = sesinw = 0; start
+    #    slightly off the origin, as here, even for a binary believed to be circular.
+    #    numpyro reports the singular start as "Cannot find valid initial parameters".
     priors = {
         "period": dist.Uniform(5.5, 6.5),
         "t_conj": dist.Uniform(-1.0, 1.0),
@@ -81,7 +79,7 @@ def main() -> None:
         "log_eta": jnp.log(5.0) * jnp.ones(2),
     }
 
-    print("\nfitting (the first evaluation compiles the model; that is the slow part)...")
+    print("\nfitting (the first evaluation compiles the model)...")
     start = time.perf_counter()
     fit = ab.run_map(model.model(priors), init=init)
     print(f"  {fit.num_steps} L-BFGS steps in {time.perf_counter() - start:.1f} s")
@@ -92,17 +90,16 @@ def main() -> None:
     print(f"  K_1       {k_fit[0]:8.3f} km/s (truth {k_true[0]:.3f})")
     print(f"  K_2       {k_fit[1]:8.3f} km/s (truth {k_true[1]:.3f})")
 
-    # 5. The component spectra, conditional on the fitted orbit, with uncertainties. Read
-    #    the band, not the mean: where the epochs give no leverage the smoothness prior
-    #    sets the answer, and the band is what says so.
+    # 5. The component spectra conditional on the fitted orbit, with their pointwise
+    #    uncertainties. Where the epochs give no leverage the smoothness prior sets the
+    #    answer, and the uncertainty band identifies those regions.
     marginal = model.marginal(fit.params)
     d_hat = np.asarray(marginal.d_hat)
     std = np.asarray(ab.spectra_std(marginal))
     print(f"\n  recovered spectra: {d_hat.shape[0]} components x {d_hat.shape[1]} pixels")
     print(f"  median uncertainty: {np.median(std):.4f} in normalized flux")
 
-    # 6. Save the fit and export the spectra. This is the part that turns a run into
-    #    something a co-author can open.
+    # 6. Save the fit and export the spectra.
     ab.save_fit(fit, "quickstart_map.npz")
     ab.write_ascii("quickstart_spectra.txt", grid, d_hat, std)
     print("\n  wrote quickstart_map.npz, quickstart_spectra_1.txt, quickstart_spectra_2.txt")
@@ -128,8 +125,7 @@ def main() -> None:
     else:
         print('  (install "albireo[plots]" for the figures)')
 
-    # The point of the example is that this passes. Tolerances are loose because the fit
-    # is MAP on 12 epochs of a deliberately small problem.
+    # The tolerances are loose because this is a MAP fit on 12 epochs of a small problem.
     assert abs(k_fit[0] - k_true[0]) / k_true[0] < 0.05, "K_1 off by more than 5%"
     assert abs(k_fit[1] - k_true[1]) / k_true[1] < 0.05, "K_2 off by more than 5%"
     assert abs(float(fit.params["period"]) - truth["period"]) < 0.05, "period off by > 0.05 d"

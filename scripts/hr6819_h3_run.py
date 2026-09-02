@@ -1,23 +1,23 @@
-"""HR 6819, wide window, wavelength-dependent LSF *asymmetry* fitted jointly (D38).
+"""HR 6819, wide window, wavelength-dependent LSF asymmetry fitted jointly (D38).
 
-The last instrumental suspect. D37 exonerated LSF width variation (+90.5 nats,
-orbit unmoved); the surviving LSF channel is profile asymmetry — the first-order
-centroid effect a symmetric kernel cannot produce. This run frees per-anchor
-Gauss-Hermite ``h3`` alongside the D37 widths (13 + 13 anchors) on the D36
-configuration (wide window, Hgamma masked, per-epoch jitters + shared AR(1) phi).
+The last instrumental suspect. D37 exonerated LSF width variation (+90.5 nats, orbit
+unmoved); the surviving LSF channel is profile asymmetry, the first-order centroid
+effect a symmetric kernel cannot produce. This run frees per-anchor Gauss-Hermite
+``h3`` alongside the D37 widths (13 + 13 anchors) on the D36 configuration (wide
+window, Hgamma masked, per-epoch jitters and shared AR(1) phi).
 
-What the closed loop already measured (tests/test_lsf_h3.py): the free spectra
-absorb even a wavelength-varying asymmetry outright — an injected h3 ramp came back
-flat with the orbit unharmed — because a static centroid-warp field is representable
-by the spectra; the data-identified remainder is the epoch-coupled sampling term
+The closed loop (tests/test_lsf_h3.py) measured that the free spectra absorb a
+wavelength-varying asymmetry: an injected h3 ramp came back flat with the orbit
+unmoved, because a static centroid-warp field is representable by the spectra. The
+data-identified remainder is the epoch-coupled sampling term
 ~ c'(lambda) * lambda * (v - v_b)/c, tens of m/s here (math.md §1.3). Fitted h3
 profiles are therefore diagnostics, and the orbit's response is the readout: if the
-period does not move, every LSF channel this model can express is exonerated, and
-the surviving suspects for the 0.041 d literature offset reduce to the Be disc's
-variability and the published CCF blending itself.
+period does not move, every LSF channel this model can express is exonerated, and the
+surviving suspects for the 0.041 d literature offset reduce to the Be disc's
+variability and the published CCF blending.
 
-300 steps (not 200): D37 measured the width directions flattening the already-flat
-K_Be axis; the h3 directions add 13 more near-degenerate parameters.
+300 steps rather than 200: D37 measured the width directions flattening the already
+flat K_Be axis, and the h3 directions add 13 more near-degenerate parameters.
 
 Run:  python scripts/hr6819_h3_run.py [--max-steps 300]
       (expects the FEROS FITS under data/hr6819 or $ALBIREO_HR6819_DATA)

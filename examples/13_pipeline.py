@@ -1,39 +1,38 @@
-"""Everything, for a list of stars, from one declaration (``docs/design.md`` D58).
+"""Run every stage for a list of stars from one declaration (``docs/design.md`` D58).
 
-Every other example does one thing to one star. This one runs the whole chain --
-disentangle, fit labels to the components, measure one velocity per component per epoch
-against them, fit the orbit to the table, write the products and the figures -- for a
-*batch* of stars from a single declaration, which is what ``albireo run config.toml`` does
-from the command line and what a survey actually needs.
+The other examples apply one stage to one star. This one runs the whole chain
+(disentangle, fit labels to the components, measure one velocity per component per epoch
+against them, fit the orbit to the table, write the products and the figures) for a batch
+of stars from a single declaration. It is what ``albireo run config.toml`` does from the
+command line.
 
     python examples/13_pipeline.py            # in-process, two simulated stars
     python examples/13_pipeline.py --jobs 2   # the same batch in two worker processes
 
 Both stars are simulated with known answers, so the reports carry an "against the
 injected truth" block. The first is the packaged example, measured against its own
-disentangled components: its velocities are *differential*, because a disentangled
-component's rest frame is not identified and no synthetic grid is consulted for it, so
-the orbit fitted to the table gives each component its own systemic velocity. The second
-star's components are drawn from a toy synthetic library at known labels, and the label
-stage fits them back -- and, the part that matters for the velocities, measures each
-component's frame offset, so its velocities come out *absolute* and the orbit recovers the
-+12 km/s systemic velocity that the disentangling alone can never see.
+disentangled components: its velocities are differential, because a disentangled
+component's rest frame is not identified and no synthetic grid is consulted, so the orbit
+fitted to the table gives each component its own systemic velocity. The second star's
+components are drawn from a toy synthetic library at known labels. The label stage fits
+them back and measures each component's frame offset, so its velocities are absolute and
+the orbit recovers the +12 km/s systemic velocity that the disentangling alone cannot
+determine.
 
-Three things to watch in the output.
+Three results to check in the output.
 
-1. **The flags.** Every caveat a run records is printed at the end of each star's report
-   and stored in ``result.json``. On the packaged star the flag says the velocities are
+1. The flags. Every caveat a run records is printed at the end of each star's report and
+   stored in ``result.json``. On the packaged star the flag states that the velocities are
    differential and why; on the toy star there should be none.
-2. **The zero point.** The toy star's ``gamma`` against the injected +12 km/s, which is a
-   number a disentangling cannot produce on its own.
-3. **The batch table.** ``results.csv`` has one row per star -- period, eccentricity,
-   semi-amplitudes and systemic velocities with errors, labels, flags -- and
-   ``failures.txt`` would list any star that did not complete, without the others
-   stopping.
+2. The zero point. The toy star's ``gamma`` against the injected +12 km/s, a quantity a
+   disentangling cannot produce on its own.
+3. The batch table. ``results.csv`` has one row per star (period, eccentricity,
+   semi-amplitudes and systemic velocities with errors, labels, flags), and
+   ``failures.txt`` lists any star that did not complete, without stopping the others.
 
 Environment
 -----------
-``ALBIREO_EXAMPLE_FAST=1`` trims every optimizer budget for CI (the same as ``--fast``).
+``ALBIREO_EXAMPLE_FAST=1`` reduces every optimizer budget for CI (the same as ``--fast``).
 """
 
 from __future__ import annotations
@@ -65,7 +64,7 @@ def main(argv: list[str] | None = None) -> int:
     run = ab.run_pipeline(config, jobs=jobs)
     print(f"\nbatch wall {time.perf_counter() - t0:.1f} s")
 
-    # ---- what came out --------------------------------------------------------
+    # ---- the products ---------------------------------------------------------
     packaged = run.results["sb2_sim"]
     toy = run.results["toy_library_sb2"]
     print("\nsb2_sim (packaged example, no library):")
@@ -108,8 +107,8 @@ def main(argv: list[str] | None = None) -> int:
     assert np.isfinite(list(toy.report["seconds"].values())).all()
     print(
         "\nOK - both stars through every stage from one declaration, the differential and "
-        "absolute cases told apart, and the systemic velocity recovered where the labels "
-        "pinned the frame."
+        "absolute cases distinguished, and the systemic velocity recovered where the label "
+        "fit measured the frame."
     )
     return 0
 

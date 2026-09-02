@@ -1,41 +1,40 @@
-"""Find a hidden companion with the K2 scan: SB1 + faint secondary (``docs/math.md`` §6).
+"""Find a faint companion with the K2 scan: SB1 + marginalized secondary (``docs/math.md`` §6).
 
-The dormant-compact-object / faint-companion workflow. You already have an SB1
-solution — period, conjunction time, eccentricity vector and ``K_1`` from the
-single-lined orbit — and you want to know whether a second set of lines is buried in
-the composite spectra at some unknown ``K_2``.
+The faint-companion workflow. An SB1 solution is given (period, conjunction time,
+eccentricity vector and ``K_1`` from the single-lined orbit), and the question is whether
+a second set of lines is present in the composite spectra at some unknown ``K_2``.
 
-At each trial ``K_2`` the companion's deviation spectrum is a *linear* component, so it
-marginalizes analytically: one linear solve per grid point buys the optimal matched
-filter integrated over every possible companion spectrum, with no template library.
-The detection statistic is
+At each trial ``K_2`` the companion's deviation spectrum enters the model linearly, so it
+is marginalized analytically: one linear solve per grid point gives the matched filter
+integrated over every possible companion spectrum, with no template library. The
+detection statistic is
 
     D(K_2) = 2 [ log p(y | K_2) - log p(y | no companion) ].
 
-This script runs the scan twice with everything else held fixed: once on a dataset
-with a companion injected at K_2 = 38 km/s, and once on a companion-free dataset. The
-second run is the point. Because both marginal likelihoods carry their ``1/2 log det``
-Occam terms, the extra marginalized component *costs* likelihood unless coherent signal
-pays for it, so on companion-free data D is negative at every trial — the honest
-baseline that makes a positive D mean something.
+The script runs the scan twice with everything else held fixed: once on a dataset with
+a companion injected at K_2 = 38 km/s, and once on a companion-free dataset. Both
+marginal likelihoods carry their ``1/2 log det`` Occam terms, so the extra marginalized
+component lowers the likelihood unless coherent signal compensates for it; on
+companion-free data D is therefore negative at every trial. That baseline is what gives
+a positive D its meaning.
 
-Two caveats the package will not paper over:
+Two limitations:
 
-* ``D`` is **not** asymptotically chi-squared. Its null distribution depends on the
-  companion's prior scale ``(tau_2, eta_2)`` and must be calibrated by injection-
-  recovery with :mod:`albireo.simulate` (``docs/math.md`` §6). Absolute D values here
-  are illustrative; the contrast between peak, edges, and null is the message.
-* ``ell_2`` is a *choice*, not a fit. The observable is ``ell_2 * d_2``, so the
-  companion's light fraction trades exactly against its line depths (``docs/math.md``
-  §5.2), and at ``ell_2 = 0.1`` the recovered spectrum's smooth envelope is
-  prior-dominated by a factor ~ ell_1/ell_2. The line *pattern* is what the scan
-  recovers, not an absolute depth scale.
+* ``D`` is not asymptotically chi-squared. Its null distribution depends on the
+  companion's prior scale ``(tau_2, eta_2)`` and must be calibrated by injection and
+  recovery with :mod:`albireo.simulate` (``docs/math.md`` §6). The absolute D values
+  here are illustrative; the contrast between peak, edges and the null run is the result.
+* ``ell_2`` is assumed, not fitted. The observable is ``ell_2 * d_2``, so the companion's
+  light fraction trades exactly against its line depths (``docs/math.md`` §5.2), and at
+  ``ell_2 = 0.1`` the smooth envelope of the recovered spectrum is prior-dominated by a
+  factor of about ell_1/ell_2. The scan recovers the line pattern, not an absolute depth
+  scale.
 
 Environment
 -----------
 ALBIREO_EXAMPLE_FAST=1
     CI-sized run: 10 epochs and a 4 km/s K_2 grid. Unset (the default) gives 12 epochs
-    and a 2 km/s grid. The injected K_2 = 38 km/s lands exactly on both grids.
+    and a 2 km/s grid. The injected K_2 = 38 km/s lies exactly on both grids.
 
 Usage
 -----
@@ -55,15 +54,15 @@ import albireo as ab
 
 FAST = bool(os.environ.get("ALBIREO_EXAMPLE_FAST"))
 
-# --- the system: a bright primary and a faint, never-directly-seen companion ------
+# --- the system: a bright primary and a faint companion ---------------------------
 GRID = ab.LogGrid.from_wavelength_range(5000.0, 5045.0, dv_kms=5.5)
 P_TRUE = 6.31  # orbital period [d]
 ECC_TRUE = 0.15
 OMEGA_TRUE = 0.70  # argument of periastron of the primary [rad]
 T_PERI_TRUE = 2.0
-K1_TRUE = 12.0  # primary semi-amplitude [km/s] -- known from the SB1 solution
-K2_TRUE = 38.0  # companion semi-amplitude [km/s] -- what the scan must find
-ELL = (0.9, 0.1)  # (ell_1, ell_2): a CHOICE, see the module docstring
+K1_TRUE = 12.0  # primary semi-amplitude [km/s], known from the SB1 solution
+K2_TRUE = 38.0  # companion semi-amplitude [km/s], the quantity the scan must recover
+ELL = (0.9, 0.1)  # (ell_1, ell_2): assumed, not fitted; see the module docstring
 LSF = {"a": 7.0}
 SNR = 150.0
 N_EPOCHS = 10 if FAST else 12
@@ -75,7 +74,7 @@ SEED = 7
 # joint fit): a stiffer, shallower prior for the faint companion than for the primary.
 PRIOR = ab.SmoothnessPrior(jnp.asarray([300.0, 30.0]), jnp.asarray([5.0, 5.0]))
 
-# (K_1 + max K_2)(1 + e) with headroom -- the static solver bandwidth for the
+# (K_1 + max K_2)(1 + e) with headroom: the static solver bandwidth for the
 # two-component model. The null (one-component) model inherits it and needs less.
 V_REL_MAX = 105.0
 
@@ -83,8 +82,8 @@ V_REL_MAX = 105.0
 def sb1_solution() -> dict:
     """The fixed SB1 orbit, in albireo's (period, t_conj, secosw, sesinw) parameterization.
 
-    ``k1`` is passed separately to :func:`albireo.k2_scan` — the scan profiles over the
-    companion's semi-amplitude only, with everything else nailed down by the SB1 fit.
+    ``k1`` is passed separately to :func:`albireo.k2_scan`: the scan profiles over the
+    companion's semi-amplitude only, with the other elements fixed by the SB1 fit.
     """
     nu_conj = 0.5 * np.pi - OMEGA_TRUE
     e_conj = 2.0 * np.arctan2(
@@ -119,8 +118,8 @@ def simulate(*, with_companion: bool):
         )
         components, light = [primary, companion], ELL
     else:
-        # Identical primary, identical epochs, identical noise seed -- only the
-        # companion is removed, so any difference in D is the companion's doing.
+        # Identical primary, epochs and noise seed; only the companion is removed, so
+        # any difference in D is due to the companion.
         orbit = ab.OrbitParams(
             period=P_TRUE, t_peri=T_PERI_TRUE, ecc=ECC_TRUE, omega=OMEGA_TRUE, k=(K1_TRUE,)
         )
@@ -190,7 +189,7 @@ def main() -> None:
     print(f"K_2 trials: {K2_GRID.size} from {K2_GRID[0]:.0f} to {K2_GRID[-1]:.0f} km/s")
     t_start = time.perf_counter()
 
-    # 1. The positive: a companion really is there ---------------------------------
+    # 1. The dataset with the injected companion -----------------------------------
     dataset, companion_truth = simulate(with_companion=True)
     print(dataset.summary())
     t0 = time.perf_counter()
@@ -198,8 +197,9 @@ def main() -> None:
     t_injected = time.perf_counter() - t0
     print_curve(injected, f"companion injected at K_2 = {K2_TRUE:.0f} km/s  [{t_injected:.1f} s]")
 
-    # The recovered companion spectrum comes free from the conditional Gaussian at the
-    # peak. Compare the line *pattern*: the mean level is prior-set (math.md 5.2, 6).
+    # The recovered companion spectrum is the conditional Gaussian mean at the peak. The
+    # comparison is of the line pattern: the mean level is set by the prior (math.md
+    # §5.2, §6).
     core = np.asarray(companion_truth) < -0.05
     margin = int(0.05 * GRID.n)  # ignore the zero-padded grid edges
     core[:margin] = False
@@ -217,7 +217,7 @@ def main() -> None:
         f"  median formal sigma on d_2: {float(np.median(np.asarray(injected.companion_std))):.3f}"
     )
 
-    # 2. The negative control: same everything, no companion ------------------------
+    # 2. The companion-free control: identical in every other respect ---------------
     null_dataset, _ = simulate(with_companion=False)
     t0 = time.perf_counter()
     null = run_scan(null_dataset)
@@ -225,17 +225,17 @@ def main() -> None:
     print_curve(null, f"companion-free control  [{t_null:.1f} s]")
     print(
         f"  max over the whole grid: D = {float(np.max(null.detection)):.1f} "
-        "(negative everywhere -- nothing to detect, and the Occam term says so)"
+        "(negative at every trial: the Occam term penalizes the unneeded component)"
     )
 
-    # 3. Figure, only if matplotlib happens to be installed --------------------------
+    # 3. Figure, only if matplotlib is installed -------------------------------------
     if importlib.util.find_spec("matplotlib") is not None:
         plot_detection(injected, null, "k2_scan_detection.png")
         print("\nwrote k2_scan_detection.png")
     else:
         print("\nmatplotlib not installed - skipping the figure (it is not a dependency)")
 
-    # 4. The gate --------------------------------------------------------------------
+    # 4. Assertions ------------------------------------------------------------------
     assert injected.k2_peak == K2_TRUE, (
         f"peak at K_2 = {injected.k2_peak} km/s, injected {K2_TRUE} km/s"
     )

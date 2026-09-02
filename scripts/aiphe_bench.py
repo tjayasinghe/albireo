@@ -1,37 +1,33 @@
 """AI Phoenicis: the three disentangling codes on real archival spectra.
 
-The simulated benchmark in `fd3_bench.py` compares albireo, fd3 and shift-and-add against a
-truth spectrum nobody disputes because it was injected. This script does the harder thing:
-real data, where there is no truth spectrum at all — and where the *orbit* is nevertheless
-known to a precision no disentangling code can approach.
+The simulated benchmark in ``fd3_bench.py`` compares albireo, fd3 and shift-and-add against
+an injected truth spectrum. This script runs the comparison on real data, where no truth
+spectrum exists but the orbit is known to a precision no disentangling code approaches.
 
-That is why the roadmap picked AI Phe (HD 6980) over HR 6819. It eclipses, so its geometry
-is pinned by the TESS light curve; and its spectroscopic semi-amplitudes are published from
-several independent studies agreeing to 0.1 per cent:
+AI Phe (HD 6980) eclipses, so its geometry is pinned by the TESS light curve, and its
+spectroscopic semi-amplitudes are published from several independent studies agreeing to
+0.1 per cent:
 
     K1 = 51.164 +/- 0.007 km/s      K2 = 49.106 +/- 0.010 km/s
     P  = 24.5924 d                  e  = 0.1878 +/- 0.0006
     omega = 110.30 +/- 0.06 deg     T0 = BJD_TDB 2458362.82847  (primary eclipse)
     -- Maxted et al. (2020), MNRAS 498, 332, Tables 2-3
 
-So the comparison has an external ground truth after all. It is not the component spectra,
-it is the orbit: recover K1 and K2 from 36 archival HARPS spectra and hold the answer against
-numbers good to 0.014 and 0.020 per cent.
+The external ground truth is therefore the orbit rather than the component spectra: recover
+K1 and K2 from 36 archival HARPS spectra and compare against values good to 0.014 and
+0.020 per cent.
 
-**A correction to the roadmap's own premise, which is worth more than the figure.** The page
-says AI Phe was chosen because "it eclipses, so the light ratio is externally known and the
-one genuinely free choice in disentangling stops being a confound". That is half true. The
-eclipse pins the fractional radii, the inclination and the surface-brightness ratio *in the
-photometric band* — TESS, which is centred around 7860 A. The light ratio at the
-spectroscopic window is a different number and has to be computed from the radii and the two
-temperatures. It is also strongly wavelength dependent: for AI Phe's 6310 K + 5010 K pair
-with R2/R1 = 1.624, a blackbody estimate gives l2 = 0.375 at 4000 A and 0.510 at 6500 A. So
-the light ratio is far better constrained here than for a non-eclipsing system, but it is not
-handed to you, and quoting the TESS-band value at 5200 A would be a 10 per cent error in the
-one quantity every recovered line depth scales by.
+The light ratio is not supplied by the eclipse. The eclipse pins the fractional radii, the
+inclination and the surface-brightness ratio in the photometric band, TESS, centred near
+7860 A. The light ratio in the spectroscopic window is a different quantity and has to be
+computed from the radii and the two temperatures. It is also strongly wavelength dependent:
+for AI Phe's 6310 K + 5010 K pair with R2/R1 = 1.624, a blackbody estimate gives l2 = 0.375
+at 4000 A and 0.510 at 6500 A. The light ratio is far better constrained here than for a
+non-eclipsing system, but quoting the TESS-band value at 5200 A would be a 10 per cent error
+in the quantity every recovered line depth scales by.
 
 Data: 36 HARPS spectra (ESO programme archive, R = 115,000, 3782-6913 A), SNR 41-129,
-covering all ten phase bins. Fetched with `albireo.archive`.
+covering all ten phase bins. Fetched with :mod:`albireo.archive`.
 
 Run:  python scripts/aiphe_bench.py --data DIR [--fd3 PATH] [--fit]
 """
@@ -75,10 +71,10 @@ TAU, ETA = 300.0, 5.0
 def light_fractions(wave_angstrom: float) -> np.ndarray:
     """Blackbody light ratio at ``wave_angstrom`` from the published radii and Teffs.
 
-    Stated as an estimate, not a measurement: real stars are not blackbodies, and the
-    honest error on this is several per cent. Every recovered line depth scales as 1/l_i,
-    so this number is an assumption the results inherit — which is exactly the systematic
-    `scripts/m5_light_ratio_demo.py` quantifies.
+    An estimate, not a measurement: real stars are not blackbodies, and the error on this
+    is several per cent. Every recovered line depth scales as 1/l_i, so the value is an
+    assumption the results inherit; ``scripts/m5_light_ratio_demo.py`` quantifies that
+    systematic.
     """
     h, c, kb = 6.62607015e-34, 2.99792458e8, 1.380649e-23
     lam = wave_angstrom * 1e-10
@@ -105,9 +101,9 @@ def load(data_dir: Path):
 def published_velocities(bjd: np.ndarray) -> np.ndarray:
     """Radial velocities of both components at ``bjd`` from the published orbit.
 
-    The systemic velocity is deliberately absent: albireo's gamma is identically zero (D14),
-    because a common shift of both components is exactly degenerate with translating the
-    component spectra. The disentangling never sees it.
+    The systemic velocity is absent: albireo's gamma is identically zero (D14), because a
+    common shift of both components is exactly degenerate with translating the component
+    spectra. The disentangling does not see it.
     """
     omega = np.radians(OMEGA_PUB_DEG)
     tperi = float(t_peri_from_t_conj(T0_PUB, period=P_PUB, ecc=ECC_PUB, omega=omega))
@@ -197,7 +193,7 @@ def main() -> None:
         f"  deepest line   comp 1 {(sa[0] / ell[0]).min():.4f}, comp 2 {(sa[1] / ell[1]).min():.4f}"
     )
 
-    # How much do the two reconstructions agree, where the lines are?
+    # Agreement between the two reconstructions in the line cores.
     core = d_hat[0] < -0.10
     interior = np.zeros_like(core)
     interior[grid.n // 12 : -grid.n // 12] = True
@@ -209,7 +205,7 @@ def main() -> None:
             f"(mean-aligned {np.std(diff):.4f}, {core.sum()} px)"
         )
 
-    # ---- the orbit, which is where the real ground truth lives ----------------
+    # ---- the orbit, which carries the external ground truth -------------------
     if args.fit:
         print("\n--- fitting the orbit, and holding it against the published values ---")
         model = ab.MarginalOrbitModel(
@@ -232,7 +228,7 @@ def main() -> None:
         init = {
             "period": P_PUB,
             "t_conj": T0_PUB,
-            # Start off the published solution so agreement is a result, not an echo.
+            # Start away from the published solution, so agreement is not an echo of the init.
             "secosw": float(np.sqrt(ECC_PUB) * np.cos(omega)) * 0.85,
             "sesinw": float(np.sqrt(ECC_PUB) * np.sin(omega)) * 0.85,
             "k": jnp.array([K1_PUB * 0.92, K2_PUB * 1.08]),
@@ -242,9 +238,9 @@ def main() -> None:
         t0 = time.perf_counter()
         fit = ab.run_map(model.model(priors), init=init, max_steps=args.steps)
         print(f"  {fit.num_steps} L-BFGS steps in {time.perf_counter() - t0:.1f} s")
-        # Printed, not assumed. A fit that stopped at max_steps has not found the optimum,
-        # and quoting its semi-amplitudes against a published value good to 0.02% would be
-        # comparing an unconverged number with a measurement.
+        # A fit that stopped at max_steps has not found the optimum, so convergence is
+        # printed: semi-amplitudes from an unconverged fit cannot be compared with a
+        # published value good to 0.02%.
         print(f"  converged: {bool(fit.converged)}   |grad| = {float(fit.grad_norm):.3e}")
         if not bool(fit.converged):
             print("  *** NOT CONVERGED — the numbers below are a waypoint, not a result ***")

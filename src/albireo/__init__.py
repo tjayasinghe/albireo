@@ -1,9 +1,14 @@
 """albireo: GPU-accelerated Bayesian spectral disentangling of spectroscopic binaries.
 
-albireo requires float64 — adjoint identities, log-determinants, and sub-km/s velocity
-work are not reliable in float32 — so importing the package enables JAX x64 mode.
-Set the environment variable ``ALBIREO_DISABLE_X64`` (before import) to opt out for
-experiments; the test suite will not pass without x64.
+albireo infers the orbital elements and the individual component spectra of double- and
+multiple-lined spectroscopic binaries from a time series of composite spectra, in JAX.
+The component spectra are marginalized analytically and only the nonlinear parameters
+are sampled; the equations are in ``docs/math.md``.
+
+albireo requires float64: the adjoint identities, log-determinants and sub-km/s velocity
+work are not reliable in float32, so importing the package enables JAX x64 mode. Setting
+the environment variable ``ALBIREO_DISABLE_X64`` before import opts out for experiments;
+the test suite does not pass without x64.
 """
 
 import os
@@ -183,18 +188,14 @@ from albireo.todcor import (
 
 __version__ = "0.1.0.dev0"
 
-# albireo.io is the one module that needs astropy, so it is imported on first use rather
-# than at package import: `albireo.read_dataset(...)` stays discoverable, and installs
-# without the [io] extra keep working for everyone who already has arrays in memory.
+# albireo.io requires astropy, so it is imported on first use rather than at package
+# import, which keeps `albireo.read_dataset(...)` discoverable without the [io] extra.
 _IO_EXPORTS = frozenset(
     {"RawSpectrum", "read_dataset", "read_spectrum", "to_epoch", "write_spectra"}
 )
 
-# albireo.plotting needs matplotlib (and arviz, for the corner plot), which are optional
-# for the same reason astropy is: a fit that runs on a headless cluster node should not
-# have to install a plotting stack. Same lazy treatment, so `albireo.plot_spectra` stays
-# discoverable and raises an actionable error rather than an ImportError from inside a
-# figure.
+# albireo.plotting requires matplotlib (and arviz for the corner plot), so it is imported
+# on first use for the same reason, with an actionable error if the dependency is absent.
 _PLOT_EXPORTS = frozenset(
     {
         "plot_corner",

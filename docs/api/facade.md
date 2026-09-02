@@ -1,15 +1,16 @@
 # Disentangler (experimental)
 
-A declarative front end. You describe the system — which components exist, how bright each
-one is, what the spectrograph does, what is already known about the orbit — and albireo
-assembles the fit.
+A declarative front end. The caller states which components are present, how bright each
+one is, what the spectrograph does, and what is already known about the orbit, and albireo
+assembles the fit from that declaration.
 
 !!! warning "Experimental"
-    This is a *vocabulary*, and a vocabulary is expensive to change once people depend on
-    it, so it stays marked experimental until it has been used on somebody else's problem.
-    [`MarginalOrbitModel`](inference.md) and the functions around it are the supported
-    surface and are not going anywhere. `Disentangler.expert()` hands you exactly that
-    surface, so dropping down costs three lines rather than a rewrite.
+    This class defines a vocabulary, and a vocabulary is expensive to change once other
+    code depends on it, so it remains marked experimental until it has been used on a
+    problem outside this project. [`MarginalOrbitModel`](inference.md) and the functions
+    around it are the supported surface and are stable. `Disentangler.expert()` returns
+    exactly that surface, so moving to the low-level path costs three lines rather than a
+    rewrite.
 
 ```python
 import albireo as ab
@@ -25,27 +26,29 @@ fit = dis.fit()
 post = fit.sample(seed=0)
 ```
 
-## It is a compiler, not a shortcut
+## Derived quantities
 
-The façade emits the expert path rather than hiding it. Four things it *derives* are four
-things the low-level path makes you supply correctly, and `dis.explain()` prints every one:
+The façade emits the expert path rather than hiding it. Four quantities that the low-level
+path requires the caller to supply correctly are derived instead, and `dis.explain()`
+prints each one:
 
-| Derived | Why it is not yours to type |
+| Derived | Basis |
 |---|---|
-| The **velocity budget** | It must bound the largest relative velocity the *priors* allow, not the one the answer has. Too small and the sampler stalls against a guard it cannot see; reached through `log_likelihood` directly, too small is quietly *wrong*. The information is already in the `k` priors' support. |
+| The **velocity budget** | It must bound the largest relative velocity the priors allow, not the one the answer turns out to have. Too small a budget stalls the sampler against a guard it cannot see; reached through `log_likelihood` directly, too small a budget gives a wrong result without an error. The information is already in the support of the `k` priors. |
 | The **model grid** | Wide enough for that budget plus the LSF kernel radius. Short of that margin the shifted model runs off the grid and the fit silently loses flux there. |
-| The **conjunction phase** | Located by a 41-point scan before anything is optimized. The likelihood is sharply multimodal in phase, and L-BFGS in the wrong trough converges confidently to the wrong answer. |
+| The **conjunction phase** | Located by a 41-point scan before anything is optimized. The likelihood is sharply multimodal in phase, and L-BFGS started in the wrong trough converges tightly on the wrong answer. |
 | The **smoothness hyperparameters** | Fitted by empirical Bayes, then frozen for sampling, and reported per component with a flag on any that did not move from its start. |
 
-A fifth thing is structural rather than derived: a spec such as `Between(5.5, 6.5)` carries
-both its prior *and* its starting value, so `priors` and `init` cannot drift apart — in the
-low-level path they are two dicts written twice with an assertion between them.
+A fifth quantity is structural rather than derived: a spec such as `Between(5.5, 6.5)`
+carries both its prior and its starting value, so `priors` and `init` cannot diverge. In
+the low-level path they are two dictionaries written separately with an assertion between
+them.
 
-## When there is no orbit to declare
+## Declaring velocities instead of an orbit
 
-Not every binary has a published period, and for the ones that matter most it is the point
-that there isn't — BLOeM's 59 double-lined systems have no orbital solutions at all. Declare
-the velocities you measured instead:
+Not every binary has a published period, and for many systems of interest none exists:
+BLOeM's 59 double-lined systems have no orbital solutions. Measured velocities can be
+declared in place of an orbit:
 
 ```python
 dis = ab.Disentangler(
@@ -58,64 +61,68 @@ table = dis.fit()                     # a velocity-mode Fit; no orbital sites ar
 rv, err = table.velocities(), table.velocity_errors()
 ```
 
-Exactly one of `orbit=` and `velocities=` is required. This exists because the ordering an
-unsolved system forces cannot be met the other way round: the free per-epoch table
-(`docs/math.md` §7.6) is what *produces* the period, but it needs a warm start — a cold one
-is 122,000 nats worse — and the only warm start on offer used to be `Fit.free_velocities()`,
-which needs a Keplerian fit, which needs a period.
+Exactly one of `orbit=` and `velocities=` is required. For a system with no published
+period the free per-epoch table (`docs/math.md` §7.6) is what produces the period, and it
+requires a warm start: a cold start is 122,000 nats worse. The alternative warm start,
+`Fit.free_velocities()`, is reached through a Keplerian fit and therefore through a period,
+which is what an unsolved system lacks.
 
-Three things to know about the declaration:
+Three properties of the declaration:
 
-- The velocities are a **starting point, not a constraint**. The per-component zero point
-  stays unidentified, so what they must be right about is the epoch-to-epoch *pattern*, not
-  the level — a systemic +150 km/s changes neither the answer nor the solver's bandwidth,
-  because the budget is derived from the centred table.
-- The one failure mode is **refused rather than discovered**. A declaration whose components
-  never separate *is* the cold start, and it raises; velocities that never resolve the pair
-  beyond the LSF width warn.
-- `scan()` and `detection_limit()` need a known SB1 orbit and say so.
+- The velocities are a starting point, not a constraint. The per-component zero point
+  remains unidentified, so the declaration must be right about the epoch-to-epoch pattern
+  rather than about the level: a systemic offset of +150 km/s changes neither the result nor
+  the solver's bandwidth, because the budget is derived from the centred table.
+- A declaration whose components never separate is equivalent to a cold start and raises.
+  Velocities that never resolve the pair beyond the LSF width produce a warning.
+- `scan()` and `detection_limit()` require a known SB1 orbit and refuse without one.
 
-## Where it refuses to be convenient
+## Required declarations
 
-Each of these is a place where a default would be a scientific claim.
+In each of the following a default would amount to a scientific claim, so the value is
+required or the call is refused.
 
-- **Light fractions have no default.** `Star(light=...)` is required and the star lights
-  must sum to 1. With constant light fractions the likelihood sees only `l_i * d_i`, so
-  every recovered depth scales as `1/l_i` and nothing in the fit can tell you the value was
-  wrong. It is repeated in every summary under `Assumed, not measured`.
-- **It will not pretend a phase scan is a period search.** The scan resolves phase at *one*
-  period — the prior's midpoint — so a prior wide enough to be a search warns and names the
-  fix. It degrades rather than failing, so it is a warning rather than a refusal.
-- **Air versus vacuum is refused when it matters.** A `Nebular` or `Telluric` component is
-  keyed to absolute line positions, so an undeclared wavelength scale raises rather than
-  picking one. The difference is a nearly constant 83 km/s.
-- **A budget override may not shrink below what the priors reach**, and the error names the
+- **Light fractions have no default.** `Star(light=...)` is required and the stellar light
+  fractions must sum to 1. With constant light fractions the likelihood depends only on
+  `l_i * d_i`, so every recovered depth scales as `1/l_i` and nothing in the fit is
+  sensitive to a wrong value. The assumed value is repeated in every summary under
+  `Assumed, not measured`.
+- **A phase scan is not a period search.** The scan resolves phase at one period, the
+  prior's midpoint, so a prior wide enough to constitute a search warns and names the
+  remedy. The result degrades rather than failing, which is why this is a warning rather
+  than a refusal.
+- **Air versus vacuum must be declared when it matters.** A `Nebular` or `Telluric`
+  component is keyed to absolute line positions, so an undeclared wavelength scale raises
+  rather than being assumed. The difference between the two scales is a nearly constant
+  83 km/s.
+- **A budget override may not fall below what the priors reach**, and the error names the
   terms that overflowed it.
-- **The eccentricity singularity is designed around, not warned about.** A free `ecc` never
-  starts at the origin; `ecc=ab.Fixed(0.0)` does not sample those sites at all.
+- **The eccentricity singularity is handled by construction.** A free `ecc` never starts at
+  the origin, and `ecc=ab.Fixed(0.0)` does not sample those sites at all.
 
-## What is deliberately not in v1
+## Outside the scope of v1
 
-Per-epoch **jitter**, **AR(1)** correlated noise, **inferred light fractions**, and
-**inferred LSF widths**. Each is a one-line site in the low-level API, and each is a
-scientific claim rather than a convenience — a `jitter=True` keyword would offer one as the
-other. `fit.z_rms` is printed unconditionally so you can see whether you need them, and
-`dis.expert()` is how you add them.
+Per-epoch jitter, AR(1) correlated noise, inferred light fractions and inferred LSF widths
+are not offered through the façade. Each is a one-line site in the low-level API, and each
+is a scientific claim rather than a convenience, which a keyword such as `jitter=True`
+would present as the latter. `fit.z_rms` is printed unconditionally as the diagnostic for
+whether they are needed, and `dis.expert()` is the route to adding them.
 
-Three more are absent because the façade could not deliver them honestly, and each says so
-rather than doing something approximate:
+Three further declarations are refused rather than approximated:
 
-- **Hierarchical triples.** The model has the `period_out`/`t_conj_out`/`k_out` sites;
-  `Orbit(outer=...)` raises `NotImplementedError` pointing at `expert()`.
-- **Gauss-Hermite `h3`.** It reaches the kernel through `build_problem`, not through the
-  model class the façade builds, so an `LSF(h3=...)` field would have been silently
-  discarded. There is no such field.
+- **Hierarchical triples.** The model carries the `period_out`/`t_conj_out`/`k_out` sites;
+  `Orbit(outer=...)` raises `NotImplementedError` and points at `expert()`.
+- **Gauss-Hermite `h3`.** It reaches the kernel through `build_problem` rather than through
+  the model class the façade builds, so an `LSF(h3=...)` field would have been discarded
+  without an error. There is no such field.
 - **A lower bound on eccentricity.** The sampled pair is (√e·cos ω, √e·sin ω), in which a
   lower bound on *e* is an annulus rather than a box. `ecc=Between(lo, hi)` with `lo > 0`
-  raises instead of quietly dropping it — measured returning half the declared lower bound
-  before it did.
+  raises; before the refusal was added, a declared lower bound was measured returning half
+  its value.
 
-`Disentangler` also does not wrap plotting: [`albireo.plotting`](results.md) already covers
-it, and wrapping it would double the surface for no new guarantee.
+`Disentangler` does not wrap plotting: [`albireo.plotting`](results.md) already covers it,
+and wrapping it would double the surface without adding a guarantee.
+
+Background and references: [science overview](../science.md).
 
 ::: albireo.facade

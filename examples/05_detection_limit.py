@@ -1,46 +1,47 @@
 """From a peak to a claim: false-alarm rates and detection limits (``docs/math.md`` §6).
 
-``examples/02_k2_scan.py`` finds a companion. This one asks the two questions that turn
-that peak into something a referee will accept:
+``examples/02_k2_scan.py`` finds a companion. This script answers the two questions that
+turn a peak into a detection claim:
 
-1. **How often would noise alone have done that?** The detection statistic ``D`` has no
-   closed-form null distribution — it depends on the companion's prior scale, on the
-   epoch sampling, on the masks — so the only honest answer is measured. Draw many
-   datasets from the fitted no-companion model, scan each one exactly as the real data
-   were scanned, and look at how large ``D`` gets by chance.
-2. **What would I have found if it were there?** Inject a companion at a ladder of light
-   fractions, scan again, and count how often each rung clears the threshold. Where that
-   completeness curve crosses 95% is the limit — the sentence the Gaia BH and
-   stripped-star communities have to write.
+1. How often would noise alone produce a peak of this height? The detection statistic
+   ``D`` has no closed-form null distribution (it depends on the companion's prior
+   scale, on the epoch sampling and on the masks), so the distribution is measured: draw
+   many datasets from the fitted no-companion model, scan each one exactly as the
+   observed data were scanned, and record how large ``D`` becomes by chance.
+2. Which companions would have been detected? Inject a companion at a ladder of light
+   fractions, scan again, and count how often each rung clears the threshold. The light
+   fraction at which the completeness curve crosses 95% is the detection limit, the
+   quantity a Gaia black-hole or stripped-star study reports.
 
-Both loops run on the *observed* dataset's own operators
-(:func:`albireo.simulate.resimulate`): same epochs, same barycentric velocities, same
-chip gaps, same weights, same response. Only the noise and the injected spectra change.
-That is what makes a few hundred scans cost seconds rather than hours, and it is also
-what makes the answer specific to *this* dataset rather than to a plausible imitation.
+Both loops run on the observed dataset's own operators
+(:func:`albireo.simulate.resimulate`): the same epochs, barycentric velocities, chip
+gaps, weights and response. Only the noise and the injected spectra change. This makes
+a few hundred scans cost seconds rather than hours, and it makes the result specific to
+this dataset rather than to an approximation of it.
 
-The script runs it twice, on the same simulated system:
+The script runs on the same simulated system twice:
 
-* a genuine **SB1** — nothing to find, and the calibration says how faint a companion
-  would have had to be to hide;
-* the **SB2** — a real companion, whose peak is then read against the null distribution
-  the SB1 run produced.
+* an SB1 with no companion: the calibration states how faint a companion would have had
+  to be to escape detection;
+* the SB2: a real companion, whose peak is read against the null distribution from the
+  SB1 run.
 
-Two things worth watching. First, the null peaks come out **negative**: the marginal
-likelihood charges an Occam term for the companion's free spectrum, and with nothing to
-find, nothing pays for it. So the calibrated threshold is negative too, and "D > 0" would
-have been a *conservative* test here — on another dataset it might not be, which is the
-whole argument for calibrating rather than assuming. Second, the limit is conditional on
-the assumed companion spectrum: the observable is ``ell_2 * d_2``, so a companion with no
-lines is invisible at any light fraction. The default template is the primary's own
-recovered spectrum, and that assumption belongs next to the number.
+Two properties of the result. First, the null peaks are negative: the marginal
+likelihood charges an Occam term for the companion's free spectrum, and with no
+companion present nothing compensates for it. The calibrated threshold is therefore
+negative too, and "D > 0" would have been a conservative test on this dataset; on another
+dataset it need not be, which is the reason for calibrating the threshold rather than
+assuming it. Second, the limit is conditional on the assumed companion spectrum: the
+observable is ``ell_2 * d_2``, so a companion with no lines is undetectable at any light
+fraction. The default template is the primary's own recovered spectrum, and that
+assumption should be reported with the limit.
 
 Environment
 -----------
 ALBIREO_EXAMPLE_FAST=1
     CI-sized run: fewer trials and a coarser K_2 grid. The structure of the result is
-    unchanged, but the false-alarm resolution floor is much coarser -- 1/(n_null + 1) --
-    so the quoted limit is correspondingly rougher.
+    unchanged, but the false-alarm resolution floor, 1/(n_null + 1), is much coarser, so
+    the quoted limit is correspondingly rougher.
 
 Usage
 -----
@@ -64,7 +65,7 @@ FAST = bool(os.environ.get("ALBIREO_EXAMPLE_FAST"))
 GRID = ab.LogGrid.from_wavelength_range(5000.0, 5045.0, dv_kms=5.5)
 P_TRUE, ECC_TRUE, OMEGA_TRUE, T_PERI_TRUE = 6.31, 0.15, 0.70, 2.0
 K1_TRUE, K2_TRUE = 12.0, 38.0
-ELL = (0.9, 0.1)  # the ASSUMED pair the scan runs with (D13)
+ELL = (0.9, 0.1)  # the assumed light fractions the scan runs with (D13)
 LSF = {"a": 7.0}
 SNR = 150.0
 N_EPOCHS = 9 if FAST else 12
@@ -73,7 +74,7 @@ PRIOR = ab.SmoothnessPrior(jnp.asarray([300.0, 30.0]), jnp.asarray([5.0, 5.0]))
 V_REL_MAX = 105.0
 SEED = 7
 
-# The ladder of injected companion light fractions, and how many trials each rung gets.
+# The ladder of injected companion light fractions, and the number of trials per rung.
 # n_null sets the finest false-alarm probability the calibration can resolve, at
 # 1 / (n_null + 1): 100 trials cannot substantiate a claim below about 1%.
 ELL2_LADDER = np.array([0.005, 0.01, 0.02, 0.04])
@@ -159,8 +160,8 @@ def ticker(total_hint: str):
 
 
 def plot(limit, injected_scan, path: str) -> None:
-    """Both panels come from :func:`albireo.plot_detection_limit` — the figure is library
-    code, not example code, so a user gets it without copying anything out of here."""
+    """Both panels come from :func:`albireo.plot_detection_limit`; the figure is library
+    code, not example code."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -184,7 +185,7 @@ def main() -> None:
     common = scan_kwargs()
 
     # 1. The calibration, on the companion-free dataset -------------------------------
-    print("1. calibrating on the SB1 (nothing to find)")
+    print("1. calibrating on the SB1 (no companion present)")
     t0 = time.perf_counter()
     limit = ab.detection_limit(
         GRID,
@@ -220,7 +221,7 @@ def main() -> None:
         )
     print(f"\n  >>> {limit.summary()}\n")
 
-    # 2. The real detection, read against that null distribution ----------------------
+    # 2. The detection, read against that null distribution ---------------------------
     print("2. the SB2, scanned identically")
     t0 = time.perf_counter()
     injected = ab.k2_scan(GRID, sb2, **common)
@@ -232,15 +233,15 @@ def main() -> None:
     print(
         f"  false-alarm probability {fap:.4f}"
         + (
-            f" -- the 1/(n_null+1) = {limit.fap_floor:.4f} floor, i.e. no companion-free "
-            "trial came close"
+            f" (the 1/(n_null+1) = {limit.fap_floor:.4f} floor: no companion-free "
+            "trial reached the observed peak)"
             if fap == limit.fap_floor
             else ""
         )
     )
 
-    # 3. K_1 marginalized, since the SB1 solution has an error bar --------------------
-    print("\n3. the same scan with K_1 integrated out rather than assumed")
+    # 3. K_1 marginalized, since the SB1 solution has an uncertainty -----------------
+    print("\n3. the same scan with K_1 marginalized rather than fixed")
     t0 = time.perf_counter()
     marginal = ab.k2_scan(GRID, sb2, k1_sigma=0.05 * K1_TRUE, k1_nodes=7, **common)
     print(
@@ -250,18 +251,18 @@ def main() -> None:
         f"{marginal.log_likelihood_grid.shape[0]}x{K2_GRID.size} grid]"
     )
     print(
-        "  the 2-D surface is in .log_likelihood_grid -- its ridge is the K_1-K_2 "
-        "covariance a fixed-K_1 scan assumes away"
+        "  the 2-D surface is in .log_likelihood_grid; its ridge is the K_1-K_2 "
+        "covariance that a fixed-K_1 scan neglects"
     )
 
-    # 4. Figure, only if matplotlib happens to be installed ----------------------------
+    # 4. Figure, only if matplotlib is installed ---------------------------------------
     if importlib.util.find_spec("matplotlib") is not None:
         plot(limit, injected, "detection_limit.png")
         print("\nwrote detection_limit.png")
     else:
         print("\nmatplotlib not installed - skipping the figure (it is not a dependency)")
 
-    # 5. The gate ----------------------------------------------------------------------
+    # 5. Assertions --------------------------------------------------------------------
     assert np.all(limit.null_peaks < 0.0), "a companion-free trial reached D >= 0"
     assert np.mean(limit.null_peaks > limit.threshold) <= FALSE_ALARM + 1e-12, (
         "the threshold is anti-conservative against its own null trials"

@@ -1,36 +1,39 @@
 # albireo
 
-**albireo** performs spectral disentangling of double- and multiple-lined spectroscopic binaries:
-given a time series of composite spectra, it jointly infers the orbital elements and the individual
-component spectra. The component spectra are marginalized analytically, so only the low-dimensional
-orbit needs to be sampled, and this is done fully Bayesianly with NUTS rather than by iterative
-least-squares refinement. Everything is written in JAX (float64) and is therefore differentiable and
-runs on GPU, with numpyro for posterior sampling and optax for MAP optimization.
+**albireo** performs spectral disentangling of double- and multiple-lined spectroscopic
+binaries. Given a time series of composite spectra, it infers the orbital elements and the
+individual component spectra jointly. The component spectra are marginalized analytically,
+so only the low-dimensional orbital and instrumental parameters are sampled, with the
+No-U-Turn Sampler rather than by iterative least-squares refinement. The package is written
+in JAX (float64), is differentiable end to end, and runs on CPU or GPU, with numpyro for
+sampling and optax for optimization.
 
-The name comes from Albireo, the famous gold-and-blue double star in Cygnus:
-*albireo separates the gold from the blue*.
+The name refers to Albireo, the double star in Cygnus.
 
 !!! warning "Status: pre-alpha"
 
-    albireo is under active development. The API is unstable and will change without notice.
-    It is not yet suitable for production science.
+    albireo is under active development. The API is unstable and may change without
+    notice.
 
-## Where to go next
+## Where to start
 
-- [Quickstart](quickstart.md) — load an example dataset that ships with the package, fit it,
-  and plot the result. No data of your own, no network, about twenty seconds.
+- [Quickstart](quickstart.md): load the example dataset that ships with the package, fit
+  it, and plot the result. No data of your own and no network are needed.
+- [Scientific background](science.md): the disentangling problem, the methods in the
+  literature, the degeneracies, and the references for every part of the package.
 - Tutorials: [disentangle an SB2 end to end](tutorials/sb2-end-to-end.md) and
-  [find a hidden companion with the K₂ scan](tutorials/k2-scan.md) — both backed by
-  executable scripts in `examples/` that run in CI. Then
-  [bring your own spectra](tutorials/real-data.md), and
-  [disentangle a BLOeM SB2](tutorials/bloem-sb2.md) — 59 public double-lined SMC systems
-  whose disentangling is still unpublished.
-- [Design](design.md) — architecture, data model, and the shape of the inference problem.
-- [Mathematical foundations](math.md) — the disentangling likelihood, the analytic marginalization
-  of the component spectra, and the orbital parameterization.
-- [Benchmarks](benchmarks.md) — the running correctness/performance record per milestone,
-  including the closed-loop recovery gates and the degeneracy analyses.
-- [Roadmap](roadmap.md) — where albireo is going, in what order, and what it will not do.
+  [search for a faint companion with the K₂ scan](tutorials/k2-scan.md), both backed by
+  executable scripts in `examples/`; then [read your own spectra](tutorials/real-data.md),
+  [disentangle a BLOeM SB2](tutorials/bloem-sb2.md), [fit stellar labels](tutorials/labels.md),
+  [measure epoch velocities](tutorials/todcor.md), and
+  [run the pipeline](tutorials/pipeline.md).
+- [Design](design.md): architecture, data model, and the decision ledger.
+- [Mathematical foundations](math.md): the forward model, the analytic marginalization of
+  the component spectra, the orbital parameterization, and the estimators for stellar
+  labels and epoch velocities.
+- [Benchmarks](benchmarks.md): the validation and performance record, including the
+  closed-loop recovery tests and the degeneracy analyses.
+- [Roadmap](roadmap.md): planned work and stated non-goals.
 
 ## Source
 

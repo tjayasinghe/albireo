@@ -1,6 +1,7 @@
 # Quickstart
 
-Five minutes, no data of your own, no network.
+This page fits the example dataset that ships with the package. It needs no data of your
+own and no network, and takes a few minutes on a laptop.
 
 ```bash
 pip install albireo
@@ -23,11 +24,11 @@ Dataset: 12 epochs, frame='topocentric'
   good pixels: 10008 / 10008 (100.0%)
 ```
 
-That example ships inside the package — it is a simulated double-lined binary with a known
-injected truth, so everything below can be checked against the right answer. It needs no
-download, no astropy, and no archive account.
+The example is a simulated double-lined binary with a known injected orbit and known
+component spectra, so every result below can be compared with the truth. It requires
+neither astropy nor an archive account.
 
-## Fit it
+## Fit the orbit
 
 ```python
 dis = ab.Disentangler(
@@ -60,33 +61,33 @@ Assumed, not measured:
       only l_i * d_i is observable, so every recovered depth scales as 1/l_i.
 ```
 
-The injected truth is *P* = 6.0 d, *K* = 42.0 and 63.0 km/s, *e* = 0.15, ω = 0.7. About a
-minute, most of it JAX compiling the model on its first call. **No per-epoch radial velocity
-was measured anywhere in that**: the orbit is inferred from the spectra directly, with the
-component spectra integrated out in closed form.
+The injected truth is *P* = 6.0 d, *K* = 42.0 and 63.0 km/s, *e* = 0.15, ω = 0.7. The fit
+takes about a minute, most of it JAX compilation on the first call. No per-epoch radial
+velocity is measured at any stage: the orbit is inferred from the spectra directly, with
+the component spectra integrated out in closed form.
 
-Four things in that fit were derived rather than typed, and each is something the low-level
-path makes you get right yourself. `dis.explain()` prints all of them:
+Four quantities in that fit were derived from the declaration rather than supplied, and
+each is something the low-level interface requires the user to set. `dis.explain()`
+prints all of them:
 
 ```python
 print(dis.explain())
 ```
 
-- **The velocity budget**, which sets the solver's bandwidth. It has to bound the largest
-  relative velocity the *priors* allow, not the one the answer turns out to have — too small
-  and the sampler stalls against a guard it cannot see. It comes from the `k` priors' own
-  support, itemized, and narrowing them is what makes a fit cheaper.
-- **The model grid**, wide enough for that budget *plus* the LSF kernel radius. Short of
-  that margin the shifted model runs off the end of the grid and the fit quietly loses the
-  flux there.
-- **The conjunction phase**, located by a 41-point scan before anything is optimized. The
-  marginal likelihood is sharply multimodal in phase — 10⁵ nats between the best and worst
-  here — and L-BFGS started in the wrong trough converges confidently to the wrong answer.
-- **The smoothness hyperparameters**, fitted by empirical Bayes and then frozen. The report
-  above flags any that did not move from their starting value, which means the hyperprior
-  rather than the data is setting that component's smoothness.
+- **The velocity budget**, which sets the solver's bandwidth. It must bound the largest
+  relative velocity the priors allow, not the value the fit converges to; it is derived
+  from the support of the `k` priors, and narrowing those priors reduces the cost of a fit.
+- **The model grid**, which is widened by that budget plus the LSF kernel radius so that
+  the shifted model does not run off the grid.
+- **The conjunction phase**, located by a 41-point scan before optimization. The marginal
+  likelihood is strongly multimodal in phase (about 10⁵ nats between the best and worst
+  phase here), and an optimizer started in the wrong trough converges to the wrong answer.
+- **The smoothness hyperparameters**, fitted by empirical Bayes and then frozen. The
+  report flags any hyperparameter that did not move from its starting value, which
+  indicates that the hyperprior rather than the data is setting that component's
+  smoothness.
 
-## Sample it
+## Sample the posterior
 
 ```python
 post = fit.sample(seed=0)
@@ -94,21 +95,22 @@ print(post.summary())
 print(post.star("secondary"))   # {'k': 62.99, 'k_std': 0.08, 'k_hdi': (62.84, 63.11), ...}
 ```
 
-NUTS over the orbit, with the component spectra still marginalized and the smoothness
-hyperparameters held at their ML-II values. That last part is a plug-in approximation and
-the summary says so: the orbital credible intervals do not include smoothness uncertainty.
+This runs NUTS over the orbital parameters with the component spectra marginalized and
+the smoothness hyperparameters held at their empirical-Bayes values. The latter is a
+plug-in approximation, and the summary states it: the orbital credible intervals do not
+include the uncertainty in the smoothness hyperparameters.
 
-## Look at what came out
+## Inspect the component spectra
 
 ```python
 import numpy as np
 
 d_hat = fit.spectra()          # (2, n_pix) component deviation spectra
-std = fit.std()                # pointwise posterior uncertainty
+std = fit.std()                # pointwise posterior standard deviation
 
-# The truth was generated on its own grid, which is not the one the model was solved on:
-# `dis.grid` is widened by the velocity budget and the LSF radius, and takes its sampling
-# from the data. Resample before overlaying, or plot_spectra will tell you to.
+# The truth was generated on its own grid, which is not the grid the model was solved on:
+# `dis.grid` is widened by the velocity budget and the LSF radius and takes its sampling
+# from the data. Resample before overlaying.
 truth_grid = ab.LogGrid(x0=truth["grid_x0"], dx=truth["grid_dx"], n=int(truth["grid_n"]))
 truth_on_model = np.stack(
     [
@@ -120,15 +122,14 @@ truth_on_model = np.stack(
 fig, axes = ab.plot_spectra(dis.grid, d_hat, std=std, truth=truth_on_model)
 ```
 
-**Read the band, not the line.** Between the lines, and anywhere the epochs give little
-leverage, the recovered spectrum is set by the smoothness prior rather than by the data.
-The uncertainty band is what tells you which is which, and producing it honestly is the
-reason this package exists. In particular the *k* = 0 (constant offset) mode of each
-component spectrum is exactly unconstrained by the data — see
-[the degeneracy section](math.md) — so it is the light-weighted sum, `fit.composite()`, not
-each individual continuum level, that the data actually measure.
+Between the lines, and wherever the epochs provide little leverage, the recovered
+spectrum is set by the smoothness prior rather than by the data. The uncertainty band
+identifies those regions. In particular the constant (*k* = 0) mode of each component
+spectrum is exactly unconstrained by the data (see the
+[degeneracy section](math.md#5-degeneracies-and-identifiability)), so the data determine
+the light-weighted sum, `fit.composite()`, rather than each component's continuum level.
 
-Check the noise model while you are here:
+The noise model can be checked from the same fit:
 
 ```python
 fig, axes = ab.plot_residual_zscores(
@@ -136,57 +137,58 @@ fig, axes = ab.plot_residual_zscores(
 )
 ```
 
-Three panels: the residual distribution against a unit normal, the per-epoch scatter, and
-the per-epoch lag-1 autocorrelation. The third is the one that catches the failure the
-other two miss — correlated pixels inflate every uncertainty derived from the fit and are
-invisible in a histogram. `fit.z_rms` is the one-number version, printed in every summary.
+The figure has three panels: the residual distribution against a unit normal, the
+per-epoch scatter, and the per-epoch lag-1 autocorrelation. Correlated pixels inflate every
+uncertainty derived from the fit and are not visible in a histogram; the third panel is
+the diagnostic for them. `fit.z_rms` is the scalar summary printed in every fit summary.
 
-## Keep it
+## Save the results
 
 ```python
 fit.write_spectra("spectra.fits")           # needs albireo[io]
 ab.save_fit(fit.result, "quickstart_map.npz")
-ab.write_ascii("spectra.txt", dis.grid, d_hat, std)   # no dependencies
+ab.write_ascii("spectra.txt", dis.grid, d_hat, std)   # no optional dependency
 ```
 
 The FITS and ECSV writers record the light fractions and the prior hyperparameters in the
-header, because the recovered line depths are only interpretable next to them.
+header, because the recovered line depths are interpretable only together with them.
 
-## When you need more than the façade
+## Beyond the declarative interface
 
-`Disentangler` is a **compiler**, not a wall: it emits the expert path, and hands it to you.
+`Disentangler` assembles the low-level model and returns it on request:
 
 ```python
 model, priors, init = dis.expert()
 ```
 
-That triple is exactly what [`MarginalOrbitModel`](api/inference.md) and `ab.run_map` take,
-so anything the façade does not name — per-epoch jitter, AR(1) correlated noise, inferred
-light fractions, inferred LSF widths — is three lines away rather than a rewrite. The
-façade is marked **experimental** while its vocabulary settles; the low-level API below it
-is not, and is not going anywhere.
+That triple is what [`MarginalOrbitModel`](api/inference.md) and `ab.run_map` take, so
+features the declarative interface does not expose (per-epoch jitter, AR(1) correlated
+noise, inferred light fractions, inferred LSF widths) are added at that level. The
+declarative interface is marked experimental while its vocabulary settles; the low-level
+interface is the supported one.
 
-## Where to go next
+## Next steps
 
-- [Disentangle an SB2 end to end](tutorials/sb2-end-to-end.md) — the same problem, but
-  sampled with NUTS rather than stopped at MAP. That is where the posterior comes from.
-- [Find a hidden companion](tutorials/k2-scan.md) — the SB1 faint-companion scan.
-- [Bring your own spectra](tutorials/real-data.md) — FITS files to a `Dataset`.
+- [Disentangle an SB2 end to end](tutorials/sb2-end-to-end.md): the same problem sampled
+  with NUTS at the low level.
+- [Search for a faint companion](tutorials/k2-scan.md): the SB1 companion scan.
+- [Read your own spectra](tutorials/real-data.md): from FITS files to a `Dataset`.
+- [Scientific background](science.md): the methods and their references.
 
-## Two things that will bite you
+## Two conventions to note
 
-**There is no default light fraction, and this is deliberate.** With constant light
-fractions the data constrain only the products ℓᵢ·dᵢ, so a value assumed silently would
-propagate into every line depth and every abundance derived from it — and nothing in the
-fit could tell you it was wrong. `Star(light=...)` is required, the star lights must sum to
-1, and every summary and FITS header repeats the value under `Assumed, not measured`. Quote
-it next to any semi-amplitude you publish.
+**There is no default light fraction.** With constant light fractions the data constrain
+only the products ℓᵢ·dᵢ, so a silently assumed value would propagate into every line
+depth and every quantity derived from it without any diagnostic in the fit.
+`Star(light=...)` is therefore required, the stellar light fractions must sum to 1, and
+every summary and FITS header repeats the value under `Assumed, not measured`. Quote the
+light fractions alongside any published semi-amplitude.
 
-**Zero eccentricity is a special point, and the façade handles it for you.** The orbit is
+**Zero eccentricity is a singular point of the parameterization.** The orbit is
 parameterized by `secosw` = √e·cos ω and `sesinw` = √e·sin ω, which has no boundary at
-*e* = 0 and no wrap in ω — but it is singular at exactly the origin, where ω is undefined
-and the gradient is NaN. numpyro reports that as `Cannot find valid initial parameters`,
-which does not obviously point at the cause. A free eccentricity is therefore never started
-at the origin, and `ecc=ab.Fixed(0.0)` — a genuinely circular orbit — is handled *exactly*,
-by not sampling those two sites at all. Working at the low level, initialize slightly off
-the origin yourself, even for a binary you believe is circular.
+*e* = 0 and no wrap in ω but is singular at the origin, where ω is undefined and the
+gradient is not finite. numpyro reports this as `Cannot find valid initial parameters`.
+The declarative interface never starts a free eccentricity at the origin, and
+`ecc=ab.Fixed(0.0)` handles a circular orbit exactly by not sampling those two sites. At
+the low level, initialize slightly off the origin even for a binary believed to be
+circular.

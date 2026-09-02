@@ -1,21 +1,21 @@
 name: Full
 
-# Everything `ci.yml` deliberately leaves out: the platform/version matrix, the acceptance
-# gates with coverage, and the example scripts. Run it **on demand** — the Actions tab,
-# "Full", "Run workflow" — rather than on every push, because on a private repository it is
-# expensive and most commits do not need it. Order-of-magnitude, from the suite times
-# measured locally and *not* yet from a real run: the matrix is four jobs at ~15 min each
-# but Windows bills at 2x, so ~95 billed minutes; the gates job is the ~37-minute full
-# suite plus coverage; the examples job ~15. Call it 150+ billed minutes a go, i.e. under
-# fifteen runs a month on the free tier — and none of it charged once the repo is public.
+# Everything `ci.yml` leaves out: the platform/version matrix, the acceptance gates with
+# coverage, and the example scripts. Run it on demand (the Actions tab, "Full", "Run
+# workflow") rather than on every push, because on a private repository it is expensive and
+# most commits do not need it. Order-of-magnitude, from the suite times measured locally and
+# not yet from a real run: the matrix is four jobs at ~15 min each but Windows bills at 2x,
+# so ~95 billed minutes; the gates job is the ~37-minute full suite plus coverage; the
+# examples job ~15. That is 150+ billed minutes a go, i.e. under fifteen runs a month on the
+# free tier, and none of it charged once the repo is public.
 #
-# There is no `schedule:` here on purpose. A weekly run would spend a quarter of the free
-# tier's monthly minutes re-testing commits that have not changed, and GitHub disables
-# scheduled workflows on inactive repositories anyway.
+# There is no `schedule:` here. A weekly run would spend a quarter of the free tier's
+# monthly minutes re-testing commits that have not changed, and GitHub disables scheduled
+# workflows on inactive repositories anyway.
 #
-# When to actually run it: before tagging a release (`docs/releasing.md` step 1), after
-# touching the solver, the assembly, or anything else the fast suite only covers at small
-# scale, and whenever `ci.yml` passes but you do not believe it.
+# When to run it: before tagging a release (`docs/releasing.md` step 1), after touching the
+# solver, the assembly, or anything else the fast suite covers only at small scale, and
+# whenever `ci.yml` passes but its result is in doubt.
 
 on:
   workflow_dispatch:
@@ -42,7 +42,7 @@ jobs:
     name: Test (${{ matrix.os }}, py${{ matrix.python-version }})
     if: inputs.matrix
     runs-on: ${{ matrix.os }}
-    # Same workload as ci.yml's `check` — see the timeout note there — but also on Windows,
+    # Same workload as ci.yml's `check` (see the timeout note there), but also on Windows,
     # which is slower to install and slower to run. Kept in step with that job at 45.
     timeout-minutes: 45
     strategy:
@@ -78,11 +78,11 @@ jobs:
     runs-on: ubuntu-latest
     # The M3 NUTS gate is a few minutes of real sampling; a hung chain (say a mass-matrix
     # regression driving trees to the depth cap) must fail rather than idle. The cap has to
-    # clear the real thing by a wide margin, though: a bare `pytest` measures 36m25s on the
+    # clear the real runtime by a wide margin: a bare `pytest` measures 36m25s on the
     # development machine (633 passed, 1 skipped), and this job adds a cold dependency
     # install and coverage tracing on a runner that is slower per core. 45 left barely eight
     # minutes over the measured suite alone, so any of those three costs would have killed
-    # the job — and a timeout kill reports no result at all.
+    # the job, and a timeout kill reports no result at all.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5

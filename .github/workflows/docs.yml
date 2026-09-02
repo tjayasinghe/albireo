@@ -1,13 +1,12 @@
 name: Docs
 
-# Two jobs, both cheap, and deliberately *not* filtered by path: mkdocstrings imports the
-# package to read its docstrings, so a source-only change can break `--strict` just as
-# easily as a docs one. This is the workflow that still runs when `ci.yml` skips a
-# docs-only push.
+# Two jobs, both cheap, and not filtered by path: mkdocstrings imports the package to read
+# its docstrings, so a source-only change can break `--strict` just as easily as a docs one.
+# This workflow still runs when `ci.yml` skips a docs-only push.
 #
 # The deploy job needs Pages set to "GitHub Actions" in the repository settings, and Pages
-# from a **private** repository requires GitHub Pro — on the free tier it only works once
-# the repository is public. Because neither is true before the first push, deploy is gated
+# from a private repository requires GitHub Pro; on the free tier it only works once the
+# repository is public. Because neither is true before the first push, deploy is gated
 # behind the `PAGES_ENABLED` repository variable; the build job runs regardless, so a broken
 # docs build is still caught. See docs/releasing.md step 2.
 
@@ -64,10 +63,9 @@ jobs:
 
   # Gated on a repository variable rather than run unconditionally. `deploy-pages` calls the
   # Pages API and hard-fails with a 404 if Pages has not been switched to "GitHub Actions" in
-  # the settings — and on the free tier that switch is unavailable while the repository is
-  # private. Left ungated, every push to main would leave a red Docs run that means nothing,
-  # which is how a workflow teaches you to stop reading it. Set the variable once Pages is
-  # actually on:  gh variable set PAGES_ENABLED --body true
+  # the settings, and on the free tier that switch is unavailable while the repository is
+  # private. Left ungated, every push to main would leave a red Docs run carrying no
+  # information. Set the variable once Pages is on:  gh variable set PAGES_ENABLED --body true
   deploy:
     name: Deploy
     needs: build

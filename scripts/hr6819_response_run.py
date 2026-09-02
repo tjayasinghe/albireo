@@ -1,17 +1,17 @@
-"""HR 6819 with the per-epoch response site (D33): does the period offset survive?
+"""HR 6819 with the per-epoch response site (D33).
 
-The D30 record (docs/benchmarks.md, "HR 6819") closes by naming this run: what the
-fit needs is "an honest noise model, a wider window, and a check of whether the period
-offset survives a per-epoch continuum treatment". D31 built the noise-scale site and
-measured it relocating the period by 174 formal sigmas. This script is the continuum
-check: both windows, MAP with and without an order-2 per-epoch multiplicative response
-site (``albireo.forward.with_response``, D33), everything else held at the D30
-configuration so the comparison is against the recorded numbers.
+The D30 record (docs/benchmarks.md, "HR 6819") names three follow-ups: a better noise
+model, a wider window, and a check of whether the period offset survives a per-epoch
+continuum treatment. D31 built the noise-scale site and measured it relocating the
+period by 174 formal sigmas. This script is the continuum check: both windows, MAP with
+and without an order-2 per-epoch multiplicative response site
+(``albireo.forward.with_response``, D33), everything else held at the D30 configuration
+so the comparison is against the recorded numbers.
 
-Uncertainties are *conditional-orbit Laplace*: curvature over the orbit sites only,
-hyperparameters (and response coefficients, where fitted) held at their MAP values,
-pushed to constrained space by sampling. Statistical only — the D30/D31 record is
-explicit that window-to-window and noise-model-to-noise-model spread is the honest
+Uncertainties are conditional-orbit Laplace: curvature over the orbit sites only, with
+hyperparameters (and response coefficients, where fitted) held at their MAP values and
+pushed to constrained space by sampling. They are statistical only; the D30/D31 record
+states that window-to-window and noise-model-to-noise-model spread is the realistic
 error bar on this dataset.
 
 Run:  python scripts/hr6819_response_run.py [--windows A B] [--max-steps 150]
@@ -44,7 +44,7 @@ WINDOWS = {"A": (4380.0, 4600.0), "B": (4120.0, 4330.0)}
 DV_KMS = 1.5
 LSF_SIGMA = ab.C_KMS / (48_000.0 * 2.0 * np.sqrt(2.0 * np.log(2.0)))  # FEROS, 2.652 km/s
 V_REL_MAX = 90.0
-LIGHT_FRACTIONS = (0.45, 0.55)  # optical, Bodensteiner et al. 2020 — an input (D13)
+LIGHT_FRACTIONS = (0.45, 0.55)  # optical, Bodensteiner et al. 2020; an input (D13)
 RESPONSE_ORDER = 2
 RESPONSE_PRIOR_SIGMA = 0.02  # preprocess.normalize should be good to ~1%; allow 2%
 P_LIT, K_LIT = 40.3261, (61.15, 3.90)  # Klement et al. 2025, Table 3
@@ -130,7 +130,7 @@ def conditional_orbit_sigmas(model, priors, fit_params, *, seed=0, n_draws=4096)
 
     The unconstrained covariance is pushed to constrained space by sampling and
     applying the sites' bijections directly (the k sites live behind a sigmoid, so the
-    delta method would need its jacobian anyway) — NOT via numpyro's postprocess,
+    delta method would need its jacobian anyway), and not via numpyro's postprocess,
     which replays the whole model (marginal likelihood included) per draw.
     Deterministic given the seed.
     """

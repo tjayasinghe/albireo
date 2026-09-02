@@ -7,12 +7,12 @@ the packaged file from scratch:
 
 Everything is seeded, so a rebuild on any machine produces a byte-identical file. The
 script prints the SHA-256 of what it wrote; for downloaded (non-packaged) examples that
-value goes into the ``_EXAMPLES`` registry in ``src/albireo/examples.py``, which is what
-makes a corrupted download fail loudly instead of quietly.
+value goes into the ``_EXAMPLES`` registry in ``src/albireo/examples.py``, so that a
+corrupted download is detected.
 
-The packaged example is kept small on purpose. It ships inside the wheel, so it has to stay
-well under the 500 kB pre-commit file-size limit and has to be quick to fit — it exists so
-that the first thing a new user runs works offline, not to be a realistic science case.
+The packaged example is small: it ships inside the wheel, so it has to stay well under the
+500 kB pre-commit file-size limit and has to be quick to fit. It provides a first offline
+run rather than a realistic science case.
 """
 
 from __future__ import annotations
@@ -39,18 +39,18 @@ from albireo.simulate import (  # noqa: E402
 PACKAGED_DIR = REPO_ROOT / "src" / "albireo" / "data_files"
 
 # A short window at modest resolution: enough pixels to carry a dozen lines and show the
-# disentangling actually working, few enough that a MAP fit is seconds rather than minutes.
+# disentangling working, few enough that a MAP fit takes seconds rather than minutes.
 GRID = LogGrid.from_wavelength_range(4500.0, 4560.0, dv_kms=6.0)
 PERIOD = 6.0
 T_PERI = 0.0
 K1, K2 = 42.0, 63.0
 LIGHT = (0.62, 0.38)
 N_EPOCHS = 12
-# Modestly eccentric rather than circular, and deliberately so. The orbit is parameterized
-# by (sqrt(e) cos w, sqrt(e) sin w), which is singular at e = 0: the argument of periastron
-# is undefined there, e*cos(w) behaves like |x|, and the gradient is NaN at exactly the
-# origin. A circular example would put both the truth and the natural starting guess on
-# that point, so the first thing a new user runs would fail to initialize.
+# Modestly eccentric rather than circular. The orbit is parameterized by
+# (sqrt(e) cos w, sqrt(e) sin w), which is singular at e = 0: the argument of periastron is
+# undefined there, e*cos(w) behaves like |x|, and the gradient is NaN at exactly the origin.
+# A circular example would put both the truth and the natural starting guess on that point,
+# so the first example run would fail to initialize.
 ECC = 0.15
 OMEGA = 0.7
 

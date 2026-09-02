@@ -1,12 +1,13 @@
-"""HR 6819 with the AR(1) correlated-noise model (D34): whiten AND keep the orbit?
+"""HR 6819 with the AR(1) correlated-noise model (D34).
 
-D31 measured that per-epoch noise *rescaling* whitens the residual scale and relocates
-the period by 174 formal sigmas; D33 measured that the continuum is not the culprit.
-This is the remaining recorded check: model the correlation itself — scalar AR(1)
-``phi`` shared across epochs (a property of the pipeline's resampling, not of one
-exposure) alongside the D31 per-epoch jitters — and see where the orbit goes, what
-``phi`` comes out, and whether the chain whitener removes the lag-1 autocorrelation.
-Same uniform procedure as scripts/hr6819_response_run.py (conjunction scan, literature
+D31 measured that per-epoch noise rescaling whitens the residual scale and relocates
+the period by 174 formal sigmas; D33 measured that the continuum is not responsible.
+This run models the correlation itself: a scalar AR(1) ``phi`` shared across epochs (a
+property of the pipeline's resampling rather than of one exposure) alongside the D31
+per-epoch jitters. Recorded are the orbit, the fitted ``phi``, and whether the chain
+whitener removes the lag-1 autocorrelation.
+
+The procedure matches scripts/hr6819_response_run.py (conjunction scan, literature
 init, 150 L-BFGS steps), so the D33 table is the comparison baseline. The D34 record
 ran on the probe assembly path at ~15x the D33 per-step cost; since D35 the correlated
 marginal runs the band assembly (link pair tables), so a rerun pays near-D33 cost.
@@ -73,8 +74,8 @@ def run_ar1(dataset, model, t_conj0, *, max_steps: int):
     theta_map = {s: jnp.asarray(fit.params[s]) for s in theta_sites}
     result = model.marginal(theta_map)
     z = data_residual_zscores(model.problem_at(theta_map), result.d_hat)
-    # The same residuals read through the *diagonal* whitener (phi and alpha kept):
-    # what the chain absorbed shows up here as surviving lag-1 autocorrelation.
+    # The same residuals read through the diagonal whitener (phi and alpha kept):
+    # what the chain absorbed appears here as surviving lag-1 autocorrelation.
     theta_diag = dict(theta_map)
     theta_diag.pop("ar1_phi")
     z_diag = data_residual_zscores(model.problem_at(theta_diag), result.d_hat)
