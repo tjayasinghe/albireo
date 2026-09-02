@@ -2149,9 +2149,16 @@ def _vector_spec(value, n: int, what: str) -> Spec:
     if kinds == {Fixed}:
         return Fixed(jnp.stack([jnp.asarray(s.value, dtype=jnp.float64) for s in specs]))
     if kinds == {Between}:
+        # Each entry's own starting value travels with it. Dropping it -- which the
+        # first version did, silently -- started every component at its midpoint, and a
+        # declaration such as k=[Between(10, 90, start_at=30), Between(10, 90, start_at=60)]
+        # is exactly how a caller breaks the component-swap degeneracy of a symmetric
+        # prior: the conjunction scan runs at these starts, and equal starts cannot tell
+        # which star is which.
         return Between(
             jnp.stack([jnp.asarray(s.lo, dtype=jnp.float64) for s in specs]),
             jnp.stack([jnp.asarray(s.hi, dtype=jnp.float64) for s in specs]),
+            jnp.stack([jnp.asarray(s.start(), dtype=jnp.float64) for s in specs]),
         )
     if kinds == {Known}:
         return Known(

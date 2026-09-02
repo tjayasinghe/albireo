@@ -66,7 +66,9 @@ from albireo.preprocess import (
 
 __all__ = [
     "RawSpectrum",
+    "dataset_from_raw",
     "read_dataset",
+    "read_raw_spectra",
     "read_spectrum",
     "to_epoch",
     "write_spectra",
@@ -1265,65 +1267,10 @@ def _read_many(paths: Sequence[str], *, instrument, frame, options) -> list[RawS
     return raws
 
 
-def read_dataset(
-    paths: str | Iterable[str],
-    *,
-    instrument: str | None = None,
-    frame: str | None = None,
-    medium: str | None = None,
-    sort_by_time: bool = True,
-    read_kwargs: Mapping[str, Any] | None = None,
-    **epoch_kwargs,
-) -> Dataset:
-    """Read a set of FITS spectra into one :class:`~albireo.data.Dataset`.
-
-    The one-call path from a directory of archival spectra to something
-    :func:`albireo.forward.build_problem` accepts.
-
-    Parameters
-    ----------
-    paths : str or iterable of str
-        A glob pattern (``"data/hr6819/*.fits"``), a directory, or an explicit iterable
-        of paths.
-    instrument : str, optional
-        Instrument key for every epoch; overrides the header. Give the epochs one key if
-        they share an LSF — they may still sit on different wavelength grids, which
-        albireo handles by splitting them into separate operator groups internally
-        (:func:`albireo.forward._epoch_groups`).
-    frame : {"topocentric", "barycentric"}, optional
-        Override the frame for every epoch. All epochs must agree, since the frame is a
-        property of the :class:`~albireo.data.Dataset`.
-    medium : {"air", "vacuum"}, optional
-        Declare the wavelength scale for every epoch, overriding what the files say. Use
-        this only after converting them onto a common scale — it changes the label, not
-        the wavelengths. Without it, files that disagree are refused.
-    sort_by_time : bool, optional
-        Order the epochs by ``bjd``. Default ``True``.
-    read_kwargs : mapping, optional
-        Extra keyword arguments for :func:`read_spectrum`.
-    **epoch_kwargs
-        Passed to :func:`to_epoch` — ``region``, ``smooth_angstrom``, ``tellurics``, ...
-
-    Returns
-    -------
-    Dataset
-
-    Raises
-    ------
-    ValueError
-        If no file matches, or the epochs disagree about the frame.
-
-    Examples
-    --------
-    >>> ds = read_dataset(  # doctest: +SKIP
-    ...     "data/hr6819/*.fits",
-    ...     instrument="FEROS",
-    ...     region=(4000.0, 4600.0),
-    ...     smooth_angstrom=150.0,
-    ... )
-    >>> print(ds.summary())  # doctest: +SKIP
-    """
-    if isinstance(paths, str):
+def _expand_paths(paths: str | Iterable[str]) -> list[str]:
+    """A glob, a directory or an explicit iterable, as a sorted list of files."""
+    if isinstance(paths, str | os.PathLike):
+        paths = os.fspath(paths)
         if os.path.isdir(paths):
             # Deduplicated by normalized case because Windows matches *.fits and *.FITS to
             # the same file, which would otherwise read every epoch twice.
@@ -1339,11 +1286,77 @@ def read_dataset(
         expanded = [str(p) for p in paths]
     if not expanded:
         raise ValueError(f"no files matched {paths!r}")
+    return expanded
 
+
+def read_raw_spectra(
+    paths: str | Iterable[str],
+    *,
+    instrument: str | None = None,
+    frame: str | None = None,
+    read_kwargs: Mapping[str, Any] | None = None,
+) -> list[RawSpectrum]:
+    """Read a set of FITS spectra as :class:`RawSpectrum` objects, in path order.
+
+    The first half of :func:`read_dataset`, exposed on its own for callers that need the
+    file-level facts before committing to a :class:`~albireo.data.Dataset` -- the
+    resolving power each header declares, which instrument key each file resolved to, the
+    wavelength medium -- and then hand the same objects to :func:`dataset_from_raw`.
+    Repeated warnings are collapsed to one per distinct complaint, as in
+    :func:`read_dataset`.
+
+    Parameters
+    ----------
+    paths : str or iterable of str
+        A glob pattern, a directory, or an explicit iterable of paths.
+    instrument, frame : str, optional
+        Overrides for every file, as :func:`read_spectrum` takes them.
+    read_kwargs : mapping, optional
+        Extra keyword arguments for :func:`read_spectrum`.
+
+    Raises
+    ------
+    ValueError
+        If no file matches.
+    """
+    expanded = _expand_paths(paths)
     options = dict(read_kwargs or {})
     options.pop("instrument", None)
     options.pop("frame", None)
-    raws = _read_many(expanded, instrument=instrument, frame=frame, options=options)
+    return _read_many(expanded, instrument=instrument, frame=frame, options=options)
+
+
+def dataset_from_raw(
+    raws: Sequence[RawSpectrum],
+    *,
+    medium: str | None = None,
+    sort_by_time: bool = True,
+    **epoch_kwargs,
+) -> Dataset:
+    """Turn already-read :class:`RawSpectrum` objects into one :class:`~albireo.data.Dataset`.
+
+    The second half of :func:`read_dataset`: the frame and wavelength-scale agreement
+    checks, the time ordering, and :func:`to_epoch` on every spectrum.
+
+    Parameters
+    ----------
+    raws
+        From :func:`read_raw_spectra` or :func:`read_spectrum`.
+    medium : {"air", "vacuum"}, optional
+        Declare the wavelength scale for every epoch, overriding what the files say.
+    sort_by_time : bool, optional
+        Order the epochs by ``bjd``. Default ``True``.
+    **epoch_kwargs
+        Passed to :func:`to_epoch`.
+
+    Raises
+    ------
+    ValueError
+        If ``raws`` is empty, or the epochs disagree about the frame or the medium.
+    """
+    raws = list(raws)
+    if not raws:
+        raise ValueError("dataset_from_raw needs at least one spectrum")
     frames = {r.frame for r in raws}
     if len(frames) > 1:
         raise ValueError(
@@ -1366,6 +1379,71 @@ def read_dataset(
 
         epochs = tuple(_replace(epoch, medium=medium) for epoch in epochs)
     return Dataset(epochs, frame=raws[0].frame)
+
+
+def read_dataset(
+    paths: str | Iterable[str],
+    *,
+    instrument: str | None = None,
+    frame: str | None = None,
+    medium: str | None = None,
+    sort_by_time: bool = True,
+    read_kwargs: Mapping[str, Any] | None = None,
+    **epoch_kwargs,
+) -> Dataset:
+    """Read a set of FITS spectra into one :class:`~albireo.data.Dataset`.
+
+    The one-call path from a directory of archival spectra to something
+    :func:`albireo.forward.build_problem` accepts. It is :func:`read_raw_spectra` followed
+    by :func:`dataset_from_raw`; use the two halves directly when the file-level facts
+    (the header's resolving power, the instrument each file resolved to) are needed
+    before the epochs are built.
+
+    Parameters
+    ----------
+    paths : str or iterable of str
+        A glob pattern (``"data/hr6819/*.fits"``), a directory, or an explicit iterable
+        of paths.
+    instrument : str, optional
+        Instrument key for every epoch; overrides the header. Give the epochs one key if
+        they share an LSF -- they may still sit on different wavelength grids, which
+        albireo handles by splitting them into separate operator groups internally
+        (:func:`albireo.forward._epoch_groups`).
+    frame : {"topocentric", "barycentric"}, optional
+        Override the frame for every epoch. All epochs must agree, since the frame is a
+        property of the :class:`~albireo.data.Dataset`.
+    medium : {"air", "vacuum"}, optional
+        Declare the wavelength scale for every epoch, overriding what the files say. Use
+        this only after converting them onto a common scale -- it changes the label, not
+        the wavelengths. Without it, files that disagree are refused.
+    sort_by_time : bool, optional
+        Order the epochs by ``bjd``. Default ``True``.
+    read_kwargs : mapping, optional
+        Extra keyword arguments for :func:`read_spectrum`.
+    **epoch_kwargs
+        Passed to :func:`to_epoch` -- ``region``, ``smooth_angstrom``, ``tellurics``, ...
+
+    Returns
+    -------
+    Dataset
+
+    Raises
+    ------
+    ValueError
+        If no file matches, or the epochs disagree about the frame.
+
+    Examples
+    --------
+    >>> ds = read_dataset(  # doctest: +SKIP
+    ...     "data/hr6819/*.fits",
+    ...     instrument="FEROS",
+    ...     region=(4000.0, 4600.0),
+    ...     smooth_angstrom=150.0,
+    ... )
+    >>> print(ds.summary())  # doctest: +SKIP
+    """
+    raws = read_raw_spectra(paths, instrument=instrument, frame=frame, read_kwargs=read_kwargs)
+    return dataset_from_raw(raws, medium=medium, sort_by_time=sort_by_time, **epoch_kwargs)
 
 
 def write_spectra(

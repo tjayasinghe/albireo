@@ -33,6 +33,7 @@ __all__ = [
     "plot_light_fractions",
     "plot_lsf",
     "plot_phase_fold",
+    "plot_phase_scan",
     "plot_residual_zscores",
     "plot_rv_curve",
     "plot_spectra",
@@ -779,6 +780,40 @@ def plot_corner(idata, *, var_names=None, **kwargs):
 # ---------------------------------------------------------------------------
 # TODCOR: the surface and the table
 # ---------------------------------------------------------------------------
+
+
+def plot_phase_scan(scan, *, ax=None):
+    """The conjunction-phase scan a façade fit ran before optimizing anything.
+
+    The marginal likelihood is sharply multimodal in conjunction phase, and the
+    neighbouring trough is the component-swapped mirror orbit: this figure is what says
+    the optimizer was started in the right one. A scan whose best and second-best troughs
+    are close is a fit worth re-running with a narrower period prior.
+
+    Parameters
+    ----------
+    scan
+        A :class:`albireo.facade.PhaseScan`, from ``fit.phase_scan``.
+    ax
+        Existing axis to draw into.
+
+    Returns
+    -------
+    (Figure, Axes)
+    """
+    plt = _plt()
+    fig, ax = (ax.figure, ax) if ax is not None else plt.subplots(figsize=(7.2, 3.6))
+    trials = np.asarray(scan.trials, dtype=float)
+    values = np.asarray(scan.values, dtype=float)
+    phase = (trials - trials[0]) / scan.period
+    ax.plot(phase, values - values.max(), "o-", ms=3, lw=1.0, color="C0")
+    best = (scan.best - trials[0]) / scan.period
+    ax.axvline(best, color="C3", lw=1.0, ls="--", label=f"t_conj = {scan.best:.4f}")
+    ax.set_xlabel("trial conjunction phase (fraction of one period)")
+    ax.set_ylabel("log-likelihood - best [nats]")
+    ax.set_title(f"conjunction scan: {scan.contrast:.3g} nats between best and worst")
+    ax.legend(fontsize=8)
+    return fig, ax
 
 
 def plot_todcor_surface(surface, *, truth=None, ax=None, levels: int = 30):

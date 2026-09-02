@@ -82,6 +82,14 @@ directly, with the component spectra marginalized out in closed form. Run
   equivalent width and — because a static line is a component with *K* = 0 — 59% of K₂;
   modelling it costs 0.14% and 0.3%
   ([`examples/04_nebular.py`](examples/04_nebular.py)).
+- **One command from a list of stars to spectra, labels, velocities and orbits.**
+  `albireo init` writes an annotated TOML, `albireo run config.toml --jobs 4` reads each star's
+  epochs, disentangles them, fits atmospheric labels to the components against a published
+  grid, measures one velocity per component per epoch against those components, fits the
+  Keplerian to the table, and writes tables, spectra with their bands, a JSON report and six
+  diagnostic figures per star — in worker processes, with every failure recorded and every
+  caveat flagged. `albireo demo` runs it on two simulated stars with known answers, offline
+  ([`examples/13_pipeline.py`](examples/13_pipeline.py)).
 - **Epoch radial velocities for every component, by TODCOR** — the one product the joint fit
   never makes and every eclipsing-binary analysis and orbit code starts from. `ab.todcor`
   correlates each spectrum against a combination of templates with independent shifts
@@ -106,6 +114,22 @@ directly, with the component spectra marginalized out in closed form. Run
   the targets and `ab.bloem_spectra("1-037")` gives one star's epochs, resolving the survey
   identifier through VizieR because the archive files these under their Gaia DR3 source ids
   ([`examples/06_bloem.py`](examples/06_bloem.py)).
+
+## One command
+
+```bash
+pip install "albireo[io,plots]"
+albireo demo                      # two simulated stars with known answers, offline
+albireo init                      # an annotated albireo.toml to edit for your own stars
+albireo run albireo.toml --jobs 4
+```
+
+Each star gets a directory with `summary.txt`, `result.json`, the velocity table, the
+disentangled spectra with their uncertainty bands, the orbit, the labels and the figures; the
+batch gets `results.csv` with one row per star. The things the data cannot supply — the light
+fraction of each component, and the wavelength scale where a synthetic grid is consulted — are
+required by the file rather than defaulted by the command. The walkthrough is
+[`docs/tutorials/pipeline.md`](docs/tutorials/pipeline.md).
 
 ## Installation
 

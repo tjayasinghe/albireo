@@ -77,9 +77,11 @@ import matplotlib.pyplot as plt
 sys.path.insert(0, "scripts")
 matplotlib.rcParams["figure.dpi"] = 110
 
-import albireo as ab
-from aiphe_bench import TEFF1, TEFF2, R1_FRAC, R2_FRAC, WINDOW, load
-from aiphe_labels_bench import LIBRARY, disentangle, published_logg
+# After the path insert on purpose: the two bench modules live in scripts/.
+from aiphe_bench import R1_FRAC, R2_FRAC, TEFF1, TEFF2, WINDOW, load  # noqa: E402
+from aiphe_labels_bench import LIBRARY, disentangle, published_logg  # noqa: E402
+
+import albireo as ab  # noqa: E402
 
 print(f"albireo {ab.__version__}")""",
     ),
@@ -133,14 +135,14 @@ print(f"light fractions assumed: {ell[0]:.4f} / {ell[1]:.4f}")""",
         PY,
         """\
 fig, axes = plt.subplots(2, 1, figsize=(9.5, 5.0), sharex=True)
-for i, (ax, name) in enumerate(zip(axes, ("primary (F7 V)", "secondary (K0 IV)"))):
+for i, (ax, name) in enumerate(zip(axes, ("primary (F7 V)", "secondary (K0 IV)"), strict=True)):
     ax.fill_between(grid.wave, 1 + d_hat[i] - 2 * std[i], 1 + d_hat[i] + 2 * std[i],
                     color=f"C{i}", alpha=0.3, lw=0)
     ax.plot(grid.wave, 1 + d_hat[i], color=f"C{i}", lw=0.8)
     ax.set_ylabel(name, fontsize=9)
     ax.set_xlim(*WINDOW)
 axes[-1].set_xlabel("wavelength [Å]")
-axes[0].set_title("AI Phe, disentangled on the Mg I b window, with the ±2σ band")
+axes[0].set_title(r"AI Phe, disentangled on the Mg I b window, with the $\\pm 2\\sigma$ band")
 fig.set_layout_engine("constrained")""",
     ),
     (

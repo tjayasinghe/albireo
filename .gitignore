@@ -241,3 +241,8 @@ forecast.png
 rv_table.png
 todcor_*.png
 todcor_tables/
+# albireo.pipeline products (examples/13_pipeline.py, `albireo demo`, `albireo init`)
+albireo_demo/
+albireo_results/
+pipeline_example/
+albireo.toml

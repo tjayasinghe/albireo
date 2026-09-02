@@ -605,6 +605,37 @@ front-half job the package was missing — the table — and the honest position
 spectra are known, measuring velocities against them is faster, simpler and works on one
 spectrum, which is exactly the split Zucker himself drew between correlation and disentangling.
 
+### 11. One command for a list of stars — **done** (D58)
+
+Every stage above existed as a function, and a survey — or a first-time user — does not want
+to call them one after another for every star. `albireo.pipeline` is the driver: read the
+epochs, disentangle, fit labels to the components, measure the epoch velocities against them,
+fit the orbit to the table, write the products and the figures, for every star in a TOML file,
+in worker processes, with the failures recorded and the results in a table. `albireo init`,
+`albireo run` and `albireo demo` are its command line, and the configuration is the façade's
+own vocabulary rendered as TOML with the standard library — which is the ordering this page
+asked for below: the CLI came after the façade so that it would not freeze a second schema.
+
+**The driver made no scientific decision of its own**, and that was the design constraint
+rather than a modesty: light fractions are still required and the wavelength medium is still
+declared before a grid is consulted, and where a request cannot be honoured the star gets a
+flag and the batch carries on. What it *added* is the composition the pieces had promised: the
+label fit's measured frame offset is applied to each component's own template, so the epoch
+velocities come out absolute and the orbit fitted to them recovers the systemic velocity the
+disentangling alone can never see — the demo's toy star returns +11.9 ± 0.2 km/s against an
+injected +12.
+
+**The degeneracy it found was in the first demo run.** With a symmetric semi-amplitude prior
+the conjunction scan sees the declared component assignment and its mirror — spectra swapped,
+rescaled by the light ratio — as equally deep troughs, and the toy star came back with its
+components exchanged. The resolution is a convention, stated rather than hidden: components are
+declared in order of decreasing mass, the fit is started with K₁ < K₂, and the label stage
+flags a fitted light fraction far from the declared one as the signature of a wrong order.
+Finding it exposed a façade defect (per-component `start_at` values were silently dropped), now
+fixed. The scaling of a batch across worker processes is measured in [the benchmark
+record](benchmarks.md): 2.0× for four workers and 2.5× for eight, and the per-worker thread cap —
+kept as a precaution — turned out to be worth nothing measurable there.
+
 ## Tier 3 — later, and why later
 
 **Time-variable component spectra.** The core assumption of disentangling is that each component's
@@ -633,9 +664,10 @@ visit spectra must be read in the un-shifted form.
 GPU hardware, which is also the one open acceptance gate from M5 — the current scale projections are
 extrapolated from CPU measurements and say so.
 
-**A command-line interface.** Deferred until after the façade, because the façade is the
+~~**A command-line interface.** Deferred until after the façade, because the façade is the
 configuration schema and building a CLI first would freeze a second one. When it happens, the
-subcommand with real value is `albireo fetch`, not `albireo fit`.
+subcommand with real value is `albireo fetch`, not `albireo fit`.~~ **Done** (Tier 2 item 11,
+D58): `albireo run` is a TOML rendering of the façade's vocabulary, and `albireo fetch` is in it.
 
 **A guard at zero eccentricity.** The `(√e cos ω, √e sin ω)` parameterization is singular at exactly
 the origin: ω is undefined, `e·cos ω` behaves like `|x|`, and the gradient is NaN. numpyro then

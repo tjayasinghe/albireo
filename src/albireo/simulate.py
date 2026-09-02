@@ -45,9 +45,11 @@ __all__ = [
     "OrbitParams",
     "SimulationTruth",
     "chebyshev_response",
+    "library_component",
     "resimulate",
     "simulate_dataset",
     "synthetic_deviation_spectrum",
+    "synthetic_library",
     "synthetic_nebular_spectrum",
     "synthetic_telluric_spectrum",
 ]
@@ -651,3 +653,180 @@ def resimulate(problem: Problem, d_stack, *, seed: int = 0) -> Problem:
         noise = np.stack([_ar1_noise(rng, w.shape[1], float(phi[e])) for e in range(w.shape[0])])
         z_new.append(np.asarray(g.r) * np.asarray(model_dev) + sigma * noise)
     return with_data(problem, z_new)
+
+
+# ---------------------------------------------------------------------------
+# A toy spectral library: the simulator's stand-in for BOSZ or POLLUX
+# ---------------------------------------------------------------------------
+
+_LIBRARY_DEFAULT_TEFF = tuple(float(t) for t in range(4000, 5751, 250))
+_LIBRARY_DEFAULT_LOGG = (3.0, 3.5, 4.0, 4.5, 5.0)
+_LIBRARY_DEFAULT_MH = (-1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5)
+
+
+def _library_line_depths(teff, logg, mh, n_lines: int) -> list[float]:
+    """Line depths as functions of the labels, each label owning lines of its own.
+
+    That ownership is load-bearing. If two labels moved the same lines the same way they
+    would be exactly interchangeable, and a fit would drive the chi-square to zero along a
+    curve through label space while "failing" to recover the injected values -- the
+    degenerate-fixture trap that D53 recorded. Here Teff, log g and [M/H] each drive lines
+    that the others do not, so the map from labels to spectrum is invertible and a
+    recovery test is a statement about the code rather than about the fixture.
+    """
+    t = (teff - 4800.0) / 600.0
+    g = logg - 4.0
+    rules = (
+        0.30 + 0.13 * np.tanh(t),
+        0.22 - 0.11 * np.tanh(0.8 * t),
+        0.26 + 0.09 * g + 0.02 * g**2,
+        0.17 - 0.07 * g,
+        0.21 + 0.16 * mh + 0.04 * mh**2,
+        0.19 + 0.10 * mh - 0.03 * np.tanh(t),
+    )
+    depths = []
+    for i in range(n_lines):
+        base = rules[i % len(rules)]
+        # Repeats past the sixth line are scaled so no two lines are identical copies.
+        depths.append(float(base * (1.0 - 0.15 * (i // len(rules)))))
+    return depths
+
+
+def synthetic_library(
+    wave_range: tuple[float, float] = (5150.0, 5250.0),
+    *,
+    n_pix: int = 1400,
+    n_lines: int = 6,
+    teff: Sequence[float] = _LIBRARY_DEFAULT_TEFF,
+    logg: Sequence[float] = _LIBRARY_DEFAULT_LOGG,
+    mh: Sequence[float] = _LIBRARY_DEFAULT_MH,
+    medium: str = "air",
+    line_width_angstrom: float = 0.25,
+    seed: int = 0,
+):
+    """A small, complete-box spectral library standing in for BOSZ or POLLUX.
+
+    Every synthetic-grid feature above the grid itself -- interpolation, broadening, the
+    dilution model, the additive nuisance, the label optimizer, and the templates
+    :func:`albireo.todcor` correlates against -- is exercised unchanged by this stand-in,
+    which is what lets the label mode and the pipeline be tested and demonstrated
+    offline. The real grids are hundreds of megabytes (:func:`albireo.fetch_library`).
+
+    Each node is a set of Gaussian absorption lines at fixed wavelengths whose depths
+    depend on the labels, with each label owning lines of its own so that the map from
+    labels to spectrum is invertible (see :func:`_library_line_depths`), and a continuum
+    that falls with Teff across the window -- the wavelength dependence that makes a
+    light ratio measurable.
+
+    Parameters
+    ----------
+    wave_range
+        The window, in Angstrom.
+    n_pix
+        Samples across the window (uniform in wavelength).
+    n_lines
+        Lines per spectrum, spread across the window with an 8% margin at each edge.
+    teff, logg, mh
+        The node axes. The default box matches the BOSZ FGK spacing (250 K, 0.5 dex).
+    medium
+        The wavelength scale to declare. Required by the container; there is no default
+        in the real thing either.
+    line_width_angstrom
+        Intrinsic Gaussian sigma of every line. Rotation is applied by a kernel afterwards,
+        never here.
+    seed
+        Seeds the jitter of the line positions.
+
+    Returns
+    -------
+    albireo.library.SpectralLibrary
+    """
+    from albireo.library import SpectralLibrary
+
+    lo, hi = float(wave_range[0]), float(wave_range[1])
+    if not hi > lo:
+        raise ValueError("wave_range must satisfy lo < hi")
+    wave = np.linspace(lo, hi, int(n_pix))
+    rng = np.random.default_rng(seed)
+    margin = 0.08 * (hi - lo)
+    centers = np.linspace(lo + margin, hi - margin, int(n_lines))
+    spacing = (hi - lo - 2 * margin) / max(n_lines - 1, 1)
+    centers = centers + rng.uniform(-0.15, 0.15, size=centers.size) * spacing
+
+    nodes, normalized, continua = [], [], []
+    for t in teff:
+        for g in logg:
+            for m in mh:
+                depths = _library_line_depths(float(t), float(g), float(m), int(n_lines))
+                flux = np.ones_like(wave)
+                for center, depth in zip(centers, depths, strict=True):
+                    flux = flux - depth * np.exp(
+                        -0.5 * ((wave - center) / line_width_angstrom) ** 2
+                    )
+                log_continuum = (
+                    30.0 + 4.0 * np.log(float(t) / 5000.0) - 0.025 * (wave - wave[0]) / 100.0
+                )
+                nodes.append((float(t), float(g), float(m)))
+                normalized.append(flux)
+                continua.append(log_continuum)
+    return SpectralLibrary(
+        label_names=("teff", "logg", "mh"),
+        nodes=np.asarray(nodes),
+        normalized=np.asarray(normalized),
+        log_continuum=np.asarray(continua),
+        wave=wave,
+        medium=medium,
+        meta={
+            "grid": "albireo.simulate.synthetic_library (toy)",
+            "vmicro": "n/a",
+            "citation": "none: a synthetic stand-in generated by albireo",
+        },
+    )
+
+
+def library_component(
+    library,
+    labels: Mapping[str, float],
+    grid: LogGrid,
+    *,
+    medium: str,
+    vsini_kms: float = 0.0,
+    epsilon: float = 0.6,
+) -> np.ndarray:
+    """A library spectrum at ``labels`` as a deviation on ``grid``, rotationally broadened.
+
+    The component a simulated star is built from when its labels are meant to be
+    recoverable: interpolate the library at the labels (the same interpolator the label
+    fit uses), subtract the unit continuum, and broaden with the pixel-integrated Gray
+    kernel. Hand the result to :func:`simulate_dataset` as one of its ``components``.
+
+    Parameters
+    ----------
+    library
+        A :class:`~albireo.library.SpectralLibrary`, e.g. :func:`synthetic_library`.
+    labels
+        ``{"teff": ..., "logg": ..., "mh": ...}`` -- every axis the library has.
+    grid
+        The model grid to render on.
+    medium
+        The wavelength scale of ``grid`` (the library is converted onto it).
+    vsini_kms, epsilon
+        Rotational broadening and the limb-darkening coefficient.
+    """
+    from albireo.library import library_interpolator
+    from albireo.operators import rotational_kernel
+
+    resampled = library.resampled_to(grid, medium=medium)
+    missing = [axis for axis in resampled.label_names if axis not in labels]
+    if missing:
+        raise ValueError(f"labels are missing the library axes {missing}")
+    interpolator = library_interpolator(resampled)
+    point = jnp.asarray([float(labels[axis]) for axis in resampled.label_names])
+    normalized, _ = interpolator(point)
+    deviation = np.asarray(normalized, dtype=np.float64) - 1.0
+    if vsini_kms < 0.0:
+        raise ValueError("vsini_kms must be non-negative")
+    if vsini_kms > 0.0:
+        kernel = np.asarray(rotational_kernel(vsini_kms / grid.dv_kms, epsilon=epsilon))
+        deviation = np.convolve(deviation, kernel, mode="same")
+    return deviation

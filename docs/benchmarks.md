@@ -2735,3 +2735,55 @@ zero point is removed, and the Keplerian fitted to them returns *K* to 0.05%, wi
 reduced chi-square of the correlation itself at 1.005. AI Phoenicis, where every element has a
 published value and the templates would be the D55 label fits, is the obvious next gate and
 has not been run.
+
+## D58 — the pipeline in worker processes (2026-09-01)
+
+Machine: the **AMD Ryzen 9 9950X3D desktop** of D49–D56 (16 cores / 32 threads, 32 GB,
+Windows 11, CPU only, float64). Harness: `scripts/pipeline_bench.py`, offline. The batch is
+eight simulated stars — the pipeline's own toy star, a two-component SB2 drawn from
+`albireo.simulate.synthetic_library` at known labels, 8 epochs of 725 native pixels each,
+S/N 120 — with the label stage and the figures off, so what is timed is what every star
+pays for: the conjunction scan and 60 L-BFGS steps of disentangling on an 893-pixel grid,
+the velocity table against the fit's own components, the orbit fit, and the products.
+Every star is identical up to its noise seed. One warm-up star is run in-process first so
+that the compile is paid before the in-process timing, as every worker pays it once too.
+Another project's test suite was running on the machine during the first four rows and had
+finished before the last two; the capped eight-worker point was measured in both states
+and agreed to 0.1 s.
+
+| workers | threads per worker | batch wall [s] | mean per star [s] | speedup |
+|---|---|---|---|---|
+| 1 (in-process) | 32 | 132.2 | 16.5 | 1.00× |
+| 2 | 16 | 101.4 | 24.0 | 1.30× |
+| 4 | 8 | 66.7 | 29.9 | 1.98× |
+| 8 | 4 | 54.0 | 43.5 | 2.45× |
+| 8 | 32 (cap off) | 54.7 | 43.0 | 2.42× |
+
+Three readings, one of them a correction to what the module was written to claim.
+
+**Workers help, sub-linearly.** Four workers finish the batch twice as fast as one process
+and eight 2.5× as fast, while the mean wall per star climbs from 16.5 to 43.5 s as the
+workers share the machine. A single in-process star is not a serial program: XLA's CPU
+backend already spreads the banded solve and the operator assembly over the cores, so what
+the extra processes overlap is the serial remainder of each star — compilation, the
+41-point conjunction scan's Python loop, the orbit fit, the writing — and that remainder
+is what bounds the gain.
+
+**The thread cap made no measurable difference.** The pipeline caps each worker's XLA and
+BLAS threads at `cpu_count // jobs`, and the docstrings as first written said the cap was
+"what turns worker processes into a speedup". The last row says otherwise: eight workers
+each free to use all 32 threads finished the same batch in 54.7 s against 54.1 s capped.
+On this workload the operating system's scheduler absorbs the oversubscription. The cap
+stays, as a precaution that costs nothing here and because BLAS-heavy stages are where
+oversubscription has been seen to bite on this machine (the D50 record's 32-thread
+OpenBLAS), but every claim that it is *the* speedup has been rewritten to this measurement.
+
+**`jobs="auto"` is `cpu_count // 4`**, which on this machine is eight — the last capped
+row. Going beyond the core count buys nothing on a CPU: the batch is compute-bound once
+the serial remainder is overlapped, and each worker holds its own XLA runtime (a few
+hundred megabytes) and its own copy of the shared configuration.
+
+Not measured here: the label stage, which is the expensive part of a full run
+(~50 s against ~30 s of disentangling on this star in fast mode) and scales the same way,
+being one more in-process JAX program per star; and a GPU, on which the in-process star
+would be faster and the workers' overlap smaller.

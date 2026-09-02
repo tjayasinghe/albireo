@@ -87,6 +87,10 @@ docs = [
 Repository = "https://github.com/tjayasinghe/albireo"
 Issues = "https://github.com/tjayasinghe/albireo/issues"
 
+[project.scripts]
+# `albireo init | run | demo | fetch` -- the pipeline's command line (albireo.cli).
+albireo = "albireo.cli:main"
+
 [tool.hatch.version]
 path = "src/albireo/__init__.py"
 

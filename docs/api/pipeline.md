@@ -1,0 +1,94 @@
+# Pipeline and command line
+
+One declaration in, structured products out: for every star in a list, read the epochs,
+disentangle them, fit atmospheric labels to the components against a synthetic grid,
+measure one velocity per component per epoch against those components, fit the
+Keplerian to the table, and write the lot — tables, spectra with their bands, a JSON
+report, diagnostic figures — into one directory per star, with a batch-level table and a
+record of every failure.
+
+```bash
+albireo init            # writes an annotated albireo.toml
+albireo run albireo.toml --jobs 4
+albireo demo            # two simulated stars with known answers, offline
+```
+
+The same thing from Python:
+
+```python
+import albireo as ab
+
+run = ab.run_pipeline("albireo.toml", jobs=4)
+run.results["AI Phe"].report["orbit"]["k"]     # {"primary": ..., "secondary": ...}
+```
+
+## What it is, and is not
+
+It is a **driver**. Every scientific decision is still made by the stage that owns it —
+[`Disentangler`](facade.md), [`match_labels`](match.md), [`todcor`](todcor.md),
+[`fit_rv_orbit`](rvorbit.md) — and the two rules those stages enforce are enforced here
+unchanged: light fractions are declared, never defaulted, and the wavelength medium is
+declared before a synthetic grid is consulted. Where the pipeline cannot honour a request
+it records a **flag** on the star's report and carries on, rather than guessing or
+stopping the batch.
+
+Three routes into the orbit:
+
+| Declaration | What runs |
+|---|---|
+| `period = [lo, hi]` (or a value, or `{value, sigma}`) | the Keplerian is inferred from the spectra; the epochs are measured back against the components |
+| `period = "search"` | library templates at the declared starting labels measure a first table, a periodogram finds the period, an orbit fitted to the table warm-starts the disentangling |
+| `velocities = "file"` | the free per-epoch table is fitted from measured velocities; the period comes from the table afterwards |
+
+**Declare the components in order of decreasing mass** — the brighter star first for a
+main-sequence pair. The likelihood cannot tell which spectrum belongs to which star: with
+a symmetric semi-amplitude prior the conjunction scan sees two equally deep troughs, the
+declared assignment and its mirror with the spectra swapped and rescaled by the light
+ratio. The pipeline starts the fit with $K_1 < K_2 < \dots$ (the first star moves least),
+which is a convention rather than a constraint, and the label stage checks it: a fitted
+light fraction far from the declared one is flagged as the signature of an order declared
+the wrong way round.
+
+**The zero point is the thing to read on every report.** Velocities measured against a
+disentangled component are differential — its rest frame is not identified
+([§5.3](../math.md#53-systemic-velocity-zero-point)) — unless the label fit measured the
+frame's offset, in which case the pipeline applies it to the templates and the velocities
+come out absolute. `result.json` says which (`velocities.absolute`), and so does the orbit
+fit, which uses one systemic velocity per component whenever a component is differential.
+
+## Batches
+
+Stars are independent, so `jobs > 1` runs them in a spawn-based process pool. On the
+development desktop four workers finish a batch of eight simulated stars 2.0× faster than
+one process and eight workers 2.5× — sub-linear, because a single star already keeps
+several cores busy, so what the workers overlap is each star's serial part. Each worker's
+XLA and BLAS thread counts are capped at `cpu_count // jobs` as a precaution against
+oversubscription; on that benchmark the cap made no measurable difference. A worker
+returns a plain-data report; the live objects (the `Fit`, the velocity table, the label
+match) are kept only on an in-process run (`jobs=1`), since they carry compiled JAX
+programs that do not cross a pipe. One bad star is recorded in `failures.txt` and does not
+stop the others. The numbers are in
+[the benchmark record](../benchmarks.md#d58-the-pipeline-in-worker-processes-2026-09-01).
+
+## The products
+
+Per star, `<output>/<star>/`:
+
+| File | What |
+|---|---|
+| `summary.txt` | every stage's own report, the assumptions block, the flags |
+| `result.json` | the machine-readable report: dataset, declaration, orbit from the spectra, labels with both error bars, the velocity table, the orbit from the table with errors, timings, flags, files |
+| `velocities.rv`, `velocities.csv` | the epoch velocity table, twice (commented ASCII with the zero-point status in its header; a CSV) |
+| `spectrum_<component>.txt`, `spectra.fits` | the disentangled components with their uncertainty band |
+| `orbit.txt`, `labels.txt`, `template_<component>.txt` | the Keplerian from the table; the label report; the label fit's model spectra |
+| `fit.npz`, `posterior.npz` | the MAP result for `load_fit`; the NUTS draws when sampling was asked for |
+| `spectra.png`, `residuals.png`, `velocities.png`, `phase_scan.png`, `todcor_surface.png`, `rv_curve.png` | the figures |
+| `log.txt` | the progress lines with timings, and every warning |
+
+Per batch: `results.json` (every report), `results.csv` (one row per star: period,
+eccentricity, semi-amplitudes and systemic velocities with errors, labels, flags),
+`summary.txt`, `failures.txt`, and `run.json` (the declaration as run).
+
+::: albireo.pipeline
+
+::: albireo.cli

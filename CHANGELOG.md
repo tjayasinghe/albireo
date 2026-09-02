@@ -13,6 +13,49 @@ This file records *what changed*. The reasons live elsewhere and are worth follo
 
 ### Added
 
+- **One command from a list of stars to spectra, labels, velocities and orbits —
+  `albireo.pipeline` and the `albireo` command line (D58).** `albireo init` writes an
+  annotated TOML, `albireo run config.toml --jobs 4` runs every star in it, and `albireo demo`
+  runs the same pipeline on two simulated stars with known answers, offline. For each star the
+  driver reads the epochs, disentangles them (`Disentangler`), fits Teff / log g / [M/H] /
+  *v* sin *i* to the components against a synthetic grid (`match_labels`), measures one velocity
+  per component per epoch against those components (`todcor`), fits the Keplerian to the table
+  (`fit_rv_orbit`), and writes `summary.txt`, `result.json`, the velocity table as commented
+  ASCII and CSV, the component spectra with their bands, the orbit, the labels, `fit.npz`, and
+  six diagnostic figures; a batch adds `results.csv` (one row per star), `results.json`,
+  `summary.txt` and `failures.txt`. New names: `PipelineConfig`, `StarConfig`,
+  `ComponentConfig`, `Analysis`, `StarResult`, `PipelineRun`, `run_pipeline`, `run_star`,
+  `load_config`, `config_from_dict`, `write_config_template`, `demo_config`; `plot_phase_scan`;
+  `albireo.simulate.synthetic_library` and `library_component` (the toy grid the demo and the
+  tests are built on); `albireo.io.read_raw_spectra` and `dataset_from_raw` (the two halves of
+  `read_dataset`, so a caller can read the header's resolving power before building the
+  epochs). A console script `albireo` (`[project.scripts]`) and `python -m albireo`.
+  **Zero new dependencies**: the configuration is TOML, read with the standard library.
+
+  Three routes into the orbit: a period prior (the Keplerian is inferred from the spectra),
+  `period = "search"` (library templates measure a first table, a periodogram finds the period,
+  an orbit fitted to the table warm-starts the disentangling through `RVOrbit.to_theta()`), or
+  a file of measured velocities (the free per-epoch table). Stars run in a spawn-based process
+  pool — measured at 2.0× for four workers and 2.5× for eight on a batch of eight simulated
+  stars, sub-linear because one star already keeps several cores busy — with each worker's XLA
+  and BLAS threads capped at `cpu_count // jobs` as a precaution (the cap made no measurable
+  difference on that benchmark); a failed star is recorded and the batch continues. Every
+  caveat a run records is a **flag** on the report — a noise model that does not describe the
+  data, a skipped stage and why, a table whose semi-amplitudes disagree with the disentangling —
+  and the two rules the stages enforce are enforced unchanged: light fractions are declared,
+  never defaulted, and the wavelength medium is declared before a synthetic grid is consulted.
+
+  Two things the driver found. **Components must be declared in order of decreasing mass**,
+  and the fit is started with K₁ < K₂: a symmetric semi-amplitude prior gives the conjunction
+  scan two equally deep troughs — the declared assignment and its mirror with the spectra
+  swapped and rescaled by the light ratio — and the first demo run landed in the mirror. The
+  convention is stated in the template, and the label stage checks it (a fitted light fraction
+  far from the declared one is flagged). And `Disentangler`'s `_vector_spec` silently dropped
+  every entry's `start_at` when a semi-amplitude was declared per component, so every star
+  started at its midpoint — exactly the symmetric configuration; fixed, with a regression test.
+  Docs: `docs/api/pipeline.md`, `docs/tutorials/pipeline.md`, `examples/13_pipeline.py`,
+  `scripts/pipeline_bench.py`, benchmarks.md "D58".
+
 - **Epoch radial velocities for every component by N-dimensional correlation — `albireo.todcor`
   (D56).** The two-dimensional correlation of Zucker & Mazeh (1994), generalized to any number
   of components and to weighted, masked, multi-instrument data by writing it as the weighted

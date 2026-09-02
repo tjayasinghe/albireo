@@ -28,6 +28,7 @@ The path from a directory of FITS files to a posterior runs through them in roug
 | Label | [`albireo.match`](match.md) | Teff / log g / [M/H] / *v* sin *i* against those grids — for choosing a template, not for an abundance table |
 | Measure | [`albireo.todcor`](todcor.md) | one velocity per component per epoch, by N-dimensional correlation against templates — the disentangled components, a label match, or a library — with calibrated errors and a batch driver |
 | Solve | [`albireo.rvorbit`](rvorbit.md) | a Keplerian fitted to that table, with the same solver and conventions as the joint model, and a period search |
+| Run | [`albireo.pipeline`](pipeline.md) | every stage above for a list of stars from one declaration — `albireo run config.toml` — in worker processes, with structured products, figures and the failures recorded |
 
 [`albireo.simulate`](simulate.md) sits outside that path and feeds it: it is the oracle every
 closed-loop test is written against.

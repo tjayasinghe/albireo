@@ -389,6 +389,16 @@ def test_a_vector_site_may_be_one_spec_or_one_spec_per_star():
     assert np.allclose(np.asarray(combined.hi), np.asarray(split.hi))
 
 
+def test_a_vector_site_keeps_each_entry_starting_value():
+    """Dropping start_at silently started every component at its midpoint -- and equal
+    starts are exactly the symmetric configuration in which the conjunction scan cannot
+    tell the declared component assignment from its mirror."""
+    spec = _vector_spec([ab.Between(10.0, 90.0, 30.0), ab.Between(10.0, 90.0, 60.0)], 2, "k")
+    np.testing.assert_allclose(np.asarray(spec.start()), [30.0, 60.0])
+    plain = _vector_spec([ab.Between(10.0, 90.0), ab.Between(10.0, 90.0)], 2, "k")
+    np.testing.assert_allclose(np.asarray(plain.start()), [50.0, 50.0])
+
+
 def test_mixing_spec_kinds_in_one_vector_site_is_refused():
     with pytest.raises(TypeError, match="one distribution family"):
         _vector_spec([ab.Between(1.0, 3.0), ab.Known(2.0, 0.1)], 2, "k")
