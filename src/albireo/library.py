@@ -241,8 +241,7 @@ class SpectralLibrary:
         quadrature against any real LSF and identical on both sides of the comparison, since
         the data are convolved by the same instrument profile.
 
-        This moves the model onto the data's grid. The data are never resampled
-        never resampled.
+        This moves the model onto the data's grid; the data are never resampled.
         """
         library = self.in_medium(medium)
         target = np.asarray(grid.wave, dtype=np.float64)
