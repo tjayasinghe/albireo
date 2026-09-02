@@ -16,7 +16,7 @@ this by overwriting every flux with unused values and requiring a bit-identical 
 
 :func:`sensitivity_forecast` summarizes ``Sigma`` in three quantities, each quoted against
 the prior alone so that a band that has relaxed onto the prior is not mistaken for one the
-data determined (D42). The pointwise band (:attr:`SensitivityForecast.component_std`) is
+data determined. The pointwise band (:attr:`SensitivityForecast.component_std`) is
 one standard deviation per component per model pixel. The worst-determined modes are the
 top eigenpairs of ``Sigma``, by subspace iteration on the banded factor; they are the exact
 form of the low-frequency degeneracy that ``docs/math.md`` §5.1 derives asymptotically, and
@@ -39,7 +39,7 @@ The orbit is not forecast. The Fisher information for a velocity runs through
 ``K_2`` requires the component line depths, which are not known before the data exist.
 
 Every reported quantity is conditional on the assumptions the analysis makes: the orbit
-that sets the shifts, the light fractions (D13; the observable is ``ell_i d_i``), the LSF
+that sets the shifts, the light fractions (the observable is ``ell_i d_i``), the LSF
 widths, the response, the weights and noise model, and the prior hyperparameters
 ``(tau, eta)``. For a star already observed these come from a fit; for a proposal on a star
 with no spectra they are assumptions, and the forecast is then a comparison between
@@ -130,7 +130,7 @@ def plan_epochs(
     medium
         Wavelength scale, as in :class:`~albireo.data.EpochData`. Default is the
         template's, which keeps a planned epoch combinable with the real ones in one
-        :class:`~albireo.data.Dataset` (D43 rejects a mixture).
+        :class:`~albireo.data.Dataset` (a mixture is rejected).
 
     Returns
     -------
@@ -952,7 +952,7 @@ def sensitivity_forecast(
 
         The design and its baseline both pass through here (same construction, same
         assembly, same summaries), so that the comparison cannot become a difference
-        between two numbers reached by two slightly different routes (D46).
+        between two numbers reached by two slightly different routes.
 
         ``mask`` is the coordinate subspace over which the mode and median summaries
         are taken. It is derived from the full design and then passed to the baseline,

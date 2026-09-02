@@ -1,6 +1,6 @@
 """Synthetic spectroscopic-binary datasets, the test harness for the inference code.
 
-Milestone M1 (``internal/design.md`` §8). :func:`simulate_dataset` generates composite epochs
+:func:`simulate_dataset` generates composite epochs
 through the same operator stack the inference code uses: shift, LSF convolution, rebin to
 the native grid, then multiplicative response. Closed-loop tests therefore exercise the
 forward model itself, under the pathologies the model claims to handle: chip gaps, cosmic
@@ -73,7 +73,7 @@ class InstrumentSpec:
     sigma_v_lsf
         Gaussian LSF width in km/s: a scalar for a stationary LSF, or, together with
         ``lsf_anchors_angstrom``, one width per anchor for a wavelength-dependent LSF
-        (D37), linearly interpolated across the grid exactly as the forward model
+        linearly interpolated across the grid exactly as the forward model
         realizes it (:func:`albireo.operators.gaussian_lsf_profiles`).
     snr
         Per-pixel continuum signal-to-noise (noise sigma = 1/snr on normalized flux).
@@ -81,7 +81,7 @@ class InstrumentSpec:
         Optional anchor wavelengths (strictly increasing, >= 2) for a
         wavelength-dependent LSF; None keeps the stationary one.
     lsf_h3
-        Optional Gauss-Hermite skewness (D38): a scalar or one value per anchor,
+        Optional Gauss-Hermite skewness: a scalar or one value per anchor,
         anchored instruments only; None keeps pure Gaussian profiles.
     """
 
@@ -380,7 +380,7 @@ def simulate_dataset(
     nebular
         Optional nebular deviation spectrum on ``grid``
         (:func:`synthetic_nebular_spectrum`): additive, static in the barycentric frame,
-        and scaled per epoch by ``nebular_amplitudes``. This is the D40 component.
+        and scaled per epoch by ``nebular_amplitudes``. This is the nebular component.
     nebular_amplitudes
         Per-epoch amplitude of the nebular component, ``(n_ep,)`` or a scalar
         (default 1), representing the seeing and slit-loss variation the component

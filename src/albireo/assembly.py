@@ -32,10 +32,10 @@ Stages per epoch (all exact, all differentiable in shifts, lights, kernel and we
    taps (static slices only); the second translates columns alone, which makes it a
    contraction of the band image against a static ``(w_u, w_g)`` banded matrix, one
    GEMM rather than 2r + 1 further read-modify-write passes over the widest image in
-   the assembly (D49). As elsewhere in this module the equality holds up to summation
+   the assembly. As elsewhere in this module the equality holds up to summation
    order (measured 0.5 ulp; XLA does not promise a GEMM's accumulation order, although
    it matched the loop's exactly on the benchmark configurations). A
-   wavelength-dependent LSF (``forward.build_problem(lsf_anchors_angstrom=...)``, D37)
+   wavelength-dependent LSF (``forward.build_problem(lsf_anchors_angstrom=...)``)
    keeps the identical structure with the scalar kernel taps replaced by row-shifted
    profile columns; there both applications translate rows, so both stay loops, and
    the second runs against the band-transpose of the first, since only left
@@ -55,7 +55,7 @@ Stages per epoch (all exact, all differentiable in shifts, lights, kernel and we
    integer offset enters as a traced ``dynamic_update_slice`` start, so no scatter is
    needed. The update is ``band + place(f)``, the identity in ``band``, but reverse
    mode reassembles that identity out of three whole-tensor passes unless told
-   otherwise, so it goes through the closed-form :func:`_band_accumulate` (D49: 3.5 s
+   otherwise, so it goes through the closed-form :func:`_band_accumulate` (3.5 s
    of a 5.9 s backward at the benchmark ladder's first row). The epoch loop is a
    ``lax.scan`` with the band tensor as carry (buffer reuse; the body is
    rematerialized in reverse mode, since recomputing one epoch's band is much cheaper

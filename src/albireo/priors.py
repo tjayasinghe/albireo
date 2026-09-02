@@ -10,7 +10,7 @@ with the low-frequency separation degeneracy of ``docs/math.md`` §5.1; the weak
 ``eta_i`` makes those directions proper by anchoring the spectrum to the continuum.
 Precisions are banded (half-bandwidth 2); dense covariance kernels are not used.
 
-Either strength may carry a static per-pixel profile (D40),
+Either strength may carry a static per-pixel profile,
 
     Lambda_i = D2^T diag(tau_i * p^tau_i) D2 + diag(eta_i * p^eta_i),
 
@@ -135,7 +135,7 @@ def nebular_windows(
         component's lines fall on the model grid, and the profile must agree with it.
         Both default to 0, which places the component at the observed barycentric
         wavelengths, the convention the stellar components follow (their systemic
-        velocity is absorbed into their spectra, D14).
+        velocity is absorbed into their spectra).
     wave_range
         Optional ``(min, max)`` in angstrom; windows disjoint from it are dropped.
         ``(grid.wave[0], grid.wave[-1])`` keeps only the lines a given model grid
@@ -254,7 +254,7 @@ class SmoothnessPrior:
     """Independent smoothness-plus-continuum-anchor prior per component.
 
     Implements the banded precision of ``docs/math.md`` §2, with the optional per-pixel
-    profiles of D40.
+    profiles of the nebular component.
 
     Attributes
     ----------
@@ -268,7 +268,7 @@ class SmoothnessPrior:
         §5.1).
     tau_profile, eta_profile
         Optional static ``(n_components, n_pixels)`` per-pixel multipliers on the two
-        strengths (D40): the effective weights are ``tau[i] * tau_profile[i]`` and
+        strengths: the effective weights are ``tau[i] * tau_profile[i]`` and
         ``eta[i] * eta_profile[i]``. ``None`` (default) is a uniform profile and
         reproduces the v1 prior exactly. The scalars stay separate from the profiles, so
         the ML-II hyperparameter fit is unchanged: a profile sets where the freedom is,

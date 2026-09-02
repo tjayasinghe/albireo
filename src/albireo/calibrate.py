@@ -30,7 +30,7 @@ companion spectrum. The null trials are drawn at the same ``K_1``, orbit and lig
 fractions the scan assumes, so the threshold is self-consistent with those assumptions and
 cannot detect that any of them is wrong. ``K_1`` matters most, because an error in it
 inflates ``D``: unremoved primary signal is coherent across epochs, the companion's free
-spectrum absorbs it, and the peak grows. Measured (``docs/benchmarks.md`` D41): a ``K_1``
+spectrum absorbs it, and the peak grows. Measured (``docs/benchmarks.md``): a ``K_1``
 10% high tripled the detection statistic and reduced the recovered companion's line
 pattern from 0.96 correlation with the truth to 0.49. A calibrated threshold does not flag
 this; marginalizing ``K_1`` (``k1_sigma=``) addresses it, and the two are complementary.
@@ -229,7 +229,7 @@ def detection_limit(
         As in :func:`albireo.scan.k2_scan`.
     orbit, k1, k2_grid, light_fractions, prior, v_rel_max_kms, k1_sigma, k1_nodes
         As in :func:`albireo.scan.k2_scan`; they must match the real scan.
-        ``light_fractions`` is the assumed pair the analysis scans with (D13). The
+        ``light_fractions`` is the assumed pair the analysis scans with. The
         injected amplitude is set by ``ell2_grid`` and varies independently: the
         assumption belongs to the analysis, and the limit is a statement about the truth.
     k2_true
@@ -237,7 +237,7 @@ def detection_limit(
         components move in antiphase, so their relative velocity never drops below
         roughly ``K_1``, and the limit is nearly flat in ``K_2`` whenever ``K_1`` is
         large: measured 0.292 / 0.296 / 0.297% at ``K_2`` = 20 / 40 / 65 km/s with
-        ``K_1`` = 55 km/s (``docs/benchmarks.md`` D41). A real dependence is expected
+        ``K_1`` = 55 km/s (``docs/benchmarks.md``). A real dependence is expected
         only when ``K_1`` is small enough that the pair is barely resolved at any phase;
         there, calibrate at several ``K_2`` and quote the worst.
     ell2_grid

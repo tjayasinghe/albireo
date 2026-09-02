@@ -242,7 +242,7 @@ class SpectralLibrary:
         the data are convolved by the same instrument profile.
 
         This moves the model onto the data's grid. The data are never resampled
-        (``internal/design.md`` D4).
+        never resampled.
         """
         library = self.in_medium(medium)
         target = np.asarray(grid.wave, dtype=np.float64)

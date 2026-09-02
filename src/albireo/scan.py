@@ -22,7 +22,7 @@ in the recovered secondary spectrum.
 chi-squared. Its null distribution is estimated by injection-recovery on datasets
 resimulated through the observed data's own operators (:mod:`albireo.calibrate`, §6.2).
 The light fraction of the putative companion must be supplied explicitly (design decision
-D13): the observable is ``ell_2 * d_2``, so ``ell_2`` trades exactly against the
+): the observable is ``ell_2 * d_2``, so ``ell_2`` trades exactly against the
 companion's line depths, and only external information (photometry, eclipse depths) sets
 it.
 
@@ -182,13 +182,13 @@ def k2_scan(
     Parameters
     ----------
     grid, dataset, lsf_sigma_v, telluric, nebular, nebular_v_kms, response_coeffs, block_size
-        As in :class:`albireo.inference.MarginalOrbitModel`. A nebular component (D40)
+        As in :class:`albireo.inference.MarginalOrbitModel`. A nebular component
         matters here in particular: an unmodelled static emission line is a stationary
         residual, and a faint-companion scan is a matched filter for such a residual, so
         it reports the nebula at whatever ``K_2`` puts the companion nearest to rest.
     orbit
         The fixed SB1 solution: a mapping with ``period``, ``t_conj``, ``secosw`` and
-        ``sesinw`` (gamma = 0 throughout; D14). The companion moves with ``omega + pi``
+        ``sesinw`` (gamma = 0 throughout). The companion moves with ``omega + pi``
         at each trial ``K_2``.
     k1
         Primary semi-amplitude [km/s]. Held fixed unless ``k1_sigma`` is given, in which
@@ -210,7 +210,7 @@ def k2_scan(
         Number of Gauss-Hermite nodes for that integral (default 7). Ignored when
         ``k1_sigma`` is None.
     light_fractions
-        Explicit ``(ell_1, ell_2)``, or per-epoch ``(2, n_epochs)``. Required (D13); see
+        Explicit ``(ell_1, ell_2)``, or per-epoch ``(2, n_epochs)``. Required; see
         the module docstring on the trade between ``ell_2`` and the line depths.
     prior
         Spectral prior for the two-component model, one ``(tau, eta)`` pair per

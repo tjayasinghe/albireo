@@ -17,7 +17,7 @@ consumes; nothing else in albireo reads ``mask``. The finite-``flux`` requiremen
 ``ivar > 0`` alone, so a pixel that is to hold non-finite values requires ``ivar = 0``, not
 merely ``mask = False``.
 
-Data are never resampled (``internal/design.md`` D4, ``docs/math.md`` §1.1). Interpolating
+Data are never resampled (``docs/math.md`` §1.1). Interpolating
 observations onto a common grid correlates the noise and invalidates the diagonal ``ivar``
 model. Each epoch keeps its own native, strictly increasing ``wave`` array, and the model is
 projected onto it by a static rebin operator, so mixed instruments, resolutions and samplings

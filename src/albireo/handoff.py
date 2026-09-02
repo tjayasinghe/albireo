@@ -26,7 +26,7 @@ atmospheric parameter only through repeated fits of posterior draws; see
 
 Neither writer converts between air and vacuum. iSpec provides ``air_to_vacuum`` and
 ``vacuum_to_air`` as explicit user steps and does no conversion on read; albireo does the same
-here (D43), because the offset is a nearly constant 83 km/s, the same order as the orbits
+here, because the offset is a nearly constant 83 km/s, the same order as the orbits
 being measured.
 
 References
@@ -128,7 +128,7 @@ def write_gssp(path, grid, d_hat, *, component=None, step_angstrom=None, dilute=
     Notes
     -----
     Resampling is linear interpolation onto the equidistant grid. It correlates neighbouring
-    pixels, which is why albireo does not resample observations (D4); here it is applied to a
+    pixels, which is why albireo does not resample observations; here it is applied to a
     model quantity for a code that requires the spacing, and an unresampled file would set
     GSSP's synthetic step incorrectly. The same interpolation is applied to every draw in
     :func:`export_draws`, so draws remain comparable to each other.

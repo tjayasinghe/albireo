@@ -246,7 +246,7 @@ class LabelProblem:
 
     Passed to the numpyro model through ``model_args`` rather than captured in a closure:
     the interpolated grids run to tens of megabytes, and XLA constant-folds closure constants
-    into the compiled executable (``internal/design.md`` D27).
+    into the compiled executable.
     """
 
     interpolators: tuple
@@ -671,7 +671,7 @@ def match_labels(
         ``"matched"`` convolves both sides with the declared LSF first. The latter appears
         the more careful choice, since ``d_hat`` is a regularized partial deconvolution and
         is therefore shrunk toward zero at fine scales by the smoothness prior, but
-        measurement contradicts it and the default was changed accordingly (D55).
+        measurement contradicts it and the default was changed accordingly.
 
         Convolving the residuals correlates them over the kernel width while the likelihood
         stays diagonal, so the mis-specification costs a factor of ``1 / sum(k^2)`` in

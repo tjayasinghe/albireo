@@ -1,4 +1,4 @@
-"""Joint Bayesian inference of the orbit with the spectra marginalized (M3).
+"""Joint Bayesian inference of the orbit with the spectra marginalized.
 
 Implements ``docs/math.md`` §7. The nonlinear parameter vector ``theta`` is a dict of
 JAX arrays; conditional on ``theta`` the component spectra are marginalized analytically
@@ -24,7 +24,7 @@ them are the realism extensions of ``docs/math.md`` §7.5.
   and argument ``omega_out``; one tertiary component is appended, moving with
   ``k_out[1]`` and ``omega_out + pi``.
 - ``velocity``: free per-epoch radial velocities [km/s], ``(n_stellar, n_epochs)``,
-  replacing the Keplerian sites entirely (D42; ``docs/math.md`` §7.6). With this site
+  replacing the Keplerian sites entirely (``docs/math.md`` §7.6). With this site
   present the orbital sites must be absent, and each epoch's velocity is its own
   parameter. Each component's zero point is removed before use, in pixel space, where
   the removal is exact; an uncentered table would have its absolute level set by
@@ -34,17 +34,17 @@ them are the realism extensions of ``docs/math.md`` §7.5.
 - ``light``: stellar light fractions [dimensionless], ``(n_stellar,)`` constant or
   ``(n_epochs, n_stellar)`` per epoch, rows on the simplex (Dirichlet priors).
 - ``lsf_sigma``: Gaussian LSF widths [km/s], one entry per LSF anchor for instruments
-  built with ``lsf_anchors_angstrom`` (wavelength-dependent LSF, D37) and one entry per
+  built with ``lsf_anchors_angstrom`` (wavelength-dependent LSF) and one entry per
   un-anchored instrument, concatenated in instrument order. The construction-time
   ``lsf_sigma_v`` values are per-entry upper bounds, since they fix the kernel radii.
-- ``lsf_h3``: Gauss-Hermite LSF skewness [dimensionless] (D38), one entry per LSF
+- ``lsf_h3``: Gauss-Hermite LSF skewness [dimensionless], one entry per LSF
   anchor of each anchored instrument, concatenated in instrument order, ``|h3| <= 0.2``.
   Un-anchored instruments have no entry: a stationary asymmetric LSF is absorbed by the
   free spectra (``docs/math.md`` §1.3). May appear with or without ``lsf_sigma``;
   without it the widths stay at the build values.
 - ``response``: multiplicative per-epoch Chebyshev response coefficients
   [dimensionless], ``(n_coef,)`` shared or ``(n_epochs, n_coef)`` per epoch
-  (:func:`albireo.forward.with_response`, D7/D33). ``r = 1 + sum_m c_m T_m``, so
+  (:func:`albireo.forward.with_response`). ``r = 1 + sum_m c_m T_m``, so
   all-zero coefficients give the unit response. This is the per-epoch continuum
   treatment: a low-order response trades against the components' broad features
   (``internal/design.md`` §5), so the order should be low and the priors tight and
@@ -52,15 +52,15 @@ them are the realism extensions of ``docs/math.md`` §7.5.
   are replaced.
 - ``log_jitter``: log noise-inflation factor [dimensionless], scalar (shared) or one
   per epoch; the weights become ``w_j / exp(2 log_jitter_j)``
-  (:func:`albireo.forward.with_jitter`, D15). A jitter fitted against systematics
+  (:func:`albireo.forward.with_jitter`). A jitter fitted against systematics
   widens the uncertainties around a biased point estimate; see that function's notes.
 - ``ar1_phi``: AR(1) correlation of the standardized noise [dimensionless], scalar
-  (shared) or one per epoch, ``|phi| < 1`` (:func:`albireo.forward.with_ar1`, D34).
+  (shared) or one per epoch, ``|phi| < 1`` (:func:`albireo.forward.with_ar1`).
   Requires ``ar1=True`` at construction, because the correlated coupling widens the
-  static solver bandwidth; the marginal stays on the band assembly path (D35). Composes
+  static solver bandwidth; the marginal stays on the band assembly path. Composes
   with ``log_jitter``: the jitter scales the noise, ``phi`` correlates it.
 - ``log_nebular_amp``: log per-epoch amplitude of the nebular component
-  [dimensionless], ``(n_epochs,)`` (D40; requires ``nebular=True`` at construction).
+  [dimensionless], ``(n_epochs,)`` (requires ``nebular=True`` at construction).
   The site is centered before use, ``a_j = exp(u_j - mean(u))``, because only the
   products ``a_j d_neb`` are observable and the overall scale is degenerate with the
   component spectrum. A prior on this site is therefore a prior on the epoch-to-epoch
@@ -71,7 +71,7 @@ them are the realism extensions of ``docs/math.md`` §7.5.
   ``mean(log_nebular_amp)`` in the samples reproduces the prior. The applied
   amplitudes are the ``nebular_amp`` deterministic (:func:`nebular_amplitudes`).
 
-``gamma`` is identically zero (D14): a systemic velocity is exactly degenerate with a
+``gamma`` is identically zero: a systemic velocity is exactly degenerate with a
 common shift of the component spectra. The ``(secosw, sesinw)`` parameterization is
 smooth through ``e = 0``, where ``omega`` and a time of periastron are undefined, and
 maps a uniform prior on the unit disk to a uniform prior on ``e`` (``docs/math.md``
@@ -262,7 +262,7 @@ def orbit_velocities(theta: Mapping, bjd, *, ecc_max: float = _ECC_MAX_DEFAULT):
 
     Inner components follow :class:`albireo.simulate.OrbitParams` conventions:
     component ``i`` uses ``omega + (i % 2) * pi`` and semi-amplitude ``k[i]``;
-    ``gamma = 0`` (D14). With the outer-orbit sites present (SB3), the outer
+    ``gamma = 0``. With the outer-orbit sites present (SB3), the outer
     center-of-mass velocity (semi-amplitude ``k_out[0]``, argument ``omega_out``,
     conjunction convention on the inner pair's center of mass) is added to every
     inner component, and one tertiary row is appended with semi-amplitude
@@ -301,7 +301,7 @@ def relative_velocities(velocity, grid):
     A table of free per-epoch velocities has one arbitrary zero point per stellar
     component, not one in total. Each component's deviation spectrum is a free vector,
     so translating it absorbs a constant added to that component's shifts and the
-    likelihood is unchanged. This generalizes ``gamma = 0`` (D14): with no Keplerian
+    likelihood is unchanged. This generalizes ``gamma = 0``: with no Keplerian
     tying the components together, each component has its own zero point
     (``docs/math.md`` §7.6).
 
@@ -319,7 +319,7 @@ def relative_velocities(velocity, grid):
     against component 2 (the Wilson mass ratio), which is a slope and therefore
     independent of both zero points. The systemic velocity and the absolute velocity of
     either star are not recoverable from this table; they are measured afterwards from
-    the disentangled spectra, as D14 prescribes for ``gamma``.
+    the disentangled spectra, as the convention prescribes for ``gamma``.
 
     Parameters
     ----------
@@ -346,7 +346,7 @@ def relative_velocity_errors(covariance, unconstrained: Mapping, *, site: str = 
     The diagonal of the Laplace covariance is not a usable error bar for this site. Each
     component's zero point is an exactly flat direction of the likelihood
     (:func:`relative_velocities`), so its posterior width equals the prior width, and
-    every epoch's marginal variance inherits it. Measured on the D42 fixture with a
+    every epoch's marginal variance inherits it. Measured on the velocity-table fixture with a
     ``Normal(0, 120)`` prior over 10 epochs, every raw marginal sigma is
     37.95 km/s = 120/sqrt(10), identical to four digits across both components and all
     epochs, while the identified per-epoch error is 0.059 km/s: a factor of 640, and
@@ -392,7 +392,7 @@ def relative_velocity_errors(covariance, unconstrained: Mapping, *, site: str = 
     -----
     A Laplace covariance is a local Gaussian approximation with the hyperparameters held
     at their MAP values, so it omits the widening that marginalizing over
-    ``log_tau``/``log_eta`` would add. On the D42 fixture the resulting errors are about
+    ``log_tau``/``log_eta`` would add. On the velocity-table fixture the resulting errors are about
     1.4x optimistic against the realized errors. They are a fast estimate; NUTS gives
     the posterior.
     """
@@ -527,7 +527,7 @@ class MarginalOrbitModel:
         light fractions only set ``n_stellar``, and the build-time LSF widths become
         strict upper bounds: they fix the kernel radii, and the model rejects wider
         widths, which the fixed radii would otherwise truncate.
-        ``lsf_anchors_angstrom`` makes an instrument's LSF wavelength-dependent (D37)
+        ``lsf_anchors_angstrom`` makes an instrument's LSF wavelength-dependent
         and gives it one ``lsf_sigma`` entry per anchor rather than one in total.
         ``response_coeffs`` is the fixed response used whenever ``theta`` carries no
         ``response`` site, and is replaced when it does
@@ -548,7 +548,7 @@ class MarginalOrbitModel:
         Fixed :class:`SmoothnessPrior`, used whenever ``theta`` carries no
         ``log_tau``/``log_eta`` sites. Optional if the hyperparameters are always in
         ``theta``, with one exception: its per-pixel profiles are kept even when the
-        scalars are inferred (D40), because a profile is structure rather than a
+        scalars are inferred, because a profile is structure rather than a
         hyperparameter. A windowed component therefore needs its prior passed here even
         in a pure ML-II run.
     ecc_max
@@ -557,10 +557,10 @@ class MarginalOrbitModel:
     block_size
         Solver block size passed through to the marginal likelihood.
     ar1
-        Allow an ``ar1_phi`` site (correlated noise, D34). The AR coupling widens
+        Allow an ``ar1_phi`` site (correlated noise). The AR coupling widens
         ``A^T W A`` by a static amount (:attr:`albireo.forward.Problem.ar_bandwidth_extra`)
         that must be reserved in the solver bandwidth at construction, so the site is a
-        construction-time choice like the bandwidth itself (D21). It costs a few pixels
+        construction-time choice like the bandwidth itself. It costs a few pixels
         of bandwidth whether or not ``theta`` carries the site.
     """
 
@@ -931,7 +931,7 @@ class MarginalOrbitModel:
             (``docs/math.md`` §7.1). The model takes the base
             :class:`~albireo.forward.Problem` as an optional argument and advertises it
             through a ``model_args`` attribute; the runners pass it through numpyro as a
-            traced jit argument, the same contract as :meth:`marginal` (D27). Captured
+            traced jit argument, the same contract as :meth:`marginal`. Captured
             as a closure constant instead, the problem's arrays are baked into the jitted
             potential as XLA constants, whose compile-time folding allocates multi-GB
             temporaries at survey scale. Calling the model with no argument (as any plain
@@ -969,7 +969,7 @@ class MarginalOrbitModel:
             ]
             raise ValueError(
                 f"missing orbital sites {missing}. Sample or fix them, or build a "
-                "free-velocity model instead by giving a 'velocity' site (D42)."
+                "free-velocity model instead by giving a 'velocity' site."
             )
 
         def _model(base=None):
@@ -1123,7 +1123,7 @@ def run_map(
     model_args
         Positional arguments for ``model``, passed through numpyro as traced jit
         arguments rather than closure constants, which XLA constant-folds into multi-GB
-        temporaries at scale (D27). Default: the model's own ``model_args`` attribute
+        temporaries at scale. Default: the model's own ``model_args`` attribute
         when it has one (:meth:`MarginalOrbitModel.model` advertises its base problem
         there), else ``()``. Passing ``()`` explicitly forces the closure path.
 
@@ -1272,7 +1272,7 @@ def run_nuts(
     The No-U-Turn Sampler (Hoffman & Gelman 2014) is the adaptive Hamiltonian Monte
     Carlo method reviewed by Betancourt (2017), here in its numpyro implementation (Phan
     et al. 2019). The marginal likelihood enters through a ``numpyro.factor`` site
-    (D11), and numpyro supplies the priors, transforms and summaries.
+    and numpyro supplies the priors, transforms and summaries.
 
     Parameters
     ----------

@@ -11,7 +11,7 @@ where ``Lt = Lp + A^T W A`` is the posterior precision of the stacked deviation 
 ``Lp`` the prior precision, ``z`` the data with the offset term removed
 (``docs/math.md`` §3.1), and ``b = A^T W z``. Both determinants come from
 block-tridiagonal Cholesky factorizations (``docs/math.md`` §4.2). The band of ``Lt`` is
-assembled per epoch from its analytic structure by default (``docs/math.md`` §4.5, D28);
+assembled per epoch from its analytic structure by default (``docs/math.md`` §4.5);
 exact comb probing of the matrix-free operators is retained as the reference path. The
 pointwise posterior variance of the spectra, and the selected inverse required by the
 closed-form gradient, come from the Takahashi recursion on the block factor (Takahashi
@@ -244,11 +244,11 @@ def marginal_loglikelihood(
         enabled in the tests. Not jit-compatible.
     assembly
         ``None`` (default) selects ``"band"``: direct per-epoch band assembly
-        (:func:`albireo.assembly.band_block_tridiagonal`, ``docs/math.md`` §4.5, D28),
+        (:func:`albireo.assembly.band_block_tridiagonal`, ``docs/math.md`` §4.5),
         O(band width) work per epoch instead of O(bandwidth) operator applications, more
         than 10x faster at survey bandwidths, with an identical result up to
         floating-point summation order. Correlated AR(1) noise runs on the same path
-        (D35): the chain's cross-row terms enter through static link pair tables
+        the chain's cross-row terms enter through static link pair tables
         (:func:`albireo.operators.rebin_link_pair_tables`). ``"probe"`` selects global
         comb probing, retained as the reference implementation and as the independent
         construction behind the ``validate`` oracle.

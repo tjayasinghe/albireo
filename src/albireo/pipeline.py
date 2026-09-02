@@ -1,4 +1,4 @@
-"""Run every stage of the analysis for a list of stars, from one declaration (D58).
+"""Run every stage of the analysis for a list of stars, from one declaration.
 
 For each star the driver reads the epochs (:mod:`albireo.io`), disentangles them
 (:class:`albireo.Disentangler`), fits atmospheric labels to the components so that each
@@ -2568,7 +2568,7 @@ def run_pipeline(
     scans, the orbit fit, the writing). On the development desktop (16 cores, eight
     simulated stars) four workers finished the batch 2.0x faster than one process and
     eight 2.5x; capping each worker's XLA and BLAS threads at ``cpu_count // jobs`` made
-    no measurable difference on that benchmark (``docs/benchmarks.md``, D58). A worker
+    no measurable difference on that benchmark (``docs/benchmarks.md``). A worker
     returns a plain-data :class:`StarResult`; the live objects (the :class:`~albireo.Fit`,
     the velocity table, the label match) are kept only on an in-process run, since they
     carry compiled JAX programs that cannot be pickled.

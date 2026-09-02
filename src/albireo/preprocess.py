@@ -423,7 +423,7 @@ def estimate_ivar(
     The result estimates the noise of the delivered product and inherits whatever the
     reduction pipeline did to it. Resampling in particular correlates neighbouring pixels, so
     the diagonal inverse-variance model albireo uses is an approximation for any archival
-    product that has been rebinned onto a common wavelength grid (``internal/design.md`` D4 gives
+    product that has been rebinned onto a common wavelength grid (``docs/math.md`` §1.1 gives
     the same reason for not resampling in albireo, but an archive may already have done it).
     The lag-2 stencil keeps the amplitude approximately right; the neglected correlation makes
     formal uncertainties mildly optimistic.
@@ -803,7 +803,7 @@ def mask_flux_gaps(epoch: EpochData, *, min_run: int = 8, warn: bool = True) -> 
     a genuine measurement, and no generic rule separates those from a gap. A contiguous run is
     different in kind: real spectra do not hold exactly zero for eight consecutive pixels.
     Isolated non-positive pixels are therefore left alone, following the quality-flag policy
-    of D45, under which the reader may decline to answer but may not guess.
+    followed by the readers: they may decline to answer but may not guess.
 
     Parameters
     ----------
@@ -873,7 +873,7 @@ def share_wavelength_grid(
 
     When the grids agree to well within a pixel, this function collapses them back to one. The
     operation is a relabelling, not a resampling: no flux value is modified and the ``ivar``
-    model stays diagonal (``internal/design.md`` D4). What changes is the wavelength assigned to
+    model stays diagonal. What changes is the wavelength assigned to
     each sample, by at most ``atol_kms``. Epochs are trimmed to their common overlap, so the
     shared array is exact for all of them.
 

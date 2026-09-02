@@ -10,7 +10,7 @@ marginalized:
 
 with ``t_i`` the templates normalized to their own continua, ``T`` the shift, ``B_j`` the
 instrument's line-spread function, ``R_j`` the projection onto the epoch's native pixels
-(data are never resampled, ``internal/design.md`` D4), and ``w`` the inverse variances with
+(data are never resampled), and ``w`` the inverse variances with
 masks folded in. For every set of shifts the amplitudes are either held or solved in
 closed form; the chi-square is minimized over the integer shifts of the template grid and
 then refined below a pixel.
@@ -1242,7 +1242,7 @@ def todcor(
         means the templates are already at the instruments' resolution, as when the
         template is an observed single-star spectrum from the same spectrograph.
     lsf_anchors_angstrom
-        Optional per-instrument anchors for a wavelength-dependent LSF (D37).
+        Optional per-instrument anchors for a wavelength-dependent LSF.
     nuisance_order
         Order of an additive Chebyshev polynomial fitted alongside the templates in every
         epoch: ``0`` (default) a constant, which absorbs the residual of the continuum

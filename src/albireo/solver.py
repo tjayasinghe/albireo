@@ -11,7 +11,7 @@ Assembly by comb probing applies the matrix-free operator to unit combs of strid
 ``2p + 1``. Columns of one comb are separated by more than the bandwidth, so they do not
 alias within the band, and ``2p + 1`` operator applications recover every band entry
 exactly from the tested forward and adjoint operators. Direct band assembly
-(``docs/math.md`` §4.5, D28) has replaced probing on the likelihood path; probing remains
+(``docs/math.md`` §4.5) has replaced probing on the likelihood path; probing remains
 the reference construction and the validation oracle.
 
 The logical dimension ``n`` is padded to ``K * B``. The pad block is the identity (probing
@@ -164,7 +164,7 @@ def probe_block_tridiagonal(
         Rematerialize probe batches in the backward pass. Saves gradient memory
         proportional to the probe count at about 1.5-2x the backward probing cost.
         Default: size-adaptive, off for small problems (a measured 2x NUTS slowdown at
-        the M3 gate scale with no memory benefit) and on at scale, where storing every
+        the gate scale with no memory benefit) and on at scale, where storing every
         batch would need hundreds of GB.
 
     Returns

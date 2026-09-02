@@ -327,7 +327,7 @@ def plot_residual_zscores(problem, d_stack, *, bjd=None, axes=None):
     autocorrelation of each epoch. A large lag-1 coefficient indicates correlation between
     neighbouring pixels, which inflates every uncertainty derived from the fit and does
     not show up in the histogram; it is the statistic the AR(1) noise model addresses
-    (``docs/benchmarks.md``, D34).
+    (``docs/benchmarks.md``).
 
     The lag-1 coefficient is computed within each epoch, since consecutive pixels of
     different exposures are unrelated.
@@ -409,7 +409,7 @@ def plot_lsf(anchor_wave, sigma, *, h3=None, sigma_max=None, axes=None):
     parameters are the most degenerate part of the model: they trade against the intrinsic
     line widths of the components and against the smoothness prior, so a width that drifts
     with wavelength may describe the spectrograph or may be absorbing other structure
-    (``docs/benchmarks.md``, D37 and D38). Passing ``sigma_max`` draws the build-time upper
+    (``docs/benchmarks.md``). Passing ``sigma_max`` draws the build-time upper
     bound; the kernel radius is fixed when the model is built, so a width sitting at that
     bound indicates a kernel built too narrow for the fit.
 
@@ -694,7 +694,7 @@ def plot_forecast(forecast, *, axes=None):
     Left panel, the forecast pointwise standard deviation of each component spectrum
     against wavelength, together with the same quantity under the prior alone. Where the
     forecast band meets the prior line the design constrains nothing at that wavelength,
-    and additional exposure time does not change it (D42). The shaded span marks the
+    and additional exposure time does not change it. The shaded span marks the
     region the summaries are taken over; outside it the band rises to the prior because
     the model grid is wider than the data.
 

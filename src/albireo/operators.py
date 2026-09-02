@@ -149,7 +149,7 @@ def gaussian_kernel_traced(sigma_px, radius: int):
 
 
 def gauss_hermite_kernel_traced(sigma_px, h3, radius: int):
-    """Normalized Gauss-Hermite kernel: a Gaussian with traced skewness ``h3`` (D38).
+    """Normalized Gauss-Hermite kernel: a Gaussian with traced skewness ``h3``.
 
     The van der Marel & Franx (1993) series truncated at the first asymmetric term,
 
@@ -311,7 +311,7 @@ def convolve_spectrum(flux, kernel):
 
 
 def convolve_varying(flux, profiles):
-    """Row-varying 'same' convolution (wavelength-dependent LSF, D37).
+    """Row-varying 'same' convolution (wavelength-dependent LSF).
 
     Each output pixel applies its own kernel row, in the convention of
     :func:`convolve_spectrum`:
@@ -321,7 +321,7 @@ def convolve_varying(flux, profiles):
     so a ``profiles`` whose rows are all equal to ``kernel`` reproduces
     ``convolve_spectrum(flux, kernel)`` exactly. The matrix realized is banded,
     ``K[m, c] = profiles[m, m - c + r]`` for ``|m - c| <= r``: the banded-matrix form
-    design.md D8 reserved for a tabulated LSF. Zero-padded at the grid edges (exact for
+    seam reserved for a tabulated LSF. Zero-padded at the grid edges (exact for
     deviation spectra) and linear in ``flux`` as well as in ``profiles``, so a traced
     profile bank (LSF inference) differentiates through it.
     """
@@ -369,7 +369,7 @@ def gaussian_lsf_profiles(sigma_px, anchor_wave, grid_wave, h3=None):
     ``(len(grid_wave), 2 * radius + 1)``, ready for :func:`convolve_varying`.
     ``sigma_px`` must supply one positive width per anchor. Optional ``h3`` (one
     skewness per anchor) makes each anchor kernel the Gauss-Hermite profile of
-    :func:`gauss_hermite_kernel_traced` (D38); None or all-zero is exactly Gaussian.
+    :func:`gauss_hermite_kernel_traced`; None or all-zero is exactly Gaussian.
 
     References
     ----------

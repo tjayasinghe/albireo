@@ -301,7 +301,7 @@ class Problem:
         is :attr:`EpochGroup.ar_step`, computed exactly at build time, and is zero when
         no links were stored. Read it even for a diagonal problem when a later
         :func:`with_ar1` swap is planned: probing with the widened bandwidth is exact
-        either way (D21: an overestimate costs time, an underestimate silently
+        either way (an overestimate costs time, an underestimate silently
         corrupts).
         """
         return max(g.ar_step for g in self.groups)
@@ -320,7 +320,7 @@ class Problem:
         two model components at any epoch: for an SB2, ``(K_1 + K_2)(1 + e)`` plus, if
         a telluric component is present, the stellar velocity relative to the telluric
         frame (which includes the barycentric motion, up to ~30 km/s). A nebular
-        component (D40) adds ``|nebular_v_kms| + max K`` against the stars and, since
+        component adds ``|nebular_v_kms| + max K`` against the stars and, since
         the two sit in opposite frames, the barycentric motion again against the
         telluric column.
 
@@ -525,10 +525,10 @@ def build_problem(
         given, the instrument's LSF varies across the grid: per-anchor Gaussian
         kernels are linearly interpolated (in log-wavelength, clamped beyond the end
         anchors) into a per-model-pixel profile bank applied by
-        :func:`albireo.operators.convolve_varying`, the tabulated-LSF form of
-        design.md D8. Instruments absent from the mapping stay stationary.
+        :func:`albireo.operators.convolve_varying`, the tabulated-LSF form the
+        design reserved. Instruments absent from the mapping stay stationary.
     lsf_h3
-        Optional per-instrument Gauss-Hermite skewness (D38): a scalar or one value
+        Optional per-instrument Gauss-Hermite skewness: a scalar or one value
         per anchor, requiring ``lsf_anchors_angstrom`` for that instrument. A
         stationary asymmetric LSF is absorbed by the free spectra, so only the
         wavelength variation of the asymmetry is identified (``docs/math.md`` §1.3).
@@ -540,7 +540,7 @@ def build_problem(
         the topocentric one: static for topocentric-frame data, ``+v_bary`` for
         barycentric-frame data.
     nebular
-        If True, append a nebular component (D40), static in the barycentric frame (the
+        If True, append a nebular component, static in the barycentric frame (the
         opposite convention from the telluric one) and carrying a free per-epoch
         amplitude rather than a light fraction. Component order is stellar, telluric,
         nebular, so enabling it adds one trailing column and one more entry to the
@@ -558,7 +558,7 @@ def build_problem(
         (km/s). It is not identified by the data: the shift is the same at every epoch
         (barycentric-frame data) or differs only by ``v_bary`` (topocentric), and a
         constant shift of a free spectrum is a reparameterization ``d -> T(delta) d``,
-        exactly as the systemic velocity is for the stellar components (D14). What it
+        exactly as the systemic velocity is for the stellar components. What it
         decides is where the component's lines land on the model grid, which matters as
         soon as the prior confines it to windows
         (:func:`albireo.priors.window_profile`), since the windows and the shift must
@@ -907,7 +907,7 @@ def with_light_fractions(problem: Problem, light_fractions) -> Problem:
 def with_nebular_amplitudes(problem: Problem, amplitudes) -> Problem:
     """Return ``problem`` with the nebular component's per-epoch amplitudes replaced.
 
-    The θ-dependent path for the D40 nebular component: only its light column moves,
+    The θ-dependent path for the nebular component: only its light column moves,
     and the stellar simplex and the telluric column are untouched. Differentiable and
     safe inside ``jax.jit`` with traced values.
 
@@ -954,7 +954,7 @@ def with_nebular_amplitudes(problem: Problem, amplitudes) -> Problem:
 def with_jitter(problem: Problem, jitter) -> Problem:
     """Return ``problem`` with per-epoch noise-inflation factors ``alpha_j`` (differentiable).
 
-    ``docs/math.md`` §1.4 and ``internal/design.md`` D15: the weights become
+    ``docs/math.md`` §1.4: the weights become
     ``w_j -> w_j / alpha_j^2``, so ``alpha = 1`` is exactly the unmodified problem and
     ``alpha > 1`` says this epoch's quoted inverse variances are optimistic by that
     factor. The marginal likelihood keeps its ``+1/2 sum log w`` term, which is what
@@ -1120,12 +1120,13 @@ def _whiten_residuals(g: EpochGroup, resid):
 def with_ar1(problem: Problem, phi) -> Problem:
     """Return ``problem`` with AR(1)-correlated noise (differentiable in ``phi``).
 
-    The noise model D15 could not express and D31 measured the need for. Per epoch the
-    noise covariance is ``C = alpha^2 D^{-1/2} R_phi D^{-1/2}`` with ``D = diag(w)``
+    The noise model a diagonal one cannot express, and that real data showed was
+    needed. Per epoch the noise covariance is
+    ``C = alpha^2 D^{-1/2} R_phi D^{-1/2}`` with ``D = diag(w)``
     and ``R_phi`` the AR(1) correlation in native-pixel index: adjacent pixels of the
     standardized residual share correlation ``phi``, the expected shape when a pipeline
     resamples spectra onto a common step (each output pixel mixes the same input pixels
-    as its neighbours). ``phi = 0`` is exactly the D31 model. The jitter ``alpha``
+    as its neighbours). ``phi = 0`` is exactly the diagonal model. The jitter ``alpha``
     scales and ``phi`` correlates, and the two compose: ``with_jitter`` and this swap
     are independent, and each replaces its own parameter.
 
@@ -1141,9 +1142,9 @@ def with_ar1(problem: Problem, phi) -> Problem:
 
     Two structural consequences, both static:
 
-    * the D28 band assembly carries the chain's off-diagonal terms through static
-      cross-row link pair tables built at :func:`build_problem` time (D35,
-      :func:`albireo.operators.rebin_link_pair_tables`), so the correlated marginal
+    * the direct band assembly carries the chain's off-diagonal terms through static
+      cross-row link pair tables built at :func:`build_problem` time
+      (:func:`albireo.operators.rebin_link_pair_tables`), so the correlated marginal
       stays on the fast path; global comb probing remains the reference
       implementation (``assembly="probe"``) and the ``validate`` oracle;
     * ``A^T W A`` widens by :attr:`Problem.ar_bandwidth_extra` model pixels.
@@ -1202,13 +1203,13 @@ def _chebval_traced(x, c):
 def with_response(problem: Problem, response_coeffs) -> Problem:
     """Return ``problem`` with the multiplicative per-epoch response replaced (differentiable).
 
-    The θ-dependent path for response and continuum inference, the swap D7 deferred:
-    the response enters the targets ``z_j = y_j - r_j (R 1)`` and the normal-matrix
+    The θ-dependent path for response and continuum inference, the swap the design
+    deferred: the response enters the targets ``z_j = y_j - r_j (R 1)`` and the normal-matrix
     weights ``w r^2``, not only the forward operator. The stored ``base = R 1`` is
     response-independent, which gives the target update in place,
     ``z_new = z_old + (r_old - r_new) * base``, exactly and without carrying the raw
     fluxes. Masked pixels stay exactly zero (every ``z`` entry at ``w = 0`` was zeroed
-    at build time and the update is re-masked), so the D30 ``0 * nan`` failure cannot
+    at build time and the update is re-masked), so the ``0 * nan`` failure cannot
     resurface here. This replaces rather than compounds, as :func:`with_jitter` does;
     the ``sum log w`` term is untouched because the noise lives on the data, not on the
     response-divided data.
@@ -1222,8 +1223,8 @@ def with_response(problem: Problem, response_coeffs) -> Problem:
     trades against the components' broad spectral features, so the epoch-shared part of
     a free response is only weakly identified, while the epoch-to-epoch differences,
     which are what a per-epoch continuum treatment is for, are well constrained. Keep
-    the order low and the priors tight and zero-centered; the anchor policy of D13 and
-    D25 applies.
+    the order low and the priors tight and zero-centered; the same anchor policy as
+    the light ratio and the LSF widths applies.
 
     Parameters
     ----------
@@ -1275,7 +1276,7 @@ def with_lsf(problem: Problem, lsf_sigma_v: Mapping, lsf_h3: Mapping | None = No
         the build used, or a scalar, which broadcasts to every anchor. A group built
         without anchors takes a scalar only.
     lsf_h3
-        Optional per-instrument Gauss-Hermite skewness (traced values allowed; D38):
+        Optional per-instrument Gauss-Hermite skewness (traced values allowed):
         one value per anchor or a scalar, for anchored instruments only. Instruments
         absent from the mapping keep pure Gaussian anchors. Keep ``|h3|`` within the
         inference bound (0.2); the kernel radius is unchanged.
