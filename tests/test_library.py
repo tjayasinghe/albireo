@@ -2,9 +2,10 @@
 
 Interpolators are checked against scipy's own implementations — ``RegularGridInterpolator``
 for the box, ``LinearNDInterpolator`` for the scattered case — so the oracle is independent
-code rather than a second copy of the same arithmetic. The one exact invariant is node
-reproduction: interpolating *at* a node must return the stored spectrum bit-for-bit, which
-is what lets the warm-start node scan and the continuous fit be compared on equal terms.
+code rather than a second copy of the same arithmetic. Node reproduction is the invariant
+that lets the warm-start node scan and the continuous fit be compared on equal terms: the
+box interpolators return the stored spectrum bit-for-bit, and the simplex interpolator
+returns it to rounding, for the reason recorded at ``NODE_TOL_EPS`` below.
 
 Nothing here needs the network. Libraries are generated in-test from an analytic rule, and
 the air/vacuum measurement is exercised on spectra built with a known convention.
@@ -246,14 +247,63 @@ def test_box_cubic_matches_an_independent_catmull_rom(library):
         np.testing.assert_allclose(got, expected, rtol=1e-12, atol=1e-13)
 
 
-@pytest.mark.parametrize("method", ["linear", "cubic", "simplex"])
-def test_interpolation_at_a_node_is_exact(library, method):
-    """The exact invariant: a node comes back bit-for-bit, not merely to tolerance."""
+# The simplex path reproduces a node to rounding, not bit-for-bit: its weights come from
+# Qhull's affine transforms, so at a vertex they are 1 - eps and eps rather than 1 and 0, and
+# the error is eps times the spread of the rows across the simplex. The bound is written in
+# units of eps * max(|y|, 1), which is between one and two true ulp of y. Measured over 200
+# triangulations of each test grid (node order permuted; 105,600 node evaluations): a quarter
+# inexact, the worst 1.075 in these units. Four leaves 3.7x headroom on grids this smooth;
+# a rougher library would need more, which is a statement about that library.
+NODE_TOL_EPS = 4
+
+
+def _assert_reproduced_to_rounding(got, want):
+    tol = NODE_TOL_EPS * np.finfo(np.float64).eps * np.maximum(np.abs(want), 1.0)
+    assert np.all(np.abs(np.asarray(got) - want) <= tol)
+
+
+@pytest.mark.parametrize("method", ["linear", "cubic"])
+def test_box_interpolation_at_a_node_is_bit_exact(library, method):
+    """A node lands on weights that are exactly 1 and 0, so it comes back bit-for-bit."""
     interpolator = library_interpolator(library, method=method)
     for index in (0, 37, library.n_nodes - 1):
         normalized, log_continuum = interpolator(jnp.asarray(library.nodes[index]))
         assert np.array_equal(np.asarray(normalized), library.normalized[index])
         assert np.array_equal(np.asarray(log_continuum), library.log_continuum[index])
+
+
+def test_simplex_interpolation_at_a_node_is_exact_to_rounding(library):
+    """The scattered path promises a few ulp, not bit-exactness; see ``NODE_TOL_EPS``."""
+    interpolator = library_interpolator(library, method="simplex")
+    for index in (0, 37, library.n_nodes - 1):
+        normalized, log_continuum = interpolator(jnp.asarray(library.nodes[index]))
+        _assert_reproduced_to_rounding(normalized, library.normalized[index])
+        _assert_reproduced_to_rounding(log_continuum, library.log_continuum[index])
+
+
+@pytest.mark.parametrize("fixture", ["library", "punched_library"])
+def test_simplex_node_reproduction_does_not_depend_on_the_triangulation(request, fixture):
+    """Every node, under three triangulations of each grid, to the promised bound.
+
+    Which nodes happen to come back bit-exact is a property of the triangulation Qhull
+    chose, and that choice differs between scipy builds: a Linux CI runner and a Windows
+    desktop disagreed. Permuting the node order changes the triangulation the same way, so
+    this exercises the invariant that is actually promised, on every platform. The punched
+    grid is the one that reaches the simplex path through ``method="auto"``.
+    """
+    base = request.getfixturevalue(fixture)
+    rng = np.random.default_rng(20260902)
+    for _ in range(3):
+        perm = rng.permutation(base.n_nodes)
+        permuted = base.replace(
+            nodes=base.nodes[perm],
+            normalized=base.normalized[perm],
+            log_continuum=base.log_continuum[perm],
+        )
+        interpolator = library_interpolator(permuted, method="simplex")
+        got, got_lc = jax.jit(jax.vmap(interpolator))(jnp.asarray(permuted.nodes))
+        _assert_reproduced_to_rounding(got, permuted.normalized)
+        _assert_reproduced_to_rounding(got_lc, permuted.log_continuum)
 
 
 def test_cubic_beats_linear_on_the_toy_grid(library):
@@ -335,8 +385,13 @@ def test_simplex_hull_margin_flags_the_punched_corner(punched_library):
     # strictly inside a simplex
     assert float(interpolator.hull_margin(jnp.asarray([4712.0, 3.87, -0.23]))) > 0
     # exactly on a shared facet: inside the hull, but with no margin — the contract is
-    # ">= 0 inside", and a node coordinate puts the point on a lattice hyperplane
-    assert float(interpolator.hull_margin(jnp.asarray([4700.0, 4.0, -0.2]))) == 0.0
+    # ">= 0 inside", and a node coordinate puts the point on a lattice hyperplane. Zero to
+    # rounding rather than exactly: the barycentric coordinates are Qhull's affine transform
+    # applied to the point, and at a vertex they carry ~1e-16 of either sign (measured
+    # -2.2e-16 at worst over 400 triangulations of the test grids), which is the slack
+    # ``crossval_library`` uses for the same decision.
+    margin = float(interpolator.hull_margin(jnp.asarray([4700.0, 4.0, -0.2])))
+    assert abs(margin) <= lib_mod.HULL_MARGIN_TOL
     assert float(interpolator.hull_margin(jnp.asarray([5500.0, 3.0, -1.0]))) < 0
     # outside the hull it extrapolates flat rather than diverging
     outside = np.asarray(interpolator(jnp.asarray([5500.0, 3.0, -1.0]))[0])

@@ -1447,8 +1447,10 @@ with no training cost and nothing to host.
 
 There are two interpolants, chosen by geometry: separable Catmull-Rom on a complete axis
 product, and barycentric interpolation over a Delaunay triangulation when physics has cut the
-corners off the grid, as it has for the OB libraries. Both reproduce a node exactly, which is
-what allows the warm-start node scan and the continuous fit to be compared on the same footing.
+corners off the grid, as it has for the OB libraries. The cubic reproduces a node bit-for-bit;
+the barycentric path reproduces one to rounding, since its weights at a vertex are $1-\epsilon$
+and $\epsilon$ rather than $1$ and $0$. Either allows the warm-start node scan and the
+continuous fit to be compared on the same footing.
 The cubic's phantom end nodes are extrapolated linearly rather than clamped: clamping destroys
 linear reproduction in the edge cells, and on a grid with a few values per axis it performs
 worse than plain multilinear over a third of the range (measured).

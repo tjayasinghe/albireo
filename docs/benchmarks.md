@@ -2431,8 +2431,12 @@ conclusions follow, and the second settles whether a learned emulator is worth b
    same measurement has to be repeated before an emulator is either built or dismissed.
    `crossval_library` is that measurement, and it ships.
 
-Node reproduction is exact bit-for-bit (`==`, not a tolerance), which is what lets the
-warm-start node scan and the continuous fit be compared on one footing.
+Node reproduction on this box grid is exact bit-for-bit (`==`, not a tolerance), which is
+what lets the warm-start node scan and the continuous fit be compared on one footing. The
+simplex path used for punched grids reproduces a node to rounding instead (its weights at a
+vertex are 1 − ε and ε), and which nodes come back exact is a property of the triangulation
+Qhull chose; the test suite asserts the rounding bound under permuted node orders so that
+the comparison holds on every scipy build.
 
 ### Closed-loop recovery
 

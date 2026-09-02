@@ -28,9 +28,12 @@ and `crossval_library` is the measurement that answers it.
 `library_interpolator` selects its method from the grid's geometry: a separable
 Catmull-Rom cubic on a complete axis product, and barycentric interpolation over a Delaunay
 triangulation when physical limits have removed corners of the grid, as they have for every
-public OB library. Both reproduce a node exactly (bit-for-bit, not to a tolerance), which
-allows the warm-start node scan in [`albireo.match`](match.md) and the continuous fit to be
-compared on the same footing.
+public OB library. The cubic reproduces a node bit-for-bit, because a node lands on weights
+that are exactly 1 and 0. The simplex path reproduces one to rounding, because its weights
+are an affine transform of the point: the error is machine epsilon times the spread of the
+spectra across the simplex, at the ulp level for a library whose neighbouring nodes are
+alike. Either is far below anything the data can distinguish, so the warm-start node scan in
+[`albireo.match`](match.md) and the continuous fit can be compared on the same footing.
 
 ## Obtaining a grid
 

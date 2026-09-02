@@ -400,6 +400,12 @@ class BoxInterpolator:
         return cls(axes=children[0], normalized=children[1], log_continuum=children[2], cubic=aux)
 
 
+# A hull vertex evaluates to a barycentric margin of either sign at the 1e-16 level (measured
+# -2.2e-16 over 400 triangulations of the test grids), so "inside the hull" is decided with
+# this slack. A node genuinely outside a grid's hull has a margin of order 1e-2.
+HULL_MARGIN_TOL = 1e-12
+
+
 @jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True)
 class SimplexInterpolator:
@@ -416,6 +422,19 @@ class SimplexInterpolator:
     callbacks. Outside the hull the weights are clipped and renormalized, which extrapolates
     flat rather than diverging; :meth:`hull_margin` is negative there, so the fit can be
     told.
+
+    A node is reproduced to rounding, not bit-for-bit: the barycentric coordinates are an
+    affine transform applied to the point, so at a vertex they are ``1 - eps`` and ``eps``
+    rather than ``1`` and ``0``. The error is ``eps`` times the spread of the stored rows
+    across that simplex's vertices, so it is at the ulp level for a library whose
+    neighbouring spectra are alike (about one ``eps`` on the test grids, over 400
+    triangulations) and grows with node-to-node roughness rather than with dimension.
+    Which nodes happen to come back exact depends on the triangulation Qhull chose, which
+    differs between scipy builds. The box interpolator, whose node weights are exactly ``1``
+    and ``0`` by construction, is bit-exact; anything that needs that property should
+    compare against the library row rather than against an evaluation at the node. The
+    same rounding puts :meth:`hull_margin` at a vertex within ``HULL_MARGIN_TOL`` of zero
+    on either side.
 
     References
     ----------
@@ -595,7 +614,11 @@ def crossval_library(library: SpectralLibrary, *, method: str = "auto", seed: in
     predict = jax.jit(jax.vmap(interpolator))
 
     test = np.flatnonzero(~keep)
-    inside = np.asarray(jax.jit(jax.vmap(interpolator.hull_margin))(library.nodes[test])) >= 0.0
+    # Held-out nodes of a lattice sit on facets of the reduced hull, at margin zero to
+    # rounding; without the tolerance the triangulation, and so the scipy build, would decide
+    # which of them are counted, and n_tested and rms would move with it.
+    margin = np.asarray(jax.jit(jax.vmap(interpolator.hull_margin))(library.nodes[test]))
+    inside = margin >= -HULL_MARGIN_TOL
     test = test[inside]
     if test.size == 0:
         raise ValueError("every held-out node fell outside the reduced grid; nothing to measure")

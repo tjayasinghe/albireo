@@ -92,7 +92,7 @@ def bench_interpolation(library):
         np.array_equal(np.asarray(interpolator(library.nodes[i])[0]), library.normalized[i])
         for i in range(0, library.n_nodes, 37)
     )
-    print(f"  node reproduction exact (bit-for-bit): {exact}")
+    print(f"  node reproduction exact on this box grid (bit-for-bit): {exact}")
 
 
 def inject(library, grid, noise, seed=20260827):
