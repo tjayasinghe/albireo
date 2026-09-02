@@ -3,9 +3,8 @@
 This page summarises the science that albireo implements and places each part of the
 package in the context of the published literature. It is written for astronomers who
 work with spectroscopic binaries and is intended to be read before the
-[mathematical foundations](math.md), which give the equations, and the
-[design document](design.md), which records the decisions. Every method with a literature
-source is cited in the text, and the [reference list](#references) at the end carries an
+[mathematical foundations](math.md), which give the equations. Every method with a
+literature source is cited in the text, and the [reference list](#references) at the end carries an
 ADS link for each entry.
 
 ## 1. Spectroscopic binaries and the disentangling problem

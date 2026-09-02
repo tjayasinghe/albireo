@@ -444,8 +444,8 @@ On shape, once that offset is removed, albireo is about 2× more accurate (0.009
 against 0.0198 / 0.0223), which comes from the prior constraining the low-*k* modes.
 
 The remaining difference is that fd3 returns a point estimate: it carries no uncertainty on
-the component spectra. That is the gap [the roadmap](roadmap.md) exists to close, and what
-[the handoff tutorial](tutorials/downstream.md) turns into an error bar on log *g*.
+the component spectra. That is the gap albireo exists to close, and what [the handoff
+tutorial](tutorials/downstream.md) turns into an error bar on log *g*.
 
 ### Shift-and-add, clean room (2026-08-15)
 
@@ -525,10 +525,10 @@ the role of the literature's hand renormalization against an external light rati
 
 The last column, the presence of an uncertainty, is the one no handicap equalizes.
 
-One correction to this page's own plan. The roadmap proposed, as the cheapest useful figure,
-"an SB2 with a nebular line, disentangled by a method that can mask the contaminated pixels
-and by methods that structurally cannot". That framing is unfair to shift-and-add and should
-not be used: González & Levato explicitly permit "any combination algorithm... weights or
+One correction to this page's own framing. The cheapest useful figure was to have been an
+SB2 with a nebular line, disentangled by a method that can mask the contaminated pixels and
+by methods that structurally cannot. That framing is unfair to shift-and-add and should not
+be used: González & Levato explicitly permit "any combination algorithm... weights or
 some rejection algorithm", so masking is inside the published method rather than an
 extension of it. `tests/test_shift_and_add.py` exercises that: zeroing an epoch's weight
 removes a ruined epoch. What the method cannot do is produce an uncertainty, and that is the
@@ -617,8 +617,8 @@ decline to answer, but it may not guess.
 
 ### A correction to why this system was chosen
 
-The roadmap picked AI Phe because "it eclipses, so the light ratio is externally known and
-the one genuinely free choice in disentangling stops being a confound". That is only half
+AI Phe was chosen because it eclipses, so the light ratio is externally known and the one
+genuinely free choice in disentangling stops being a confound. That reason is only half
 right. The eclipse pins the fractional radii, the inclination and the surface-brightness
 ratio in the photometric band, TESS, centred near 7860 Å. The light ratio at an optical
 spectroscopic window is a different number, computed from the radii and the two
@@ -1621,8 +1621,7 @@ complete.
 
 ## D40 — the nebular component, and per-pixel prior strengths (2026-08-13)
 
-The first Tier-2 roadmap item. Everything here is from `tests/test_nebular.py` and
-`examples/04_nebular.py`. The configuration is one SB2 in an H II region: 12 epochs,
+Everything here is from `tests/test_nebular.py` and `examples/04_nebular.py`. The configuration is one SB2 in an H II region: 12 epochs,
 SNR 220, 540 model pixels over 4838-4886 A, K = (58, 41) km/s, light fractions
 (0.7, 0.3), both stars carrying a broad Hbeta absorption (true composite depth -0.506,
 EW 1.911 A), and a static nebular Hbeta emission line of peak 0.45 whose amplitude
@@ -1669,7 +1668,7 @@ here it is paid 8.1e4 times over.
 Equivalent width is the quantity that reaches the atmosphere code. An 11.5% error in a
 Balmer EW is a large error in log g, it is systematic rather than random, and nothing
 in the current literature propagates it: the disentangled spectra arrive at the next
-stage of the pipeline without an uncertainty (roadmap.md, "where albireo sits").
+stage of the pipeline without an uncertainty.
 
 `examples/04_nebular.py` adds the third treatment used in the literature, masking the
 contaminated pixels (`ivar = 0` over +-150 km/s). It is a defensible treatment with a
@@ -1750,8 +1749,8 @@ is not a measurement. Neither is a defect, but neither was inferred from the dat
 
 ## D41 — calibrated faint-companion detection (2026-08-13)
 
-The second Tier-2 roadmap item, in three pieces: vectorize the scan, marginalize K₁, and
-calibrate the statistic by injection and recovery. Everything below is from
+Three pieces: vectorize the scan, marginalize K₁, and calibrate the statistic by injection
+and recovery. Everything below is from
 `tests/test_calibrate.py` and `examples/05_detection_limit.py`. The configuration is one
 SB1/SB2 pair (14 epochs, SNR 200, 717 model pixels over 5000-5060 A, 520 native pixels,
 K = (55, 40) km/s, light fractions (0.93, 0.07), P = 7.3 d, e = 0.12) scanned on a
@@ -1859,7 +1858,7 @@ at any light fraction. Both conditions are stated wherever the numbers are.
 
 ## D42 — the free per-epoch radial-velocity table (2026-08-13)
 
-Tier-2 roadmap item 3: no Keplerian, every epoch's velocity its own parameter. From
+No Keplerian: every epoch's velocity is its own parameter. From
 `tests/test_velocity_table.py`. One SB2: 10 epochs, SNR 200, 400 model pixels at
 dv = 6.00 km/s over 5000-5040 A (284 native pixels), K = (30, 55) km/s, light fractions
 (0.6, 0.4), P = 6.31 d, e = 0.15.
@@ -2364,9 +2363,10 @@ above: about 2× on aligned shape, and the fastest wall in the comparison belong
 incumbent's algorithm, which a small number of shifts and means should achieve. The
 difference in kind is the same column no handicap equalizes in the three-way table: an
 uncertainty on the disentangled spectra, which no code in
-[the roadmap's survey](roadmap.md) produces. The difference in practice is the license line:
-the incumbent cannot be vendored, forked, or legally built upon, which is why the clean room
-exists, is a barrier for anyone extending the method, and is the opening the roadmap names.
+[the survey of methods](science.md#2-methods-of-spectral-disentangling) produces. The
+difference in practice is the license line: the incumbent cannot be vendored, forked, or
+legally built upon, which is why the clean room exists, is a barrier for anyone extending
+the method, and is the opening albireo aims at.
 This is not a criticism of its authors: disentangling is a means to an end for them, and the
 software is a by-product of the science. A comparison page should nonetheless record the
 state of the available software, not only of the algorithms.
@@ -2374,9 +2374,9 @@ state of the available software, not only of the algorithms.
 The masking row repeats an earlier caveat: weights and rejection are inside the published
 method, so masking is not an albireo advantage and is not presented as one. What differs is
 what happens when masking would discard the pixels the science needs, such as a nebular line
-sitting in Hβ, where albireo models the contaminant instead
-([D40](design.md): unmodelled, it moves K₂ by −59% and reports a circular orbit at e = 0.95,
-so the choice reaches the masses and not only the atmospheres).
+sitting in Hβ, where albireo models the contaminant instead (unmodelled, it moves K₂ by
+−59% and reports a circular orbit at e = 0.95, so the choice reaches the masses and not
+only the atmospheres).
 
 One further connection: BLOeM, the survey behind
 [the BLOeM tutorial](tutorials/bloem-sb2.md), is led by the incumbent's author, and its 59
@@ -2408,7 +2408,7 @@ on the full grid, in fractional normalized flux:
 
 Against the literature for the same spacing on a real ATLAS9 grid (Meszaros & Allende Prieto
 2013): linear 5.1e-04, cubic-Bezier 3.1e-04, and a Payne-style network about 1e-03. Two
-conclusions follow, and the second decides a roadmap item.
+conclusions follow, and the second settles whether a learned emulator is worth building.
 
 1. The cubic is worth its 4^k taps: 2.1x better than multilinear here, 1.6x in the
    published comparison.

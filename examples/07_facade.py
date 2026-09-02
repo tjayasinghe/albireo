@@ -1,6 +1,6 @@
 """The same fit twice: the expert path, and the `Disentangler` façade over it.
 
-This script is the before/after for ``docs/design.md`` D46. Both halves fit the packaged
+This script is the before/after for ``internal/design.md`` D46. Both halves fit the packaged
 example (a simulated SB2 with a known injected truth), and the two results are asserted to
 agree with each other and with the truth.
 

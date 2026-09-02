@@ -423,7 +423,7 @@ def estimate_ivar(
     The result estimates the noise of the delivered product and inherits whatever the
     reduction pipeline did to it. Resampling in particular correlates neighbouring pixels, so
     the diagonal inverse-variance model albireo uses is an approximation for any archival
-    product that has been rebinned onto a common wavelength grid (``docs/design.md`` D4 gives
+    product that has been rebinned onto a common wavelength grid (``internal/design.md`` D4 gives
     the same reason for not resampling in albireo, but an archive may already have done it).
     The lag-2 stencil keeps the amplitude approximately right; the neglected correlation makes
     formal uncertainties mildly optimistic.
@@ -873,7 +873,7 @@ def share_wavelength_grid(
 
     When the grids agree to well within a pixel, this function collapses them back to one. The
     operation is a relabelling, not a resampling: no flux value is modified and the ``ivar``
-    model stays diagonal (``docs/design.md`` D4). What changes is the wavelength assigned to
+    model stays diagonal (``internal/design.md`` D4). What changes is the wavelength assigned to
     each sample, by at most ``atol_kms``. Epochs are trimmed to their common overlap, so the
     shared array is exact for all of them.
 

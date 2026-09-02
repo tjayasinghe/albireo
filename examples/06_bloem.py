@@ -25,7 +25,7 @@ between are not obvious:
   ``QUAL_REDUCED``, and the wavelengths are in nanometres on an air scale in the
   heliocentric frame. Example 03's FEROS files use ``FLUX``/``ERR``, angstrom, barycentric.
   :func:`albireo.read_dataset` reads both without being told which is which, because it
-  dispatches on the IVOA utypes rather than on column names (``docs/design.md`` D45).
+  dispatches on the IVOA utypes rather than on column names (``internal/design.md`` D45).
 
 Two things this script does not do
 ----------------------------------

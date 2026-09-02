@@ -1,4 +1,4 @@
-"""Run every stage for a list of stars from one declaration (``docs/design.md`` D58).
+"""Run every stage for a list of stars from one declaration (``internal/design.md`` D58).
 
 The other examples apply one stage to one star. This one runs the whole chain
 (disentangle, fit labels to the components, measure one velocity per component per epoch

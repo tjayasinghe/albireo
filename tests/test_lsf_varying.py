@@ -1,4 +1,4 @@
-"""Tests for the wavelength-dependent (tabulated) LSF (docs/design.md D8 v2, D37).
+"""Tests for the wavelength-dependent (tabulated) LSF (internal/design.md D8 v2, D37).
 
 D8 fixed a Gaussian constant-resolving-power LSF and reserved a seam: "tabulated LSF
 is v2 (banded matrix, no structural change)". D37 opens that seam — each model pixel

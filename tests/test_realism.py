@@ -1,6 +1,6 @@
 """Closed-loop tests for the M4 realism features.
 
-One closed loop per feature (the M4 acceptance gate, docs/design.md §8):
+One closed loop per feature (the M4 acceptance gate, internal/design.md §8):
 hierarchical SB3 orbits, per-epoch light-fraction inference (the eclipse mode of
 math.md §5.2, with the breaker *inferred* rather than fixed), and multi-instrument
 LSF-width inference. Exactness/unit tests for the new θ-paths ride along.

@@ -1,7 +1,7 @@
 """Tests for joint inference (M3): θ-path exactness, gradients, MAP/ML-II, NUTS gate.
 
 The NUTS closed-loop test is the M3 acceptance gate: posterior means of K_1, K_2
-within 1% of truth with a converged, divergence-free chain (``docs/design.md`` §8).
+within 1% of truth with a converged, divergence-free chain (``internal/design.md`` §8).
 """
 
 import jax

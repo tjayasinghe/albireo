@@ -246,7 +246,7 @@ class LabelProblem:
 
     Passed to the numpyro model through ``model_args`` rather than captured in a closure:
     the interpolated grids run to tens of megabytes, and XLA constant-folds closure constants
-    into the compiled executable (``docs/design.md`` D27).
+    into the compiled executable (``internal/design.md`` D27).
     """
 
     interpolators: tuple

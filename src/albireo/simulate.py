@@ -1,6 +1,6 @@
 """Synthetic spectroscopic-binary datasets, the test harness for the inference code.
 
-Milestone M1 (``docs/design.md`` §8). :func:`simulate_dataset` generates composite epochs
+Milestone M1 (``internal/design.md`` §8). :func:`simulate_dataset` generates composite epochs
 through the same operator stack the inference code uses: shift, LSF convolution, rebin to
 the native grid, then multiplicative response. Closed-loop tests therefore exercise the
 forward model itself, under the pathologies the model claims to handle: chip gaps, cosmic

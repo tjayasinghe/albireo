@@ -42,7 +42,7 @@ reason: the dense GP cost restricted it to narrow bandpasses and required cluste
 analytic marginalization, banded structure and JAX implementation respond to that limitation
 directly: the component spectra are integrated out in closed form rather than sampled, and the
 linear algebra is banded rather than dense. Keeping that claim testable is why the
-[benchmark record](benchmarks.md) is as long as it is.
+[benchmark record](../docs/benchmarks.md) is as long as it is.
 
 What follows is ordered by that logic: make the existing capability usable (Tier 1), then reach the
 communities whose problems it already solves (Tier 2), then extend the model (Tier 3).
@@ -57,9 +57,9 @@ written down in [Releasing](releasing.md).
 | | Item | Why it came first |
 |---|---|---|
 | 1 | `slow` / `network` / `gpu` markers and a `conftest` | Everything below adds tests; the fast suite went from 14 minutes to 6 |
-| 2 | Single-sourced version, upgraded `CITATION.cff`, `CHANGELOG.md`, a [citing](citing.md) page, a tag-driven release workflow | Nothing could say `pip install albireo` until this was true |
-| 3 | Deployed docs with a rendered [API reference](api/index.md), `py.typed`, coverage | 70 exported names with good docstrings, rendered nowhere |
-| 4 | `load_example()` and a [five-minute quickstart](quickstart.md) that runs offline | Time-to-first-plot is the best-attested adoption lever there is |
+| 2 | Single-sourced version, upgraded `CITATION.cff`, `CHANGELOG.md`, a [citing](../docs/citing.md) page, a tag-driven release workflow | Nothing could say `pip install albireo` until this was true |
+| 3 | Deployed docs with a rendered [API reference](../docs/api/index.md), `py.typed`, coverage | 70 exported names with good docstrings, rendered nowhere |
+| 4 | `load_example()` and a [five-minute quickstart](../docs/quickstart.md) that runs offline | Time-to-first-plot is the best-attested adoption lever there is |
 | 5 | `albireo.results`: arviz conversion, save/load, export to FITS/ECSV/ASCII | An hours-long fit used to produce printed text and nothing else |
 | 6 | `albireo.plotting` | The three most reusable plotting functions in the repo were stranded inside example scripts |
 
@@ -109,7 +109,7 @@ can be made to move least, returning K₂ 59% low, a period long by 0.171 d, and
 degeneracies came with the component and are closed by convention rather than by data (the amplitude
 scale, pinned by centering the log-amplitudes; the nebular velocity, which is a placement convention
 for the window profile and not a measurement); both are recorded in
-[the math](math.md#13-lsf-light-fractions-response).
+[the math](../docs/math.md#13-lsf-light-fractions-response).
 
 ### 2. Calibrated faint-companion detection — **done** (D41)
 
@@ -145,7 +145,7 @@ below about K₁, and with K₁ = 55 km/s the pair is well separated at every tr
 dependence should appear only when K₁ is itself small. The dependence that does remain is on
 the assumed companion template, since the observable is ℓ₂·d₂ and a featureless companion is
 invisible at any light fraction, and that assumption is required to be quoted with the number.
-The [HR 6819 campaign](benchmarks.md) remains a ready-made validation set.
+The [HR 6819 campaign](../docs/benchmarks.md) remains a ready-made validation set.
 
 ### 3. A per-epoch radial-velocity table — **done** (D42)
 
@@ -181,7 +181,7 @@ by shifting one star's velocities by 50 km/s and watching the log-likelihood not
 for the relativistic shift, 8.7e-6 for the ordinary one that is only its first-order
 approximation), and it prints the raw Laplace bars beside the projected ones, 37.947 km/s on
 every entry, which is `120/√10`, the prior, against 0.056-0.065 measured. The narrative material
-is in [the math](math.md#76-free-per-epoch-velocities-the-rv-table) and
+is in [the math](../docs/math.md#76-free-per-epoch-velocities-the-rv-table) and
 `tests/test_velocity_table.py`.
 
 ### 4. An ESO archive loader, and BLOeM in one line — **done** (D44, D45)
@@ -227,7 +227,7 @@ all 467 products in that collection read as 100% bad and raised. A flag whose co
 read is now ignored with a warning rather than inverted, which is the same principle as refusing an
 undeclared air-vs-vacuum scale: the reader may decline to answer, but it may not guess.
 
-[The tutorial](tutorials/bloem-sb2.md) now takes one target from a survey identifier to disentangled
+[The tutorial](../docs/tutorials/bloem-sb2.md) now takes one target from a survey identifier to disentangled
 spectra with a band. Writing it turned up two things the example had wrong or left implicit. Its
 window was advertised as sitting "between Hδ and Hγ without either core" and did not: 4000–4300 Å
 contains Hδ at 4101.7, and `nebular_windows` puts a ±300 km/s window at 4099.7–4107.9 inside it, so
@@ -374,7 +374,7 @@ albireo's demonstrated science case, O and early-B stars, is outside it, and so 
 **The window is thin for early types.** 846–870 nm at *R* ≈ 11,500 gives a hot star the Paschen
 series P13–P17 plus the Ca II triplet: one species, Stark-broadened, mutually blended, just longward
 of the Paschen jump. Set against the He I / He II / Mg II / Si III of the 4380–4600 Å window in the
-[benchmarks](benchmarks.md), that is a real mismatch for hot stars. Gaia's own SB2 population is
+[benchmarks](../docs/benchmarks.md), that is a real mismatch for hot stars. Gaia's own SB2 population is
 mostly cooler, where the triplet is the strongest feature in the spectrum.
 
 ### What DR4 actually delivers, from the draft data model
@@ -432,7 +432,7 @@ disentangling joint because the disentangling code never produced one.
 
 albireo is the front half of that pipeline and does not attempt to be the back half; GSSP, iSpec,
 Korg.jl and PySME are good at what they do. `albireo.handoff` ships the writers: `write_gssp`,
-`write_ispec`, and `export_draws`, with [a tutorial](tutorials/downstream.md) and
+`write_ispec`, and `export_draws`, with [a tutorial](../docs/tutorials/downstream.md) and
 `examples/10_downstream.py`.
 
 The formats turned out to be the hard part, and both traps fail without a symptom. iSpec does no
@@ -483,7 +483,7 @@ Hensberge (2011) call dominant. Both are in the tutorial's caveat list rather th
 ### 9. A benchmark page against the incumbents — **done**
 
 New codes are trusted after they reproduce old ones, not before. Both comparison codes are built
-and run, and so is AI Phoenicis; the numbers are in [the benchmark record](benchmarks.md).
+and run, and so is AI Phoenicis; the numbers are in [the benchmark record](../docs/benchmarks.md).
 
 AI Phe delivered the cross-validation and one further result. From 36 archival HARPS spectra,
 started 15% off, the eccentricity comes back at 0.1879 against a published 0.1878 ± 0.0006: a TESS
@@ -629,7 +629,7 @@ exchanged. The resolution is a convention, stated rather than hidden: components
 order of decreasing mass, the fit is started with K₁ < K₂, and the label stage flags a fitted light
 fraction far from the declared one as the signature of a wrong order. Finding it exposed a façade
 defect (per-component `start_at` values were silently dropped), now fixed. The scaling of a batch
-across worker processes is measured in [the benchmark record](benchmarks.md): 2.0× for four workers
+across worker processes is measured in [the benchmark record](../docs/benchmarks.md): 2.0× for four workers
 and 2.5× for eight, and the per-worker thread cap, kept as a precaution, turned out to be worth
 nothing measurable there.
 

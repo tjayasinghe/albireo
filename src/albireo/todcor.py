@@ -10,7 +10,7 @@ marginalized:
 
 with ``t_i`` the templates normalized to their own continua, ``T`` the shift, ``B_j`` the
 instrument's line-spread function, ``R_j`` the projection onto the epoch's native pixels
-(data are never resampled, ``docs/design.md`` D4), and ``w`` the inverse variances with
+(data are never resampled, ``internal/design.md`` D4), and ``w`` the inverse variances with
 masks folded in. For every set of shifts the amplitudes are either held or solved in
 closed form; the chi-square is minimized over the integer shifts of the template grid and
 then refined below a pixel.

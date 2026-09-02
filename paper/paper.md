@@ -24,7 +24,7 @@ bibliography: paper.bib
 
 <!--
 TODO (submission gating, not paper content): the package is pre-alpha and the JOSS
-checklist is the M5 deliverable in docs/design.md §8 (fd3 benchmark, one published SB2
+checklist is the M5 deliverable in internal/design.md §8 (fd3 benchmark, one published SB2
 end-to-end, tutorials in CI). Numbers below are from docs/benchmarks.md through M4 and
 should be re-checked against the test suite at submission time.
 -->

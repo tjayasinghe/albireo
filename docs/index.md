@@ -27,13 +27,11 @@ The name refers to Albireo, the double star in Cygnus.
   [disentangle a BLOeM SB2](tutorials/bloem-sb2.md), [fit stellar labels](tutorials/labels.md),
   [measure epoch velocities](tutorials/todcor.md), and
   [run the pipeline](tutorials/pipeline.md).
-- [Design](design.md): architecture, data model, and the decision ledger.
 - [Mathematical foundations](math.md): the forward model, the analytic marginalization of
   the component spectra, the orbital parameterization, and the estimators for stellar
   labels and epoch velocities.
 - [Benchmarks](benchmarks.md): the validation and performance record, including the
   closed-loop recovery tests and the degeneracy analyses.
-- [Roadmap](roadmap.md): planned work and stated non-goals.
 
 ## Source
 

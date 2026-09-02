@@ -1,4 +1,4 @@
-"""Tests for the AR(1) correlated-noise model (docs/design.md D34, math.md §1.4a).
+"""Tests for the AR(1) correlated-noise model (internal/design.md D34, math.md §1.4a).
 
 D31 measured why this exists: a rescaled diagonal noise model whitens the residual
 *scale* while the *structure* — here, adjacent-pixel correlation from pipeline

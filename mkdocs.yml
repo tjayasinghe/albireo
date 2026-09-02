@@ -44,9 +44,7 @@ nav:
       - Turn a component into an RV template: tutorials/labels.md
       - Measure epoch velocities with TODCOR: tutorials/todcor.md
       - Run everything in one command: tutorials/pipeline.md
-  - Design: design.md
   - Mathematical foundations: math.md
-  - Roadmap: roadmap.md
   - Benchmarks: benchmarks.md
   - API reference:
       - Overview: api/index.md
@@ -73,7 +71,6 @@ nav:
       - Kepler solver: api/kepler.md
       - Linear algebra: api/solver.md
   - Citing albireo: citing.md
-  - Releasing: releasing.md
 
 plugins:
   - search

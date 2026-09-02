@@ -2,7 +2,7 @@
 
 This module is pure NumPy. It is the boundary at which user data enter albireo, so it is
 importable and inspectable without JAX; everything downstream consumes the arrays validated
-here (``docs/design.md`` §3). The conventions it enforces are the following.
+here (``internal/design.md`` §3). The conventions it enforces are the following.
 
 Masking is ``ivar == 0``. Chip gaps, cosmic rays, interstellar lines, saturated pixels and
 deep tellurics are all zero-weight pixels, so no operator or solve downstream needs a special
@@ -17,7 +17,7 @@ consumes; nothing else in albireo reads ``mask``. The finite-``flux`` requiremen
 ``ivar > 0`` alone, so a pixel that is to hold non-finite values requires ``ivar = 0``, not
 merely ``mask = False``.
 
-Data are never resampled (``docs/design.md`` D4, ``docs/math.md`` §1.1). Interpolating
+Data are never resampled (``internal/design.md`` D4, ``docs/math.md`` §1.1). Interpolating
 observations onto a common grid correlates the noise and invalidates the diagonal ``ivar``
 model. Each epoch keeps its own native, strictly increasing ``wave`` array, and the model is
 projected onto it by a static rebin operator, so mixed instruments, resolutions and samplings

@@ -6,7 +6,7 @@ All notable changes to albireo are recorded here. The format follows
 version is below 1.0 the public API may change in any release.
 
 This file records what changed. The reasons are recorded elsewhere:
-[`docs/design.md`](docs/design.md) §2 is the decision ledger, and
+[`internal/design.md`](internal/design.md) §2 is the decision ledger, and
 [`docs/benchmarks.md`](docs/benchmarks.md) is the validation and performance record.
 
 ## [Unreleased]
@@ -158,7 +158,7 @@ This file records what changed. The reasons are recorded elsewhere:
   and `rotational_kernel` / `rotational_kernel_traced` / `rotational_radius_for` in
   `albireo.operators`. Zero new dependencies.
 
-  The scope is narrow by design and `docs/roadmap.md`'s non-goal is amended rather than
+  The scope is narrow by design and `internal/roadmap.md`'s non-goal is amended rather than
   widened without notice: this synthesizes no spectrum, carries no line list, solves no
   radiative transfer and fits no abundances; `albireo.handoff` remains the route to GSSP,
   iSpec, Korg.jl and PySME. What it is for is the front-half job: choosing the right template,
@@ -326,7 +326,7 @@ This file records what changed. The reasons are recorded elsewhere:
   the two components' equivalent widths are correlated at −0.992 across draws, against
   −0.052 under independent noise, which is D47's *k* = 0 exchange mode arriving in a derived
   quantity, so the two stars' difference is far better determined than either alone and
-  independent error bars misstate both. See `docs/roadmap.md` Tier 2 item 8 and
+  independent error bars misstate both. See `internal/roadmap.md` Tier 2 item 8 and
   `docs/api/handoff.md`.
 
 - **`albireo.sensitivity_forecast`, which answers an observing question before the
@@ -358,7 +358,7 @@ This file records what changed. The reasons are recorded elsewhere:
   period maximizes it and is the worst of three plans: twelve nights at *P*/2 hold the RMS at
   117.8 km/s, stay blind over 58% of the scale range and are worth 243 nats, while the same
   twelve spread over phase lower the RMS to 99.3 km/s and 33% and are worth 375
-  (`examples/08_forecast.py`). See `docs/design.md` D47, `docs/math.md` §5.5 and
+  (`examples/08_forecast.py`). See `internal/design.md` D47, `docs/math.md` §5.5 and
   `docs/api/forecast.md`.
 - **`Disentangler(velocities=...)`: declare measured velocities when there is no
   orbit to declare.** Exactly one of `orbit=` and `velocities=` is now required. With
@@ -377,7 +377,7 @@ This file records what changed. The reasons are recorded elsewhere:
   warns. `scan()` and `detection_limit()` refuse without an orbit.
   Measured: warm-started from velocities carrying 3 km/s of scatter and a 150 km/s systemic
   offset, the recovered table lands at 0.096 / 0.070 km/s, the same as D42's
-  Keplerian-warm-started 0.098 / 0.066. See `docs/design.md` D48.
+  Keplerian-warm-started 0.098 / 0.066. See `internal/design.md` D48.
 - **A tutorial that takes a BLOeM SB2 from a survey identifier to disentangled spectra**
   (`docs/tutorials/bloem-sb2.md`), the second gap D45 left open. It covers the ordering the
   survey forces and that none of the other tutorials needs: with no published period there
@@ -422,7 +422,7 @@ This file records what changed. The reasons are recorded elsewhere:
   approximating: hierarchical triples (`Orbit(outer=...)`), Gauss-Hermite `h3` (it reaches
   the kernel through `build_problem`, not through the model the façade builds), and a
   lower bound on eccentricity (an annulus in the sampled parameterization, not a box).
-  See `docs/design.md` D46 and `docs/api/facade.md`.
+  See `internal/design.md` D46 and `docs/api/facade.md`.
 - **BLOeM targets resolve by name**: `albireo.resolve_bloem("1-002")`,
   `albireo.bloem_catalogue(binary_class="SB2")` (the 59 published double-lined systems),
   and `albireo.bloem_spectra(star)` for that star's epochs, ready for `download`. The
@@ -433,7 +433,7 @@ This file records what changed. The reasons are recorded elsewhere:
   Gaia ids are kept as strings because 809 of the 929 do not survive a float64 round trip.
   Defaults to survey programme `112.25R7`: the same 929 stars are also observed by
   `115.28A9` at *R* = 17000 and 23000 in two other windows, and pooling those with LR02
-  under one line-spread function would be wrong. See `docs/design.md` D45.
+  under one line-spread function would be wrong. See `internal/design.md` D45.
 - **The FITS reader dispatches on IVOA utypes (`TUTYPn`), not column names**, so every ESO
   collection reads with the right column, the right unit and the right wavelength scale.
   Names remain a last-resort fallback for non-ESO files. Keying on UCDs instead would have
@@ -479,7 +479,7 @@ This file records what changed. The reasons are recorded elsewhere:
   still threads them. The numpyro model records `velocity_rel` as a deterministic.
   Warm-started from a Keplerian 30% wrong in both semi-amplitudes, per-epoch RVs recover
   to 0.098 / 0.066 km/s, 1/60th of a model pixel, and the Wilson mass ratio to 0.4%.
-  See `docs/design.md` D42; the mode needs a warm start, and says so.
+  See `internal/design.md` D42; the mode needs a warm start, and says so.
 - `albireo.forward.with_shifts`, the pixel-space core of `with_velocities`, which is now
   a wrapper over it. Pixel shifts are where the model's shift composition is exact, so
   anything that adds or centers shifts has to work there.
@@ -502,7 +502,7 @@ This file records what changed. The reasons are recorded elsewhere:
   the quadrature, and `k1_peak`. `k1_sigma=None` is the previous behavior. This is the
   fix for the failure mode the literature reports: a K₁ 10% high took the recovered
   companion's line pattern from 0.96 correlation with truth to 0.49 while tripling
-  `D`, and marginalizing restored it to 0.93. See `docs/design.md` D41.
+  `D`, and marginalizing restored it to 0.93. See `internal/design.md` D41.
 - **`albireo.forward.with_data`** and **`albireo.simulate.resimulate`**: swap a
   problem's data term, and redraw it from the problem's own forward model. Together they
   are a parametric bootstrap that reuses the rebin operators, pair tables, masks and
@@ -523,7 +523,7 @@ This file records what changed. The reasons are recorded elsewhere:
   unmodelled leaves the H-beta core 26% too shallow and costs 11.5% of the equivalent
   width; with the component, 0.14%. The orbit is affected more than the spectra: a
   nebula-blind joint fit returns K_2 59% low, with the eccentricity of a circular orbit
-  driven to the solver's clip. See `docs/design.md` D40.
+  driven to the solver's clip. See `internal/design.md` D40.
 - **Per-pixel prior strengths**: `SmoothnessPrior(tau_profile=..., eta_profile=...)`, with
   the inferred scalars kept separate so the ML-II fit is unchanged. `albireo.window_profile`,
   `albireo.nebular_windows` and `albireo.NEBULAR_LINES` build the profile that confines a
@@ -555,7 +555,7 @@ This file records what changed. The reasons are recorded elsewhere:
 - `data_residual_zscores(..., per_epoch=True)` returns one array per epoch, which is what
   makes the lag-1 autocorrelation diagnostic meaningful (it is only defined within a single
   exposure).
-- `docs/roadmap.md`: where albireo is going, in what order, and the non-goals, with the
+- `internal/roadmap.md`: where albireo is going, in what order, and the non-goals, with the
   ecosystem evidence behind the ordering.
 - Rendered API reference (mkdocstrings) and a GitHub Pages deployment workflow. The
   `mkdocstrings` and `mkdocs-jupyter` dependencies were declared but had never been
@@ -566,7 +566,7 @@ This file records what changed. The reasons are recorded elsewhere:
   matrix deselects the gates (14 min → 6 min) and a separate job runs them with coverage.
 - A `bare-install` CI job that installs with no extras and checks that `import albireo`
   works, which is what makes the optional-dependency guards real rather than intended.
-- `CHANGELOG.md`, `docs/citing.md`, `docs/releasing.md`, `codemeta.json`, and a tag-driven
+- `CHANGELOG.md`, `docs/citing.md`, `internal/releasing.md`, `codemeta.json`, and a tag-driven
   release workflow using PyPI trusted publishing.
 
 ### Changed

@@ -1,6 +1,6 @@
 """Forward-model regressions found by putting archival spectra through the stack.
 
-Every configuration here comes from real ESO Phase-3 FEROS data (``docs/design.md`` D30)
+Every configuration here comes from real ESO Phase-3 FEROS data (``internal/design.md`` D30)
 and none of them is produced by the simulator, which is why each survived until the first
 observed dataset went through: per-exposure wavelength grids, non-finite flux at masked
 pixels, and epochs that extend past the model grid.

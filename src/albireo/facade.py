@@ -139,7 +139,7 @@ class Known(Spec):
     Appropriate for a literature period or a semi-amplitude from a cross-correlation
     study. In :meth:`Disentangler.scan` a ``Known`` primary semi-amplitude is marginalized
     over rather than held fixed, which is what prevents a 10% error in K₁ from inflating
-    the detection statistic (``docs/design.md`` D41).
+    the detection statistic (``internal/design.md`` D41).
 
     Parameters
     ----------
@@ -439,7 +439,7 @@ class Telluric:
 class Nebular:
     """A nebular emission component: static in the barycentric frame, free amplitude.
 
-    The counterpart of :class:`Telluric` (``docs/design.md`` D40). Nebular flux is added
+    The counterpart of :class:`Telluric` (``internal/design.md`` D40). Nebular flux is added
     on top of the total continuum and takes no light from the stars, so its per-epoch
     amplitude is a free parameter rather than a light fraction.
 
@@ -680,7 +680,7 @@ def _check_velocities(dis, stars) -> np.ndarray:
             "these velocities never separate the components: every star has the same "
             "velocity at every epoch, which is exactly the cold start the free-velocity "
             "mode is measured to fail from (122,000 nats worse than a warm one, "
-            "docs/design.md D42). Supply the measured per-epoch velocities "
+            "internal/design.md D42). Supply the measured per-epoch velocities "
             "(cross-correlation lags, or line splitting read off the two most separated "
             "epochs) rather than a placeholder."
         )
@@ -781,7 +781,7 @@ class Disentangler:
         :class:`Fit` whose table can be searched for a period.
 
         This mode exists because the free table requires a warm start, a cold one being
-        measured at 122,000 nats worse (``docs/design.md`` D42), while the other warm
+        measured at 122,000 nats worse (``internal/design.md`` D42), while the other warm
         start available, :meth:`Fit.free_velocities`, requires a Keplerian fit and hence
         a period. For a system with no published period the sequence is: declare the
         measured velocities, obtain the table, derive the period, then declare an
@@ -1500,7 +1500,7 @@ class Disentangler:
                 "declare the companion's semi-amplitude as ab.Scanned(grid); that grid is "
                 "the scan's axis. The primary's is Fixed(k) to hold it, or Known(k, sigma) "
                 "to marginalize over it, which is the only thing that catches a wrong K1 "
-                "inflating the detection statistic (docs/design.md D41)."
+                "inflating the detection statistic (internal/design.md D41)."
             )
         if not isinstance(k1, Fixed | Known):
             raise ValueError("the primary's semi-amplitude must be Fixed(k) or Known(k, sigma)")
@@ -1515,7 +1515,7 @@ class Disentangler:
         than :class:`Fixed` marginalizes over it. A K₁ 10% high reduces the correlation of
         the recovered companion with the truth from 0.96 to 0.49 while tripling the
         detection statistic, so the artifact presents as a stronger detection and no
-        calibrated threshold identifies it (``docs/design.md`` D41).
+        calibrated threshold identifies it (``internal/design.md`` D41).
 
         Parameters
         ----------
@@ -2015,7 +2015,7 @@ class Fit:
 
         The method is defined on :class:`Fit` rather than being constructible on its own
         because a cold start is measured at 122,000 nats worse than the warm-started
-        solution (``docs/design.md`` D42); warm-starting is the only mode shown to
+        solution (``internal/design.md`` D42); warm-starting is the only mode shown to
         succeed.
 
         This is the entry point when a Keplerian fit already exists and the table is

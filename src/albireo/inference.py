@@ -47,7 +47,7 @@ them are the realism extensions of ``docs/math.md`` §7.5.
   (:func:`albireo.forward.with_response`, D7/D33). ``r = 1 + sum_m c_m T_m``, so
   all-zero coefficients give the unit response. This is the per-epoch continuum
   treatment: a low-order response trades against the components' broad features
-  (``docs/design.md`` §5), so the order should be low and the priors tight and
+  (``internal/design.md`` §5), so the order should be low and the priors tight and
   zero-centered. When the site is present the construction-time ``response_coeffs``
   are replaced.
 - ``log_jitter``: log noise-inflation factor [dimensionless], scalar (shared) or one

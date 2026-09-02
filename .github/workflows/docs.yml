@@ -8,7 +8,7 @@ name: Docs
 # from a private repository requires GitHub Pro; on the free tier it only works once the
 # repository is public. Because neither is true before the first push, deploy is gated
 # behind the `PAGES_ENABLED` repository variable; the build job runs regardless, so a broken
-# docs build is still caught. See docs/releasing.md step 2.
+# docs build is still caught. See internal/releasing.md step 2.
 
 on:
   push:

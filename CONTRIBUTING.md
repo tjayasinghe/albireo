@@ -66,7 +66,7 @@ hooks, so installing it is the cheapest way to keep CI green.
 
 ## What a pull request needs
 
-The simulator is the oracle. The project's test philosophy (docs/design.md §7) is that
+The simulator is the oracle. The project's test philosophy (internal/design.md §7) is that
 
 - **every inference feature ships with a closed-loop test** against simulated data with known
   injected truth, asserting recovery to a stated tolerance;
@@ -88,10 +88,10 @@ pattern.
 
 ## Where the design decisions live
 
-- `docs/design.md` §2 is the **decision ledger** (D1–D26): every default, with its rationale and
+- `internal/design.md` §2 is the **decision ledger** (D1–D26): every default, with its rationale and
   the alternative that was rejected. A change that alters a recorded default should update the row
   in the same PR and say why.
-- `docs/design.md` §1 covers prior art, §5 the degeneracy policy, §8 the milestones.
+- `internal/design.md` §1 covers prior art, §5 the degeneracy policy, §8 the milestones.
 - `docs/math.md` holds the equations, and §8 maps each mathematical claim to the test that
   asserts it. New mathematics belongs there, with a test in the traceability table.
 - `docs/benchmarks.md` is the validation and performance record.

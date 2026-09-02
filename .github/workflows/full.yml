@@ -13,7 +13,7 @@ name: Full
 # monthly minutes re-testing commits that have not changed, and GitHub disables scheduled
 # workflows on inactive repositories anyway.
 #
-# When to run it: before tagging a release (`docs/releasing.md` step 1), after touching the
+# When to run it: before tagging a release (`internal/releasing.md` step 1), after touching the
 # solver, the assembly, or anything else the fast suite covers only at small scale, and
 # whenever `ci.yml` passes but its result is in doubt.
 

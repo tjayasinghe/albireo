@@ -1,4 +1,4 @@
-"""fd3 comparison harness (M5): export, run both codes, compare (docs/design.md §1).
+"""fd3 comparison harness (M5): export, run both codes, compare (internal/design.md §1).
 
 Simulates an SB2 on a common ln-lambda grid (fd3's required sampling; the native
 grid is the model grid here, so neither code resamples), writes fd3 v3.1 input

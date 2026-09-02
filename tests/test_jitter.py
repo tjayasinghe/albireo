@@ -1,4 +1,4 @@
-"""Tests for the per-epoch noise-inflation factor (docs/design.md D15, math.md §1.4).
+"""Tests for the per-epoch noise-inflation factor (internal/design.md D15, math.md §1.4).
 
 The point of a jitter site is that archival inverse variances are usually *estimated*
 rather than measured, so their overall scale is unknown. Two properties have to hold for

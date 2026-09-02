@@ -196,19 +196,24 @@ complete analysis of archival FEROS spectra.
 - [`docs/science.md`](docs/science.md): scientific background and references.
 - [`examples/`](examples/): executable tutorials, each ending in assertions against the
   injected truth; narrative versions in [`docs/tutorials/`](docs/tutorials/).
-- [`docs/design.md`](docs/design.md): architecture, data model, and the decision ledger.
 - [`docs/math.md`](docs/math.md): the forward model, the marginal likelihood, the
   degeneracy analysis, and the estimators for labels and epoch velocities.
 - [`docs/benchmarks.md`](docs/benchmarks.md): the validation and performance record.
-- [`docs/roadmap.md`](docs/roadmap.md): planned work and stated non-goals.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): development setup and test requirements.
 
-The documentation is built with MkDocs Material:
+The pages above are the published documentation, built with MkDocs Material:
 
 ```bash
 pip install -e ".[docs]"
 mkdocs serve
 ```
+
+[`internal/`](internal/) holds the working notes that are not part of that site: the
+decision ledger and architecture ([`internal/design.md`](internal/design.md)), the plan
+and the stated non-goals ([`internal/roadmap.md`](internal/roadmap.md)), and the release
+procedure ([`internal/releasing.md`](internal/releasing.md)). They are kept in the
+repository because the code and the tests cite them, but they are addressed to
+maintainers, not to users.
 
 ## Citation
 

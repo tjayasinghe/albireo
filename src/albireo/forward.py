@@ -412,7 +412,7 @@ def _epoch_groups(dataset: Dataset) -> list[tuple[str, list[int]]]:
     ESO Phase-3 FEROS spectra, for instance, carry a per-exposure grid whose start moves
     with the correction, so 51 epochs can have 51 grids differing in length and in
     sub-pixel phase. Splitting them here is exact, each epoch keeping its own grid and
-    operator (``docs/design.md`` D4), and costs one operator per distinct grid, which is
+    operator (``internal/design.md`` D4), and costs one operator per distinct grid, which is
     small next to the solve. Relabelling the epochs as distinct instruments would instead
     fork the LSF width and response tables, so widths that are physically one number
     would have to be inferred or supplied once per exposure. The instrument key
@@ -954,7 +954,7 @@ def with_nebular_amplitudes(problem: Problem, amplitudes) -> Problem:
 def with_jitter(problem: Problem, jitter) -> Problem:
     """Return ``problem`` with per-epoch noise-inflation factors ``alpha_j`` (differentiable).
 
-    ``docs/math.md`` §1.4 and ``docs/design.md`` D15: the weights become
+    ``docs/math.md`` §1.4 and ``internal/design.md`` D15: the weights become
     ``w_j -> w_j / alpha_j^2``, so ``alpha = 1`` is exactly the unmodified problem and
     ``alpha > 1`` says this epoch's quoted inverse variances are optimistic by that
     factor. The marginal likelihood keeps its ``+1/2 sum log w`` term, which is what
@@ -1218,7 +1218,7 @@ def with_response(problem: Problem, response_coeffs) -> Problem:
     wavelength grid scaled to [-1, 1] (per group, so mixed instruments each use their
     own abscissa); an all-zero coefficient vector is exactly the unit response.
 
-    Identifiability follows the ``docs/design.md`` §5 response row: a low-order response
+    Identifiability follows the ``internal/design.md`` §5 response row: a low-order response
     trades against the components' broad spectral features, so the epoch-shared part of
     a free response is only weakly identified, while the epoch-to-epoch differences,
     which are what a per-epoch continuum treatment is for, are well constrained. Keep

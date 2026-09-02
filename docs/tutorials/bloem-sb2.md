@@ -28,7 +28,7 @@ It stops where an analysis begins. Everything after §3 below is what comes next
     where the truth is known. Here it is not: these systems have no published orbital
     solutions, which is why they are interesting. Every number quoted below is therefore one
     already measured and recorded elsewhere in this repository: the archive facts
-    (`docs/design.md` D45), the loader's behaviour, and the closed-loop results from the
+    (`internal/design.md` D45), the loader's behaviour, and the closed-loop results from the
     simulator that justify each choice. Where a step produces a fitted result, the page says
     what to inspect rather than what value to expect.
 

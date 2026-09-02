@@ -1,9 +1,9 @@
 # API reference
 
 These pages are generated from the docstrings in the source and are the reference for the
-package. The [design ledger](../design.md) and the [mathematical foundations](../math.md)
-explain the choices behind the code, and the [tutorials](../tutorials/sb2-end-to-end.md)
-are worked examples.
+package. The [scientific background](../science.md) and the
+[mathematical foundations](../math.md) explain the choices behind the code, and the
+[tutorials](../tutorials/sb2-end-to-end.md) are worked examples.
 
 Nearly every public name is re-exported at the top level, so `albireo.build_problem` and
 `albireo.forward.build_problem` are the same function. The short form is preferred.

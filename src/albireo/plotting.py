@@ -476,7 +476,7 @@ def plot_light_fractions(samples, *, bjd=None, period=None, t_conj=None, ax=None
     otherwise.
 
     A constant light ratio is not determined by the spectra alone, so albireo does not
-    assume one (``docs/design.md`` §5). A ratio that varies, as it does during eclipses,
+    assume one (``internal/design.md`` §5). A ratio that varies, as it does during eclipses,
     breaks that degeneracy; the figure shows whether the inferred variation follows the
     eclipse or the noise.
 
