@@ -209,7 +209,7 @@ peak it found. Two steps close that gap, both in
 
 - **Marginalize $K_1$** rather than condition on the SB1 value, with `k2_scan(k1_sigma=...)`. A
   $K_1$ 10% too high took the recovered companion's line pattern from 0.96 correlation with the
-  truth to 0.49 while tripling $D$ ([benchmarks](../benchmarks.md), D41), so the artifact reads
+  truth to 0.49 while tripling $D$ ([benchmarks](../benchmarks.md)), so the artifact reads
   as a stronger detection.
 - **Calibrate the statistic** with [`albireo.detection_limit`](../api/calibrate.md), which
   resimulates this dataset through its own operators, scans hundreds of companion-free draws for

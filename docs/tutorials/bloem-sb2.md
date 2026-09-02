@@ -27,8 +27,8 @@ It stops where an analysis begins. Everything after §3 below is what comes next
     The other tutorials quote the answers they obtain, because they run on the simulator
     where the truth is known. Here it is not: these systems have no published orbital
     solutions, which is why they are interesting. Every number quoted below is therefore one
-    already measured and recorded elsewhere in this repository: the archive facts
-    (`internal/design.md` D45), the loader's behaviour, and the closed-loop results from the
+    already measured and recorded elsewhere in this repository: the archive facts,
+    the loader's behaviour, and the closed-loop results from the
     simulator that justify each choice. Where a step produces a fitted result, the page says
     what to inspect rather than what value to expect.
 
@@ -177,7 +177,7 @@ every entry changes neither the answer nor the solver's bandwidth.
 !!! danger "A cold start does not work, and that is measured"
     `v_measured` may not be a placeholder. With every component at the same velocity at every
     epoch the two stars are indistinguishable, and the fit does not converge slowly: it lands
-    122,000 nats worse than a warm start (D42). The declaration refuses that outright, and
+    122,000 nats worse than a warm start, measured in the benchmark record. The declaration refuses that outright, and
     warns if the supplied velocities never separate the components by more than the LSF
     width. The failure is loud rather than silent, which is what makes the mode usable.
 
@@ -193,7 +193,7 @@ Two properties of the resulting table are counter-intuitive and are described in
   what a period search and a mass ratio need.
 * **Do not read the raw Laplace diagonal as an error bar.** Each zero point is an exactly
   flat direction, so its posterior width is the prior's and every epoch inherits it: on the
-  D42 fixture the raw bars came out at `120/√10 = 37.947` km/s on *every* entry against a
+  velocity-table fixture the raw bars came out at `120/√10 = 37.947` km/s on *every* entry against a
   real 0.059. `table.velocity_errors()` projects them out; at the expert level it is
   `ab.relative_velocity_errors(cov, fit.unconstrained)`, or posterior samples of the
   `velocity_rel` deterministic.
@@ -231,7 +231,7 @@ resid = free.keplerian_residuals(kep)      # km/s, both zero points cancel exact
 Compare those residuals to the *per-epoch uncertainties* rather than to zero. Structure,
 whether phase-correlated residuals or one epoch far out, is the signature of a period that is
 slightly wrong, an unmodelled third body, or line-profile variability that the Keplerian has
-absorbed into `e`. On the D42 fixture a period wrong by 0.5% moved the residuals from 2.9σ to
+absorbed into `e`. On the velocity-table fixture a period wrong by 0.5% moved the residuals from 2.9σ to
 49σ, so the check has real power.
 
 ## 6. The nebular component, before the Balmer lines

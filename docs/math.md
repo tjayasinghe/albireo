@@ -5,7 +5,7 @@ likelihood, analyzes its computational structure, and works out the degeneracy t
 the API design. Every method implemented in the code traces back to an equation here, and
 every equation here is intended to be covered by a test.
 
-**Status:** v1 design (M0). Frozen only after review.
+**Status:** v1. Frozen only after review.
 
 ---
 
@@ -154,7 +154,7 @@ log-$\lambda$ grid this is a stationary discrete convolution $\mathbf{B}_j$ (Toe
 kernel truncated at $\pm 4\sigma$), consistent with a constant-resolving-power spectrograph.
 Because $\mathbf{B}_j$ is stationary on the same uniform grid, it commutes with $\mathbf{T}$
 (up to edges); it is applied after shifting, matching the physical picture in which the
-instrument acts in the observed frame. The v2 seam is open (D37): a wavelength-dependent LSF
+instrument acts in the observed frame. The v2 seam is open: a wavelength-dependent LSF
 is the banded non-stationary matrix $K[m, c] = P[m,\, m - c + r]$, in which each model pixel
 applies its own kernel row, realized from per-anchor kernels by linear interpolation in
 log-$\lambda$ (`operators.convolve_varying`; per-anchor Gaussian widths are the built-in
@@ -172,7 +172,7 @@ second order, since a symmetric kernel moves no centroid. The first-order channe
 wavelength-dependent *asymmetry*, whose epoch-coupled part enters as an apparent velocity
 perturbation $\propto \lambda\, c'(\lambda)\, v(t)/c$.
 
-The asymmetry channel is parameterized (D38): per-anchor Gauss–Hermite $h_3$
+The asymmetry channel is parameterized: per-anchor Gauss–Hermite $h_3$
 (`operators.gauss_hermite_kernel_traced`; van der Marel & Franx (1993) truncated at the
 first asymmetric term, $|h_3| \le 0.2$), imprinting a centroid-warp field
 $c(\lambda) \approx \sqrt{3}\, h_3(\lambda)\, \sigma$. Its identifiability is worse
@@ -195,7 +195,7 @@ orbit's response is the readout.
 (continuum-normalized data), telluric fixed at $\ell = 1$. Constant per component by default;
 a per-epoch (eclipse) mode is also supported (§5.2 gives the reason).
 
-**Nebular emission (D40).** Massive stars are born in H II regions, so their spectra carry
+**Nebular emission.** Massive stars are born in H II regions, so their spectra carry
 emission lines that belong to neither star. Three properties set the structure. The lines do
 not move with either component: they are at rest in the *barycentric* frame, the mirror of
 the telluric convention. Their strength varies from exposure to exposure with seeing, slit
@@ -283,10 +283,11 @@ estimates, and why it is not the same as rescaling by the residual scatter.
 $\mathbf{A}$ is never formed densely: it is a composition of gathers, stationary convolutions,
 and segment-sums, each with an exact adjoint (tested against `jax.linear_transpose`).
 
-### 1.4a Correlated noise: the AR(1) chain (D34)
+### 1.4a Correlated noise: the AR(1) chain
 
 A pipeline that resamples spectra onto a common wavelength step correlates adjacent
-pixels; this is the mechanism left standing by D31, where a rescaled diagonal model whitened
+pixels; this is the mechanism left standing by the jitter site, where a rescaled diagonal
+model whitened
 the residual scale while relocating the orbit. The v1 correlated model keeps every term
 closed form: per epoch, the noise covariance of the standardized residual is AR(1)
 in native-pixel index,
@@ -297,7 +298,7 @@ $$
 (\mathbf{R}_\phi)_{pq} = \phi^{|p-q|},
 $$
 
-so $w$ keeps the per-pixel scale, $\alpha$ (D31) keeps the overall scale, and $\phi$
+so $w$ keeps the per-pixel scale, $\alpha$ keeps the overall scale, and $\phi$
 correlates; $\phi = 0$ is exactly the diagonal model. Two facts make this exact and
 cheap:
 
@@ -327,10 +328,11 @@ Two structural consequences follow, both static. $\mathbf{A}^\top \mathbf{W} \ma
 couples rebin rows up to `ar1_max_gap` apart, widening the half-bandwidth by the
 largest model-pixel offset between a stored link's row supports
 (`Problem.ar_bandwidth_extra`; `MarginalOrbitModel` reserves it behind its ``ar1``
-flag, D21-style). And the inner sandwich of the D28 band assembly gains the chain's
+flag, the same declared-bandwidth convention used elsewhere). And the inner sandwich of
+the direct band assembly gains the chain's
 cross-row terms: each link contributes the symmetrized outer product
 $-c_k \sqrt{w_n w_p}\, r_n r_p (\mathbf{R}_n^\top \mathbf{R}_p + \mathbf{R}_p^\top \mathbf{R}_n)$
-of two *different* rebin rows, carried by static link pair tables (§4.5a, D35), so the
+of two *different* rebin rows, carried by static link pair tables (§4.5a), so the
 correlated marginal stays on the band path; comb probing remains the reference
 implementation.
 
@@ -365,7 +367,7 @@ is $0$ in deviation space; emission-line components need no special treatment.
 
 $\log\det\boldsymbol\Lambda_i$ is cheap (banded Cholesky, bandwidth 2).
 
-**Per-pixel strengths (D40).** Both weights may carry a static per-pixel profile:
+**Per-pixel strengths.** Both weights may carry a static per-pixel profile:
 
 $$
 \boldsymbol\Lambda_i \;=\; \mathbf{D}_2^\top
@@ -634,12 +636,12 @@ biases light ratios, LSF and hyperparameter inference. Role: fast MAP quick-look
 initialization only, never final inference.
 
 **Decision:** implement A as the default engine; B behind the same interface for benchmarks;
-C powers `fit_map(quick=True)`. The A-vs-B crossover is measured at M2/M3 on the design-target
+C powers `fit_map(quick=True)`. The A-vs-B crossover is measured on the design-target
 benchmark and recorded in `docs/benchmarks.md`.
 
-### 4.5 Direct band assembly and the closed-form gradient (D28)
+### 4.5 Direct band assembly and the closed-form gradient
 
-Through M5 the band of $\tilde{\boldsymbol\Lambda}$ was assembled by comb probing: $2p+1$
+Earlier versions assembled the band of $\tilde{\boldsymbol\Lambda}$ by comb probing: $2p+1$
 applications of the matrix-free operator, paying for the union of all epochs' band offsets.
 The shipped engine assembles the band directly from its analytic per-epoch structure
 (the shifted-product accumulation of §4.2), and keeps probing as the reference implementation
@@ -666,7 +668,7 @@ a four-term tent-weighted combination of row-translated copies of $\mathbf{G}_j$
 computation is: (i) $\mathbf{R}^\top\mathbf{W}'\mathbf{R}$ by one `segment_sum` over
 static *pair tables* precomputed from the rebin sparsity; (ii) the kernel sandwich as two
 unrolled diagonal-shifted accumulations on the band image; (iii) translation + tent
-mixing + accumulation into a global band tensor. A wavelength-dependent kernel (D37)
+mixing + accumulation into a global band tensor. A wavelength-dependent kernel
 keeps stage (ii)'s structure with the scalar taps replaced by row-shifted profile
 columns, $K[c+d,\,c] = P[c+d,\, r-d]$. Only *left* applications $\mathbf{K}^\top
 \mathbf{M}$ broadcast on a row-major band image, since a right application's taps vary along
@@ -686,7 +688,7 @@ epochs rather than part of the accumulation body. How many epochs it covers at o
 chain, so covering all of them costs ~9 GB at the design target, while any partition
 costs exactly one extra $\mathbf{G}$ pass in the rematerialized backward regardless of
 its granularity. The default keeps the whole pre-pass live below a threshold and
-batches above it (D29).
+batches above it.
 
 The prior determinant needs no factorization at all: $\boldsymbol\Lambda_p$ is block
 diagonal over components and pentadiagonal within each, so
@@ -723,7 +725,7 @@ and the band packing reads each entry exactly once, so mirrored entries receive 
 halves of $u\hat d^\top + \hat d u^\top$ separately and sum to the same parameter
 gradient. Each $\Sigma$ block is contracted at the step of the recursion that produces
 it (`solver.selected_inverse_cotangent`), so the selected inverse is never materialized
-($2K-1$ blocks, 3.1 GB at the design target, D29); `selected_inverse_blocks` remains as
+($2K-1$ blocks, 3.1 GB at the design target); `selected_inverse_blocks` remains as
 the reference form and test oracle. Gradient contract: gradients flow through the
 log-likelihood, the quadratic form, and $\hat d$. The Cholesky factor is not an output of the
 custom-VJP stage, because a cotangent on it cannot be honoured by this
@@ -742,7 +744,7 @@ edge; $T(\delta_j)$ has no row there, so the contribution is zero. Those columns
 are therefore masked once per group. (Left unmasked this cost $6\times10^{-4}$ relative
 in the assembled matrix and $2\times10^{-7}$ in $\log p$ for data spanning the grid;
 with any margin between data and grid edge the weights vanish there and the effect is
-absent, D29.)
+absent.)
 
 **Second derivatives.** Hessians are taken reverse-over-reverse
 (`jacrev(jacrev(...))`), which is exact here *because* the forward rule recomputes its
@@ -756,9 +758,9 @@ the custom boundary first. It nonetheless produces an appreciably asymmetric Hes
 on this stack, and does so on the plain-autodiff path too, so the cause is the solver
 scans rather than the custom rule; reverse-over-reverse matches central finite
 differences of the gradient to 8 digits where forward-over-reverse does not.
-`laplace_inverse_mass` uses reverse-over-reverse, fixing a defect present since M3.
+`laplace_inverse_mass` uses reverse-over-reverse, fixing a long-standing defect.
 
-Since D49 there are two custom boundaries rather than one: the band accumulate of §4.5
+Since the second speedup pass there are two custom boundaries rather than one: the band accumulate of §4.5
 carries its own `custom_vjp` (`assembly._band_accumulate`), because reverse mode
 otherwise rebuilds the entire band tensor to reproduce its own input. Everything above
 still holds, since the forward rule recomputes its primal inline for the same reason and
@@ -767,7 +769,7 @@ consequence for forward mode is now package-wide rather than confined to the sol
 stage. `forecast._effective_parameters` was the last `jax.jvp` in albireo and is now a
 `jax.grad` of the same scalar-to-scalar function, returning the identical `p_eff`.
 
-### 4.5a The tridiagonal noise sandwich: link pair tables (D35)
+### 4.5a The tridiagonal noise sandwich: link pair tables
 
 The stage-1 sandwich above assumed $\mathbf{W}'$ diagonal. With the AR(1) chain
 (§1.4a) the noise precision adds one symmetric off-diagonal term per link,
@@ -781,7 +783,7 @@ $$
 $$
 
 where $d^{\rm chain} = 1 + \sum_{\text{links at pixel}} a_k$ is the chain diagonal and
-$(n, p)$ are the link's endpoint rows. The diagonal part reuses the D28 pair tables
+$(n, p)$ are the link's endpoint rows. The diagonal part reuses the diagonal pair tables
 with a re-weighted per-pixel vector; the cross-row part gets its own static tables
 (`operators.rebin_link_pair_tables`). For every realized link (the union over
 epochs of `ar_gap[e, n] == g`, since masks differ by epoch) and every ordered entry
@@ -795,9 +797,9 @@ model-pixel offset between a realized link's row supports, the same quantity
 `Problem.ar_bandwidth_extra` reserves), and every downstream stage is untouched: the
 $\mathbf{K}$ convolutions, the T-sandwich, the band accumulation, and the custom-VJP
 solve see only a slightly wider velocity-independent band image. This restores the full
-D28/D29 cost profile for correlated problems, measured at HR-window scale: eval
+band-path cost profile for correlated problems, measured at HR-window scale: eval
 $7.2\times$, gradient $19\times$ faster than probing, gradient peak memory
-$23.7 \to 1.9$ GiB (benchmarks.md D35). Comb probing remains the reference path and
+$23.7 \to 1.9$ GiB (benchmarks.md). Comb probing remains the reference path and
 the `validate` oracle; band $=$ probe $=$ dense LAPACK is pinned in
 `tests/test_ar1.py`.
 
@@ -898,7 +900,7 @@ prior. $K_i$, $e$, $\omega$, $P_{\rm orb}$, $T_{\rm p}$ are unaffected.
 | $\gamma$ vs. common shift | exact up to edges | external rest-frame info | $\gamma \equiv 0$ default, post-hoc measurement |
 | per-epoch constants vs. response | approx | low poly order | order $\le 2$ default, covariance reported |
 | telluric constant vs. common stellar constant | exact up to edges | ridge anchors ($\eta$) on both | measured in the telluric closed loop: the two offsets cancel in the sum to $\lesssim 10^{-3}$; report both |
-| LSF width vs. intrinsic line widths | near-exact per instrument | cross-instrument spectrum sharing | absolute widths need a *reference instrument* anchor (tight prior); only relative widths are data-identified (M4, benchmarks.md) |
+| LSF width vs. intrinsic line widths | near-exact per instrument | cross-instrument spectrum sharing | absolute widths need a *reference instrument* anchor (tight prior); only relative widths are data-identified (benchmarks.md) |
 | nebular amplitude scale vs. nebular spectrum | exact ($a_j \to c\,a_j$, $d \to d/c$) | nothing; it is a convention | geometric mean pinned to 1 by centering `log_nebular_amp` (§1.3) |
 | nebular velocity vs. common shift of *its* spectrum | exact up to edges (the §5.3 argument, one component at a time) | nothing on barycentric data | `nebular_v_kms` is a *placement* choice; it must agree with the prior's line windows and is not a measurement |
 
@@ -914,7 +916,7 @@ inflates them by tens of percent while leaving the orbit untouched. Multiple
 instruments *sharing the same spectra* identify the width differences; the absolute
 scale must come from one instrument whose LSF is known.
 
-### 5.5 Forecasting a design (D47)
+### 5.5 Forecasting a design
 
 §5.1 is a statement about the *design*, not about the data, and that generalizes exactly.
 The posterior precision of the stacked spectra,
@@ -1016,7 +1018,7 @@ costs one linear solve per grid point. This is the matched
 filter *marginalized over the unknown companion spectrum*, more sensitive than a CCF
 grid search with an assumed template, and it returns the recovered companion spectrum
 $\hat d_2$ with its covariance at the peak. Because $d_2$'s prior scale enters, $D$ is calibrated
-empirically by injection–recovery (same simulator as M1) rather than by an asymptotic $\chi^2$
+empirically by injection–recovery (the same simulator) rather than by an asymptotic $\chi^2$
 claim; the null distribution is estimated, not assumed (§6.2).
 
 ### 6.1 Marginalizing $K_1$
@@ -1026,7 +1028,7 @@ and the resulting bias does not stay in $K_1$: unremoved primary signal is *cohe
 epochs, and the companion's free spectrum is the only component that can absorb it. The
 symptom reported throughout the literature is spurious structure in the recovered secondary;
 the less often reported symptom is that $D$ increases while this happens, so the artifact
-reads as a stronger detection (measured in benchmarks.md D41: $K_1$ 10% high tripled $D$ and
+reads as a stronger detection (measured in benchmarks.md: $K_1$ 10% high tripled $D$ and
 took the companion's recovered line pattern from 0.96 correlation with truth to 0.49).
 
 Integrating $K_1$ out removes the conditioning. With a Gaussian prior $K_1 \sim
@@ -1080,7 +1082,7 @@ The procedure does not check the model. The null trials are drawn at the same $K
 orbit and light fractions the scan assumes, so the threshold is self-consistent with those
 assumptions and insensitive to their being wrong, which is why §6.1 accompanies it.
 
-Implementation notes (M4, `albireo.scan.k2_scan`): the no-companion model is the
+Implementation notes (`albireo.scan.k2_scan`): the no-companion model is the
 single-component fit with $\ell_1 = 1$ and the primary's prior; the companion's light
 fraction $\ell_2$ must be chosen explicitly (§5.2: the observable is $\ell_2 d_2$).
 Because both log-marginals carry their $\tfrac12\log\det$ Occam terms, the extra
@@ -1095,7 +1097,7 @@ reliable absolute depth scale, unless eclipses or photometry pin the envelope.
 
 ---
 
-## 7. Joint inference over θ (M3)
+## 7. Joint inference over θ
 
 ### 7.1 The marginal posterior and its static computation graph
 
@@ -1121,7 +1123,7 @@ budget slows mixing near the boundary but cannot corrupt the posterior.
 ### 7.2 Parameterization
 
 Sampled sites: $P$, $T_{\rm conj}$, $(\sqrt{e}\cos\omega, \sqrt{e}\sin\omega)$, and
-$K_i$ (γ ≡ 0 by §5.3 / D14). The $\sqrt{e}$-pair is smooth through $e = 0$, where $\omega$
+$K_i$ (γ ≡ 0 by §5.3). The $\sqrt{e}$-pair is smooth through $e = 0$, where $\omega$
 and $T_{\rm peri}$ are undefined, and a uniform prior on the unit disk maps to
 $e \sim \mathcal{U}(0,1)$, $\omega \sim \mathcal{U}(-\pi,\pi)$; the disk constraint enters
 as a $-\infty$ factor with $e$ clipped at $e_{\max} = 0.95$ (the Kepler solver's verified
@@ -1131,13 +1133,13 @@ non-smooth point is the origin $\sqrt{e}\cos\omega = \sqrt{e}\sin\omega = 0$ (an
 off it. $T_{\rm conj}$ (the §1.2 convention $\nu + \omega = \pi/2$) replaces $T_{\rm peri}$,
 which degenerates with $\omega$ as $e \to 0$.
 
-One smoothness caveat: with linear (2-tap) shift interpolation (D3), $A(\theta)$ is
+One smoothness caveat: with linear (2-tap) shift interpolation, $A(\theta)$ is
 piecewise-linear in each shift, so $\log p(y\mid\theta)$ is piecewise-$C^1$ in the
 velocities with derivative kinks where a shift crosses an integer pixel. On an oversampled
 model grid the kink amplitudes are set by sub-pixel spectral curvature and are far below
 the posterior scale; NUTS (Hoffman & Gelman 2014) treats them as it treats any
 leapfrog-scale roughness. The 4-tap
-cubic kernel (D3, flagged) is the smoothing upgrade if a dataset ever exposes them.
+cubic kernel (opt-in, flagged) is the smoothing upgrade if a dataset ever exposes them.
 
 ### 7.3 Hyperparameters: ML-II by default
 
@@ -1161,7 +1163,7 @@ $p(d \mid y) = \int p(d \mid y, \theta)\, p(\theta \mid y)\, d\theta$, a mixture
 uncertainty into the spectra; the pointwise bands from a single $\hat\theta$ (§3.3) are the
 *conditional* uncertainty only. Both are exposed and documented as different objects.
 
-### 7.5 Realism extensions in θ (M4)
+### 7.5 Realism extensions in θ
 
 **Hierarchical SB3.** A triple is two nested Keplerians: inner pair (A, B) and the
 outer orbit of their center of mass against the tertiary C,
@@ -1191,7 +1193,7 @@ pre-marginalization), so MAP/NUTS handle it natively.
 
 **LSF widths.** A Gaussian kernel's *values* at fixed integer offsets are smooth in
 $\sigma$, so `lsf_sigma` (one width per un-anchored instrument; one per LSF anchor for
-an instrument built with `lsf_anchors_angstrom`, D37, where the traced per-anchor bank is
+an instrument built with `lsf_anchors_angstrom`, where the traced per-anchor bank is
 re-interpolated through the same static tables the build used) is traced while the
 kernel *radius* stays fixed at build time by the construction-time widths, which thereby
 become strict per-entry upper bounds: a realized $\sigma$ above them would be silently
@@ -1199,15 +1201,15 @@ truncated by the fixed radius, so the model rejects it with a $-\infty$ factor (
 guard-not-silent-corruption pattern as the bandwidth budget, §7.1). Identifiability is
 §5.4's caveat sharpened by §1.3: absolute widths require one anchored reference instrument,
 and fitted per-anchor profiles are diagnostics rather than measurements. The asymmetry
-site ``lsf_h3`` (D38) follows the same pattern (per-anchor Gauss–Hermite $h_3$ for
+site ``lsf_h3`` follows the same pattern (per-anchor Gauss–Hermite $h_3$ for
 anchored instruments only, the static radius untouched, clipped and guarded at
 $|h_3| \le 0.2$), with the still-sharper identifiability caveat of §1.3.
 
-**Per-epoch response (D33, post-M5).** The multiplicative response enters the
+**Per-epoch response.** The multiplicative response enters the
 likelihood in three places: the target, $z_j = y_j - r_j \odot (\mathbf{R}\mathbf{1})$;
 the sandwich weights, since $\mathbf{A}_j = \mathrm{diag}(r_j)\mathbf{R}_j\mathbf{B}_j\cdots$
 folds $r_j^2$ into $\mathbf{A}^\top W \mathbf{A}$; and the right-hand side through
-$r_j z_j$. That is why D7 kept its coefficients as build-time constants through M4: a
+$r_j z_j$. That is why the coefficients were build-time constants for so long: a
 `response` swap is not a pure operator swap like the shifts. It is nonetheless cheap,
 because $\mathbf{R}\mathbf{1}$ (the rebinned unit continuum, stored per group) is
 *response-independent*:
@@ -1217,7 +1219,8 @@ z^{\rm new}_j \;=\; z^{\rm old}_j + \left(r^{\rm old}_j - r^{\rm new}_j\right) \
 $$
 
 rebuilds the target exactly without carrying the raw fluxes (and re-masking keeps
-zero-weight pixels at exactly zero, so the D30 ``0·nan`` trap cannot resurface), while
+zero-weight pixels at exactly zero, so the ``0·nan`` trap found on real data cannot
+resurface), while
 the $\sum \log w$ term is untouched, since the noise lives on the data rather than on
 response-divided data. `response` is a θ site: $(n_{\rm coef},)$ shared or
 $(J, n_{\rm coef})$ per-epoch, $r = 1 + \sum_m c_m T_m(x)$ on each group's native
@@ -1244,7 +1247,7 @@ $$
 T(\delta_{ij} + \Delta_i)\, d_i \;=\; T(\delta_{ij})\, \big[T(\Delta_i)\, d_i\big].
 $$
 
-This is $\gamma$ (§5.3, D14) once per star rather than once in total. The equality is
+This is $\gamma$ (§5.3) once per star rather than once in total. The equality is
 exact for whole-pixel $\Delta_i$; for fractional ones the linear-interpolation shift
 operator blurs slightly as well as translating, so the likelihood is left with a weak
 preference that is a property of the *operator*, not of the data. Measured: a one-pixel
@@ -1275,7 +1278,8 @@ and must be measured afterwards from the disentangled spectra exactly as §5.3 p
 
 **Uncertainties need the same projection.** Each zero point is an exactly flat likelihood
 direction, so its posterior width is the prior width and every epoch's marginal variance
-inherits it: on the D42 fixture the raw Laplace diagonal returns $120/\sqrt{10} = 37.95$
+inherits it: on the velocity-table fixture the raw Laplace diagonal returns
+$120/\sqrt{10} = 37.95$
 km/s on every entry, against a per-epoch error of 0.059 km/s. Projecting each
 component's mean out of the covariance leaves exactly $n_{\rm stellar}$ null directions
 and gives the identified errors. Posterior samples of the `velocity_rel` deterministic
@@ -1302,35 +1306,32 @@ are the signature of a wrong period, an unseen third body, or line-profile varia
 | rebin conserves flux | $\sum \Delta\lambda_{\rm out} f_{\rm out} = \sum \Delta\lambda_{\rm in} f_{\rm in}$ on covered ranges |
 | marginal likelihood correct | brute-force dense Gaussian marginalization on tiny problems, rtol $10^{-10}$ |
 | conditional spectra + covariance correct | closed-loop recovery on simulated data; whitened residual $z$-scores $\sim \mathcal{N}(0,1)$ |
-| posterior calibration | SBC / coverage on injections (M3; `scripts/m3_coverage.py`, results in benchmarks.md) |
+| posterior calibration | SBC / coverage on injections (`scripts/m3_coverage.py`, results in benchmarks.md) |
 | degeneracy analysis (§5.1) | measured posterior variance of difference modes vs. $\lambda_-(k)^{-1}$ prediction |
 | θ-path equals fixed-parameter path (§7.1) | jitted `MarginalOrbitModel.log_likelihood` vs. `build_problem` + `marginal_loglikelihood`, rtol $10^{-12}$ |
 | θ-gradients correct through probing + Cholesky | `jax.grad` vs. central finite differences per site, rtol $10^{-4}$ |
 | bandwidth guard (§7.1) | out-of-budget orbit ⇒ non-finite model log-density; in-budget ⇒ finite |
 | velocity conventions match the simulator | `orbit_velocities(θ)` ≡ `OrbitParams.component_velocities` |
 | ML-II sanity (§7.3) | MAP over (θ, log τ, log η) recovers K's and sane hyperscales |
-| **M3 gate**: $K_1, K_2$ to <1% with valid posteriors | closed-loop NUTS: posterior means within 1%, truth in central 95%, zero divergences |
+| **Joint-inference gate**: $K_1, K_2$ to <1% with valid posteriors | closed-loop NUTS: posterior means within 1%, truth in central 95%, zero divergences |
 | light/LSF θ-paths equal fresh builds (§7.5) | `with_light_fractions` / `with_lsf` vs. `build_problem` at matched kernel radius, rtol $10^{-12}$; FD gradients through both sites |
-| response θ-path equals fresh builds (§7.5, D33) | `with_response` vs. `build_problem(response_coeffs=...)`: `r` bitwise, marginal rtol $10^{-12}$; FD gradients; replace-not-compound; masked pixels inert |
-| **D33 gate**: per-epoch response closed loop | difference-mode coefficients to $5\times10^{-3}$ against injected $3\times10^{-2}$; K's <1%; common mode prior-pinned (asserted at prior scale, not at truth) |
-| AR(1) chain closed forms exact (§1.4a, D34) | marginal vs. dense brute force under the correlated covariance — chain correlation built independently and LAPACK-inverted — with masked gaps ($\rho = \phi^{g}$) and jitter composed, rtol $10^{-10}$; FD gradients, including at $\phi = 0$ (the `pow` nan-grad trap); $\phi = 0$ ≡ diagonal model |
-| **D34 gate**: correlated closed loop | injected $\phi = 0.45$ and ivar scale error $\alpha = 1.5$ recovered ($\pm 0.05$, $\pm 5\%$) jointly with K's <1%; chain whitener removes the lag-1 autocorrelation the diagonal whitener exposes ($\approx\phi$ vs $\approx 0$), while both report unit *scale* |
-| correlated band assembly (§4.5a, D35) | band $=$ probe on the gapped+jittered fixture (loglike rtol $10^{-12}$, `validate` operator check); $\partial/\partial\phi$ band $=$ probe to $10^{-9}$; `epoch_chunk` batching invariant (the AR weight tuple pads and slices together); the D34 dense gold test runs the band path |
+| response θ-path equals fresh builds (§7.5) | `with_response` vs. `build_problem(response_coeffs=...)`: `r` bitwise, marginal rtol $10^{-12}$; FD gradients; replace-not-compound; masked pixels inert |
+| **Response gate**: per-epoch response closed loop | difference-mode coefficients to $5\times10^{-3}$ against injected $3\times10^{-2}$; K's <1%; common mode prior-pinned (asserted at prior scale, not at truth) |
+| AR(1) chain closed forms exact (§1.4a) | marginal vs. dense brute force under the correlated covariance — chain correlation built independently and LAPACK-inverted — with masked gaps ($\rho = \phi^{g}$) and jitter composed, rtol $10^{-10}$; FD gradients, including at $\phi = 0$ (the `pow` nan-grad trap); $\phi = 0$ ≡ diagonal model |
+| **Correlated-noise gate**: correlated closed loop | injected $\phi = 0.45$ and ivar scale error $\alpha = 1.5$ recovered ($\pm 0.05$, $\pm 5\%$) jointly with K's <1%; chain whitener removes the lag-1 autocorrelation the diagonal whitener exposes ($\approx\phi$ vs $\approx 0$), while both report unit *scale* |
+| correlated band assembly (§4.5a) | band $=$ probe on the gapped+jittered fixture (loglike rtol $10^{-12}$, `validate` operator check); $\partial/\partial\phi$ band $=$ probe to $10^{-9}$; `epoch_chunk` batching invariant (the AR weight tuple pads and slices together); the dense gold test runs the band path |
 | SB3 velocity law (§7.5) | `orbit_velocities` with outer sites ≡ hand-composed nested Keplerians, atol $10^{-12}$ |
 | LSF bound + outer-disk guards | width above build bound / outer $e > e_{\max}$ ⇒ non-finite model log-density |
 | telluric constant exchange (§5.4) | closed loop: the two $k=0$ offsets cancel in the light-weighted sum to $<5\times10^{-3}$ |
-| **M4 gate**: closed loop per realism feature | telluric joint MAP; SB3 MAP (inner and outer $K$'s <2%); per-epoch light inferred (ℓ rms <0.01, components individually recovered); LSF width vs. reference instrument <3%; $K_2$ scan (peak at truth, negative $D$ under null) |
+| **Realism gate**: closed loop per realism feature | telluric joint MAP; SB3 MAP (inner and outer $K$'s <2%); per-epoch light inferred (ℓ rms <0.01, components individually recovered); LSF width vs. reference instrument <3%; $K_2$ scan (peak at truth, negative $D$ under null) |
 | TODCOR identities (§10.2) | free-amplitude surface $=$ Zucker & Mazeh's symmetric $R^2$, fixed-ratio/free-scale surface $=$ their $R^2(s_1, s_2; \alpha)$, held-fraction surface $=$ the pinned least squares, each to $10^{-10}$ against a NumPy transcription on a uniform-weight grid epoch |
-| **D56 gate**: velocities and calibrated errors (§10.1, §10.4) | simulated SB2 through LSF, rebin, cosmics, gaps and barycentric motion: every velocity within $5\sigma$, rms $<0.1$ km/s, pull rms in $[0.6, 1.6]$; both frames agree; mixed instruments; one and three components; free and global light fractions recover the injected ones; profiled $=$ ivar errors $\times\sqrt{\chi^2_\nu}$ |
+| **Velocity gate**: velocities and calibrated errors (§10.1, §10.4) | simulated SB2 through LSF, rebin, cosmics, gaps and barycentric motion: every velocity within $5\sigma$, rms $<0.1$ km/s, pull rms in $[0.6, 1.6]$; both frames agree; mixed instruments; one and three components; free and global light fractions recover the injected ones; profiled $=$ ivar errors $\times\sqrt{\chi^2_\nu}$ |
 | zero points and flags (§10.4, §10.5) | a template offset composes relativistically to $10^{-9}$; an unknown offset is reported as differential; twin stars at one velocity are flagged blended and at 120 km/s are not; a minimum at the range edge is flagged; a continuum offset is absorbed by the nuisance and biases the light without it |
 | orbit from the table (§10.6) | injected $P, e, \omega, K_1, K_2, \gamma$ recovered from a noisy table within $3\sigma$; `predict` $\equiv$ `orbit_velocities(to_theta())` $+ \gamma$; per-component $\gamma$ recovers offset zero points while a forced shared one corrupts $K$; the periodogram finds $P$ to 1% |
 
-Sections 1–2 and the operator rows are implemented and tested in M0; §3–4 landed in M2;
-§7.1–7.4 landed in M3 (with §5 diagnostics); §6 and §7.5 landed in M4, except the §7.5
-response swap, which landed post-M5 (D33), as did the §1.4a correlated-noise chain
-(D34) and its §4.5a band assembly (D35). §9 landed with D52–D55, §10 with D56–D57.
+Every section above is implemented and covered by the tests in this table.
 
-## 9. Stellar labels from disentangled components (D52–D55)
+## 9. Stellar labels from disentangled components
 
 Everything above returns component *spectra*. This section is the forward model that turns one
 of those into four labels ($T_{\mathrm{eff}}$, $\log g$, [M/H], $v\sin i$) against a
@@ -1413,7 +1414,7 @@ intrinsic spectrum: §1.3 applies the LSF *inside* the epoch model, so $\hat d$ 
 partial deconvolution, faithful where the data had signal and shrunk toward zero where the
 smoothness prior dominated. That argues for convolving *both sides once* with the declared $B$
 and comparing in the space the data constrained, and `compare="matched"` did that, as the
-default, until AI Phe was fitted (D55).
+default, until AI Phe was fitted.
 
 The argument is right about the deconvolution and wrong about what it costs. Convolving the
 residuals correlates them over the kernel width, while the likelihood of §9.1 stays diagonal.
@@ -1453,7 +1454,7 @@ linear reproduction in the edge cells, and on a grid with a few values per axis 
 worse than plain multilinear over a third of the range (measured).
 
 Whether a learned emulator is worth building is therefore an empirical question about a
-particular grid, and `crossval_library` provides the measurement, as in D49 and D50.
+particular grid, and `crossval_library` provides the measurement, as in benchmarks.md.
 
 ### 9.4 Degeneracies, extending the §5.4 ledger
 
@@ -1509,7 +1510,7 @@ $-20$ km/s for hot stars before mitigation (Blomme et al. 2023). That is the sam
 one-zero-point-per-component quantity §5.3 and §7.6 already track. This mode therefore fixes
 zero points, flux ratios and gross template mismatch; it does not improve RV precision.
 
-## 10. Epoch velocities by N-dimensional correlation (D56–D57)
+## 10. Epoch velocities by N-dimensional correlation
 
 Everything above infers the orbit from the composite spectra and never measures a per-epoch
 velocity. This section describes the complementary measurement: given the component spectra
@@ -1585,7 +1586,8 @@ three- and four-component extensions (Zucker et al. 1995; Torres et al. 2007) ar
 block solve with a larger $G$; nothing in the formulation is specific to
 $N = 2$. What the least-squares form adds is that masks, chip gaps, cosmic rays, per-pixel
 weights, mixed instruments and mixed samplings enter through $\mathbf{W}$ and $\mathbf{R}_j$
-and change no formula, following the same D4 convention as the rest of the package, and that
+and change no formula, following the same weighting convention as the rest of the package,
+and that
 the templates can be intrinsic spectra with each instrument's LSF applied in quadrature above
 the resolution they already carry.
 
@@ -1600,7 +1602,7 @@ splitting the dataset by order, covers that case.
 ### 10.3 Fractional shifts are exact, and the pixel-locking bound
 
 The shift operator is linear in the template and, for a fractional shift $n + f$,
-$\mathbf{T}(n + f)\, t = (1 - f)\,\mathbf{T}(n)\, t + f\,\mathbf{T}(n + 1)\, t$ (§1.1, D3). Every inner
+$\mathbf{T}(n + f)\, t = (1 - f)\,\mathbf{T}(n)\, t + f\,\mathbf{T}(n + 1)\, t$ (§1.1). Every inner
 product above is therefore **bilinear in the fractional parts**, and $\chi^2(\mathbf{s})$ with
 held amplitudes is an exact quadratic in $f \in [0, 1]^N$ inside each unit cell of the
 integer grid, reconstructed from $3^N$ exact evaluations and minimized in closed form, with
@@ -1615,7 +1617,7 @@ chi-square whose pull on the minimum is of order $2\pi / (64\sigma_{\rm px}^2) \
 0.1/\sigma_{\rm px}^2$ pixels. That is an estimate rather than a bound: measured on noiseless
 data simulated at
 four times the template resolution, the largest error is 0.03 px at one pixel per sigma, 0.015
-at two, 0.006 at five and 0.002 at ten (benchmarks.md, D56). Three pixels per LSF sigma puts it
+at two, 0.006 at five and 0.002 at ten (benchmarks.md). Three pixels per LSF sigma puts it
 below a hundredth of a pixel; `Fit.templates()` upsamples the components to that, and `todcor`
 warns below two.
 

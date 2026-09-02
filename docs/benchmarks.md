@@ -4,11 +4,11 @@ Running record of correctness and performance results at each milestone. Numbers
 from the referenced tests, which reproduce them deterministically (fixed seeds); no
 claim here is asserted without a test.
 
-## M2 — fixed-orbit linear solver (2026-08-11)
+## The fixed-orbit linear solver (2026-08-11)
 
 Machine: Windows 11 laptop, CPU only, float64, un-jitted (JAX 0.11). Performance work
-is deferred to M3/M5 (jit, custom band assembly, GPU batching); M2 is a correctness
-milestone.
+is deferred to the later stages (jit, custom band assembly, GPU batching); this one is a
+correctness milestone.
 
 ### Exactness
 
@@ -20,7 +20,7 @@ milestone.
 | comb-probe assembly reproduces the matrix-free operator | exact (validated per run) | `test_probe_assembly_is_exact`, `validate=True` |
 | garbage values at masked pixels change nothing | rtol 1e-12 | `test_masked_pixel_values_do_not_affect_anything` |
 
-### Closed-loop recovery (the M2 acceptance gate)
+### Closed-loop recovery (the acceptance gate)
 
 Simulated SB2: SNR 100, 30 epochs (4 in partial eclipse), K = (45, 70) km/s, e = 0.2,
 Gaussian LSF 4 km/s, model grid dv = 2.5 km/s (n = 2114 px), 5% chip gaps + cosmics,
@@ -35,7 +35,7 @@ truth solved with true nonlinear parameters (`test_closed_loop_recovery_snr100_3
 Wall time for one full marginal-likelihood evaluation (assembly + factorization +
 solve + logdet) at this scale: **1.6 s** (CPU, un-jitted, probe assembly = 141
 operator applications). The design-target scale (2×10⁵ px, 50 epochs) on GPU is the
-M5 gate.
+scale gate below.
 
 ### Nullspace / degeneracy analysis (empirical)
 
@@ -57,11 +57,11 @@ Two lessons from the closed loop, both now covered by tests and documentation:
 2. **Sub-LSF scales are unrecoverable.** With a weak smoothness prior the posterior
    std is dominated by a flat ~5–7% contribution from deconvolution modes below the
    instrument resolution. The prior curvature scale must encode the true spectral
-   smoothness (here set by hand; ML-II optimization of the marginal likelihood is the
-   M3 mechanism). This contribution appears as reported variance rather than as
+   smoothness (here set by hand; ML-II optimization of the marginal likelihood arrives
+   with joint inference, below). This contribution appears as reported variance rather than as
    unreported error.
 
-## M3 — joint NUTS inference (2026-08-11)
+## Joint NUTS inference (2026-08-11)
 
 Machine: same Windows 11 laptop, CPU only, float64, now **jit-compiled** through the
 whole θ → velocities → shifts → probed marginal likelihood path (math.md §7.1), with
@@ -71,15 +71,15 @@ reverse-mode gradients through the comb probing and the scan-based block Cholesk
 
 | Check | Result | Test |
 |---|---|---|
-| jitted `MarginalOrbitModel.log_likelihood(θ)` vs. the M2 `build_problem` route (different but sufficient bandwidths) | rtol 1e-12 | `test_model_loglike_matches_m2_path` |
+| jitted `MarginalOrbitModel.log_likelihood(θ)` vs. the fixed-orbit `build_problem` route (different but sufficient bandwidths) | rtol 1e-12 | `test_model_loglike_matches_m2_path` |
 | `orbit_velocities(θ)` vs. the simulator's Kepler conventions | atol 1e-10 | `test_orbit_velocities_match_simulator` |
 | ∂ log p/∂θ (K, t_conj, √e cos ω, log τ) vs. central finite differences | rtol 1e-4 (measured ~1e-7) | `test_gradient_matches_finite_differences` |
 | bandwidth guard: epoch-realized shift excess ⇒ non-finite log-density | pass | `test_bandwidth_guard_rejects_out_of_bound_orbits` |
 
 Jitted timings at n = 1191 px × 2 components, 14 epochs, half-bandwidth bound 45
 (probe stride 187): marginal evaluation **53 ms**, value+gradient **222 ms** (vs. 1.6
-s un-jitted at the larger M2 config; jit alone gains about an order of magnitude on
-CPU, and GPU batching remains M5).
+s un-jitted at the larger fixed-orbit config; jit alone gains about an order of magnitude
+on CPU, and GPU batching is still to come).
 
 ### The MAP → Laplace → NUTS pipeline (the load-bearing engineering result)
 
@@ -99,7 +99,7 @@ each), because the posterior scales span ~5 orders of magnitude (σ_P ~ 9×10⁻
 
 Total: ~3 min for a converged orbital posterior on a laptop CPU.
 
-### Closed-loop NUTS gate (the M3 acceptance gate)
+### Closed-loop NUTS gate (the acceptance gate)
 
 Simulated SB2: SNR 130, 12 epochs, K = (30, 22) km/s, e = 0.2, ω = 0.7, LSF 7 km/s,
 grid dv = 5.5 km/s (n = 490 px), topocentric frame with |v_bary| ≤ 25 km/s, gaps +
@@ -118,7 +118,7 @@ cosmics; priors: photometric-quality Normal on P and T_conj, Uniform(−1, 1)² 
 
 0 divergences; truth inside the central 95% interval for every parameter. ML-II
 selected τ ≈ (330, 390) and η ≈ (0.5, 2.4), a weaker continuum anchor than the
-hand-tuned M2 value. This is the expected outcome: without eclipse epochs the k = 0
+hand-tuned fixed-orbit value. This is the expected outcome: without eclipse epochs the k = 0
 anchor is prior-dominated (see below).
 
 ### Posterior spectra under θ uncertainty
@@ -127,7 +127,7 @@ anchor is prior-dominated (see below).
 gate configuration (constant light fractions, with no eclipse breaker) the
 light-weighted observable combination ℓ₁d₁ + ℓ₂d₂ is recovered to < 2% RMS in line
 cores, while individual components carry the expected k = 0 unobservable-direction
-scatter (M2 lesson 1, larger here because ML-II does not impose a tight continuum
+scatter (the fixed-orbit stage's first lesson, larger here because ML-II does not impose a tight continuum
 anchor that the data do not constrain). The test asserts this split
 (`test_posterior_spectra_from_samples`).
 
@@ -167,7 +167,7 @@ per transition, max 36. The strict MAP `converged` flag (grad-norm < 10⁻²) fi
 only 5/24; the tolerance is conservative, and MAP point quality (K's to <1% typical)
 is unaffected.
 
-## M4 — realism: tellurics, SB3, per-epoch light, LSF widths, K₂ scan (2026-08-11)
+## Realism: tellurics, SB3, per-epoch light, LSF widths, K₂ scan (2026-08-11)
 
 Machine: same Windows 11 laptop, CPU only, float64, jitted θ-path throughout. Every
 number below is asserted (usually with margin) by a deterministic closed-loop test.
@@ -183,9 +183,9 @@ number below is asserted (usually with margin) by a deterministic closed-loop te
 | ∂ log p / ∂(light, lsf_sigma) vs. finite differences | rtol 1e-4 | `test_gradients_light_lsf_match_finite_differences` |
 | LSF-bound / outer-disk guards reject | non-finite log-density | `test_guards_reject_wide_lsf_and_outer_disk` |
 
-### Closed loops (the M4 acceptance gate — one per feature)
+### Closed loops (the acceptance gate — one per feature)
 
-All at the gate scale of M3 (n = 490 px, 10–14 epochs, SNR 110–150, topocentric,
+All at the joint-NUTS gate scale (n = 490 px, 10–14 epochs, SNR 110–150, topocentric,
 gaps + cosmics), MAP/ML-II point recovery:
 
 | Feature | Recovery | Wall time |
@@ -196,7 +196,7 @@ gaps + cosmics), MAP/ML-II point recovery:
 | **LSF widths** (2 instruments, reference pinned) | σ_B −0.67% (asserted <3%); K's <0.2% | 36 s |
 | **K₂ scan** (ℓ₂ = 0.1 companion, 15-point grid) | peak exactly at injected K₂ = 38; contrast > 4000 in D over the scan edges; companion line pattern corr 0.977, offset-removed RMS 0.05 | ~3 s/scan |
 
-The per-epoch-light row completes the M2 result: the k = 0 additive indeterminacy that
+The per-epoch-light row completes the fixed-orbit result: the k = 0 additive indeterminacy that
 capped constant-light component recovery at the ~0.1 level is broken by eclipse epochs
 whose light fractions are inferred rather than supplied. Component spectra are
 recovered individually at the 0.01 level with ℓ(t) recovered to 0.003.
@@ -206,8 +206,8 @@ recovered individually at the 0.01 level with ℓ(t) recovered to 0.003.
 1. **Absolute LSF widths are unidentifiable in a template-free model.** ML-II with
    both instruments free inflates σ by +35% / +13% (trading against intrinsic line
    widths; K's unaffected at <0.2%). With one reference instrument pinned, the other
-   width recovers to <1%. Policy recorded as D25; the same declared-anchor convention
-   as the light ratio (D13).
+   width recovers to <1%. The policy is therefore to pin one instrument, the same
+   declared-anchor convention as the light ratio.
 2. **The K₂-scan null is negative.** On a companion-free dataset, D(K₂) ∈ [−544, −465]
    over the whole grid: the marginal likelihood's Occam term penalizes the extra
    marginalized component and no coherent signal offsets the penalty. Detection
@@ -226,9 +226,9 @@ recovered individually at the 0.01 level with ℓ(t) recovered to 0.003.
    against the raw truth at any SNR or epoch count); this is a simulator-configuration
    lesson, not a solver limitation.
 
-## M5 — scale, benchmarks, release readiness (2026-08-11)
+## Scale, benchmarks, release readiness (2026-08-11)
 
-Machine: same Windows 11 laptop (32 GB RAM), CPU, float64. The M5 scale gate ("2×10⁵
+Machine: same Windows 11 laptop (32 GB RAM), CPU, float64. The scale gate ("2×10⁵
 px / 50 epochs samples in minutes on one GPU") was projected from these CPU
 measurements. It has since been run on a real GPU (below, 2026-08-14): the CUDA path
 works and scales as predicted, but the gate does not close on the consumer card
@@ -236,7 +236,7 @@ available here, for two measured reasons: 16 GB of device memory against a gradi
 that needs 18.24 GB, and fp64 at 1/50 of fp32. The gate stays open, with a specific
 hardware requirement rather than an open-ended one.
 
-### Three scale pathologies, found and fixed (D27)
+### Three scale pathologies, found and fixed
 
 The first attempt to evaluate the marginal likelihood at survey scale
 (n = 31,750 px × 2 components, 50 epochs, half-bandwidth 513) failed with an
@@ -266,7 +266,7 @@ by the exactness suite (identical log-likelihoods to 12 digits before/after):
 
 One trade was made and corrected the same day: unconditional remat + serialized small
 batches cost up to 2× NUTS wall time at small scale (tutorial run 72 → 141 s; gate
-test 156 s vs ~102 s M3 baseline; bit-identical posteriors, caught by the tutorial
+test 156 s vs ~102 s at the joint-NUTS baseline; bit-identical posteriors, caught by the tutorial
 smoke runs). The mechanism: XLA's parallel execution of independent unrolled probe
 batches, the same behaviour that overlapped 80 GB of live buffers at scale, is a
 multi-core speedup at small scale. Batch size and remat are now size-adaptive on the
@@ -295,7 +295,7 @@ this scale is deferred to the GPU (below).
 ### GPU projection (stated as projection, not measurement)
 
 At the design target a NUTS run needs ~2,600 gradient evaluations (150+250 transitions
-× 6.5 mean leapfrogs, the measured M3/M4 pipeline numbers). On this CPU that is 2600 ×
+× 6.5 mean leapfrogs, the pipeline numbers measured above). On this CPU that is 2600 ×
 12.2 min ≈ three weeks, which is out of reach and is the reason the design brief
 targets GPU. The dominant costs (batched probe matvecs; 800-step scanned Cholesky of
 513² blocks) are dense, batched, and fp64; on a single A100-class device the same
@@ -328,7 +328,7 @@ properties of the hardware.
 
 *Memory.* The run fails at 31,734 model px (one sixth of the design target) on a
 single 7.42 GiB request, with 13.8 GiB free and preallocation disabled. This is
-consistent with the D29 table below, which measured the gradient needing **18.24 GB**
+consistent with the memory-pass table below, which measured the gradient needing **18.24 GB**
 at the design target, more than any 16 GB card has. The GPU requests ~2.5× the CPU
 peak at the same size in one contiguous buffer, so the CPU figures are a floor for GPU
 sizing, not an estimate of it.
@@ -500,9 +500,9 @@ On speed, albireo loses to both. Shift-and-add is 10× faster than albireo's ste
 two-component separation that is the expected ordering, and a Bayesian marginal method is
 not faster than seven sweeps of arithmetic.
 
-Since re-run (D50). The speed statement above describes this table's machine and its
-measurement convention rather than the codes. The "D50 re-run" section at the end of this
-file re-ran all three on a 16-core desktop under one protocol. Every accuracy value below
+Since re-run. The speed statement above describes this table's machine and its
+measurement convention rather than the codes. The re-run section at the end of this
+file took all three on a 16-core desktop under one protocol. Every accuracy value below
 reproduced exactly; the shift-and-add wall was contaminated by the harness's own in-process
 timing (on both machines), fd3 was inflated by its BLAS spinning 32 threads, and the ranking
 there is shift-and-add 0.026 s, albireo 0.059 s, fd3 0.064 s pinned.
@@ -611,8 +611,8 @@ window that was 33% detector gap disentangled to component spectra with negative
 the wavelength range, and `to_epoch` calls it before the spike clip, since a flat run has no
 local scatter for a running median to catch. The rule is about runs: `RawSpectrum.bad_pixels`
 does not treat a single zero flux value as missing, because one zero can be a saturated core
-or a clipped cosmic ray, whereas eight in a row cannot. This is the same shape as D45's
-zero-error-means-infinite-precision, one level up, and follows the same rule: the reader may
+or a clipped cosmic ray, whereas eight in a row cannot. This is the same shape as the
+reader's zero-error-means-infinite-precision rule, one level up, and follows the same rule: the reader may
 decline to answer, but it may not guess.
 
 ### A correction to why this system was chosen
@@ -649,10 +649,10 @@ f = 0.439 ± 0.013 from GRAVITY to score the posterior against) with
 **AI Phoenicis** as the precision backup (60 public epochs; K's known to 0.02%).
 Data download awaits maintainer approval.
 
-## M5 speedup pass — direct band assembly + closed-form gradient (2026-08-11, D28)
+## Speedup pass: direct band assembly and a closed-form gradient (2026-08-11)
 
 Same machine, same ladder configuration, same seeds; log-likelihoods agree with
-the M5 record to machine precision (several rows bit-identical, the rest at
+the scale-stage record to machine precision (several rows bit-identical, the rest at
 ~1e-15 relative, since the assembly changes only the floating-point summation
 order).
 
@@ -699,11 +699,12 @@ than the factorization, was the scale problem.
 design-target marginal evaluation, that is disentangled spectra at a fixed
 orbit, is now ~26 s on a laptop CPU (was 2.5 min), and a gradient under 2 min
 (was 12 min). The gate-scale NUTS test follows: ~65 s wall (Laplace + warmup +
-250 samples) against ~102 s at the M3 baseline and 112 s in the M5 record, so
+250 samples) against ~102 s at the joint-NUTS baseline and 112 s in the scale-stage
+record, so
 the small-problem regression that the probe-era size-adaptive policy existed to
 prevent no longer occurs, and the policy is no longer needed. The design-target
 gradient's working set exceeded this machine's 32 GB (measured 34.0 GB; see the
-D29 pass below, which brought it to 18.2 GB and the top row to 22.2 s /
+memory pass below, which brought it to 18.2 GB and the top row to 22.2 s /
 87.4 s), which is the source of the ratio erosion at the top row. At realistic
 single-star bandwidths (HR 6819-like: p ≈ 160 rather than the ladder's
 conservative 513) the same operations take seconds per gradient, which puts full
@@ -718,12 +719,12 @@ its forward rule called the custom function itself, so Hessians re-entered the
 custom boundary and lost the chol-mediated terms through the dropped cotangent.
 Inlining the primal in the forward rule fixes it, after which
 `jacrev(jacrev(...))` agrees with plain autodiff to 1e-15. Second, and
-independent of all M5 work: `jax.hessian` (forward-over-reverse) produces an
+independent of all the scale work: `jax.hessian` (forward-over-reverse) produces an
 asymmetric Hessian on this stack even for the plain-autodiff path (off-diagonal
 0.566 vs 0.855 on the diagnostic problem), while reverse-over-reverse matches
 central finite differences of the gradient to 8 digits at three step sizes.
 `laplace_inverse_mass`, the only forward-mode consumer in the package, had
-therefore been symmetrizing a slightly wrong matrix since M3. It now uses
+therefore been symmetrizing a slightly wrong matrix since joint inference was added. It now uses
 reverse-over-reverse (math.md §4.5). The mass matrix is a preconditioner, so
 posteriors were never biased; warmup was tuned from a mildly wrong curvature
 estimate.
@@ -735,8 +736,8 @@ slices, and one 50-step scan with large per-step work, all GPU-native shapes;
 the probe-era `probe_chunk`/`remat` tuning is gone along with probing. The
 remaining GPU-specific bottleneck is chain latency in the sequential block
 Cholesky/Takahashi scans (~800 steps of 513² work at the design target);
-the associative-scan (parallel-prefix) factorization that removes it is on the
-ledger (D28), as are a custom-VJP band→block packing, a fully analytic
+the associative-scan (parallel-prefix) factorization that removes it is recorded as a
+remaining lever, as are a custom-VJP band→block packing, a fully analytic
 assembly VJP, and opt-in mixed precision. Projection (a projection, not a
 measurement): design-target gradient ~0.5–1.5 s on one A100-class device, a
 converged design-target posterior in tens of minutes; the earlier 1–2 h
@@ -744,9 +745,9 @@ projection stands as the conservative bound.
 
 ---
 
-## D29 memory pass — and a boundary bug it turned up (2026-08-12)
+## Memory pass, and a boundary bug it turned up (2026-08-12)
 
-The D28 speedup left the design target fast but not runnable: measuring the
+The speedup pass left the design target fast but not runnable: measuring the
 compiled executables rather than estimating them (XLA `memory_analysis()`, which
 reports buffer assignment without allocating it) put the design-target gradient
 at 34.0 GB against 32 GB of RAM.
@@ -796,7 +797,7 @@ unfused selected inverse, unbatched pre-pass).
 Wall clock, same laptop, same seeds. The pass was aimed at memory, but at the
 design target it reduced time as well:
 
-| n (model px) | eval D28 → D29 | ∇ D28 → D29 |
+| n (model px) | eval, before → after | ∇, before → after |
 |---|---|---|
 | 31,734 | 3.0 → **2.82 s** | 10.6 → 11.22 s |
 | 74,322 | 8.0 → **6.95 s** | 24.9 → 30.67 s |
@@ -813,7 +814,7 @@ trades back.
 ### The bug the memory work uncovered
 
 Re-deriving the band layout while looking for allocation hot spots exposed a
-correctness defect in D28's assembly. `G = Kᵀ(RᵀW′R)K` is built as a band image;
+correctness defect in the new assembly. `G = Kᵀ(RᵀW′R)K` is built as a band image;
 `H` is exactly zero outside the model grid, but the LSF convolution smears
 in-grid mass outward, writing band entries at column indices that correspond to
 grid pixels that do not exist. The T-sandwich reads those entries whenever an
@@ -877,7 +878,7 @@ storage so the band tensor never exists, are the recorded next levers. Neither
 is needed to run the design target, which now has ~13 GB of headroom on this
 machine.
 
-## HR 6819 — the first observed dataset (2026-08-12, D30)
+## HR 6819 — the first observed dataset (2026-08-12)
 
 The first observed dataset run through the stack is the 51 public FEROS exposures
 of HR 6819 (ESO 073.D-0274(A), PI Rivinius, 153 MB, anonymous), the same data
@@ -1017,10 +1018,10 @@ and the improvement it gave was not the expected one.
 
 ---
 
-## The jitter site, and what it did to HR 6819 (2026-08-12, D31)
+## The jitter site, and what it did to HR 6819 (2026-08-12)
 
-D15 allowed a per-epoch noise-inflation factor but none was implemented, so the run above
-took its estimated `ivar` at face value and reported a residual scatter of 1.4–1.7 as a
+The model allowed a per-epoch noise-inflation factor but none was implemented, so the run
+above took its estimated `ivar` at face value and reported a residual scatter of 1.4–1.7 as a
 caveat. `forward.with_jitter` and the `log_jitter` θ site supply that factor. This section
 measures what difference it makes.
 
@@ -1122,20 +1123,20 @@ within 1.4 d of that weighted centroid) and diverge on either side of it.
   0.0289 ± 0.0058, i.e. 0.8σ and 1.3σ, where the no-jitter run gave 0.2σ. Still consistent,
   but the 0.2σ was fortuitous.
 
-## The response site, and the exoneration of the continuum (2026-08-12, D33)
+## The response site, and the exoneration of the continuum (2026-08-12)
 
-D30's suspect list for the 1.4–1.7× residual excess had "per-epoch continuum residuals"
-near the top, and its closing sentence asked for "a check of whether the period offset
-survives a per-epoch continuum treatment". D33 is the treatment: the multiplicative
-response coefficients D7 fixed at build time became a θ site.
+The HR 6819 suspect list for the 1.4–1.7× residual excess had "per-epoch continuum
+residuals" near the top, and its closing sentence asked for "a check of whether the period
+offset survives a per-epoch continuum treatment". This section is that treatment: the
+multiplicative response coefficients, until now fixed at build time, become a θ site.
 
 ### The swap
 
 The response enters the targets ``z = y − r(R·1)`` and the sandwich weights ``w r²``, not
-only the forward operator, which is why D7 deferred it. The swap is exact and inexpensive
+only the forward operator, which is why the design deferred it. The swap is exact and inexpensive
 because ``R·1`` (the rebinned unit continuum, now stored per group) is
 response-independent: ``z_new = z_old + (r_old − r_new)·R·1`` rebuilds the target with no
-raw fluxes carried, re-masked so the D30 ``0·nan`` trap cannot resurface, and the
+raw fluxes carried, re-masked so the ``0·nan`` trap found on HR 6819 cannot resurface, and the
 ``Σ log w`` term is untouched because the noise lives on the data (math.md §7.5). The
 traced Clenshaw matches ``np.polynomial.chebyshev.chebval`` operation-for-operation, so
 `with_response` equals a fresh ``build_problem`` with ``r`` bitwise identical and the
@@ -1155,7 +1156,7 @@ scale; tightening that assertion would test the prior rather than the data.
 `scripts/hr6819_response_run.py`: both windows, 150 L-BFGS steps per config, response
 fits warm-started from the baseline MAP, order 2 per epoch (153 coefficients), prior
 N(0, 0.02²). Uncertainties are conditional-orbit Laplace (nuisances at MAP), computed
-identically for all four fits. They land ~2× the D30-recorded formal errors, which came by
+identically for all four fits. They land ~2× the formal errors recorded above, which came by
 a different route; the difference does not affect the comparisons below.
 
 | | A: baseline | A: response | B: baseline | B: response |
@@ -1180,30 +1181,30 @@ Three readings, in order:
   ≤ 0.0001, and the residual sd by 0.4–0.5%, so the excess scatter is not continuum-shaped.
   Window-to-window disagreement is unchanged: ΔP 2.8σ → 3.1σ,
   ΔK<sub>pre-sd</sub> 10.5σ → 10.4σ.
-* The continuum is therefore crossed off D30's suspect list by measurement. The surviving
+* The continuum is therefore crossed off the suspect list by measurement. The surviving
   suspects for the correlated residual are the pipeline's resampling (the diagonal ivar is
   optimistic by construction), the Gaussian stand-in for FEROS's real LSF, and the Be
   star's variable disc emission. The recorded next steps are a correlated-noise model and a
   wider window; the continuum treatment is complete and remains a hygiene term rather than
   a fix.
 
-One further multimodality sighting: window A's baseline here reproduces the D30 record to
-0.0002 d, but window B's uniform-procedure MAP lands at P = 40.36091, which is 0.0093 d
-below the D30-recorded 40.37022 and 6.6× the combined formal errors, with both runs
+One further multimodality sighting: window A's baseline here reproduces the earlier record
+to 0.0002 d, but window B's uniform-procedure MAP lands at P = 40.36091, which is 0.0093 d
+below the 40.37022 recorded there and 6.6× the combined formal errors, with both runs
 converged (parameters stationary to ~0.0002 d over the final 20 steps). After the jitter
 relocation (174σ) and the two-optima period scan
 (125σ apart), this is the third independent demonstration that this surface holds optima
 far outside their curvature widths, selected by the optimizer's path. Every comparison in
 the table above is therefore between fits sharing one procedure.
 
-## The AR(1) chain: whiten the residuals *and* keep the orbit (2026-08-12, D34)
+## The AR(1) chain: whiten the residuals *and* keep the orbit (2026-08-12)
 
-D31 recorded that a rescaled diagonal noise model whitened the residual scale and
-relocated the period by 174 formal σ, and D33 crossed the continuum off the suspect list,
-leaving the pipeline's resampling correlations at the top of it. D34 models the
-correlation: an AR(1) chain per epoch, `C = α²·D^(−1/2)·R_φ·D^(−1/2)` (math.md §1.4a),
+The jitter section recorded that a rescaled diagonal noise model whitened the residual
+scale and relocated the period by 174 formal σ, and the response site crossed the continuum
+off the suspect list, leaving the pipeline's resampling correlations at the top of it. This
+section models the correlation: an AR(1) chain per epoch, `C = α²·D^(−1/2)·R_φ·D^(−1/2)` (math.md §1.4a),
 with φ shared across epochs on the θ site (a property of the resampling, not of one
-exposure) alongside the D31 per-epoch jitters.
+exposure) alongside the per-epoch jitters.
 
 ### Closed forms, and the trap they avoid
 
@@ -1224,13 +1225,14 @@ inverted with LAPACK: marginal log-likelihood to rtol 1e-10 with gaps and jitter
 differences including exactly at φ = 0 (`jnp.power`'s nan-gradient at a zero base; the
 gap-1 links use φ directly).
 
-Two structural costs are declared in advance. The D28 band assembly assumes diagonal
+Two structural costs are declared in advance. The direct band assembly assumes diagonal
 weights, so a correlated problem selects the probe path: 2p + 1 = 347 operator applications
-per evaluation with plain reverse-mode gradients, ~15× the D33 per-step cost as measured
+per evaluation with plain reverse-mode gradients, ~15× the response-site per-step cost as
+measured
 below (the tridiagonal band-sandwich extension is a recorded lever, to be built only if
 AR(1) earns a permanent place). The chain also couples pixels across masked gaps, so the
-solver bandwidth grows by a statically reserved `ar_bandwidth_extra` (D21's
-declared-bandwidth convention; 5 and 6 model pixels on the HR 6819 windows), behind an
+solver bandwidth grows by a statically reserved `ar_bandwidth_extra` (the same
+declared-bandwidth convention as elsewhere; 5 and 6 model pixels on the HR 6819 windows), behind an
 explicit `MarginalOrbitModel(ar1=True)`.
 
 ### Closed loop: φ and α jointly, neither poisons the orbit
@@ -1247,18 +1249,19 @@ correlation and supplied `ivar` overstated by α² = 1.5²:
 | same residuals, diagonal whitener: lag-1 | φ ≈ 0.45 | **+0.395** |
 
 The 0.944 is not a miscalibration: residuals about the fitted spectra read low by
-`√(1 − p_eff/N)` (math.md §3.2a, the D31 dof effect; p_eff/N ≈ 0.11 at gate scale), and the
+`√(1 − p_eff/N)` (math.md §3.2a, the dof effect of the jitter section; p_eff/N ≈ 0.11 at gate scale), and the
 marginal's own α̂ is dof-corrected. The last two rows show the discriminator working on
 identical residual vectors: the diagonal whitener sees the injected correlation, the chain
 removes it.
 
 ### HR 6819: the noise model closes, the orbit stays
 
-Same uniform procedure as D33 (conjunction scan, literature init, 150 L-BFGS steps),
+Same uniform procedure as the response-site fits (conjunction scan, literature init,
+150 L-BFGS steps),
 θ = orbit + hypers + 51 per-epoch jitters + shared φ; ~53–56 s/step on the probe path
-(8,369 / 7,948 s per window) against ~3.6–4.2 s/step for the D33 fits.
+(8,369 / 7,948 s per window) against ~3.6–4.2 s/step for those fits.
 
-| | A: D33 baseline | A: D31 jitter | A: AR(1) | B: D33 baseline | B: D31 jitter | B: AR(1) |
+| | A: baseline | A: jitter | A: AR(1) | B: baseline | B: jitter | B: AR(1) |
 |---|---|---|---|---|---|---|
 | period [d] | 40.36566 | 40.44429 | **40.37115** | 40.36091 | 40.42979 | **40.36956** |
 | K<sub>pre-sd</sub> [km/s] | 63.308 | 63.074 | **63.242** | 63.575 | 63.400 | **63.518** |
@@ -1276,23 +1279,23 @@ e 0.0289 ± 0.0058.)
 Five readings, in the order they matter:
 
 * The noise model closes. Both windows whiten in both moments (sd 0.997 with lag-1 +0.041
-  and +0.012), the first fits in this campaign to do so (D31 fixed the scale and left the
-  structure; D33 fixed neither). The self-consistency check: the same residuals read
+  and +0.012), the first fits in this campaign to do so (the jitter fixed the scale and
+  left the structure; the response site fixed neither). The self-consistency check: the same residuals read
   through the diagonal whitener show lag-1 +0.797 and +0.688, which is φ̂ (+0.801, +0.694)
-  to two decimals. In ML-II terms, window A's chain model sits ~1.7×10⁵ nats above the D31
-  diagonal-jitter model (1,691,463 vs the 1,518,265 recorded at D31's own MAP): the
+  to two decimals. In ML-II terms, window A's chain model sits ~1.7×10⁵ nats above the
+  diagonal-jitter model (1,691,463 vs the 1,518,265 recorded at that model's own MAP): the
   correlation term is not a refinement to the noise model, it accounts for most of the
   miscalibration.
-* The D31 relocation does not recur, and α indicates why. Under the chain the per-epoch
+* The jitter relocation does not recur, and α indicates why. Under the chain the per-epoch
   jitters collapse from 1.11–3.61 to 1.55–1.93, and their medians (1.66 and 1.40)
-  reproduce the D30 residual sds (1.674, 1.403) closely. What D31's jitters were fitting
+  reproduce the earlier residual sds (1.674, 1.403) closely. What those jitters were fitting
   was correlated structure, epoch by epoch, treated as per-exposure scale, and the epochs
   where they over-fitted it were the ones whose downweighting moved the period. Modelled
   as correlation, the excess is roughly uniform across epochs, a pipeline property and
   what the resampling hypothesis predicts, and the period lands within 0.006/0.009 d of
   the diagonal baselines instead of 0.08 d away.
 * The two windows move toward each other. ΔP across the independent windows is 0.00475 d
-  at the baseline and 0.00159 d under the chain, 3.0× closer, where the D31 model widened
+  at the baseline and 0.00159 d under the chain, 3.0× closer, where the jitter model widened
   it to 0.0145 d. The K<sub>pre-sd</sub> spread is nearly unchanged (0.267 → 0.276 km/s).
   Every previous noise model made the windows agree less; this one is the first to make
   them agree more, which is the available internal evidence that the chain is closer to
@@ -1304,23 +1307,24 @@ Five readings, in the order they matter:
   not yield to a noise model.
 * The literature period offset survives its third noise model: 40.3712 and 40.3696 against
   40.3261, a difference of 0.044 d, marginally further than the baseline. It is now
-  measured not to be the continuum (D33), not the noise scale (D31), and not the pixel
-  correlation (D34). The surviving candidates are the Gaussian stand-in for FEROS's LSF,
+  measured not to be the continuum, not the noise scale, and not the pixel correlation. The surviving candidates are the Gaussian stand-in for FEROS's LSF,
   the Be disc's variability, and the published CCF analysis itself, which blends the
   components this model separates; the last of these cannot be adjudicated from here.
-  What φ̂ = 0.7–0.8 settles is the scale of D30's optimism: at these correlations a
+  What φ̂ = 0.7–0.8 settles is the scale of the first fit's optimism: at these correlations a
   diagonal model overcounts low-frequency information by (1+φ)/(1−φ) ≈ 5.5–9×, which is
   why formal errors of ±0.0005 d coexisted with window disagreements of 0.005 d.
 
-## D32 — the numpyro path stops baking the problem into the graph (2026-08-12)
+## The numpyro path stops baking the problem into the graph (2026-08-12)
 
-D27 set the contract for `MarginalOrbitModel.marginal`: the `Problem` pytree is passed to
+The scale work set the contract for `MarginalOrbitModel.marginal`: the `Problem` pytree is
+passed to
 `jax.jit` as an argument, because closure-captured arrays are embedded in the graph as
 constants, and XLA then evaluates every θ-independent subgraph over them at compile time,
-against compile-time memory (~80 GB of it at the design target when D27 first measured
-it). The numpyro path did not have that contract: the model closure from
+against compile-time memory (~80 GB of it at the design target when this was first
+measured). The numpyro path did not have that contract: the model closure from
 `MarginalOrbitModel.model()` captured `self.problem`, so `run_map`'s jitted L-BFGS step
-and the NUTS sample loop both compiled with the problem baked in. Recorded unfixed at D30
+and the NUTS sample loop both compiled with the problem baked in. Recorded unfixed on the
+first observed dataset
 and fixed here, through numpyro's own machinery for this case:
 
 * the model takes the base problem as an optional argument and advertises it via a
@@ -1358,12 +1362,12 @@ Two qualifications:
 * The memory cost is heuristic-gated. At 31.7k px XLA folded ~2 GiB of derived constants
   into the executable; at 74.3k px its own folding guards declined the largest folds, so
   the memory cost did not materialize while the compile-time cost (13×) remained. Whether
-  the D27 blow-up recurs at any given scale is a property of XLA's internal thresholds and
+  the blow-up recurs at any given scale is a property of XLA's internal thresholds and
   version, so the argument-passing contract removes the exposure rather than relying on
   the guard.
 * Folded constants are marginally faster at runtime (5.9 vs 6.2 s at row 0), which is the
   trade XLA is designed to make. At survey scale it is the wrong one: the same mechanism
-  costs tens of GB against the design target (D27), and a NUTS warmup recompiling per
+  costs tens of GB against the design target, and a NUTS warmup recompiling per
   mass-matrix window would pay the folding repeatedly.
 
 ### Regression tests (`tests/test_inference.py`)
@@ -1373,12 +1377,13 @@ Two qualifications:
   the closure build must show the leak, which confirms that the probe can see it.
 * `test_run_map_closure_and_argument_paths_agree` (float tolerance, different graphs) and
   `test_laplace_closure_and_argument_paths_agree` (exact, same eager ops).
-* The M3 NUTS acceptance gate now runs through `jit_model_args=True` as its default
+* The NUTS acceptance gate now runs through `jit_model_args=True` as its default
   path, so the gate itself regression-tests the traced sample loop.
 
-## D35 — the band assembly learns the chain (2026-08-12)
+## The band assembly learns the chain (2026-08-12)
 
-D34 ran the HR 6819 AR(1) fits on the probe path at ~15× the D33 per-step cost, with the
+The AR(1) fits above ran on the probe path at ~15× the response-site per-step cost, with
+the
 condition that the tridiagonal band-sandwich extension be built only if AR(1) earned a
 permanent place. It is the only noise model that whitens both moments and the first to
 bring the two windows closer together, so the condition is met; and the next recorded step
@@ -1387,7 +1392,7 @@ current window scale on a 32 GB machine.
 
 ### The extension
 
-The only stage of the D28 assembly that assumed diagonal noise was the innermost
+The only stage of the direct band assembly that assumed diagonal noise was the innermost
 sandwich `H = RᵀW′R`. The chain adds one symmetric cross-row term per link,
 `−c·√(wₙw_p)·rₙr_p·(RₙᵀR_p + R_pᵀRₙ)`, and re-weights the diagonal by the chain
 diagonal `1 + Σ a` (math.md §4.5a). Both enter through the machinery that already
@@ -1398,12 +1403,12 @@ traced weights carry φ, α and r; a per-epoch gap test selects each epoch's own
 against the shared tables, because masks differ by epoch. `H` widens by the group's
 static `ar_step`, which is the `ar_bandwidth_extra` the bandwidth reservation already
 declared, and everything downstream is unchanged: the LSF convolutions, the
-T-sandwich, the band accumulation, the D29 chunking, and the custom-VJP solve see
+T-sandwich, the band accumulation, the chunking, and the custom-VJP solve see
 only a slightly wider velocity-independent band image. The likelihood's auto-selection
 becomes `"band"` unconditionally; probing remains the reference implementation and
 the `validate` oracle.
 
-Exactness carries over: the D34 dense-LAPACK gold test (gaps + jitter composed) now
+Exactness carries over: the dense-LAPACK gold test (gaps + jitter composed) now
 runs the band path at the same rtol 1e-10, band = probe at rtol 1e-12 with ∂/∂φ
 agreeing to 1e-9, and the `epoch_chunk` batching is invariant. The AR weight tuple
 (diagonal, link, gap table) pads and slices together, pinned by a test because a
@@ -1415,7 +1420,7 @@ batched run that dropped link terms would fail silently.
 half-bandwidth 85, CPU, one assembly path per process (the peak-working-set counter
 is monotone). Gradients in velocities, φ and the jitter, i.e. one L-BFGS step's work:
 
-| | probe (D34) | band (D35) | ratio |
+| | probe path | band path | ratio |
 |---|---|---|---|
 | eval, steady | 5.10 s | **0.71 s** | 7.2× |
 | value+grad, steady | 58.83 s | **3.07 s** | **19.2×** |
@@ -1423,16 +1428,17 @@ is monotone). Gradients in velocities, φ and the jitter, i.e. one L-BFGS step's
 | grad peak working set | 23.69 GiB | **1.85 GiB** | **12.8×** |
 | log-likelihood, gradients | 1165077.330 | identical to all printed digits | — |
 
-The gradient gap exceeds the eval gap for the same reason as in D28: the band path's
+The gradient gap exceeds the eval gap for the same reason as in the first speedup pass:
+the band path's
 solve stage carries the closed-form custom VJP, while the probe path pays plain
-reverse mode through 2p + 1 = 347 operator applications, the pre-D28 cost profile.
+reverse mode through 2p + 1 = 347 operator applications, the pre-assembly cost profile.
 At 1.85 GiB the wider window fits where 23.7 GiB was already pressing against the
 machine.
 
 ### The proof on real data: window A, refit unchanged
 
 `scripts/hr6819_ar1_run.py --windows A`, rerun with no changes beyond the assembly:
-868 s where D34 took 8,369 (9.6× end-to-end, 5.8 vs 55.8 s/step), converging to the
+868 s where the probe path took 8,369 (9.6× end-to-end, 5.8 vs 55.8 s/step), converging to the
 same optimum: log-likelihood 1,691,463.5 to the printed digit, φ̂ +0.801,
 P 40.37113 vs 40.37115 (0.02 formal σ), α range 1.55–1.93 (median 1.66) and residual
 diagnostics (chain sd/lag-1 0.997/+0.041, diagonal lag-1 +0.797) identical.
@@ -1440,16 +1446,17 @@ K<sub>Be</sub> reads 2.420 vs 2.446, the direction both runs were still sliding
 along at step 150, i.e. the flattest axis of the surface rather than a path
 discrepancy. The wider window is no longer a budget question.
 
-## D36 — one wide window: 4120–4600 Å, Hγ masked (2026-08-12)
+## One wide window: 4120–4600 Å, Hγ masked (2026-08-12)
 
-The last lever recorded against this dataset (D30 asked for it; D33 repeated the
-request), runnable only because of D35: `scripts/hr6819_wide_run.py` joins windows A
+The last lever recorded against this dataset, asked for at the first fit and again at the
+response site, and runnable only because of the band assembly:
+`scripts/hr6819_wide_run.py` joins windows A
 and B into a single fit of 22,169 model px and ~765k good native pixels, 2.26× window
 A, including the 25 Å strip 4355–4380 that had not been in a fit before. Hγ's core
 (4325–4355 Å) is masked by `preprocess.mask_ranges`: ivar = 0 keeps the sampling
 regular, the AR(1) chain restarts across the hole (a masked gap beyond
 `ar1_max_gap`), the bandwidth is unchanged, and the broad absorption wings, which are
-static stellar features, stay in. Noise model and procedure are the D34 configuration.
+static stellar features, stay in. Noise model and procedure are the AR(1) configuration.
 200 L-BFGS steps, 2,447 s at 12.2 s/step, linear in pixels from the window A refit
 (5.8 s/step at 0.44× the size); the probe path would have cost roughly 7 hours against
 a ~50 GB gradient, which this machine does not have.
@@ -1486,17 +1493,17 @@ independent windows, three noise models, and one joint wide fit, P ∈ [40.3675,
 40.3712], internally consistent to 0.004 d, against a published 40.3261 ± 0.0013,
 with K<sub>pre-sd</sub> at 63.2–63.5, consistently 3.7–4% above the CCF value, in
 the direction deblending predicts. Whatever separates this analysis from the
-published orbit is measured not to be the continuum (D33), the noise scale (D31),
-the pixel correlation (D34), or the window choice (D36). The surviving candidates
-are the Gaussian stand-in for FEROS's real LSF (the next lever, and a v2 seam by
-design, D8: a tabulated LSF is a banded-operator swap), the Be disc's variability,
+published orbit is measured not to be the continuum, the noise scale, the pixel
+correlation, or the window choice. The surviving candidates
+are the Gaussian stand-in for FEROS's real LSF (the next lever, and a seam reserved by
+design: a tabulated LSF is a banded-operator swap), the Be disc's variability,
 and the published CCF analysis itself, which blends the components this model
 separates.
 
-## D37 — the tabulated-LSF seam opened: fitted σ(λ), and the orbit's answer (2026-08-12)
+## The tabulated-LSF seam opened: fitted σ(λ), and the orbit's answer (2026-08-12)
 
-D8 reserved the seam ("tabulated LSF is v2 — a banded matrix, no structural
-change"), and D37 opens it. The kernel slot becomes a per-pixel profile bank realized
+The design reserved this seam ("tabulated LSF is v2 — a banded matrix, no structural
+change"), and this section opens it. The kernel slot becomes a per-pixel profile bank realized
 from per-anchor kernels through static log-λ interpolation tables
 (`operators.convolve_varying`, exact adjoint pair, arbitrary asymmetric banks
 accepted); the band assembly keeps its structure with scalar taps replaced by
@@ -1517,14 +1524,13 @@ data-identified, through the epoch-dependent shifts. Fitted anchor widths are
 therefore diagnostics rather than measurements, and the readout is the orbit's
 response rather than σ̂(λ) itself.
 
-HR 6819 (`scripts/hr6819_lsf_run.py`): the D36 configuration (wide window
-4120–4600 Å, Hγ core masked, per-epoch jitters + shared AR(1) φ) plus 13
-Gaussian width anchors every 40 Å (the FEROS order scale), bounds 1.5–3.5 km/s
-around the nominal 2.652 (radius from the bound: half-bandwidth 91 vs 87). 200
-L-BFGS steps, 5,650 s at 28.3 s/step (2.3× D36: larger radius, varying-kernel
-band stages, 13-anchor VJP).
+HR 6819 (`scripts/hr6819_lsf_run.py`): the wide-window configuration (4120–4600 Å, Hγ
+core masked, per-epoch jitters + shared AR(1) φ) plus 13 Gaussian width anchors every
+40 Å (the FEROS order scale), bounds 1.5–3.5 km/s around the nominal 2.652 (radius from
+the bound: half-bandwidth 91 vs 87). 200 L-BFGS steps, 5,650 s at 28.3 s/step (2.3× the
+wide-window fit: larger radius, varying-kernel band stages, 13-anchor VJP).
 
-| | D36 (fixed σ = 2.652) | **D37 (fitted σ(λ) ×13)** | Klement et al. 2025 |
+| | fixed σ = 2.652 | **fitted σ(λ) ×13** | Klement et al. 2025 |
 |---|---|---|---|
 | period [d] | 40.36750 | **40.36769** | 40.3261 ± 0.0013 |
 | K<sub>pre-sd</sub> [km/s] | 63.396 | **63.395** | 61.15 ± 0.88 |
@@ -1539,8 +1545,8 @@ window, close to the 3.5 bound. This is the closed-loop behaviour on real data: 
 marginal gains smoother implied spectra with broader kernels, so the absolute level
 is bound-limited and diagnostic only. K<sub>Be</sub> is omitted from the table
 because it did not converge in 200 steps here: it oscillated 1.30–4.16 across the
-last 100 steps (a band that spans the D36 value 3.48), ending at 1.30 with
-|grad| 59 where D36 ended at 3.85. The 13 near-flat width directions slow the
+last 100 steps (a band that spans the fixed-σ value 3.48), ending at 1.30 with
+|grad| 59 where that fit ended at 3.85. The 13 near-flat width directions slow the
 already-flattest axis; every tabulated quantity above was pinned over the same
 trajectory (P within ±0.001, K₁ within ±0.02, φ̂ to three digits).
 
@@ -1548,21 +1554,22 @@ The reading is +90.5 nats with nothing else moving. The fitted width profile abs
 real likelihood, so there is wavelength structure in the effective width, and the
 orbit does not respond: P +0.0002 d (0.5% of the offset, within the trajectory
 wobble), K₁ −0.001 km/s, e +0.0001, φ̂ and every residual moment unchanged. This
-repeats D33's pattern (the response site absorbed +4,100 nats and moved nothing),
+repeats the response site's pattern (it absorbed +4,100 nats and moved nothing),
 now for the LSF. The literature period offset survives its fifth configuration, and
-LSF width variation joins the exonerated list: not the continuum (D33), not the
-noise scale (D31), not the pixel correlation (D34), not the window (D36), not σ(λ)
-(D37). The surviving LSF candidate is narrowed to profile asymmetry, the first-order
+LSF width variation joins the exonerated list: not the continuum, not the
+noise scale, not the pixel correlation, not the window, not σ(λ). The surviving LSF
+candidate is narrowed to profile asymmetry, the first-order
 centroid channel, whose epoch-coupled part enters as an apparent velocity
 perturbation ∝ λc′(λ)v(t)/c (math.md §1.3), for which the operator already accepts
 arbitrary banks; only a θ-parameterization (e.g. per-anchor Gauss–Hermite h₃) would
 be new. Beyond the LSF, the candidates are disc variability and the published CCF
 blending itself.
 
-## D38 — the asymmetry lever, and the LSF exonerated in full (2026-08-13)
+## The asymmetry lever, and the LSF exonerated in full (2026-08-13)
 
-D37 left one LSF channel standing: profile asymmetry, the first-order centroid
-effect a symmetric kernel cannot produce. D38 parameterizes it with a per-anchor
+The fitted-width fit left one LSF channel standing: profile asymmetry, the first-order
+centroid effect a symmetric kernel cannot produce. This section parameterizes it with a
+per-anchor
 Gauss–Hermite h₃ (`operators.gauss_hermite_kernel_traced`, |h₃| ≤ 0.2, h₃ = 0
 bit-identical to the Gaussian machinery) behind an `lsf_h3` site, and closes it.
 
@@ -1578,12 +1585,12 @@ bounded out rather than built. The fixed-spectra data term does prefer the injec
 profile, so the injection is real and detected; band == probe == dense with h₃
 anchors under diagonal and AR(1) noise; gradients in h₃ to 1e-9. 329 tests.
 
-HR 6819 (`scripts/hr6819_h3_run.py`): the D37 configuration plus 13 free h₃
-anchors, 26 LSF parameters joint with the orbit and the D34 noise model. 300
-L-BFGS steps (|grad| 44 at the end, better converged than D37's 200-step run),
+HR 6819 (`scripts/hr6819_h3_run.py`): the fitted-σ(λ) configuration plus 13 free h₃
+anchors, 26 LSF parameters joint with the orbit and the AR(1) noise model. 300
+L-BFGS steps (|grad| 44 at the end, better converged than that 200-step run),
 10,789 s at 36.0 s/step.
 
-| | D36 (fixed LSF) | D37 (fitted σ(λ)) | **D38 (fitted σ, h₃)** | Klement et al. 2025 |
+| | fixed LSF | fitted σ(λ) | **fitted σ, h₃** | Klement et al. 2025 |
 |---|---|---|---|---|
 | period [d] | 40.36750 | 40.36769 | **40.36719** | 40.3261 ± 0.0013 |
 | K<sub>pre-sd</sub> [km/s] | 63.396 | 63.395 | **63.391** | 61.15 ± 0.88 |
@@ -1595,19 +1602,20 @@ L-BFGS steps (|grad| 44 at the end, better converged than D37's 200-step run),
 ĥ₃(λ) at the anchors: interior anchors at the |h₃| ≤ 0.02 level, the largest
 values 0.042–0.052 at three anchors including the data-starved blue edge, which
 imply centroid shifts of −0.13 to +0.31 km/s, a 0.53 km/s spread, all of them
-diagnostics by the closed-loop measurement. +26.6 nats over D37 for 13 parameters,
+diagnostics by the closed-loop measurement. +26.6 nats over the width fit for 13
+parameters,
 an order below the widths' +90.5, since asymmetry has far less to absorb once the
 spectra are free, as the absorption argument predicts. K<sub>Be</sub> again did not
-settle on its flat axis (2.73 at |grad| 44, inside the 1.3–4.2 band the D37 run
+settle on its flat axis (2.73 at |grad| 44, inside the 1.3–4.2 band the width run
 wandered); every tabulated quantity above was pinned.
 
 The reading is that the LSF is exonerated in full and the offset survives its sixth
-configuration. P moved −0.0005 d from D37, inside the fit's own trajectory wobble,
+configuration. P moved −0.0005 d from the width fit, inside its own trajectory wobble,
 and K₁, e, φ̂, α̂, and both residual moments are unchanged to the last digit. Every
 instrumental channel this model can express has now been given a θ-site and measured
-against the orbit: the continuum (D33, +4.1k nats), the noise scale (D31), the pixel
-correlation (D34, +1.7e5 nats), the window choice (D36), the LSF width (D37,
-+90.5 nats), the LSF asymmetry (D38, +26.6 nats). None moved the period. Across all
+against the orbit: the continuum (+4.1k nats), the noise scale, the pixel
+correlation (+1.7e5 nats), the window choice, the LSF width (+90.5 nats), and the LSF
+asymmetry (+26.6 nats). None moved the period. Across all
 six configurations P ∈ [40.3672, 40.3712], internally consistent to 0.004 d, against
 a published 40.3261 ± 0.0013. The surviving candidates are no longer instrumental:
 the Be disc's variability (a time-variable component this static-spectrum model
@@ -1619,7 +1627,7 @@ complete.
 
 ---
 
-## D40 — the nebular component, and per-pixel prior strengths (2026-08-13)
+## The nebular component, and per-pixel prior strengths (2026-08-13)
 
 Everything here is from `tests/test_nebular.py` and `examples/04_nebular.py`. The configuration is one SB2 in an H II region: 12 epochs,
 SNR 220, 540 model pixels over 4838-4886 A, K = (58, 41) km/s, light fractions
@@ -1699,7 +1707,8 @@ reported at *e* = 0.95, which is the eccentricity clip rather than a fit. Only
 K<sub>1</sub> survives, because 70% of the light pins it. The blind fit is also still
 wandering at 300 steps where the modelled one has settled, and takes 3.6x the wall time
 to do it. (Neither sets `MAPResult.converged`: that flag tests an absolute
-gradient-norm tolerance which, as D30 recorded, is unreachable at these pixel counts.
+gradient-norm tolerance which, as the HR 6819 fits recorded, is unreachable at these
+pixel counts.
 The three orders of magnitude between the two gradient norms is the readable
 statement.)
 
@@ -1732,10 +1741,10 @@ fit's 120 s.
 
 Nothing downstream had to change. The nebular column is one more column of A with a
 different velocity law and a free amplitude, so the band assembly, the AR(1) link tables,
-the chunking policy, the custom-VJP solve, and the D28 bandwidth contract are all
+the chunking policy, the custom-VJP solve, and the bandwidth contract are all
 unchanged; the per-pixel prior generalizes three diagonals and keeps the same O(P)
 determinant recursion. This is a property of the linear-Gaussian family, and the same
-reason Tier 3's time-variable component, of which this is the rank-one case, can be a
+reason a general time-variable component, of which this is the rank-one case, can be a
 change of basis rather than a change of method.
 
 Two degeneracies are closed by convention rather than by data, and are recorded as such
@@ -1747,7 +1756,7 @@ is not a measurement. Neither is a defect, but neither was inferred from the dat
 
 ---
 
-## D41 — calibrated faint-companion detection (2026-08-13)
+## Calibrated faint-companion detection (2026-08-13)
 
 Three pieces: vectorize the scan, marginalize K₁, and calibrate the statistic by injection
 and recovery. Everything below is from
@@ -1856,7 +1865,7 @@ at any light fraction. Both conditions are stated wherever the numbers are.
 
 ---
 
-## D42 — the free per-epoch radial-velocity table (2026-08-13)
+## The free per-epoch radial-velocity table (2026-08-13)
 
 No Keplerian: every epoch's velocity is its own parameter. From
 `tests/test_velocity_table.py`. One SB2: 10 epochs, SNR 200, 400 model pixels at
@@ -1950,19 +1959,19 @@ without one indicates whether the data support it.
 
 ---
 
-## D49 speedup pass — the assembly's reverse pass, and four dead ends (2026-08-15)
+## Second speedup pass: the assembly's reverse pass, and four dead ends (2026-08-15)
 
-Same harness as M5/D28/D29. Machine: AMD Ryzen 9 9950X3D desktop, 16 cores / 32
+Same harness as the scale and speedup ladders above. Machine: AMD Ryzen 9 9950X3D desktop, 16 cores / 32
 threads, 32 GB, Windows 11, CPU only, float64, measured at 66.8 GB/s streaming (triad)
-and 1188 GFLOP/s fp64 `dgemm` at n = 2000. The M5–D29 tables above are labelled "Windows
+and 1188 GFLOP/s fp64 `dgemm` at n = 2000. The earlier tables are labelled "Windows
 11 laptop", so absolute numbers should not be read across that boundary; every
 before/after pair below was measured back to back on this machine, and those comparisons
 are valid.
 
 ### The old attribution had expired
 
-D28 recorded that 92% of an evaluation was comb probing. Probing has not been on
-the hot path since D28 removed it, so that attribution no longer applied. Re-measured
+The first speedup pass recorded that 92% of an evaluation was comb probing. Probing has
+not been on the hot path since that pass removed it, so the attribution no longer applied. Re-measured
 at the ladder's first row (31,734 model px, SB2, 50 epochs, p = 513), jitted, stage by
 stage:
 
@@ -1988,11 +1997,11 @@ gradient is what sets wall time. Splitting it:
 | stage | value | gradient | backward only | ratio |
 |---|---|---|---|---|
 | band assembly | 1.91 | **8.27** | 6.37 | 4.34x |
-| solve stage (D28 custom VJP) | 0.98 | 1.68 | 0.70 | 1.71x |
+| solve stage (custom VJP) | 0.98 | 1.68 | 0.70 | 1.71x |
 | full marginal | 3.01 | 10.15 | 7.15 | 3.38x |
 
 82% of the gradient is assembly, and the assembly's backward cost 3.3x its own forward,
-while the solve stage, which D28's custom VJP was built for, is 16%. Splitting once more
+while the solve stage, which that custom VJP was built for, is 16%. Splitting once more
 put 5.94 s of that 6.37 s in the epoch band scan and 0.20 s in the band-to-block
 packing.
 
@@ -2044,7 +2053,7 @@ widest image in the assembly once per tap:
 why the more obvious variant lost. The two applications compose into a single
 `((2r+1) w_h, w_g)` map, so both can be one contraction; that needs a 37 MB
 neighbourhood stack per epoch, 1.9 GB across a hoisted 50-epoch pre-pass, the kind
-of vmapped intermediate D29 removed, and it measured 0.32 s against 0.36 s. Ten
+of vmapped intermediate the memory pass removed, and it measured 0.32 s against 0.36 s. Ten
 percent for 1.9 GB, so it was declined.
 
 ### What the two changes bought
@@ -2090,43 +2099,45 @@ increasing `k2` is increasing `s`, so the two ideal orders coincide, but XLA is 
 block a GEMM's accumulation as it chooses. Against a random kernel it differs from the
 loop by 0.5 ulp. The claim in the code comments is the weaker one.
 
-D28's second-order re-entry defect recurred, and D28's own regression test caught it. A
+The earlier second-order re-entry defect recurred, and its own regression test caught it. A
 `custom_vjp` whose forward rule calls the custom function itself is first-order exact but
 returns the transpose of the true Hessian, and
 `test_second_order_reverse_matches_plain_autodiff` failed on the first attempt. The fix
-is D28's: inline the primal in the forward rule.
+the same as before: inline the primal in the forward rule.
 
 ### The three-way head-to-head is now hardware-bound, and needs re-running
 
-On the fd3 benchmark's configuration (4,444 px, 20 epochs, `b_nat` = 63) D49 takes
+On the fd3 benchmark's configuration (4,444 px, 20 epochs, `b_nat` = 63) this pass takes
 albireo's steady state from 0.071 s to 0.059 s, 1.20x, in line with the ladder. That is
 the part this pass is responsible for, and the only part measured on one machine with one
 change.
 
-The published comparison no longer reads the same way, and mostly not because of D49:
+The published comparison no longer reads the same way, and mostly not because of this
+pass:
 
 | | recorded (laptop) | this machine |
 |---|---|---|
 | albireo, committed code | 0.182 s | 0.071 s |
-| albireo, with D49 | — | **0.059 s** |
+| albireo, with this pass | — | **0.059 s** |
 | fd3 (rebuilt binary, WSL, min of five) | 0.111 s | 0.099 s |
 | shift-and-add, 7 sweeps | 0.018 s | 0.049 s — **does not reproduce** |
 
 fd3 moved 12% across that hardware change; albireo moved 2.6x. fd3 is a single-threaded
-C program and albireo's XLA uses all 32 threads, so the M5 ordering is a statement about
+C program and albireo's XLA uses all 32 threads, so the recorded ordering is a statement
+about
 core count at least as much as about the two codes. On this machine albireo is ~1.7x
 faster than fd3, where the record says 1.64x slower.
 
-This is not written into the M5 three-way table, for two reasons. The shift-and-add figure
+This is not written into the three-way table above, for two reasons. The shift-and-add figure
 does not reproduce (0.049 s here against 0.018 s recorded, on a machine where everything
 else got faster or stayed flat), and until that is understood a partial update would be
 worse than no update. And a fair three-way needs all three codes re-run end to end under
-one methodology on one machine, which is a separate job from a speedup pass. The M5 table
+one methodology on one machine, which is a separate job from a speedup pass. That table
 stands as what it was: a correct same-machine record, on a machine that is not this one.
 Accuracy is unaffected either way: the recovered spectra reproduce the recorded RMS
 exactly (0.0093 / 0.0116 mean-aligned).
 
-Done: see "D50 re-run" at the end of this file. The re-run reproduced all twelve accuracy
+Done: see the re-run at the end of this file. The re-run reproduced all twelve accuracy
 values exactly, explained the 0.049 s (the harness's own in-process convention, timing
 shift-and-add on a heap the XLA solve had just worked over, a convention both recorded
 numbers share), caught fd3's OpenBLAS spinning 32 threads (pinned to one, fd3 is 1.7×
@@ -2134,10 +2145,10 @@ faster), and moved the harness to a fresh-process timing.
 
 ### Memory: unchanged, which was the requirement
 
-D29 was a memory pass, and a speedup that undoes it is not a speedup. Peak
-buffer-assignment bytes (XLA `memory_analysis()`, the same instrument D29 used):
+The previous pass was a memory pass, and a speedup that undoes it is not a speedup. Peak
+buffer-assignment bytes (XLA `memory_analysis()`, the same instrument used there):
 
-| n (model px) | eval, D29 | eval, now | ∇, D29 | ∇, now |
+| n (model px) | eval, then | eval, now | ∇, then | ∇, now |
 |---|---|---|---|---|
 | 31,734 | 2.94 GB | 2.96 GB | 4.00 GB | 4.02 GB |
 | 74,322 | 4.86 GB | 4.76 GB | 11.47 GB | **10.26 GB** |
@@ -2151,7 +2162,8 @@ temporaries.
 ### What it cost: the package no longer has a forward-mode path
 
 `custom_vjp` rejects `jax.jvp` outright, and `forecast._effective_parameters` was the
-only place in albireo that used forward mode: D47 gets `p_eff = tr[Sigma A^T W A]` from
+only place in albireo that used forward mode: the forecast gets `p_eff = tr[Sigma A^T W A]`
+from
 one directional derivative of `log det` in the noise scale, because `with_jitter` is
 already that one-parameter family. The full suite caught it: eleven `test_forecast.py`
 failures and two in `test_plotting.py`, all `TypeError: can't apply forward-mode autodiff
@@ -2160,7 +2172,7 @@ failures and two in `test_plotting.py`, all `TypeError: can't apply forward-mode
 Both `t` and the log-determinant are scalars, so forward and reverse mode compute the
 same single number, and it is now a `jax.grad`:
 
-| | committed code | with D49 |
+| | committed code | with this pass |
 |---|---|---|
 | forward (`jax.jvp`) | 0.283 s | **rejected** |
 | reverse (`jax.grad`) | 0.773 s | 0.532 s |
@@ -2171,8 +2183,8 @@ it against a dense trace oracle at rel 1e-8 on either route. The cost is 0.283 s
 on a call made once per forecast, in exchange for 1.8x on a gradient evaluated ~2,600
 times per posterior.
 
-This closes forward mode through the marginal likelihood entirely. D28 had already closed
-it one stage later (`_solve_stage` is a `custom_vjp`, which is why
+This closes forward mode through the marginal likelihood entirely. The first speedup pass
+had already closed it one stage later (`_solve_stage` is a `custom_vjp`, which is why
 `laplace_inverse_mass` uses reverse-over-reverse), so the capability was already half
 removed. It is now removed by construction, and second derivatives remain available (and
 tested) through reverse-over-reverse.
@@ -2205,10 +2217,10 @@ cost more to obtain than the two changes above, and they bound what remains.
    once per (i, j) pair, 16 slab operations down to 10. Measured slower (0.81 s
    against 0.79 s; results agree to 5e-16). XLA already fuses the four terms into one
    pass, so the restructure only adds a materialized intermediate.
-3. **`remat=False`.** D29 chose rematerialization of the epoch body for memory. It is
+3. **`remat=False`.** The memory pass chose rematerialization of the epoch body. It is
    also faster: 7.64 s against 9.81 s for the epoch scan's gradient. The memory
    choice and the time choice coincide, so there is no trade to make.
-4. **A custom-VJP band-to-block packing**, named on D28's own list of remaining levers.
+4. **A custom-VJP band-to-block packing**, named on the earlier list of remaining levers.
    The effect is real (`_pack_band`'s gather does transpose to a scatter), but it costs
    0.20 s of a 10 s gradient. It remains unimplemented as a recorded decision rather
    than by omission.
@@ -2218,9 +2230,9 @@ Rejected by arithmetic before implementing: re-laying-out the band tensor as
 The band read-modify-write is only ~0.15 s of the 0.76 s T-sandwich, and ablating it
 entirely made the forward slower: the traffic is in building `f`, not in storing it.
 
-## D50 re-run — all three codes, one machine, and the wall that would not reproduce (2026-08-16)
+## Re-run: all three codes, one machine, and the wall that would not reproduce (2026-08-16)
 
-D49 left the head-to-head unfinished: hardware-bound, one wall (shift-and-add's 0.018 s)
+The speedup pass left the head-to-head unfinished: hardware-bound, one wall (shift-and-add's 0.018 s)
 irreproducible, and a rule that a partial update would be worse than none. This is the
 full re-run, all three codes under one protocol on one machine, and both walls that
 misbehaved are properties of the environment rather than of the codes.
@@ -2253,10 +2265,10 @@ running:
 
 The ranking on this machine: shift-and-add first, then albireo and single-threaded fd3 at
 parity (mins 0.0591 against 0.0636, medians 0.0625 against 0.0640), then fd3 as it ships.
-M5's "albireo loses to both" was a statement about one laptop; the durable statements are
+The earlier "albireo loses to both" was a statement about one laptop; the durable statements are
 that shift-and-add is fastest everywhere, as a small number of array shifts and means
 should be, and that albireo's 32-thread XLA graph recovers fd3's single-thread advantage on
-current hardware. D49's partial recheck reproduces from here: its 0.059 s is this table's
+current hardware. The speedup pass's partial recheck reproduces from here: its 0.059 s is this table's
 0.0591, its fd3 0.099 s sits inside a later control series (minima 0.092–0.104), and its
 irreproducible 0.049 s sits inside the contaminated band below.
 
@@ -2281,7 +2293,7 @@ heap) flat at 0.17 → 0.15 µs; 34.6 KB, the size of shift-and-add's full-grid 
 requests above 16 KB walking a user-mode free list for microseconds (the same address comes
 back, so the walk is the cost), and `disentangle` makes ~10⁴ such allocations per call:
 +20–45 ms, which is the observed band. Reproduced directly: the committed convention gives
-0.037–0.043 s here, and after fully jitted runs 0.049–0.084 s, which contains D49's 0.049.
+0.037–0.043 s here, and after fully jitted runs 0.049–0.084 s, which contains that 0.049.
 
 The laptop's 0.018 s was taken through the same convention with an unknown dose, so the
 residual clean-machine gap (0.0263 here against 0.018 there, 1.46×) does not decompose
@@ -2297,14 +2309,14 @@ thread pinning. It was not flat. The binary as built links its GSL against OpenB
 the default environment it shows 1938% CPU, 1.95 s of user time inside a 0.10 s wall with
 32 threads spinning, while `OMP_NUM_THREADS=1` gives 93% CPU and 0.0636 s, 1.7× faster.
 fd3's own code is single-threaded; the library underneath it is not, and on a many-core
-machine the spin pool costs it 60%. This also revises D49's "fd3 moved 12% across the
+machine the spin pool costs it 60%. This also revises the "fd3 moved 12% across the
 hardware change": part real, part oversubscription inflating the desktop number. The pinned
 figure is the one to use for fd3 as an algorithm; the as-found row stays in the table
 because that is how it is normally run.
 
 ### What stands
 
-The M5 tables stand as a record, now labelled with what their machine was: an earlier
+The earlier tables stand as a record, now labelled with what their machine was: an earlier
 laptop, stack unrecorded. The accuracy result is unchanged and is now confirmed a second
 time by exact replication: ~2× on shape, the same *k* = 0 null space in all three codes,
 and a posterior from one of them.
@@ -2381,15 +2393,16 @@ only the atmospheres).
 One further connection: BLOeM, the survey behind
 [the BLOeM tutorial](tutorials/bloem-sb2.md), is led by the incumbent's author, and its 59
 published SB2s have no orbital solutions, which is the case `Disentangler(velocities=...)`
-was built for (D48). The two codes are stages rather than rivals: the incumbent's
+was built for. The two codes are stages rather than rivals: the incumbent's
 shift-and-add is how several of those systems were found, and albireo addresses what comes
 after: the orbit, the spectra, and the error bars on both.
 
 
-## D52/D53 — stellar labels from disentangled components (2026-08-27)
+## Stellar labels from disentangled components (2026-08-27)
 
 Machine: AMD Ryzen 9 9950X3D desktop, 16 cores / 32 threads, 32 GB, Windows 11, CPU only,
-float64, the same machine as D49/D50, so those numbers are comparable with these while the
+float64, the same machine as the speedup pass and the re-run, so those numbers are
+comparable with these while the
 earlier "Windows 11 laptop" tables are not. Harness: `scripts/label_bench.py`, which is
 offline and
 reproducible; the grid is a toy at BOSZ's own node density (250 K in Teff, 0.5 dex in log g,
@@ -2413,7 +2426,7 @@ conclusions follow, and the second settles whether a learned emulator is worth b
 1. The cubic is worth its 4^k taps: 2.1x better than multilinear here, 1.6x in the
    published comparison.
 2. On a grid at this density a learned emulator would be worse, by roughly a factor of five.
-   That is the measurement D53's plan said would decide whether to build one, and for FGK it
+   That is the measurement that was to decide whether to build one, and for FGK it
    says not to. It says nothing about the coarse, strongly non-linear OB grids, where the
    same measurement has to be repeated before an emulator is either built or dismissed.
    `crossval_library` is that measurement, and it ships.
@@ -2497,9 +2510,9 @@ upper bound. The real-data gate is AI Phe against Maxted et al. (2020), which is
 here.
 
 
-## D55 — AI Phoenicis: the label fit against a star (2026-08-27)
+## AI Phoenicis: the label fit against a star (2026-08-27)
 
-Machine: AMD Ryzen 9 9950X3D desktop, as D49-D53. Harness: `scripts/aiphe_labels_bench.py`
+Machine: AMD Ryzen 9 9950X3D desktop, as above. Harness: `scripts/aiphe_labels_bench.py`
 over 36 archival HARPS spectra (R = 115,000, `scripts/download_aiphe.py`), disentangled on
 5150-5250 A with the velocities held at the published orbit so that what is under test is the
 label fit and not the orbit. Library: `bosz2024-fgk-r20000`, 454 nodes. The notebook of the
@@ -2535,7 +2548,8 @@ of absence.
 
 `compare="matched"` convolves both the model and the data with the declared LSF before
 comparing, on the argument that `d_hat` is a regularized partial deconvolution. It was the
-default from D53. On AI Phe it drove both components to the floor of their `v sin i` prior
+default when the mode shipped. On AI Phe it drove both components to the floor of their
+`v sin i` prior
 (0.14 and 0.46 km/s) and inflated chi-square against `native`:
 
 | mode | primary Teff | secondary Teff | v sin i | chi2 |
@@ -2584,10 +2598,11 @@ array, so the weights are albireo's own estimate (the z-RMS 2.64 noted in the D-
 Phe disentangling entry applies here too). One system, one window, one library: this is a
 validation, not a survey.
 
-## D56 — epoch velocities by N-dimensional correlation (2026-09-01)
+## Epoch velocities by N-dimensional correlation (2026-09-01)
 
 Machine: AMD Ryzen 9 9950X3D desktop, 16 cores / 32 threads, 32 GB, Windows 11, CPU only,
-float64, the same machine as D49–D55. Harness: `scripts/todcor_bench.py`, offline and
+float64, the same machine as the sections above. Harness: `scripts/todcor_bench.py`,
+offline and
 reproducible. The fixture is a simulated SB2 through the real operator stack (LSF sigma
 5 km/s, rebin onto a 0.05 Å native grid, light 0.6/0.4, barycentric motion), with the
 injected component spectra as templates on a 1 km/s grid (five pixels per LSF sigma). Every
@@ -2629,7 +2644,7 @@ than a property of the noise.
 
 ### Pixel locking of the shift operator against template sampling
 
-The linear shift operator (D3) blurs a template at half-pixel shifts, which adds a
+The linear shift operator blurs a template at half-pixel shifts, which adds a
 one-pixel-periodic ripple to the chi-square and pulls the minimum toward integer shifts
 (math.md §10.3). Measured on **noiseless** data simulated at 0.25 km/s, with the templates
 rebinned onto coarser grids so the template interpolation error is real rather than an inverse
@@ -2727,12 +2742,12 @@ the one real-data-shaped check here: against the components a MAP disentangling 
 packaged example recovered, the velocities come back to 0.13 and 0.10 km/s rms once each
 component's zero point is removed, and the Keplerian fitted to them returns *K* to 0.05%,
 with the reduced chi-square of the correlation itself at 1.005. AI Phoenicis, where every
-element has a published value and the templates would be the D55 label fits, is the next
+element has a published value and the templates would be the label fits above, is the next
 gate and has not been run.
 
-## D58 — the pipeline in worker processes (2026-09-01)
+## The pipeline in worker processes (2026-09-01)
 
-Machine: the AMD Ryzen 9 9950X3D desktop of D49–D56 (16 cores / 32 threads, 32 GB,
+Machine: the same AMD Ryzen 9 9950X3D desktop (16 cores / 32 threads, 32 GB,
 Windows 11, CPU only, float64). Harness: `scripts/pipeline_bench.py`, offline. The batch is
 eight simulated stars (the pipeline's own toy star, a two-component SB2 drawn from
 `albireo.simulate.synthetic_library` at known labels, 8 epochs of 725 native pixels each,
@@ -2769,7 +2784,7 @@ BLAS threads at `cpu_count // jobs`, and the docstrings as first written said th
 each free to use all 32 threads finished the same batch in 54.7 s against 54.1 s capped.
 On this workload the operating system's scheduler absorbs the oversubscription. The cap
 stays, as a precaution with no measurable cost here and because BLAS-heavy stages are where
-oversubscription has been observed on this machine (the D50 record's 32-thread OpenBLAS),
+oversubscription has been observed on this machine (the re-run's 32-thread OpenBLAS),
 but every claim that it is the source of the speedup has been rewritten to this
 measurement.
 

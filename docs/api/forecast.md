@@ -19,7 +19,7 @@ depths, which are what has not yet been measured. This asymmetry is why the fore
 restricted to the spectra.
 
 The theory is in [§5.1](../math.md#51-the-low-frequency-degeneracy-the-undulations-theorem)
-and [§5.5](../math.md#55-forecasting-a-design-d47). The module docstring below states the
+and [§5.5](../math.md#55-forecasting-a-design). The module docstring below states the
 caveats that apply before a forecast is quoted in a proposal.
 
 Background and references: [science overview](../science.md).

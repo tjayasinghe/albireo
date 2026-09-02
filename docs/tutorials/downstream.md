@@ -106,8 +106,8 @@ assumes the error is white. Disentangling error is not white: it has a low-frequ
 it, a surface gravity.
 
 [`examples/10_downstream.py`](https://github.com/tjayasinghe/albireo/blob/main/examples/10_downstream.py)
-measures the difference. Equivalent width stands in for the atmosphere code: D40 established
-that EW is the quantity that reaches the atmosphere code, and that an 11.5% EW error is a
+measures the difference. Equivalent width stands in for the atmosphere code: the nebular
+benchmark established that EW is the quantity that reaches it, and that an 11.5% EW error is a
 systematic in log *g*. On the packaged example, over 24 draws:
 
 | | EW (Å) | joint draws | independent per-pixel noise | ratio |
@@ -121,7 +121,7 @@ the spectrum, and for an integrated quantity the band is not the right input.
 
 The second result concerns the two components jointly. The correlation between their
 equivalent widths across draws is −0.992, against −0.052 for the same statistic under
-independent per-pixel noise. That is D47's *k* = 0 exchange mode, the delocalized see-saw that
+independent per-pixel noise. That is the *k* = 0 exchange mode of the forecast, the delocalized see-saw that
 sits at about 1× the prior for every observing design, appearing in a derived quantity. The two
 stars trade line depth almost exactly, so their difference is better determined than either one
 alone, and fitting the components separately with independent error bars misstates both. Keep
@@ -154,5 +154,5 @@ cluster job, provided the grid is generated once and reused.
 
 Neither writer converts between air and vacuum, by design. iSpec ships `air_to_vacuum` /
 `vacuum_to_air` as explicit user steps and does no conversion on read; albireo does the same,
-for the reason in D43: the offset is a nearly constant 83 km/s, the same order as the orbits
+for one reason: the offset is a nearly constant 83 km/s, the same order as the orbits
 being measured, so guessing it is worse than declining to.

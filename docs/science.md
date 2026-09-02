@@ -268,7 +268,7 @@ expected information gain, which for a linear-Gaussian model is the Bayesian
 D-optimality criterion (Chaloner & Verdinelli 1995). The variance of the differential
 shift over the epochs, which the small-frequency expansion of Section 3 suggests as a
 figure of merit, is shown to rank cadences incorrectly when the cadence is aliased to the
-orbital period ([math.md, Section 5.5](math.md#55-forecasting-a-design-d47)).
+orbital period ([math.md, Section 5.5](math.md#55-forecasting-a-design)).
 
 ## 7. Atmospheric parameters from disentangled spectra
 
@@ -321,7 +321,7 @@ that recovers the velocity profile itself.
 
 albireo evaluates the same estimator as the weighted least-squares fit of $N$ shifted,
 LSF-convolved templates projected onto each epoch's pixels
-([math.md, Section 10](math.md#10-epoch-velocities-by-n-dimensional-correlation-d56d57)).
+([math.md, Section 10](math.md#10-epoch-velocities-by-n-dimensional-correlation)).
 On a uniform grid with uniform weights this reproduces the TODCOR expressions exactly; the
 least-squares form additionally admits masks, chip gaps, per-pixel weights, mixed
 instruments, exact fractional shifts and the maximum-likelihood errors of Zucker (2003).

@@ -68,7 +68,7 @@ worker returns a plain-data report; the live objects (the `Fit`, the velocity ta
 label match) are retained only on an in-process run (`jobs=1`), since they carry compiled
 JAX programs that cannot cross a pipe. A star that fails is recorded in `failures.txt` and
 does not stop the others. The measurements are in
-[the benchmark record](../benchmarks.md#d58-the-pipeline-in-worker-processes-2026-09-01).
+[the benchmark record](../benchmarks.md#the-pipeline-in-worker-processes-2026-09-01).
 
 ## Products
 

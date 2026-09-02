@@ -147,7 +147,7 @@ worker's XLA and BLAS threads are capped at `cpu_count // jobs` as a precaution 
 oversubscription; on that benchmark the cap made no measurable difference. One failing star (a
 missing file, or a declaration the façade refuses) lands in `failures.txt` with its message and
 does not stop the others. The numbers are in
-[the benchmark record](../benchmarks.md#d58-the-pipeline-in-worker-processes-2026-09-01).
+[the benchmark record](../benchmarks.md#the-pipeline-in-worker-processes-2026-09-01).
 
 From Python the same run is
 

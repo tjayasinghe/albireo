@@ -48,8 +48,7 @@ companion the epoch does not detect); and the Wilson slope, which equals $-K_2/K
 independent of both zero points.
 
 The theory is in
-[§10](../math.md#10-epoch-velocities-by-n-dimensional-correlation-d56d57); the decision
-record is D56.
+[§10](../math.md#10-epoch-velocities-by-n-dimensional-correlation).
 
 Background and references: [science overview](../science.md).
 

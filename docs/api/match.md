@@ -52,8 +52,7 @@ against the spread of the draws. A Teff–log g correlation near 0.98 with both 
 expected and is labelled as such; the remedy is to fix log g from the eclipsing solution,
 not to discount the number.
 
-The theory is in [§9](../math.md#9-stellar-labels-from-disentangled-components-d52d55);
-the decision record is D53.
+The theory is in [§9](../math.md#9-stellar-labels-from-disentangled-components).
 
 Background and references: [science overview](../science.md).
 

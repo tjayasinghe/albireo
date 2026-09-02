@@ -79,8 +79,7 @@ registry-level pin published under a DOI is not yet in place. BOSZ was recompute
 build date is recorded in `meta["retrieved"]`, and an older build is a different
 calculation.
 
-The theory is in [§9.3](../math.md#93-interpolation-and-why-not-an-emulator-yet); the
-decision record is D52.
+The theory is in [§9.3](../math.md#93-interpolation-and-why-not-an-emulator-yet).
 
 Background and references: [science overview](../science.md).
 
