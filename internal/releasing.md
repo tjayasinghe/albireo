@@ -4,18 +4,24 @@ Maintainer notes. Nothing here is needed in order to use albireo.
 
 ## The first public release
 
-albireo's history is currently local: nothing has ever been pushed, so CI has never run and
-no clock has started. Two of those clocks matter:
+The repository went public on 2026-08-14; `main` and `origin/main` have been in sync since,
+and CI and Docs have run on every push from that one onwards. So the first clock is running
+and the second has not started:
 
 - **JOSS** requires at least six months of public development history, and rejects
   submissions whose commits are all concentrated shortly before the paper. The six months
-  begins at the first push, not at the first commit.
+  begins at the first push, not at the first commit, which puts the earliest submission at
+  2027-02-14. Calendar time is not the whole test: what JOSS reads as evidence of public
+  development is releases, issues and pull requests, and there are none of any of those
+  yet. Waiting does not produce them.
 - **PyPI and astropy affiliation** both require the package to be installable before they
-  can be applied for at all.
+  can be applied for at all. albireo is not on PyPI, so every install command in the
+  documentation is a clone install and says so.
 
-The ordering below therefore front-loads going public and leaves the paper to follow. Each
-step is listed separately because each differs in reversibility: pushing is easy to correct,
-while a published PyPI version number can never be reused.
+What remains is therefore the release itself. Each step is listed separately because each
+differs in reversibility: pushing is easy to correct, while a published PyPI version number
+can never be reused. Steps already taken carry the date they were taken.
+
 
 ### 1. Before pushing anything
 
@@ -29,40 +35,52 @@ while a published PyPI version number can never be reused.
 - [ ] `ruff check . && ruff format --check .`
 - [ ] `mkdocs build --strict`
 - [ ] Re-check that the name `albireo` is still free on PyPI. It was verified free on
-      2026-08-11 (D18) and the recorded fallback is `albireo-spectra`.
+      2026-08-11 (D18) and again on 2026-09-03; the recorded fallback is `albireo-spectra`,
+      also free. PyPI has no reservation mechanism, so the only way to hold the name is to
+      upload something under it.
 
-### 2. Push, and let CI run for the first time
+### 2. Push, and let CI run (done 2026-08-14)
 
-- [ ] `git push -u origin main`
-- [ ] Watch `CI` (one job: lint, the bare-install guards, the fast suite) and `Docs`.
-      Expect something to fail, since CI has never executed and this is the first
-      evidence any of it works.
-- [ ] Then run the `Full` workflow by hand from the Actions tab. It carries everything
+- [x] `git push -u origin main`. Done 2026-08-14; the first workflow run is 2026-08-15
+      01:53 UTC.
+- [x] Watch `CI` (one job: lint, the bare-install guards, the fast suite) and `Docs`. Both
+      have run on every push since and both are green.
+- [ ] Then run the `Full` workflow by hand from the Actions tab.
+ It carries everything
       `CI` leaves out, namely the OS/Python matrix, the slow acceptance gates with coverage,
       and the example scripts, none of which has run anywhere but this machine. The Windows
       legs are the least-evidenced part, since local runs are Windows and CI's routine job is
       Linux.
-- [ ] In the repository settings, set **Pages** to deploy from GitHub Actions, so the
-      `Docs` workflow's deploy job has somewhere to publish. Note that Pages from a
-      private repository needs GitHub Pro; on the free tier the deploy job only works
-      once the repository is public.
-- [ ] Then switch the deploy job on: `gh variable set PAGES_ENABLED --body true`. It is
-      gated behind that variable because `deploy-pages` cannot be made to
+- [x] Set **Pages** to deploy from GitHub Actions, so the `Docs` workflow's deploy job has
+      somewhere to publish. Done 2026-09-03 with
+      `gh api -X POST repos/tjayasinghe/albireo/pages -f build_type=workflow`, which is the
+      API form of the settings page. Pages from a private repository needs GitHub Pro; on
+      the free tier the deploy job only works once the repository is public, which it has
+      been since 2026-08-14.
+- [x] Then switch the deploy job on: `gh variable set PAGES_ENABLED --body true`. Done
+      2026-09-03. It is gated behind that variable because `deploy-pages` cannot be made to
       succeed before the two settings above exist (it calls the Pages API and 404s), and
       a workflow that is red for a known reason stops being read. The `Docs` build job
       runs from the first push regardless, so a broken docs build is still caught; only the
       publish step waits.
-- [ ] Enable **Discussions**.
 
-!!! note "Going public is also the Actions-minutes fix"
+      Both halves of the gate had to be closed together, and neither is visible from a
+      green badge: from 2026-08-14 to 2026-09-03 `Docs` was green on every push while
+      <https://tjayasinghe.github.io/albireo/> returned 404, because the build job was the
+      only one running and the README's badge links to the site rather than to the run.
+      The deploy job fires on the next push to `main`; the badge and the link agree only
+      after that run succeeds.
+- [ ] Enable **Discussions**. Not yet enabled.
+
+!!! note "Actions minutes are no longer a constraint"
     Actions minutes are free and unlimited on public repositories and metered on private
     ones, at 2,000/month on the free tier, with Windows billing at 2x and macOS at 10x. That
-    is why `CI` is one Linux job and everything expensive is manual (`full.yml`). While the
-    repository is private, budget roughly 25-30 billed minutes per push (the fast suite
-    measures 12-16 minutes locally, and the runner is slower per core) and 150+ per manual
-    `Full` run, where the Windows legs bill at 2x. Once it is public, neither number is
-    charged against anything, which is the strongest practical argument for not staying
-    private long.
+    is why `CI` is one Linux job and everything expensive is manual (`full.yml`), and while
+    the repository was private it was also why: roughly 25-30 billed minutes per push (the
+    fast suite measures 12-16 minutes locally, and the runner is slower per core) and 150+
+    per manual `Full` run, where the Windows legs bill at 2x. Since 2026-08-14 none of that
+    is charged against anything, so the shape of the workflows is now a choice about
+    feedback time rather than about cost.
 
 ### 3. Zenodo, *before* the first tag
 
@@ -86,6 +104,10 @@ and the first release is not archived, so the DOI record starts a release late.
       than a missing registration.
 - [ ] Rehearse: run the `Release` workflow manually with **Publish to TestPyPI** checked,
       and install the result into a scratch environment.
+- [ ] Switch the documentation's install commands from the editable clone form back to
+      `pip install "albireo[...]"`. `grep -rn 'pip install -e' README.md docs/ scripts/`
+      finds every one, `docs/quickstart.md`'s three-line clone block collapses to one, and
+      the README's "not yet on PyPI" paragraph and its note about the editable form both go.
 - [ ] Update `CHANGELOG.md`: move `Unreleased` to the version and date.
 - [ ] Bump `__version__` in `src/albireo/__init__.py` and the `version:` in `CITATION.cff`
       to match. `tests/test_metadata.py` fails if they disagree, and the release workflow

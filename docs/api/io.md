@@ -1,6 +1,6 @@
 # Reading spectra
 
-The only module that requires astropy, installed with `pip install "albireo[io]"`. The rest
+The only module that requires astropy, installed with `pip install -e ".[io]"`. The rest
 of the package operates on arrays already held in memory.
 
 ## Column identification

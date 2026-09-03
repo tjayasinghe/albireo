@@ -8,7 +8,7 @@ component per epoch, fit the orbit to the table, and write the products out, for
 a file, with the failures recorded and the results in a table a spreadsheet can read.
 
 ```bash
-pip install "albireo[io,plots]"
+pip install -e ".[io,plots]"
 albireo demo
 ```
 

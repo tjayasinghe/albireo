@@ -96,8 +96,9 @@ The scientific background and the literature each method rests on are summarized
 
 ## Command line
 
+The command line needs the `io` and `plots` extras; see [Installation](#installation).
+
 ```bash
-pip install "albireo[io,plots]"
 albireo demo                      # two simulated stars with known answers, offline
 albireo init                      # writes an annotated albireo.toml
 albireo run albireo.toml --jobs 4
@@ -128,6 +129,9 @@ needs neither:
 - `pip install -e ".[io]"` installs astropy for reading and writing FITS (`albireo.io`);
 - `pip install -e ".[plots]"` installs matplotlib and ArviZ for `albireo.plotting` and
   the posterior diagnostics.
+
+Every install command in the documentation takes the same editable form, for the same
+reason; each becomes `pip install "albireo[...]"` at the first PyPI release.
 
 For a GPU build, install the `jax[cuda]` wheel for your platform following the
 [JAX installation guide](https://docs.jax.dev/en/latest/installation.html).

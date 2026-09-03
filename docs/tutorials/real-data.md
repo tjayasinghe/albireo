@@ -29,7 +29,7 @@ ds = ab.Dataset(ab.share_wavelength_grid(list(ds)), frame=ds.frame)
 grid = ab.LogGrid.covering(ds, dv_kms=1.5, v_margin_kms=90.0, lsf_sigma_kms=2.65)
 ```
 
-Reading spectra needs astropy: `pip install "albireo[io]"`. Nothing else in albireo does.
+Reading spectra needs astropy: `pip install -e ".[io]"`. Nothing else in albireo does.
 
 The sections below describe what those four lines do, and why each step is a decision
 rather than a default.

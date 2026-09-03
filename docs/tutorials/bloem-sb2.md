@@ -51,7 +51,7 @@ ds = ab.read_dataset(
 grid = ab.LogGrid.covering(ds, dv_kms=8.0, v_margin_kms=400.0, lsf_sigma_kms=20.2)
 ```
 
-`resolve_bloem` and `read_dataset` need the optional extras: `pip install "albireo[io]"`.
+`resolve_bloem` and `read_dataset` need the optional extras: `pip install -e ".[io]"`.
 
 ## 1. The two steps that are not obvious
 

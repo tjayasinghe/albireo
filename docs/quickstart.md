@@ -1,10 +1,15 @@
 # Quickstart
 
 This page fits the example dataset that ships with the package. It needs no data of your
-own and no network, and takes a few minutes on a laptop.
+own and no network, and takes a few minutes on one CPU.
+
+albireo is not yet on PyPI, so install it from a clone. The figures on this page need the
+`plots` extra; nothing else here needs an optional dependency.
 
 ```bash
-pip install albireo
+git clone https://github.com/tjayasinghe/albireo.git
+cd albireo
+pip install -e ".[plots]"
 ```
 
 Then:

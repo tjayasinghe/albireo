@@ -58,7 +58,7 @@ Background and references: [science overview](../science.md).
 Install with the plotting extra:
 
 ```
-pip install "albireo[plots]"
+pip install -e ".[plots]"
 ```
 
 Two limitations are repeated in the package's own summaries:
