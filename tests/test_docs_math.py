@@ -13,8 +13,15 @@ begins ``- `` or ``+ `` becomes a bullet list. None of this errors; it just rend
 wrongly, which is why it needs a test rather than a build step.
 
 The forms GitHub documents for this -- ``$`x`$`` inline and a ``` ```math ``` fence for
-display -- are opaque to its Markdown parser. ``scripts/mkdocs_math_hook.py`` and the
-``custom_fences`` entry in ``mkdocs.yml`` map both back onto arithmatex for the site.
+display -- are opaque to its Markdown parser. ``scripts/mkdocs_math_hook.py`` maps both
+back onto arithmatex for the site.
+
+Getting the expression to the renderer intact is only half of it: GitHub then runs its
+own guard over the TeX and refuses a macro that is not on its allowlist, printing "The
+following macros are not allowed" in place of the formula. ``\\operatorname`` is on the
+wrong side of that line even though MathJax parses it, so the pages use ``\\mathrm``.
+GitHub publishes no list, so ``BLOCKED_MACROS`` below is empirical -- add to it whenever
+a page comes back with that message.
 """
 
 from __future__ import annotations
@@ -29,6 +36,42 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 FENCE_OPEN = re.compile(r"^[ \t]*(`{3,}|~{3,})")
 BACKTICKS = re.compile(r"`+")
+
+# Macros GitHub's math renderer refuses. `operatorname` is the one this project actually
+# hit -- it renders everywhere else, so nothing but a page view catches it; write
+# \mathrm{diag} instead, adding \, on either side where the operator abuts an ordinary
+# symbol. The rest are the define-a-macro family, which no page here needs and which a
+# renderer will not accept from untrusted Markdown.
+BLOCKED_MACROS = (
+    "operatorname",
+    "def",
+    "newcommand",
+    "renewcommand",
+    "providecommand",
+    "DeclareMathOperator",
+    "newenvironment",
+    "let",
+    "gdef",
+    "edef",
+    "xdef",
+    "require",
+    "includegraphics",
+    "input",
+)
+BLOCKED = re.compile(r"\\(" + "|".join(BLOCKED_MACROS) + r")\b")
+
+MATH_FENCE = re.compile(r"^```math\n(.*?)\n```$", re.DOTALL | re.MULTILINE)
+INLINE_MATH = re.compile(r"\$(`+)(.+?)\1\$", re.DOTALL)
+ANY_FENCE = re.compile(r"^(```+|~~~+).*?^\1", re.DOTALL | re.MULTILINE)
+
+
+def _expressions(text: str) -> list[tuple[int, str]]:
+    """Every math expression on the page, as (line number, TeX)."""
+    found = [(text[: m.start()].count("\n") + 1, m.group(1)) for m in MATH_FENCE.finditer(text)]
+    # blank every fence, keeping the line count, so inline scanning sees prose only
+    prose = ANY_FENCE.sub(lambda m: "\n" * m.group(0).count("\n"), text)
+    found += [(prose[: m.start()].count("\n") + 1, m.group(2)) for m in INLINE_MATH.finditer(prose)]
+    return found
 
 
 def _markdown_pages() -> list[Path]:
@@ -161,6 +204,22 @@ def test_math_fences_do_not_end_a_line_with_a_tex_break(page: Path):
         f"{page.relative_to(REPO_ROOT).as_posix()} ends a line inside a ```math fence with "
         f"a TeX line break (line {offenders[0][0] if offenders else '?'}). GitHub emits a "
         "spurious third backslash for that; begin the following line with '\\\\ ' instead."
+    )
+
+
+@pytest.mark.parametrize("page", _markdown_pages(), ids=_page_ids())
+def test_no_macro_github_refuses_to_render(page: Path):
+    text = page.read_text(encoding="utf-8").replace("\r\n", "\n")
+    offenders = [
+        (line, BLOCKED.search(tex).group(1), " ".join(tex.split())[:70])
+        for line, tex in _expressions(text)
+        if BLOCKED.search(tex)
+    ]
+    assert not offenders, (
+        f"{page.relative_to(REPO_ROOT).as_posix()}:{offenders[0][0]} uses "
+        f"\\{offenders[0][1]}, which GitHub's math renderer refuses — the formula is "
+        'replaced by "The following macros are not allowed". MathJax accepts it, so the '
+        f"docs build will not catch this. In: {offenders[0][2]!r}"
     )
 
 

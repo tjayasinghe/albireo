@@ -239,7 +239,7 @@ rather than a bootstrap around a point estimate. `extra=hyper` supplies the site
 fixed during sampling.
 
 The per-component spectra are not fully determined by the data. In Fourier space the difference
-mode between the two components has information $`\propto k^2 \operatorname{Var}_j(\Delta_j)`$,
+mode between the two components has information $`\propto k^2\,\mathrm{Var}_j(\Delta_j)`$,
 which vanishes at $`k = 0`$: a constant added to $`d_1`$ and subtracted (light-weighted) from $`d_2`$
 changes no epoch's prediction ([`docs/math.md`](../math.md) §5.1). The smooth envelope of each
 component is therefore set by the prior rather than measured. The example prints both sides of

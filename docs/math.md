@@ -56,16 +56,16 @@ $`\lambda_{\rm obs} = \lambda_{\rm em}(1+z)`$, i.e. a **translation** in $`x`$ b
 ```math
 \xi(v) \;=\; \ln(1+z) \;=\;
 \begin{cases}
-\operatorname{artanh}(v/c) & \text{relativistic (default)},\\[2pt]
+\mathrm{artanh}(v/c) & \text{relativistic (default)},\\[2pt]
 \ln(1 + v/c) & \text{classical}.
 \end{cases}
 ```
 
 The relativistic form follows from $`1+z = \sqrt{(1+\beta)/(1-\beta)}`$ for purely radial motion,
-whose logarithm is $`\operatorname{artanh}\beta`$. It is the default for two reasons:
+whose logarithm is $`\mathrm{artanh}\,\beta`$. It is the default for two reasons:
 (i) at $`|v| \sim 600\ \mathrm{km\,s^{-1}}`$ the classical form is wrong by
 $`\sim 0.6\ \mathrm{km\,s^{-1}}`$, far above the RV error budget; (ii)
-$`\operatorname{artanh}`$ is exactly antisymmetric, so shifts compose and invert exactly:
+$`\mathrm{artanh}`$ is exactly antisymmetric, so shifts compose and invert exactly:
 $`\xi(-v) = -\xi(v)`$, and a barycentric correction is exact additive composition in $`x`$
 (velocity composition is not additive, log-shifts are).
 
@@ -258,7 +258,7 @@ than in the Fourier domain, so that each epoch keeps its native grid, its mask a
 per-pixel weights. Collecting §1.1 to §1.3, the model for epoch $`j`$ is
 
 ```math
-m_j(\theta, d) \;=\; \operatorname{diag}\!\big(r_j\big)\,
+m_j(\theta, d) \;=\; \mathrm{diag}\big(r_j\big)\,
 \mathbf{R}_j \Big[\mathbf{1} + \sum_{i=1}^{N_c} \ell_{ij}\, \mathbf{B}_j\, \mathbf{T}(\delta_{ij})\, d_i \Big],
 ```
 
@@ -268,13 +268,13 @@ $`d = (d_1^\top,\dots,d_{N_c}^\top)^\top \in \mathbb{R}^{N_c P}`$:
 
 ```math
 y = a_0(\theta) + \mathbf{A}(\theta)\, d + n, \qquad n \sim \mathcal{N}\big(0, \mathbf{C}_n\big),
-\quad \mathbf{C}_n = \operatorname{diag}(w)^{-1},
+\quad \mathbf{C}_n = \mathrm{diag}(w)^{-1},
 ```
 
 where row-block $`j`$ of $`\mathbf{A}`$ is
-$`\big[\ \operatorname{diag}(r_j)\mathbf{R}_j \mathbf{B}_j \mathbf{T}(\delta_{1j})\ \big|\ \cdots\ \big|\
-\operatorname{diag}(r_j)\mathbf{R}_j \mathbf{B}_j \mathbf{T}(\delta_{N_c j})\ \big]`$ scaled by
-$`\ell_{ij}`$, and $`a_0 = \operatorname{diag}(r_j)\mathbf{R}_j \mathbf{1}`$ collects the continuum.
+$`\big[\ \mathrm{diag}(r_j)\mathbf{R}_j \mathbf{B}_j \mathbf{T}(\delta_{1j})\ \big|\ \cdots\ \big|\
+\mathrm{diag}(r_j)\mathbf{R}_j \mathbf{B}_j \mathbf{T}(\delta_{N_c j})\ \big]`$ scaled by
+$`\ell_{ij}`$, and $`a_0 = \mathrm{diag}(r_j)\mathbf{R}_j \mathbf{1}`$ collects the continuum.
 Masked pixels have $`w=0`$ and drop out of every inner product below. An optional per-epoch
 noise-inflation ("jitter") factor $`\alpha_j`$ rescales $`w_j \to w_j/\alpha_j^2`$ and joins
 $`\theta`$ (`forward.with_jitter`, θ site `log_jitter`); §3.2a derives what profiling it
@@ -294,7 +294,7 @@ in native-pixel index,
 
 ```math
 \mathbf{C}_j \;=\; \alpha_j^2\, \mathbf{D}_j^{-1/2}\, \mathbf{R}_{\phi_j}\, \mathbf{D}_j^{-1/2},
-\qquad \mathbf{D}_j = \operatorname{diag}(w_j),\quad
+\qquad \mathbf{D}_j = \mathrm{diag}(w_j),\quad
 (\mathbf{R}_\phi)_{pq} = \phi^{|p-q|},
 ```
 
@@ -371,8 +371,8 @@ $`\log\det\boldsymbol\Lambda_i`$ is cheap (banded Cholesky, bandwidth 2).
 
 ```math
 \boldsymbol\Lambda_i \;=\; \mathbf{D}_2^\top
-  \operatorname{diag}\!\big(\tau_i\, p^\tau_i\big)\, \mathbf{D}_2
-\;+\; \operatorname{diag}\!\big(\eta_i\, p^\eta_i\big),
+  \mathrm{diag}\big(\tau_i\, p^\tau_i\big)\, \mathbf{D}_2
+\;+\; \mathrm{diag}\big(\eta_i\, p^\eta_i\big),
 ```
 
 with row $`k`$ of $`\mathbf{D}_2`$ (which spans pixels $`k, k{+}1, k{+}2`$) taking the profile
@@ -413,8 +413,8 @@ $`p(y\,|\,\theta)`$.
 
 ### 3.1 Derivation
 
-Write $`\tilde y = y - a_0(\theta)`$, $`\mathbf{W} = \operatorname{diag}(w)`$,
-$`\boldsymbol\Lambda = \operatorname{blkdiag}(\boldsymbol\Lambda_1,\dots,\boldsymbol\Lambda_{N_c})`$.
+Write $`\tilde y = y - a_0(\theta)`$, $`\mathbf{W} = \mathrm{diag}(w)`$,
+$`\boldsymbol\Lambda = \mathrm{blkdiag}(\boldsymbol\Lambda_1,\dots,\boldsymbol\Lambda_{N_c})`$.
 The joint log-density is
 
 ```math
@@ -487,7 +487,7 @@ $`-N\log\alpha`$ ($`N`$ = unmasked pixels), and
 -\tfrac12\log\det\big(\boldsymbol\Lambda + \mathbf{A}^\top\mathbf{W}_0\mathbf{A}/\alpha^2\big)
 \;\longrightarrow\; +\,p_{\text{eff}}\log\alpha + \text{const},
 \qquad
-p_{\text{eff}} = \operatorname{tr}\!\big[\tilde{\boldsymbol\Lambda}^{-1}\mathbf{A}^\top\mathbf{W}\mathbf{A}\big],
+p_{\text{eff}} = \mathrm{tr}\big[\tilde{\boldsymbol\Lambda}^{-1}\mathbf{A}^\top\mathbf{W}\mathbf{A}\big],
 ```
 
 $`p_{\text{eff}}`$ being the usual effective number of parameters (prior-dominated directions
@@ -544,7 +544,7 @@ output.
 
 NUTS needs $`\nabla_\theta \log p(y|\theta)`$. All terms are compositions of JAX primitives, so
 reverse-mode AD applies end-to-end, including through the Cholesky factorization (the
-$`\log\det`$ gradient $`\tfrac12\operatorname{tr}(\tilde{\boldsymbol\Lambda}^{-1}\partial\tilde{\boldsymbol\Lambda})`$
+$`\log\det`$ gradient $`\tfrac12\,\mathrm{tr}(\tilde{\boldsymbol\Lambda}^{-1}\partial\tilde{\boldsymbol\Lambda})`$
 emerges automatically). Two engineering notes:
 
 - The banded/block factorization is a `lax.scan`; reverse-mode memory is controlled with
@@ -564,7 +564,7 @@ $`N_c \times N_c`$ grid of $`P\times P`$ blocks:
 ```math
 \big[\mathbf{A}^\top\mathbf{W}\mathbf{A}\big]_{ii'} \;=\;
 \sum_j \ell_{ij}\ell_{i'j}\; \mathbf{T}(\delta_{ij})^\top \mathbf{B}_j^\top \mathbf{R}_j^\top
-\operatorname{diag}(r_j^2 w_j) \mathbf{R}_j \mathbf{B}_j \mathbf{T}(\delta_{i'j}) .
+\mathrm{diag}(r_j^2 w_j) \mathbf{R}_j \mathbf{B}_j \mathbf{T}(\delta_{i'j}) .
 ```
 
 Let $`m`$ be the half-bandwidth of $`\mathbf{B}^\top(\cdots)\mathbf{B}`$ (LSF + rebin support,
@@ -830,15 +830,15 @@ difference mode, expanding at small $`k`$:
 
 ```math
 |g(k)| = J\left|\left\langle e^{\mathrm{i}k\Delta}\right\rangle\right|
-\approx J\left(1 - \tfrac{k^2}{2}\operatorname{Var}_j(\Delta)\right)
+\approx J\left(1 - \tfrac{k^2}{2}\,\mathrm{Var}_j(\Delta)\right)
 \;\;\Rightarrow\;\;
-\lambda_-(k) \approx \tfrac{J k^2}{2} \operatorname{Var}_j(\Delta).
+\lambda_-(k) \approx \tfrac{J k^2}{2}\,\mathrm{Var}_j(\Delta).
 ```
 
 So the noise amplification of the separation is
 
 ```math
-\sigma_-(k) \;\propto\; \frac{1}{k\,\sqrt{J\operatorname{Var}_j(\Delta)}} ,
+\sigma_-(k) \;\propto\; \frac{1}{k\,\sqrt{J\,\mathrm{Var}_j(\Delta)}} ,
 ```
 
 diverging as $`k\to0`$, with $`k=0`$ exactly singular. **Interpretation:** spectral features
@@ -850,10 +850,10 @@ Consequences for the design:
 
 1. The prior (§2) makes these directions proper and *sets their scale explicitly* ($`\eta_i`$).
 2. The posterior covariance of §3.3 *reports* the inflation instead of hiding it.
-3. $`\operatorname{Var}_j(\Delta)`$ is an **observing-strategy diagnostic**: albireo exposes
+3. $`\mathrm{Var}_j(\Delta)`$ is an **observing-strategy diagnostic**: albireo exposes
    $`\lambda_-(k)`$ forecasts from planned epochs (`sensitivity_forecast`, §5.5), which show
    which phase sampling improves separation quality. §5.5 also records
-   where $`\operatorname{Var}_j(\Delta)`$ on its own ranks designs incorrectly, which is why
+   where $`\mathrm{Var}_j(\Delta)`$ on its own ranks designs incorrectly, which is why
    the exact covariance is computed alongside it rather than in place of it.
 4. Per-epoch response polynomials absorb the per-epoch near-constant modes;
    their order is kept low (default 2) so that they cannot absorb real broad features, and the
@@ -895,7 +895,7 @@ prior. $`K_i`$, $`e`$, $`\omega`$, $`P_{\rm orb}`$, $`T_{\rm p}`$ are unaffected
 
 | Degeneracy | Exact/approx | Broken by | albireo policy |
 |---|---|---|---|
-| low-$`k`$ mode exchange between components | exact at $`k=0`$, $`\propto 1/k`$ | phase coverage ($`\operatorname{Var}\Delta`$), priors | proper priors; covariance reported; forecast tool (§5.5) returns it as the leading eigenvector, at ~1× the prior for *every* design |
+| low-$`k`$ mode exchange between components | exact at $`k=0`$, $`\propto 1/k`$ | phase coverage ($`\mathrm{Var}\,\Delta`$), priors | proper priors; covariance reported; forecast tool (§5.5) returns it as the leading eigenvector, at ~1× the prior for *every* design |
 | $`\ell_i`$ vs. line depth | exact (constant $`\ell`$) | eclipses, photometry, saturation floor, assumption | explicit `light_ratio=` choice required |
 | $`\gamma`$ vs. common shift | exact up to edges | external rest-frame info | $`\gamma \equiv 0`$ default, post-hoc measurement |
 | per-epoch constants vs. response | approx | low poly order | order $`\le 2`$ default, covariance reported |
@@ -936,9 +936,9 @@ is that computation; `plan_epochs` builds the epochs to hand it.
 
 Three summaries follow, each an exact quantity rather than an estimate.
 
-**Pointwise band.** $`\sqrt{\operatorname{diag}\boldsymbol\Sigma}`$, by the same Takahashi
+**Pointwise band.** $`\sqrt{\mathrm{diag}\,\boldsymbol\Sigma}`$, by the same Takahashi
 selected-inversion sweep as §3.3, quoted against
-$`\sqrt{\operatorname{diag}\boldsymbol\Lambda_p^{-1}}`$. The second is reported because
+$`\sqrt{\mathrm{diag}\,\boldsymbol\Lambda_p^{-1}}`$. The second is reported because
 a band that has relaxed back onto the prior is otherwise indistinguishable from one the data
 constrained.
 
@@ -952,7 +952,7 @@ is made wider than the data (§1.1, the shift-plus-kernel margin), so its margin
 pixels are prior-only and carry the largest eigenvalue on essentially every real problem;
 left in, the worst-determined mode would report how much margin the grid was given.
 
-**Constrained degrees of freedom.** $`p_{\rm eff} = \operatorname{tr}[\boldsymbol\Sigma\,
+**Constrained degrees of freedom.** $`p_{\rm eff} = \mathrm{tr}[\boldsymbol\Sigma\,
 \mathbf{A}^\top\mathbf{W}\mathbf{A}]`$, the same quantity §3.2a profiles the jitter against.
 It comes from one directional derivative rather than a stochastic trace estimator: scaling
 every epoch's noise by $`\alpha \to \alpha e^{t}`$ sends $`\mathbf{A}^\top\mathbf{W}\mathbf{A}
@@ -977,7 +977,7 @@ the data-free half of §3.1's marginal likelihood, and the Bayesian D-optimality
 and is therefore what screens a hundred candidate cadences: with $`J`$ epochs and differential
 log-shifts $`\Delta_j`$, separating the pair is noisier than measuring their sum by
 $`\sqrt{(J + |g(k)|)/(J - |g(k)|)}`$ with $`g(k) = \sum_j e^{\mathrm{i}k\Delta_j}`$. But
-$`\operatorname{Var}_j(\Delta)`$ is only the small-$`k`$ expansion of that, and maximizing it is
+$`\mathrm{Var}_j(\Delta)`$ is only the small-$`k`$ expansion of that, and maximizing it is
 not the same as optimizing the design. A cadence aliased to the orbital period visits the two
 *extreme* values of $`\Delta`$ repeatedly: it maximizes the variance, and it leaves
 $`|g(k)| = J|\cos(k\,\Delta_{\rm sep}/2)|`$, which returns to $`J`$ at a whole comb of scales.
@@ -1256,7 +1256,7 @@ terms, a 0.1-pixel one costs 7.3 nats. An uncentered table would therefore have 
 absolute level set by interpolation error.
 
 albireo removes the zero points in pixel space, which is where the removal is exact:
-with $`\xi = \operatorname{artanh}(v/c)`$ (§1.1, chosen so shifts compose and invert
+with $`\xi = \mathrm{artanh}(v/c)`$ (§1.1, chosen so shifts compose and invert
 exactly) a constant *pixel* offset is relativistic velocity addition, not ordinary
 addition, so
 
@@ -1640,7 +1640,7 @@ level profiled out, $`\log L = -\tfrac{N}{2}\log[1 - C^2(\hat s)]`$, and derived
 the Hessian. In the chi-square form the same profiling gives
 
 ```math
-\operatorname{Cov}(\hat{\mathbf{s}}) = \frac{\chi^2_{\min}}{n_{\rm pix} - p}\; 2\,\mathbf{H}^{-1},
+\mathrm{Cov}(\hat{\mathbf{s}}) = \frac{\chi^2_{\min}}{n_{\rm pix} - p}\; 2\,\mathbf{H}^{-1},
 \qquad \mathbf{H} = \left.\frac{\partial^2 \chi^2}{\partial \mathbf{s}\,\partial \mathbf{s}^{\!\top}}\right|_{\hat{\mathbf{s}}},
 ```
 

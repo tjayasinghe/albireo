@@ -160,7 +160,7 @@ absolute scale must come from one instrument whose profile is known.
 
 The model grid is uniform in $`x = \ln\lambda`$ so that a Doppler shift is a translation
 (Hadrava 1995). The mapping from velocity to log-shift uses the relativistic radial
-Doppler formula, $`\xi(v) = \operatorname{artanh}(v/c)`$, which is exactly antisymmetric so
+Doppler formula, $`\xi(v) = \mathrm{artanh}(v/c)`$, which is exactly antisymmetric so
 that shifts compose and invert exactly; the classical form differs by about
 0.6 km s$`^{-1}`$ at 600 km s$`^{-1}`$. Each component's deviation from the continuum is
 shifted, convolved with the instrument's line-spread function, weighted by its light
