@@ -105,6 +105,15 @@ markdown_extensions:
   - pymdownx.superfences
   - pymdownx.details
 
+hooks:
+  # The pages spell math the way GitHub renders it faithfully -- $`x`$ inline and a
+  # ```math fence for display -- and the hook turns both back into the $x$ and $$...$$
+  # that arithmatex reads. Doing the fence here rather than through a superfences
+  # custom_fence keeps this file free of a !!python/object/apply tag, which the
+  # check-yaml pre-commit hook cannot load. Kept outside docs/ so mkdocs does not
+  # publish it.
+  - scripts/mkdocs_math_hook.py
+
 extra_javascript:
   - javascripts/mathjax.js
   # Cloudflare-hosted mirror of polyfill.io; the original cdn.polyfill.io domain

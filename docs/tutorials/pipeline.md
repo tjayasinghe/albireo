@@ -56,14 +56,14 @@ albireo run albireo.toml --jobs 4
 Three entries in that file are places where the pipeline refuses to guess.
 
 **The light fractions are required.** With constant light fractions the likelihood sees only
-$\ell_i d_i$ ([§5.2](../math.md#52-light-ratio-line-depth)), so every recovered line depth
-scales as $1/\ell_i$ and no part of the fit can report that the assumed value was wrong. Quote
+$`\ell_i d_i`$ ([§5.2](../math.md#52-light-ratio-line-depth)), so every recovered line depth
+scales as $`1/\ell_i`$ and no part of the fit can report that the assumed value was wrong. Quote
 them beside every result, as every report does under *Assumed, not measured*.
 
 **The components are declared in order of decreasing mass.** The likelihood cannot tell which
 spectrum belongs to which star: with a symmetric semi-amplitude prior the conjunction scan sees
 the declared assignment and its mirror as equally good. The pipeline therefore starts the fit
-with $K_1 < K_2$ and lets the label stage check it afterwards, flagging a fitted light fraction
+with $`K_1 < K_2`$ and lets the label stage check it afterwards, flagging a fitted light fraction
 far from the declared one as the signature of an order declared the wrong way round.
 
 **The wavelength scale is declared before a synthetic grid is consulted.** ESO files declare
@@ -85,14 +85,14 @@ the offset of its rest frame. A disentangled component's zero point is not ident
 ([§5.3](../math.md#53-systemic-velocity-zero-point)); the label fit measures it, and the
 pipeline applies it to the templates so that the epoch velocities come out absolute. Without a
 library the velocities are differential: semi-amplitudes, eccentricity and mass ratio exact,
-systemic velocity meaningless, and the orbit fit gives each component its own $\gamma$. Every
+systemic velocity meaningless, and the orbit fit gives each component its own $`\gamma`$. Every
 report states which it got, in the first lines of the velocity table's summary and in
 `result.json["velocities"]["absolute"]`.
 
 The demo shows the difference. Its second star has a systemic velocity of +12 km/s that the
 disentangling alone cannot see; with the toy library declared, the label fit measures each
 component's frame at about +12, the velocities come out absolute, and the orbit fitted to them
-returns $\gamma = 11.96 \pm 0.15$ km/s.
+returns $`\gamma = 11.96 \pm 0.15`$ km/s.
 
 ## Two routes when the period is unknown
 

@@ -16,8 +16,8 @@ one set of lines is visible is a single-lined spectroscopic binary (SB1); one in
 both are visible is double-lined (SB2), and triple-lined systems (SB3) also occur.
 
 Two quantities are wanted from such a time series. The first is the orbit: the period
-$P$, eccentricity $e$, argument of periastron $\omega$, a reference epoch, and the
-velocity semi-amplitudes $K_1$ and $K_2$. Together with an inclination from eclipses or
+$`P`$, eccentricity $`e`$, argument of periastron $`\omega`$, a reference epoch, and the
+velocity semi-amplitudes $`K_1`$ and $`K_2`$. Together with an inclination from eclipses or
 astrometry these give the dynamical masses and the semi-major axis (Hilditch 2001;
 Torres, Andersen & Giménez 2010). The second is the spectrum of each component on its own,
 from which effective temperatures, surface gravities, rotation rates and abundances follow.
@@ -52,7 +52,7 @@ discussed in Section 3. albireo follows this formulation.
 
 ### 2.3 Fourier-space disentangling
 
-Hadrava (1995) showed that on a grid uniform in $\ln\lambda$ a Doppler shift is a
+Hadrava (1995) showed that on a grid uniform in $`\ln\lambda`$ a Doppler shift is a
 translation, so that each Fourier mode of the composite spectra decouples into a small
 linear system. The resulting code, KOREL, solves for the component spectra and the orbital
 elements simultaneously and was later extended to variable line strengths (Hadrava 1997)
@@ -68,7 +68,7 @@ and Hensberge, Ilijić & Torres (2008).
 
 González & Levato (2006) proposed an iterative scheme: subtract the current estimate of
 one component, shift the residuals to the rest frame of the other, average, and repeat,
-with the semi-amplitudes chosen by a $\chi^2$ grid over $(K_1, K_2)$. Shenar et al. (2020)
+with the semi-amplitudes chosen by a $`\chi^2`$ grid over $`(K_1, K_2)`$. Shenar et al. (2020)
 applied it to LB-1, and the same approach identified the companion of HR 6819
 (Bodensteiner et al. 2020). It is simple and robust at low signal-to-noise, and it is the
 most widely used method in the massive-star and compact-companion literature. Its costs are
@@ -142,7 +142,7 @@ Quataert 2021).
 
 **Systemic velocity.** Translating every component spectrum by the same amount and
 shifting the systemic velocity by the opposite amount leaves the composite unchanged, so
-$\gamma$ is not identified by disentangling and must be measured afterwards from the
+$`\gamma`$ is not identified by disentangling and must be measured afterwards from the
 disentangled spectra against a template. When per-epoch velocities are fitted instead of
 a Keplerian, the same argument applies once per component: each star's velocities carry
 an arbitrary zero point, while the semi-amplitudes and the mass ratio, which is the slope
@@ -158,11 +158,11 @@ absolute scale must come from one instrument whose profile is known.
 
 ### 4.1 Forward model
 
-The model grid is uniform in $x = \ln\lambda$ so that a Doppler shift is a translation
+The model grid is uniform in $`x = \ln\lambda`$ so that a Doppler shift is a translation
 (Hadrava 1995). The mapping from velocity to log-shift uses the relativistic radial
-Doppler formula, $\xi(v) = \operatorname{artanh}(v/c)$, which is exactly antisymmetric so
+Doppler formula, $`\xi(v) = \operatorname{artanh}(v/c)`$, which is exactly antisymmetric so
 that shifts compose and invert exactly; the classical form differs by about
-0.6 km s$^{-1}$ at 600 km s$^{-1}$. Each component's deviation from the continuum is
+0.6 km s$`^{-1}`$ at 600 km s$`^{-1}`$. Each component's deviation from the continuum is
 shifted, convolved with the instrument's line-spread function, weighted by its light
 fraction, summed, projected onto the epoch's native pixels by a flux-conserving rebinning
 operator, and multiplied by a low-order response polynomial. Telluric absorption is an
@@ -176,7 +176,7 @@ the data.
 ### 4.2 Priors and analytic marginalisation
 
 Each deviation spectrum receives an independent Gaussian prior whose precision is
-$\tau\,\mathbf{D}_2^\top\mathbf{D}_2 + \eta\,\mathbf{I}$, a curvature penalty plus a weak
+$`\tau\,\mathbf{D}_2^\top\mathbf{D}_2 + \eta\,\mathbf{I}`$, a curvature penalty plus a weak
 ridge. The ridge makes the affine null space of the curvature penalty proper; these are
 exactly the low-frequency directions of Section 3. Because the model is linear-Gaussian in
 the spectra conditional on the nonlinear parameters, the marginal likelihood has the
@@ -195,7 +195,7 @@ than by reverse-mode differentiation of the factorisation.
 
 Inference over the nonlinear parameters proceeds in three stages. A maximum a posteriori
 fit by L-BFGS also maximises the marginal likelihood over the prior hyperparameters
-$(\tau, \eta)$, which is the type-II maximum likelihood or empirical Bayes estimate
+$`(\tau, \eta)`$, which is the type-II maximum likelihood or empirical Bayes estimate
 (MacKay 1992). A Laplace approximation at the optimum supplies the inverse mass matrix.
 The posterior is then sampled with the No-U-Turn Sampler (Hoffman & Gelman 2014;
 Betancourt 2017) as implemented in numpyro (Phan, Pradhan & Jankowiak 2019; Bingham et al.
@@ -208,9 +208,9 @@ the [benchmark record](benchmarks.md).
 Radial velocities follow the standard Keplerian law (Hilditch 2001) with Kepler's equation
 solved by Newton iteration; the gradient with respect to the elements is supplied by the
 implicit-function theorem so that it is exact at the converged solution. The eccentricity
-and argument of periastron are sampled as $(\sqrt{e}\cos\omega, \sqrt{e}\sin\omega)$,
-which is smooth through $e = 0$ and maps a uniform prior on the unit disk to a uniform
-prior on $e$ (Ford 2006; Eastman, Gaudi & Agol 2013). The reference epoch is the time of
+and argument of periastron are sampled as $`(\sqrt{e}\cos\omega, \sqrt{e}\sin\omega)`$,
+which is smooth through $`e = 0`$ and maps a uniform prior on the unit disk to a uniform
+prior on $`e`$ (Ford 2006; Eastman, Gaudi & Agol 2013). The reference epoch is the time of
 conjunction, which remains defined for circular orbits. Times are barycentric Julian dates
 in the TDB time scale (Eastman, Siverd & Gaudi 2010), and the barycentric correction to
 the velocities follows Wright & Eastman (2014). Minimum masses and projected semi-major
@@ -219,11 +219,11 @@ axes follow the relations collected by Hilditch (2001).
 ### 4.5 Instrumental effects and preprocessing
 
 The line-spread function is Gaussian in velocity, constant or varying with wavelength,
-with an optional asymmetric term parameterised by the Gauss-Hermite coefficient $h_3$
+with an optional asymmetric term parameterised by the Gauss-Hermite coefficient $`h_3`$
 (van der Marel & Franx 1993). Rotational broadening of synthetic templates uses the
 limb-darkened profile of Gray (2005). Conversion between air and vacuum wavelengths uses
 the Edlén (1966) dispersion formula as revised by Birch & Downs (1994), the form tabulated
-by Morton (2000); the two scales differ by about 83 km s$^{-1}$ in the optical, and albireo
+by Morton (2000); the two scales differ by about 83 km s$`^{-1}`$ in the optical, and albireo
 requires the medium to be declared wherever absolute line positions matter. Where reduced
 spectra carry no usable error array, the noise is estimated from the spectrum itself with
 the DER_SNR estimator (Stoehr et al. 2008). Correlated noise introduced by pipeline
@@ -244,12 +244,12 @@ lines is present, at what light fraction it would have been seen, and how often 
 alone produces a comparable signal are therefore the questions a companion search must
 answer.
 
-albireo's SB1 mode scans the companion semi-amplitude $K_2$ with the companion spectrum
+albireo's SB1 mode scans the companion semi-amplitude $`K_2`$ with the companion spectrum
 marginalised at every trial, which is a matched filter that assumes no template; the
 detection statistic is twice the log ratio of the marginal likelihoods with and without
 the companion ([math.md, Section 6](math.md#6-sb1-faint-companion-mode-k_2-scan)). The
 primary's semi-amplitude may be integrated out over a Gaussian prior instead of held at a
-literature value, because an error in $K_1$ leaves coherent primary signal that the free
+literature value, because an error in $`K_1`$ leaves coherent primary signal that the free
 companion spectrum absorbs, which both distorts the recovered companion and increases the
 detection statistic. The statistic has no closed-form null distribution, so the false-alarm
 probability and the completeness are measured by injection and recovery through the
@@ -287,8 +287,8 @@ parameters across draws is the disentangling contribution to their uncertainty. 
 ratio, which is assumed rather than inferred under constant light fractions, is not
 included in that spread.
 
-For the purpose of measuring epoch radial velocities, albireo also fits $T_{\rm eff}$,
-$\log g$, [M/H] and $v\sin i$ to the disentangled components against published synthetic
+For the purpose of measuring epoch radial velocities, albireo also fits $`T_{\rm eff}`$,
+$`\log g`$, [M/H] and $`v\sin i`$ to the disentangled components against published synthetic
 grids, so that each component can be rendered as a template. The grids are read, not
 computed: BOSZ (Bohlin et al. 2017; Mészáros et al. 2024), POLLUX (Palacios et al. 2010),
 PHOENIX (Husser et al. 2013) and TLUSTY (Lanz & Hubeny 2003, 2007) are the public
@@ -301,7 +301,7 @@ light fractions that sum to one, following the binary mode of GSSP (Tkachenko 20
 the constant offset that disentangling leaves unconstrained is absorbed by an additive
 nuisance term and reported. The accuracy that a radial-velocity template requires is
 modest: template temperature errors of several hundred kelvin bias solar-type velocities by
-of order 0.2 km s$^{-1}$ (Posbic et al. 2012), least-squares-deconvolution profiles are
+of order 0.2 km s$`^{-1}`$ (Posbic et al. 2012), least-squares-deconvolution profiles are
 insensitive to comparable label changes (Tkachenko et al. 2022), and the dominant effect of
 a wrong template is a constant velocity offset per component, which was the origin of the
 hot-star radial-velocity offsets in Gaia DR3 before correction (Blomme et al. 2023).
@@ -319,7 +319,7 @@ the correlation peak is a maximum-likelihood estimate, which provides its uncert
 rule for combining spectral orders. Broadening functions (Rucinski 2002) are an alternative
 that recovers the velocity profile itself.
 
-albireo evaluates the same estimator as the weighted least-squares fit of $N$ shifted,
+albireo evaluates the same estimator as the weighted least-squares fit of $`N`$ shifted,
 LSF-convolved templates projected onto each epoch's pixels
 ([math.md, Section 10](math.md#10-epoch-velocities-by-n-dimensional-correlation)).
 On a uniform grid with uniform weights this reproduces the TODCOR expressions exactly; the

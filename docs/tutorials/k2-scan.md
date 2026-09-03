@@ -2,7 +2,7 @@
 
 A single-lined binary is a binary whose second star is not visible in the spectrum. Sometimes
 the companion is dark (a neutron star, a black hole, a stripped helium core), and sometimes its
-lines are a few percent deep and hidden under a bright primary. The $K_2$ scan distinguishes the
+lines are a few percent deep and hidden under a bright primary. The $`K_2`$ scan distinguishes the
 two cases, and it is the workflow behind the dormant compact-object searches.
 
 Every code block below is taken verbatim from
@@ -19,15 +19,15 @@ See the [science overview](../science.md) for background and references.
 
 ## The method
 
-The SB1 solution is given: $P_{\rm orb}$, $T_{\rm conj}$, $e$, $\omega$ and $K_1$, all fixed. The
-only remaining unknown about the putative companion's orbit is $K_2$. The companion's spectrum,
-however unknown, enters the forward model linearly, so at each trial $K_2$ it is marginalized
+The SB1 solution is given: $`P_{\rm orb}`$, $`T_{\rm conj}`$, $`e`$, $`\omega`$ and $`K_1`$, all fixed. The
+only remaining unknown about the putative companion's orbit is $`K_2`$. The companion's spectrum,
+however unknown, enters the forward model linearly, so at each trial $`K_2`$ it is marginalized
 analytically, exactly as the component spectra are in the SB2 case. That gives a detection
 statistic
 
-$$
+```math
 D(K_2) = 2\left[\log p(y \mid K_2) - \log p(y \mid \text{no companion})\right]
-$$
+```
 
 at the cost of one linear solve per grid point. It is the matched filter integrated over every
 possible companion spectrum, so it needs no template library, and the recovered companion
@@ -53,20 +53,20 @@ K2_GRID = np.arange(10.0, 70.0, K2_STEP)
 SEED = 7
 ```
 
-$K_1 = 12$ km/s against $K_2 = 38$, that is $M_1/M_2 = K_2/K_1 \approx 3.2$, with the companion
+$`K_1 = 12`$ km/s against $`K_2 = 38`$, that is $`M_1/M_2 = K_2/K_1 \approx 3.2`$, with the companion
 contributing 10% of the continuum. That 10% is `ELL[1]`, and it controls the interpretation of
 the recovered spectrum; see [§4](#4-limits-of-the-recovered-companion-spectrum).
 
 The spectral prior is passed explicitly rather than fitted, because the scan is a profile over
-$K_2$, not a joint fit:
+$`K_2`$, not a joint fit:
 
 ```python
 PRIOR = ab.SmoothnessPrior(jnp.asarray([300.0, 30.0]), jnp.asarray([5.0, 5.0]))
 ```
 
-The companion is given the stiffer curvature scale ($\tau_2 = 30$ against $\tau_1 = 300$). This
-is a modelling choice that $D$ depends on, which is why the statistic must be calibrated
-empirically rather than read off a $\chi^2$ table.
+The companion is given the stiffer curvature scale ($`\tau_2 = 30`$ against $`\tau_1 = 300`$). This
+is a modelling choice that $`D`$ depends on, which is why the statistic must be calibrated
+empirically rather than read off a $`\chi^2`$ table.
 
 ## 2. Run the scan
 
@@ -102,11 +102,11 @@ On the dataset with the companion injected at 38 km/s:
 
 The peak lands on the injected value, and the curve is smooth and single-peaked around it: the
 five highest trials bracket 38 km/s symmetrically. The width of that peak, not its height,
-constrains $K_2$; sharpening it requires epochs near the velocity extremes rather than more
+constrains $`K_2`$; sharpening it requires epochs near the velocity extremes rather than more
 epochs.
 
-The absolute numbers carry no direct significance. $D(\text{peak}) \approx 2.7\times10^{4}$ is
-not "$\sqrt{D}\,\sigma$" of anything: $D$ contains the companion's prior scale, and its null
+The absolute numbers carry no direct significance. $`D(\text{peak}) \approx 2.7\times10^{4}`$ is
+not "$`\sqrt{D}\,\sigma`$" of anything: $`D`$ contains the companion's prior scale, and its null
 distribution is estimated by injection and recovery with `albireo.simulate` rather than assumed
 ([`docs/math.md`](../math.md) §6). The meaningful quantities on this page are the contrasts,
 peak against scan edge and, more importantly, the companion-free control below.
@@ -130,14 +130,14 @@ difference is that no companion was injected.
   max over the whole grid: D = -464.5 (negative at every trial: the Occam term penalizes the unneeded component)
 ```
 
-$D < 0$ at every trial, and this is not a tuned threshold. Both marginal likelihoods carry their
-own $\tfrac12\log\det$ Occam term, so adding a marginalized component lowers the likelihood
+$`D < 0`$ at every trial, and this is not a tuned threshold. Both marginal likelihoods carry their
+own $`\tfrac12\log\det`$ Occam term, so adding a marginalized component lowers the likelihood
 unless coherent signal compensates for it. On companion-free data nothing compensates, and the
 two-component model loses to the null everywhere on the grid, monotonically over this grid,
-since a larger $K_2$ separates the components further and adds the noise-fitting freedom that
+since a larger $`K_2`$ separates the components further and adds the noise-fitting freedom that
 the determinant term charges for.
 
-That baseline is what gives a positive $D$ its meaning, and it is what the script asserts:
+That baseline is what gives a positive $`D`$ its meaning, and it is what the script asserts:
 
 ```python
     null_max = float(np.max(null.detection))
@@ -154,31 +154,31 @@ The recovered companion spectrum is informative in a specific sense:
 
 Correlation 0.98 with the injected line pattern, and a residual offset of 0.19 in depth units.
 The offset is structural and does not decrease with more data. The observable is the product
-$\ell_2 d_2$, so the companion's light fraction trades exactly against its line depths
-([`docs/math.md`](../math.md) §5.2). In addition, an error $\Delta$ in the bright primary's
-smooth envelope maps to $-(\ell_1/\ell_2)\Delta$ in the companion, an amplification of about ten
-at $\ell_2 = 0.1$, on top of the $k = 0$ indeterminacy that already leaves the envelope
+$`\ell_2 d_2`$, so the companion's light fraction trades exactly against its line depths
+([`docs/math.md`](../math.md) §5.2). In addition, an error $`\Delta`$ in the bright primary's
+smooth envelope maps to $`-(\ell_1/\ell_2)\Delta`$ in the companion, an amplification of about ten
+at $`\ell_2 = 0.1`$, on top of the $`k = 0`$ indeterminacy that already leaves the envelope
 prior-dominated ([`docs/math.md`](../math.md) §5.1, §6).
 
 The pattern of the recovered lines is therefore the usable result: it identifies the companion's
 spectral type, and it is what the correlation coefficient measures. Absolute depths should not
-be read off it unless eclipses or photometry have pinned $\ell_2$ independently. For the same
+be read off it unless eclipses or photometry have pinned $`\ell_2`$ independently. For the same
 reason `k2_scan` has no default for `light_fractions`: there is no defensible generic value, and
 an implicit one would propagate into a mass.
 
 Two further limits:
 
-- The scan is conditional on the SB1 solution. An error in $P_{\rm orb}$ or $T_{\rm conj}$
-  smears the companion's lines across epochs and depresses $D$ everywhere; a marginal detection
+- The scan is conditional on the SB1 solution. An error in $`P_{\rm orb}`$ or $`T_{\rm conj}`$
+  smears the companion's lines across epochs and depresses $`D`$ everywhere; a marginal detection
   should be followed by a joint refit (the `K2ScanResult` carries a ready-to-use `model` for
   that, seeded at the peak).
-- $\gamma \equiv 0$ throughout. A systemic velocity is exactly degenerate with a common shift
+- $`\gamma \equiv 0`$ throughout. A systemic velocity is exactly degenerate with a common shift
   of all component spectra ([`docs/math.md`](../math.md) §5.3), so it is measured afterwards,
   from the disentangled spectra, outside the scan.
 
 ## 5. Figure
 
-With matplotlib importable, the script writes `k2_scan_detection.png`, showing $D(K_2)$ for both
+With matplotlib importable, the script writes `k2_scan_detection.png`, showing $`D(K_2)`$ for both
 datasets with the injected value marked, into the working directory. matplotlib is not a
 dependency:
 
@@ -198,7 +198,7 @@ ALBIREO_EXAMPLE_FAST=1 python examples/02_k2_scan.py
 ```
 
 On Windows, `$env:ALBIREO_EXAMPLE_FAST = "1"` sets the same switch. The script exits non-zero
-unless the peak lands on the injected $K_2$ and the companion-free control stays negative
+unless the peak lands on the injected $`K_2`$ and the companion-free control stays negative
 everywhere, so it can be run directly in CI.
 
 ## From a peak to a detection claim
@@ -207,19 +207,19 @@ This tutorial finds a companion. It does not state how often noise alone would h
 peak it found. Two steps close that gap, both in
 [`examples/05_detection_limit.py`](https://github.com/tjayasinghe/albireo/blob/main/examples/05_detection_limit.py):
 
-- **Marginalize $K_1$** rather than condition on the SB1 value, with `k2_scan(k1_sigma=...)`. A
-  $K_1$ 10% too high took the recovered companion's line pattern from 0.96 correlation with the
-  truth to 0.49 while tripling $D$ ([benchmarks](../benchmarks.md)), so the artifact reads
+- **Marginalize $`K_1`$** rather than condition on the SB1 value, with `k2_scan(k1_sigma=...)`. A
+  $`K_1`$ 10% too high took the recovered companion's line pattern from 0.96 correlation with the
+  truth to 0.49 while tripling $`D`$ ([benchmarks](../benchmarks.md)), so the artifact reads
   as a stronger detection.
 - **Calibrate the statistic** with [`albireo.detection_limit`](../api/calibrate.md), which
   resimulates this dataset through its own operators, scans hundreds of companion-free draws for
-  the null distribution of $\max_{K_2} D$, and injects a ladder of light fractions for
+  the null distribution of $`\max_{K_2} D`$, and injects a ladder of light fractions for
   completeness. The output is a false-alarm probability for the peak above and a limit of the
-  form "any companion contributing more than $X$% of the light would have been detected at 95%
+  form "any companion contributing more than $`X`$% of the light would have been detected at 95%
   confidence".
 
-A calibrated threshold and a marginalized $K_1$ do different jobs and neither replaces the
-other: the null trials are drawn under whatever $K_1$ the scan assumes, so the calibration is
+A calibrated threshold and a marginalized $`K_1`$ do different jobs and neither replaces the
+other: the null trials are drawn under whatever $`K_1`$ the scan assumes, so the calibration is
 blind to that assumption being wrong.
 
 Previously: [disentangle an SB2 end to end](sb2-end-to-end.md).

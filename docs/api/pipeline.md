@@ -43,7 +43,7 @@ Three routes to the orbit:
 main-sequence pair is the brighter star first. The likelihood cannot tell which spectrum
 belongs to which star: with a symmetric semi-amplitude prior the conjunction scan sees two
 equally deep troughs, the declared assignment and its mirror with the spectra swapped and
-rescaled by the light ratio. The pipeline starts the fit with $K_1 < K_2 < \dots$ (the
+rescaled by the light ratio. The pipeline starts the fit with $`K_1 < K_2 < \dots`$ (the
 first star moves least), which is a convention rather than a constraint, and the label
 stage checks it: a fitted light fraction far from the declared one is flagged as the
 signature of a reversed order.

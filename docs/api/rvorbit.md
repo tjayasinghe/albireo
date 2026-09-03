@@ -7,7 +7,7 @@ way and one inferred directly from the spectra can be compared element for eleme
 
 Two conventions apply to every result. The systemic velocity is fitted once per component
 whenever a component's velocities are differential: a table built from disentangled
-templates carries one unidentified zero point per star, and a shared $\gamma$ would absorb
+templates carries one unidentified zero point per star, and a shared $`\gamma`$ would absorb
 two different constants and bias both semi-amplitudes. `RVOrbit.gamma_mode` records which
 was done. The quoted errors are the curvature errors rescaled by the reduced chi-square, as
 in other orbit codes, because the per-epoch errors of a template fit do not include

@@ -40,17 +40,17 @@ N_EPOCHS = 10 if FAST else 12
 SEED = 20260811
 ```
 
-The model grid is uniform in $\ln\lambda$, so a Doppler shift is a pure translation and every
+The model grid is uniform in $`\ln\lambda`$, so a Doppler shift is a pure translation and every
 operator in the forward model is a convolution or a shift. 5.5 km/s per pixel over 60 Å gives
 652 pixels, roughly one échelle order in the green, and enough to carry an orbit.
 
 `ELL` is the one entry in that block that is an assumption rather than a measurement. With
-constant light fractions the likelihood depends only on the products $\ell_i d_i$, so the
+constant light fractions the likelihood depends only on the products $`\ell_i d_i`$, so the
 continuum light ratio and the component line depths are exactly degenerate
-([`docs/math.md`](../math.md) §5.2). albireo does not estimate $\ell$: it is either fixed by
+([`docs/math.md`](../math.md) §5.2). albireo does not estimate $`\ell`$: it is either fixed by
 assumption (as here), supplied through an external photometric prior, or broken by eclipses
 through per-epoch light fractions. The fit is conditional on that choice, and the recovered
-depths scale as $1/\ell_i$ if the choice is wrong.
+depths scale as $`1/\ell_i`$ if the choice is wrong.
 
 The solver's bandwidth is static, which is what allows the whole marginal likelihood to be
 compiled inside a single `jax.jit`:
@@ -59,8 +59,8 @@ compiled inside a single `jax.jit`:
 V_REL_MAX = float(K_TRUE.sum()) * (1.0 + ECC_TRUE) * 1.35
 ```
 
-$(K_1 + K_2)(1 + e)$ is the largest relative velocity the pair reaches; the factor 1.35 is
-headroom. Orbits that would exceed the bound are rejected by the numpyro model with a $-\infty$
+$`(K_1 + K_2)(1 + e)`$ is the largest relative velocity the pair reaches; the factor 1.35 is
+headroom. Orbits that would exceed the bound are rejected by the numpyro model with a $`-\infty`$
 factor rather than mis-solved, so a prior wider than `v_rel_max_kms` costs mixing efficiency
 near the bound, not correctness.
 
@@ -104,9 +104,9 @@ chip gap carries unused flux values at the masked pixels, so any code path that 
 ```
 
 This object holds the static problem structure (rebin operators, kernels, weights, built once)
-and exposes a single jit-compiled, differentiable function of the orbital parameters $\theta$.
-The $2 \times 652$ component-spectrum pixels never appear as sampling parameters: at every
-$\theta$ they are integrated out in closed form through a block-tridiagonal Cholesky
+and exposes a single jit-compiled, differentiable function of the orbital parameters $`\theta`$.
+The $`2 \times 652`$ component-spectrum pixels never appear as sampling parameters: at every
+$`\theta`$ they are integrated out in closed form through a block-tridiagonal Cholesky
 factorization ([`docs/math.md`](../math.md) §3, §4.2). NUTS therefore explores six dimensions.
 
 The priors are ordinary numpyro distributions, one per site:
@@ -124,9 +124,9 @@ PRIORS = {
 ```
 
 `period` and `t_conj` carry a photometric ephemeris, offset from the truth so that nothing is
-initialized at the answer. $(\sqrt{e}\cos\omega, \sqrt{e}\sin\omega)$ is smooth through $e = 0$,
-where $\omega$ and a time of periastron are undefined, and a uniform prior on the unit disk is a
-uniform prior on $e$. `log_tau` and `log_eta` are the spectral-prior hyperparameters: the
+initialized at the answer. $`(\sqrt{e}\cos\omega, \sqrt{e}\sin\omega)`$ is smooth through $`e = 0`$,
+where $`\omega`$ and a time of periastron are undefined, and a uniform prior on the unit disk is a
+uniform prior on $`e`$. `log_tau` and `log_eta` are the spectral-prior hyperparameters: the
 curvature scale of the component spectra and the ridge that makes the unconstrained
 low-frequency directions proper.
 
@@ -155,7 +155,7 @@ marginal likelihood is nearly flat. How many steps that takes to cross the `tol=
 gradient-norm criterion depends on floating-point details of the linear-algebra backend, and
 this fit has needed between about 150 and 215, so the example raises the cap rather than
 reporting `converged=False` intermittently. That flag describes the optimizer, not the orbit:
-the potential and the recovered $K$ agree to the printed precision either way. The MAP is used
+the potential and the recovered $`K`$ agree to the printed precision either way. The MAP is used
 as a starting point and a curvature estimate; the posterior is the reported result.
 
 ## 5. From the MAP to NUTS
@@ -178,7 +178,7 @@ coverage and is documented as such.
 
 The Hessian of the potential at the MAP, symmetrized, eigenvalue-floored and inverted, gives a
 dense mass matrix. Without it, warmup has to discover from scratch that `period` is constrained
-at the $10^{-3}$ level while `k` is constrained at $10^{-1}$, and early trajectories run into
+at the $`10^{-3}`$ level while `k` is constrained at $`10^{-1}`$, and early trajectories run into
 the tree-depth cap. With it, warmup only tunes the step size. Mass adaptation defaults to off
 when an explicit matrix is supplied, so that the early adaptation windows do not overwrite it
 with a poor few-sample estimate.
@@ -195,7 +195,7 @@ with a poor few-sample estimate.
     )
 ```
 
-The example runs a single chain to stay short. For science, run at least two and check $\hat R$;
+The example runs a single chain to stay short. For science, run at least two and check $`\hat R`$;
 `run_nuts` collects `num_steps` and `diverging` as extra fields either way.
 
 ## 6. Results
@@ -214,7 +214,7 @@ NUTS: 100 warmup + 150 samples x 1 chain(s), 0 divergences, 7 leapfrogs/sample  
 ```
 
 Seven leapfrog steps per sample is what a well-scaled mass matrix gives. The `z` column is the
-pull, $(\text{mean} - \text{truth})/\text{sd}$, which should be $\mathcal{O}(1)$ if the
+pull, $`(\text{mean} - \text{truth})/\text{sd}`$, which should be $`\mathcal{O}(1)`$ if the
 posterior is calibrated; the repository's injection-coverage study
 ([`docs/benchmarks.md`](../benchmarks.md)) tracks it over many injections rather than one.
 
@@ -233,14 +233,14 @@ The script's gate is looser than the numbers above:
     spectra = ab.posterior_spectra(model, samples, jax.random.PRNGKey(9), num_draws=24, extra=hyper)
 ```
 
-Each draw picks a posterior $\theta$ at random and then draws once from the conditional Gaussian
+Each draw picks a posterior $`\theta`$ at random and then draws once from the conditional Gaussian
 over the spectra, so the returned scatter carries both the spectral and the orbital uncertainty
 rather than a bootstrap around a point estimate. `extra=hyper` supplies the sites that were
 fixed during sampling.
 
 The per-component spectra are not fully determined by the data. In Fourier space the difference
-mode between the two components has information $\propto k^2 \operatorname{Var}_j(\Delta_j)$,
-which vanishes at $k = 0$: a constant added to $d_1$ and subtracted (light-weighted) from $d_2$
+mode between the two components has information $`\propto k^2 \operatorname{Var}_j(\Delta_j)`$,
+which vanishes at $`k = 0`$: a constant added to $`d_1`$ and subtracted (light-weighted) from $`d_2`$
 changes no epoch's prediction ([`docs/math.md`](../math.md) §5.1). The smooth envelope of each
 component is therefore set by the prior rather than measured. The example prints both sides of
 this:
@@ -259,7 +259,7 @@ Absolute depths per component require eclipses or photometry, not a longer chain
 
 If matplotlib is importable, the script writes `sb2_rv_curve.png` (posterior orbit draws
 phase-folded against the injected Keplerian) and `sb2_spectra.png` (posterior mean
-$\pm 2\sigma$ bands against the truth) to the working directory. matplotlib is not a dependency
+$`\pm 2\sigma`$ bands against the truth) to the working directory. matplotlib is not a dependency
 of albireo, and the guard is:
 
 ```python
@@ -283,6 +283,6 @@ ALBIREO_EXAMPLE_FAST=1 python examples/01_sb2_end_to_end.py
 ```
 
 On Windows, `$env:ALBIREO_EXAMPLE_FAST = "1"` sets the same switch. The script exits non-zero if
-$K_1$ or $K_2$ differs from the truth by more than 2%, so it can be run directly in CI.
+$`K_1`$ or $`K_2`$ differs from the truth by more than 2%, so it can be run directly in CI.
 
 Next: [find a companion that never shows a second set of lines](k2-scan.md).

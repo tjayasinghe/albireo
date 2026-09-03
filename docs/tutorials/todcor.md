@@ -81,7 +81,7 @@ Three arguments in that call need a note each.
 velocity range being searched (`LogGrid.covering(dataset, dv_kms=..., v_margin_kms=...)` builds
 one), and it should sample the narrowest LSF with three or more pixels per sigma. The shift
 operator interpolates linearly, which carries a pixel-locking ripple of order
-$0.1/\sigma_{\rm px}^2$ pixels
+$`0.1/\sigma_{\rm px}^2`$ pixels
 ([§10.3](../math.md#103-fractional-shifts-are-exact-and-the-pixel-locking-bound)): a few
 thousandths of a pixel at three per sigma, a few hundredths at one. `todcor` warns below two;
 `fit.templates()` upsamples automatically; a library template's grid is built by the caller and
@@ -99,7 +99,7 @@ spectra were solved against them, and no other amplitude is consistent with what
 
 **The LSF.** The templates are intrinsic, and each instrument's LSF is applied to them in
 quadrature above whatever resolution the template already carries (`Template.sigma_kms`). A
-template rendered from an $R = 20{,}000$ grid is therefore not broadened twice, and a template
+template rendered from an $`R = 20{,}000`$ grid is therefore not broadened twice, and a template
 broader than the instrument is used as it is, with a warning.
 
 ## Reading the diagnostics
@@ -165,7 +165,7 @@ Keplerian fit to 24 velocities of 2 component(s): chi2 15.65 for 17 dof (errors 
   q = K_primary/K_secondary = 0.6663;  M_primary sin^3 i = 0.4173 Msun, M_secondary sin^3 i = 0.2780 Msun
 ```
 
-against an injected $P = 6$, $e = 0.15$, $\omega = 40.1^\circ$, $K = 42, 63$. The fit uses the
+against an injected $`P = 6`$, $`e = 0.15`$, $`\omega = 40.1^\circ`$, $`K = 42, 63`$. The fit uses the
 same Kepler solver and angle conventions as the joint model, so `orbit.to_theta()` is what
 `Disentangler(orbit=...)` takes as a warm start: measure against a library template, fit the
 orbit, disentangle from it. The period search returns its aliases as well (6.083, 5.843,
@@ -184,8 +184,8 @@ The disentangled components are the best templates available for a system, with 
 lines, depths and rotation, measured from these very epochs. The velocities measured against
 them recover the injected ones to 0.13 and 0.10 km/s rms once each component's zero point is
 removed. They are differential: `own.absolute` is `(False, False)`, `summary()` reports
-"template zero point unknown", and `fit_rv_orbit` fits one $\gamma$ per component rather than
-forcing a shared one onto two different constants, which would corrupt both $K$ values (a test
+"template zero point unknown", and `fit_rv_orbit` fits one $`\gamma`$ per component rather than
+forcing a shared one onto two different constants, which would corrupt both $`K`$ values (a test
 covers that case). The semi-amplitudes come back at 41.983 ± 0.046 and 62.991 ± 0.072 km/s.
 
 Absolute velocities from this loop are what the label mode provides: fit labels to the

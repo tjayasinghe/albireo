@@ -43,8 +43,8 @@ with them: which components are absolute and which carry an unidentified zero po
 disentangled template does; [§7.6](../math.md#76-free-per-epoch-velocities-the-rv-table));
 which epochs are blended (the velocities lie on a ridge, with a covariance correlation
 above 0.9); which epochs sat at the search edge; the per-component detection statistic
-$\Delta\chi^2$ (the increase in chi-square when that component is removed, small for a
-companion the epoch does not detect); and the Wilson slope, which equals $-K_2/K_1$ and is
+$`\Delta\chi^2`$ (the increase in chi-square when that component is removed, small for a
+companion the epoch does not detect); and the Wilson slope, which equals $`-K_2/K_1`$ and is
 independent of both zero points.
 
 The theory is in
