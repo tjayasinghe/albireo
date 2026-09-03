@@ -1,5 +1,8 @@
 """Query and download reduced spectra from the ESO Science Archive.
 
+**Experimental.** This is a thin layer over an external service; its query surface
+follows the archive's, not a stability promise of albireo's.
+
 The ESO archive publishes Phase 3 one-dimensional spectra under one query language, one
 file layout and one proprietary period: FEROS, HARPS, UVES, X-shooter, GIRAFFE and
 ESPRESSO all deliver ``SCIENCE.SPECTRUM`` products, and every product becomes public a

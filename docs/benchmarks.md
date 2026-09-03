@@ -4,9 +4,38 @@ Running record of correctness and performance results at each milestone. Numbers
 from the referenced tests, which reproduce them deterministically (fixed seeds); no
 claim here is asserted without a test.
 
+## The machine
+
+Every table in this file was measured on one computer: an AMD Ryzen 9 9950X3D desktop,
+16 cores / 32 threads, 32 GB, Windows 11 Pro build 26200, CPU only, float64. The tables
+written before the D50 re-run call it a "Windows 11 laptop". That label is wrong. There was
+never a second machine, and the specifications those tables quote, 32 GB and Windows 11,
+are this one's.
+
+Two arguments in the later sections were built on the two-machine reading and do not
+survive it.
+
+* The 1.46× "residual clean-machine gap" between shift-and-add's recorded 0.018 s and the
+  0.0263 s measured under the D50 protocol is not a hardware difference, because there was
+  no hardware difference. What it is cannot now be recovered: the earlier number's software
+  stack, warmup and dose of the heap contamination D50 identified are all unrecorded, and
+  that contamination makes a run slower rather than faster, so it does not explain a number
+  below the clean one either. 0.018 s is an unreproduced measurement, not evidence about a
+  machine.
+* "fd3 moved 12% across the hardware change" describes no hardware change. D50 attributed
+  part of that motion to OpenBLAS oversubscription; the remainder has no second machine to
+  be attributed to.
+
+Nothing about the accuracy record depends on this. Those results are deterministic and were
+reproduced exactly in the re-run, which is why accuracy is the durable comparison here and
+the walls are not.
+
+No result in this file was measured on a portable machine. Every runtime below is 16
+desktop cores, and the wording of the earlier sections has been corrected to say so.
+
 ## The fixed-orbit linear solver (2026-08-11)
 
-Machine: Windows 11 laptop, CPU only, float64, un-jitted (JAX 0.11). Performance work
+Machine: the desktop above, CPU only, float64, un-jitted (JAX 0.11). Performance work
 is deferred to the later stages (jit, custom band assembly, GPU batching); this one is a
 correctness milestone.
 
@@ -63,7 +92,7 @@ Two lessons from the closed loop, both now covered by tests and documentation:
 
 ## Joint NUTS inference (2026-08-11)
 
-Machine: same Windows 11 laptop, CPU only, float64, now **jit-compiled** through the
+Machine: the same desktop, CPU only, float64, now **jit-compiled** through the
 whole θ → velocities → shifts → probed marginal likelihood path (math.md §7.1), with
 reverse-mode gradients through the comb probing and the scan-based block Cholesky.
 
@@ -97,7 +126,7 @@ each), because the posterior scales span ~5 orders of magnitude (σ_P ~ 9×10⁻
    150 warmup + 250 samples in **102 s**, **0 divergences, mean 6.5 leapfrogs** per
    transition.
 
-Total: ~3 min for a converged orbital posterior on a laptop CPU.
+Total: ~3 min for a converged orbital posterior on one desktop CPU.
 
 ### Closed-loop NUTS gate (the acceptance gate)
 
@@ -137,7 +166,7 @@ anchor that the data do not constrain). The test asserts this split
 from the sampling priors (disk + bandwidth-guard truncation replicated exactly),
 independent random line lists per injection (so the spectral prior is misspecified by
 construction and (τ, η) are refit by ML-II each time), and NUTS 150+250 per injection
-via the MAP → Laplace → NUTS pipeline. Total: 101 min on the laptop CPU (~4.2
+via the MAP → Laplace → NUTS pipeline. Total: 101 min on the desktop CPU (~4.2
 min/injection).
 
 | Site | cov68 | cov90 | mean \|z\| | rank-KS |
@@ -169,7 +198,7 @@ is unaffected.
 
 ## Realism: tellurics, SB3, per-epoch light, LSF widths, K₂ scan (2026-08-11)
 
-Machine: same Windows 11 laptop, CPU only, float64, jitted θ-path throughout. Every
+Machine: the same desktop, CPU only, float64, jitted θ-path throughout. Every
 number below is asserted (usually with margin) by a deterministic closed-loop test.
 
 ### θ-path exactness (new sites)
@@ -228,7 +257,7 @@ recovered individually at the 0.01 level with ℓ(t) recovered to 0.003.
 
 ## Scale, benchmarks, release readiness (2026-08-11)
 
-Machine: same Windows 11 laptop (32 GB RAM), CPU, float64. The scale gate ("2×10⁵
+Machine: the same desktop (32 GB RAM), CPU, float64. The scale gate ("2×10⁵
 px / 50 epochs samples in minutes on one GPU") was projected from these CPU
 measurements. It has since been run on a real GPU (below, 2026-08-14): the CUDA path
 works and scales as predicted, but the gate does not close on the consumer card
@@ -287,9 +316,9 @@ Cholesky cost for a determinant of negligible cost).
 
 Both scale linearly in n at fixed bandwidth (~0.75 ms/px eval, ~3.4 ms/px gradient),
 as the O(n·p²) flop count predicts; log-likelihood values are bit-identical across all
-three solver revisions. Peak memory stays within the laptop's 32 GB at every size. A
+three solver revisions. Peak memory stays within the machine's 32 GB at every size. A
 single design-target marginal evaluation (the operation that returns disentangled
-spectra at a given orbit) is thus **2.5 min on a laptop CPU**; posterior sampling at
+spectra at a given orbit) is thus **2.5 min on one desktop CPU**; posterior sampling at
 this scale is deferred to the GPU (below).
 
 ### GPU projection (stated as projection, not measurement)
@@ -342,7 +371,7 @@ rate, and albireo's solver contract is float64. Measured here on a 4096³ matmul
 | float64 | **783** |
 
 **A 50× penalty.** 783 GFLOP/s of fp64 is the rate of a good desktop CPU, not of an
-accelerator, which is why the eval times above beat this laptop's CPU by only about 2×
+accelerator, which is why the eval times above beat this desktop's CPU by only about 2×
 rather than by the order of magnitude the projection assumed. The projection was not
 wrong about the graph; it assumed A100-class fp64, which consumer silicon does not
 provide.
@@ -568,6 +597,14 @@ share no lines:
 | K₂ | 49.495 (+0.79%) | 49.479 (+0.76%) | 49.106 ± 0.010 |
 | *q* = K₁/K₂ | 1.0193 | 1.0194 | 1.0419 |
 
+Both runs used the period rounded to 24.5924 d and a second window starting at 5340 Å.
+`aiphe_bench.py` now carries the unrounded photometric period, 24.592483 d (Kirkby-Kent
+et al. 2016), and starts the cross-check window at 5341 Å so that its 3 Å pad clears
+HARPS's inter-CCD gap, 5304.67–5337.61 Å; at 5340 Å the pad reached 0.6 Å into the gap
+and clipped about 33 pixels per epoch, which `mask_flux_gaps` removed. Neither changes
+this table: `period` and `t_conj` are free in the K fit, and the clipped pixels carry no
+flux. Both matter for the runs below that hold the velocities fixed.
+
 The two windows agree with each other to 0.02% in K₁ and 0.01% in the mass ratio, and both
 sit the same distance from the published values. Three explanations are therefore excluded
 rather than merely suspected:
@@ -686,7 +723,7 @@ than the factorization, was the scale problem.
    is a contiguous copy, where a gather's transpose is a scatter). Verified
    against plain autodiff at 1e-13 relative and by finite differences.
 
-### Ladder, before → after (CPU, same laptop, jitted, p = 513, 50 epochs, SB2)
+### Ladder, before → after (CPU, same desktop, jitted, p = 513, 50 epochs, SB2)
 
 | n (model px) | eval before | eval after | ∇ before | ∇ after |
 |---|---|---|---|---|
@@ -697,7 +734,7 @@ than the factorization, was the scale problem.
 
 (`scripts/m5_scale_bench.py`, single sequential run, no external load.) A
 design-target marginal evaluation, that is disentangled spectra at a fixed
-orbit, is now ~26 s on a laptop CPU (was 2.5 min), and a gradient under 2 min
+orbit, is now ~26 s on one desktop CPU (was 2.5 min), and a gradient under 2 min
 (was 12 min). The gate-scale NUTS test follows: ~65 s wall (Laplace + warmup +
 250 samples) against ~102 s at the joint-NUTS baseline and 112 s in the scale-stage
 record, so
@@ -708,7 +745,7 @@ memory pass below, which brought it to 18.2 GB and the top row to 22.2 s /
 87.4 s), which is the source of the ratio erosion at the top row. At realistic
 single-star bandwidths (HR 6819-like: p ≈ 160 rather than the ladder's
 conservative 513) the same operations take seconds per gradient, which puts full
-NUTS posteriors for real SB2 problems within reach of a laptop CPU; the GPU
+NUTS posteriors for real SB2 problems within reach of one desktop CPU; the GPU
 budget becomes headroom rather than a requirement.
 
 ### Found in passing: the Laplace mass matrix was built from a defective Hessian
@@ -794,7 +831,7 @@ Log-likelihoods, gradients and Hessians are unchanged; the equivalences are
 regression-tested against the routes they replaced (blocked prior determinant,
 unfused selected inverse, unbatched pre-pass).
 
-Wall clock, same laptop, same seeds. The pass was aimed at memory, but at the
+Wall clock, same desktop, same seeds. The pass was aimed at memory, but at the
 design target it reduced time as well:
 
 | n (model px) | eval, before → after | ∇, before → after |
@@ -1964,7 +2001,8 @@ without one indicates whether the data support it.
 Same harness as the scale and speedup ladders above. Machine: AMD Ryzen 9 9950X3D desktop, 16 cores / 32
 threads, 32 GB, Windows 11, CPU only, float64, measured at 66.8 GB/s streaming (triad)
 and 1188 GFLOP/s fp64 `dgemm` at n = 2000. The earlier tables are labelled "Windows
-11 laptop", so absolute numbers should not be read across that boundary; every
+11 laptop" and are this same machine under an unrecorded software stack (see The
+machine), so absolute numbers still should not be read across that boundary; every
 before/after pair below was measured back to back on this machine, and those comparisons
 are valid.
 
@@ -2060,7 +2098,7 @@ percent for 1.9 GB, so it was declined.
 
 The full design-target ladder (`scripts/m5_scale_bench.py`, same seeds, same machine,
 committed code stashed and re-run for the "before" column, not carried over from the
-laptop tables):
+earlier tables):
 
 | n (model px) | eval before | eval after | | ∇ before | ∇ after | |
 |---|---|---|---|---|---|---|
@@ -2115,7 +2153,7 @@ change.
 The published comparison no longer reads the same way, and mostly not because of this
 pass:
 
-| | recorded (laptop) | this machine |
+| | recorded earlier | this machine |
 |---|---|---|
 | albireo, committed code | 0.182 s | 0.071 s |
 | albireo, with this pass | — | **0.059 s** |
@@ -2256,7 +2294,7 @@ changed changed in the measurement.
 Two to three warmups, then nine recorded repeats per code, strictly sequential, nothing else
 running:
 
-| | recorded (earlier laptop) | min | median | convention |
+| | recorded earlier | min | median | convention |
 |---|---|---|---|---|
 | shift-and-add, 7 sweeps | 0.018 s | **0.0263 s** | 0.0267 s | fresh process, jax never imported |
 | albireo | 0.182 s | **0.0591 s** | 0.0625 s | jitted steady state; cold compile + first call 0.495 s |
@@ -2265,7 +2303,7 @@ running:
 
 The ranking on this machine: shift-and-add first, then albireo and single-threaded fd3 at
 parity (mins 0.0591 against 0.0636, medians 0.0625 against 0.0640), then fd3 as it ships.
-The earlier "albireo loses to both" was a statement about one laptop; the durable statements are
+The earlier "albireo loses to both" was a statement about one earlier measurement; the durable statements are
 that shift-and-add is fastest everywhere, as a small number of array shifts and means
 should be, and that albireo's 32-thread XLA graph recovers fd3's single-thread advantage on
 current hardware. The speedup pass's partial recheck reproduces from here: its 0.059 s is this table's
@@ -2277,7 +2315,7 @@ irreproducible 0.049 s sits inside the contaminated band below.
 The wall that refused to reproduce was not shift-and-add's but the measurement's.
 
 The committed harness timed shift-and-add in the same process, after the albireo solve, the
-convention behind both recorded numbers including the laptop's. Dose–response, one process,
+convention behind both recorded numbers including the earlier one's. Dose–response, one process,
 minimum wall per stage: numpy-only 0.0265 s → `import jax` 0.0267 → backend init 0.0267 → a
 tiny jit 0.0275 → after the big jitted solve 0.0632–0.0736 s, and it does not recover:
 `clear_caches()` plus gc reads 0.0729, three seconds of idle 0.0787. The inner `_shift`
@@ -2295,10 +2333,11 @@ back, so the walk is the cost), and `disentangle` makes ~10⁴ such allocations 
 +20–45 ms, which is the observed band. Reproduced directly: the committed convention gives
 0.037–0.043 s here, and after fully jitted runs 0.049–0.084 s, which contains that 0.049.
 
-The laptop's 0.018 s was taken through the same convention with an unknown dose, so the
-residual clean-machine gap (0.0263 here against 0.018 there, 1.46×) does not decompose
-further: serial small-array NumPy throughput on an unrecorded stack, plus contamination of
-a size that cannot be reconstructed. `scripts/fd3_bench.py` now times shift-and-add in a
+The earlier 0.018 s was taken through the same convention, on this same machine, with an
+unknown dose, so the 1.46× residual (0.0263 here against 0.018 there) does not decompose
+further and has no hardware explanation: serial small-array NumPy throughput on an
+unrecorded stack, plus contamination of a size that cannot be reconstructed, and
+contamination only ever slows a run. 0.018 s is unreproduced. `scripts/fd3_bench.py` now times shift-and-add in a
 fresh interpreter (warmup, then min of five), the convention this table uses, and the row
 above is its first number produced under a recorded stack.
 
@@ -2316,8 +2355,8 @@ because that is how it is normally run.
 
 ### What stands
 
-The earlier tables stand as a record, now labelled with what their machine was: an earlier
-laptop, stack unrecorded. The accuracy result is unchanged and is now confirmed a second
+The earlier tables stand as a record, now labelled with what their machine was: this same
+desktop, software stack and timing dose unrecorded. The accuracy result is unchanged and is now confirmed a second
 time by exact replication: ~2× on shape, the same *k* = 0 null space in all three codes,
 and a posterior from one of them.
 
@@ -2402,8 +2441,8 @@ after: the orbit, the spectra, and the error bars on both.
 
 Machine: AMD Ryzen 9 9950X3D desktop, 16 cores / 32 threads, 32 GB, Windows 11, CPU only,
 float64, the same machine as the speedup pass and the re-run, so those numbers are
-comparable with these while the
-earlier "Windows 11 laptop" tables are not. Harness: `scripts/label_bench.py`, which is
+comparable with these. The earlier tables, labelled "Windows 11 laptop", are this same
+machine under an unrecorded stack and are not. Harness: `scripts/label_bench.py`, which is
 offline and
 reproducible; the grid is a toy at BOSZ's own node density (250 K in Teff, 0.5 dex in log g,
 0.25 dex in [M/H]; 455 nodes x 2000 px) so that the interpolation numbers can be read against
@@ -2521,6 +2560,10 @@ over 36 archival HARPS spectra (R = 115,000, `scripts/download_aiphe.py`), disen
 5150-5250 A with the velocities held at the published orbit so that what is under test is the
 label fit and not the orbit. Library: `bosz2024-fgk-r20000`, 454 nodes. The notebook of the
 same run is `docs/tutorials/aiphe-labels.ipynb`.
+
+The velocities were held at the rounded period, 24.5924 d. `aiphe_bench.py` now carries
+24.592483 d, which moves the fixed velocities by up to 0.107 km/s at the steepest phases;
+the figures in this section predate that change and are due a re-run.
 
 AI Phe is the validation target because every quantity the mode produces has an independent
 published value: Teff 6310 K and 5010 K, log g 4.001 and 3.598, R2/R1 = 1.6237 (Maxted et al.

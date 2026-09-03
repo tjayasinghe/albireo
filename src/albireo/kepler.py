@@ -119,9 +119,12 @@ def radial_velocity(t, *, period, t_peri, ecc, omega, k, gamma=0.0):
 def t_peri_from_t_conj(t_conj, *, period, ecc, omega):
     """Time of periastron from a time of conjunction.
 
-    The conjunction convention is ``nu(t_conj) + omega = pi/2``, the inferior conjunction
-    of the component whose ``omega`` is given (for an eclipsing system, the time at which
-    that component passes in front). The inverse mapping is ``nu -> E -> M -> t``.
+    The conjunction convention is ``nu(t_conj) + omega = pi/2``, the superior conjunction
+    of the component whose ``omega`` is given. The line-of-sight displacement is
+    ``r sin(i) sin(nu + omega)`` measured away from the observer, so at ``nu + omega =
+    pi/2`` that component is farthest behind the plane of the sky and, in an eclipsing
+    system, is the one being eclipsed; passing the primary's ``omega`` therefore makes
+    ``t_conj`` the time of primary eclipse. The inverse mapping is ``nu -> E -> M -> t``.
     """
     nu_conj = 0.5 * jnp.pi - omega
     e_conj = 2.0 * jnp.arctan2(

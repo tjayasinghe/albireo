@@ -1,5 +1,8 @@
 """Writers for the atmosphere codes that consume disentangled spectra.
 
+**Experimental.** The writers follow the file formats the atmosphere codes accept,
+and change when those do.
+
 albireo produces component spectra; codes such as GSSP, iSpec, Korg.jl and PySME turn a
 component spectrum into effective temperature, surface gravity and abundances. This module
 writes the input files those codes read, without further hand-editing. The two formats are

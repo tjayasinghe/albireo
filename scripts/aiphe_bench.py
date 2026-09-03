@@ -9,9 +9,14 @@ spectroscopic semi-amplitudes are published from several independent studies agr
 0.1 per cent:
 
     K1 = 51.164 +/- 0.007 km/s      K2 = 49.106 +/- 0.010 km/s
-    P  = 24.5924 d                  e  = 0.1878 +/- 0.0006
+    P  = 24.592483 d                e  = 0.1878 +/- 0.0006
     omega = 110.30 +/- 0.06 deg     T0 = BJD_TDB 2458362.82847  (primary eclipse)
-    -- Maxted et al. (2020), MNRAS 498, 332, Tables 2-3
+    -- Maxted et al. (2020), MNRAS 498, 332, Tables 2-3, except the period, which Maxted
+       quotes rounded to 24.5924 d from Kirkby-Kent et al. (2016), A&A 591, A124. The
+       unrounded value is carried here: the 8.3e-5 d difference accumulates to 0.0089 d
+       over the 107 cycles back to the first epoch, worth up to 0.107 km/s where the
+       velocity curve is steepest. The K fit absorbs it in its free period; the runs that
+       hold the velocities fixed, including the label fit, do not.
 
 The external ground truth is therefore the orbit rather than the component spectra: recover
 K1 and K2 from 36 archival HARPS spectra and compare against values good to 0.014 and
@@ -50,7 +55,7 @@ from albireo.likelihood import marginal_loglikelihood
 from albireo.priors import SmoothnessPrior
 
 # --- the published system (Maxted et al. 2020, MNRAS 498, 332) ---------------
-P_PUB = 24.5924
+P_PUB = 24.592483  # Kirkby-Kent et al. 2016; Maxted's tables quote it rounded to 24.5924
 K1_PUB, K1_ERR = 51.164, 0.007
 K2_PUB, K2_ERR = 49.106, 0.010
 ECC_PUB, ECC_ERR = 0.1878, 0.0006
@@ -63,6 +68,12 @@ R1_FRAC, R2_FRAC = 0.037724, 0.061253  # r = R/a, run C
 # 5150-5250 A: metal-rich, no telluric bands (those start beyond ~6270 A), and it
 # carries the Mg I b triplet, which both an F7 V and a K0 IV show strongly.
 WINDOW = (5150.0, 5250.0)
+# The disjoint cross-check window, passed with --window. HARPS's inter-CCD gap is
+# 5304.67-5337.61 A, and a window is widened by region_pad_angstrom = 3.0 before pixels are
+# selected, so any start below 5341 A reaches into the gap. mask_flux_gaps removes those
+# pixels (the runs are far longer than its threshold of 8), but clearing the gap is cheaper
+# than masking it. The record in docs/benchmarks.md was taken with a start of 5340 A.
+WINDOW_2 = (5341.0, 5440.0)
 DV_KMS = 0.8  # native HARPS sampling is 0.577 km/s; the LSF sigma is 1.107
 LSF_SIGMA_V = 299792.458 / 115000.0 / 2.3548  # R = 115,000
 TAU, ETA = 300.0, 5.0
@@ -128,8 +139,9 @@ def main() -> None:
         nargs=2,
         default=None,
         metavar=("LO", "HI"),
-        help="analysis window in angstrom; the recovered orbit's dependence on this is "
-        "itself a measurement (see the module docstring)",
+        help=f"analysis window in angstrom; the recovered orbit's dependence on this is "
+        f"itself a measurement (see the module docstring). The disjoint cross-check is "
+        f"{WINDOW_2[0]:.0f} {WINDOW_2[1]:.0f}",
     )
     args = ap.parse_args()
     if args.window:

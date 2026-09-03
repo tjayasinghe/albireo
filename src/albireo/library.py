@@ -1,5 +1,8 @@
 """Synthetic spectral libraries: standardized containers and differentiable interpolation.
 
+**Experimental.** The container, the grid identifiers and the cache layout may
+change.
+
 A library is a published grid of synthetic spectra (BOSZ, Bohlin et al. 2017 and Mészáros
 et al. 2024; POLLUX, Palacios et al. 2010; PHOENIX, Husser et al. 2013) reduced to the four
 quantities a label fit needs: the node labels, the normalized flux at each node, the

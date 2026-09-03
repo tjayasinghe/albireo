@@ -1,5 +1,9 @@
 """Run every stage of the analysis for a list of stars, from one declaration.
 
+**Experimental.** The TOML schema read here and the ``albireo`` command line built
+on it may be renamed or reshaped; they are a convenience over the stage APIs, each
+of which does the same work when called directly.
+
 For each star the driver reads the epochs (:mod:`albireo.io`), disentangles them
 (:class:`albireo.Disentangler`), fits atmospheric labels to the components so that each
 can serve as a radial-velocity template (:mod:`albireo.match`), measures one velocity per

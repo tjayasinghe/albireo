@@ -386,12 +386,12 @@ design. Recorded here so that they are not re-derived in December:
 |---|---|
 | Table | `rvs_epoch_spectrum`, DataLink only, not through the main TAP interface |
 | DataLink retrieval type | `EPOCH_SPECTRUM_RVS` |
-| Grid | 961 elements, 846–870 nm, step 0.025 nm, not DR3's 2401 × 0.01 nm |
-| Frame | "shifted from the Gaia reference frame to the barycentric reference frame and are normalised" |
+| Grid | 961 elements, 846–870 nm, step 0.025 nm, not DR3's 2401 × 0.01 nm. At R ≈ 11,500 that is 1.3 bins per LSF σ against DR3's 3.2, below the ≥ 3 px/σ threshold the TODCOR work measured for pixel-locking, so template correlation on these spectra should be expected to lock. The joint model is unaffected: it chooses its own grid rather than the data's. |
+| Frame | "shifted from the Gaia reference frame to the barycentric reference frame". Normalisation is conditional, and `normalisation_method` records which was applied: 0 leaves the spectrum untouched and is what every double-lined transit gets, 3 divides flux and `flux_error` by the same median, 4 marks a median-negative spectrum. The SB2 population therefore arrives un-normalised while the reference population is median-scaled; the loader has to branch on the byte and must not assume a pseudo-continuum near 1. |
 | Time | `obs_time_rv`, Barycentric JD in TCB − 2 455 197.5 d, Roemer-corrected to the barycentre |
 | Uncertainties | `flux_error[961]`, propagated per bin; NaN where every contributing CCD was masked |
-| Per-pixel coverage | `combined_ccd_in_index`, stored only where smaller than `combined_ccds` |
-| Selection | `all_source_rvs.has_epoch_rvs`, a graded byte rather than a boolean (0 = none, 1 = very weak) |
+| Per-pixel coverage | `combined_ccd_in_index`, a sparse `short[]` paired with a second `short[]` named `index` holding the flux-array positions it refers to; both are null when every bin used all CCDs. Read as a per-pixel array of length 961 it is wrong: it has to be scattered into `index`. |
+| Selection | `all_source_flags.has_epoch_rvs`, a byte graded by `external_apparent_grvs` rather than by spectrum S/N: 0 no spectrum, 1 G_RVS > 14 (unusable on its own, no epoch RVs), 2 for 12 < G_RVS ≤ 14 (epoch RVs), 3 for G_RVS ≤ 12 (epoch RVs and broadening velocities). Class 3 is the usable population. The draft's own prose puts the column in `all_source_rvs` in one section and `all_source_flags` in another; the definition site is `all_source_flags`, and the two tables are different sizes (2.79e9 rows against 3.12e8), so the SB2 query joins both. Re-check on release day. |
 
 Two of those are decisive. There is a per-transit barycentric timestamp, which was the one unknown
 that could have made the product unusable to albireo regardless of everything else. And the fluxes

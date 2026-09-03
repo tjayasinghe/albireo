@@ -1,5 +1,8 @@
 """Epoch radial velocities of every component by N-dimensional correlation (TODCOR).
 
+**Experimental.** The names and return shapes defined here may change; the joint
+:class:`~albireo.inference.MarginalOrbitModel` path infers velocities without them.
+
 The estimator is the weighted least-squares fit of N shifted, LSF-convolved, rebinned
 templates to each epoch's pixels, with the amplitudes held at declared light fractions or
 profiled, and an additive low-order nuisance polynomial (``docs/math.md`` §10.1). The

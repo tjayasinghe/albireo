@@ -1,5 +1,7 @@
 """Observing-strategy forecasts from the flux-free posterior covariance of the spectra.
 
+**Experimental.** The names and return shapes defined here may change.
+
 The posterior covariance of the component spectra,
 
     Sigma = (Lambda_p + A^T W A)^{-1},

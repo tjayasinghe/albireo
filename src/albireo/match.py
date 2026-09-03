@@ -1,5 +1,7 @@
 """Stellar labels for disentangled components: Teff, log g, [M/H] and v sin i.
 
+**Experimental.** The label vocabulary and the return shapes may change.
+
 The mode fits atmospheric labels to the component spectra a disentangling returns, against a
 published synthetic grid (:mod:`albireo.library`), so that a component can serve as a
 radial-velocity template for TODCOR (:mod:`albireo.todcor`), saphires, iSpec or a survey

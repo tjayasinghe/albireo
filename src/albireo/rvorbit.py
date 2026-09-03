@@ -1,5 +1,8 @@
 """Keplerian orbits fitted to a velocity table.
 
+**Experimental.** The names and return shapes defined here may change; the joint
+path of ``docs/math.md`` §7 fits the same Keplerian from the spectra directly.
+
 The main path of albireo infers the orbit from the spectra directly (``docs/math.md`` §7)
 and does not use this module. :mod:`albireo.todcor` produces one velocity per component
 per epoch, and this module fits a Keplerian to such a table with the same Kepler solver
@@ -159,8 +162,9 @@ class RVOrbit:
         Components, in the order of ``k`` and ``gamma``.
     period, t_conj, ecc, omega
         The elements: period [d], time of conjunction (``nu + omega = pi/2`` for the first
-        component, its inferior conjunction), eccentricity, and the first component's
-        argument of periastron [rad]. The second component uses ``omega + pi``.
+        component, its superior conjunction, so the eclipse of that component in an
+        eclipsing system), eccentricity, and the first component's argument of periastron
+        [rad]. The second component uses ``omega + pi``.
     k
         Semi-amplitudes [km/s], one per component.
     gamma

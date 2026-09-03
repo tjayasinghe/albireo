@@ -18,7 +18,8 @@ MarginalOrbitModel        the marginal posterior over the orbit (spectra integra
 
 !!! note "Runtime"
 
-    A few minutes on a laptop CPU with `ALBIREO_EXAMPLE_FAST=1` (10 epochs, 100 warmup / 150
+    A few minutes on one desktop CPU with `ALBIREO_EXAMPLE_FAST=1`
+ (10 epochs, 100 warmup / 150
     samples); the default size (12 epochs, 150 / 250) costs roughly 2.5 times that. NUTS
     dominates: it is a few thousand gradient evaluations, each one a banded Cholesky
     factorization in float64, so the wall time tracks whatever linear-algebra backend JAX is

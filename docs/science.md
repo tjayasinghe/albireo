@@ -351,7 +351,7 @@ of the disentangling and of the instrumental model
 **BLOeM**, the Binarity at LOw Metallicity survey (Shenar et al. 2024), obtained about 25
 epochs of VLT/FLAMES spectroscopy for 929 massive stars in the Small Magellanic Cloud.
 Villaseñor et al. (2025) classify the early B-type dwarfs and giants and identify 59
-double-lined systems, and Bodensteiner et al. (2025) the B-type supergiants. albireo can
+double-lined systems, and Britavskiy et al. (2025) the B-type supergiants. albireo can
 resolve a BLOeM identifier to its archival spectra ([tutorial](tutorials/bloem-sb2.md)).
 
 **V453 Cygni** is the published test case distributed with fd3 (Pavlovski & Southworth
@@ -384,9 +384,9 @@ Each entry links to its record in the NASA Astrophysics Data System where one ex
 - Blanco-Cuaresma, S., Soubiran, C., Heiter, U. & Jofré, P. 2014, A&A, 569, A111. [ADS](https://ui.adsabs.harvard.edu/abs/2014A%26A...569A.111B)
 - Blomme, R., Frémat, Y., Sartoretti, P., et al. 2023, A&A, 674, A7. [ADS](https://ui.adsabs.harvard.edu/abs/2023A%26A...674A...7B)
 - Bodensteiner, J., Shenar, T., Mahy, L., et al. 2020, A&A, 641, A43. [ADS](https://ui.adsabs.harvard.edu/abs/2020A%26A...641A..43B)
-- Bodensteiner, J., Sana, H., Dufton, P. L., et al. 2025, A&A, 698, A40. [ADS](https://ui.adsabs.harvard.edu/abs/2025A%26A...698A..40B)
 - Bohlin, R. C., Mészáros, Sz., Fleming, S. W., et al. 2017, AJ, 153, 234. [ADS](https://ui.adsabs.harvard.edu/abs/2017AJ....153..234B)
 - Bradbury, J., Frostig, R., Hawkins, P., et al. 2018, JAX: composable transformations of Python+NumPy programs. [GitHub](https://github.com/jax-ml/jax)
+- Britavskiy, N., Mahy, L., Lennon, D. J., et al. 2025, A&A, 698, A40. [ADS](https://ui.adsabs.harvard.edu/abs/2025A%26A...698A..40B)
 - Chaloner, K. & Verdinelli, I. 1995, Statistical Science, 10, 273. [DOI](https://doi.org/10.1214/ss/1177009939)
 - Czekala, I., Andrews, S. M., Mandel, K. S., Hogg, D. W. & Green, G. M. 2015, ApJ, 812, 128. [ADS](https://ui.adsabs.harvard.edu/abs/2015ApJ...812..128C)
 - Czekala, I., Mandel, K. S., Andrews, S. M., et al. 2017, ApJ, 840, 49. [ADS](https://ui.adsabs.harvard.edu/abs/2017ApJ...840...49C)

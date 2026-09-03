@@ -5,6 +5,24 @@ All notable changes to albireo are recorded here. The format follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html), with the caveat that while the
 version is below 1.0 the public API may change in any release.
 
+Below 1.0 that caveat covers everything, so it is worth saying which surfaces it is
+expected to bear on, because the two are not equally settled.
+
+- **Supported.** The model layer: `data`, `grids`, `preprocess`, `forward`, `likelihood`,
+  `priors`, `inference`, `kepler`, `operators`, `scan`, `calibrate`, `simulate`,
+  `examples`, `io`, `results` and `plotting`. A change here is recorded below with what to
+  do about it.
+- **Experimental**, and marked so in each module's own docstring: `facade` (the
+  `Disentangler` declaration), `pipeline` together with the `albireo` command line and the
+  TOML schema it reads, `todcor`, `rvorbit`, `library`, `match`, `forecast`, `archive` and
+  `handoff`. Their vocabulary is still settling and may be renamed or reshaped in any
+  release below 1.0. Each is a convenience over the model layer, which reaches the same
+  computation directly.
+- **Internal**, with no promise at all: `assembly` and `solver`.
+
+Every name above is re-exported at the top level, so the module is what carries the
+marker, not the import path.
+
 This file records what changed. The reasons are recorded elsewhere:
 [`internal/design.md`](internal/design.md) §2 is the decision ledger, and
 [`docs/benchmarks.md`](docs/benchmarks.md) is the validation and performance record.
