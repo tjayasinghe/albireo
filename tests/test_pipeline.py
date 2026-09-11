@@ -763,12 +763,13 @@ def test_the_candidate_periods_are_the_union_of_three_searches(monkeypatch):
 
     candidates, searches = _period_candidates(_Table(), swap_invariant=True)
     assert calls == [(False, 1, False), (False, 2, False), (False, 1, True), (True, 1, False)]
-    # The four sources in order (the sinusoid, its two-harmonic form, the first component
-    # alone, the swap-invariant peaks each followed by their double), with everything
-    # within 2% of an earlier candidate dropped: 10.05 duplicates 10.0, the first
-    # component's 10.0 is already there, and the invariant branch's 6.0, 10.0 and 6.0 (the
-    # double of 3.0 and 5.0, and the peak itself) are all already there.
-    assert candidates == [10.0, 20.0, 6.0, 11.0, 13.0, 15.0, 30.0, 3.0, 4.0, 8.0, 5.0, 12.0]
+    # The four sources (the sinusoid, its two-harmonic form, the first component alone, the
+    # swap-invariant peaks each followed by their double) merged round robin by rank: every
+    # source's best peak, then every source's second, and so on. Everything within 2% of an
+    # earlier candidate is dropped: 10.05 duplicates 10.0, the first component's 10.0 is
+    # already there, and the invariant branch's 6.0, 10.0 and 6.0 (the double of 3.0 and of
+    # 5.0, and the peak 6.0 itself) are all already there.
+    assert candidates == [10.0, 11.0, 15.0, 3.0, 20.0, 30.0, 6.0, 13.0, 4.0, 8.0, 5.0, 12.0]
     assert searches["single"]["period"] == 10.0
     assert searches["harmonic"]["period"] == 11.0
     assert searches["first"]["period"] == 15.0
@@ -778,7 +779,7 @@ def test_the_candidate_periods_are_the_union_of_three_searches(monkeypatch):
     plain, searches = _period_candidates(_Table(), swap_invariant=False)
     assert calls == [(False, 1, False), (False, 2, False), (False, 1, True)]
     assert searches["invariant"] is None
-    assert plain == [10.0, 20.0, 6.0, 11.0, 13.0, 15.0, 30.0]
+    assert plain == [10.0, 11.0, 15.0, 20.0, 30.0, 6.0, 13.0]
 
     def short(table, *, swap_invariant=False, n_harmonics=1, **kwargs):
         if n_harmonics == 2:
@@ -787,7 +788,99 @@ def test_the_candidate_periods_are_the_union_of_three_searches(monkeypatch):
 
     monkeypatch.setattr(rvorbit_module, "find_period", short)
     candidates, searches = _period_candidates(_Table(), swap_invariant=False)
-    assert candidates == [10.0, 20.0, 6.0, 15.0, 30.0] and searches["harmonic"] is None
+    assert candidates == [10.0, 15.0, 20.0, 30.0, 6.0] and searches["harmonic"] is None
+
+
+def _peak_list_stub(lists):
+    """A ``find_period`` standing in for four searches whose peak lists are given."""
+
+    def stub(table, *, swap_invariant=False, n_harmonics=1, **kwargs):
+        if kwargs.get("components"):
+            peaks = lists["first"]
+        elif swap_invariant:
+            peaks = lists["invariant"]
+        elif n_harmonics == 2:
+            peaks = lists["harmonic"]
+        else:
+            peaks = lists["single"]
+        return {"period": peaks[0], "aliases": list(peaks[1:])}
+
+    return stub
+
+
+def test_a_deeper_peak_list_only_adds_candidates_and_never_removes_one(monkeypatch):
+    """Merging by rank makes the proposal monotone in the number of peaks each search reports.
+
+    ``rvorbit._distinct_peaks`` walks the local maxima in descending power, so the list it
+    returns for a given ``n_peaks`` is the first entries of the list it returns for any
+    larger one: a deeper search extends each source rather than rewriting it. Merged round
+    robin by rank, a deeper setting therefore only appends, and a period proposed at the
+    shallower setting cannot be deduplicated away by a peak that the deeper setting reached
+    first. Concatenation had no such property, and over the 33 blind-tier stars of D64 it
+    lost 233 of the 1296 starts proposed at twenty peaks when the count went to fifty.
+    """
+    import albireo.rvorbit as rvorbit_module
+    from albireo.pipeline import _period_candidates
+
+    class _Table:
+        n_components = 2
+        names = ("A", "B")
+
+    deep = {
+        "single": [10.0, 21.0, 6.3, 33.0, 44.0, 57.0, 66.0, 77.0, 88.0, 4.05, 99.0, 111.0],
+        "harmonic": [11.0, 10.05, 13.0, 17.0, 23.0, 29.0, 37.0, 43.0, 53.0, 61.0, 71.0, 83.0],
+        "first": [15.0, 30.0, 10.0, 19.0, 25.0, 35.0, 46.0, 64.0, 75.0, 95.0, 105.0, 125.0],
+        "invariant": [3.0, 4.0, 5.0, 7.0],  # four peaks whatever the count, plus their doubles
+    }
+    shallow = dict(deep, **{k: deep[k][:8] for k in ("single", "harmonic", "first")})
+
+    monkeypatch.setattr(rvorbit_module, "find_period", _peak_list_stub(shallow))
+    at_eight, _ = _period_candidates(_Table(), swap_invariant=True)
+    monkeypatch.setattr(rvorbit_module, "find_period", _peak_list_stub(deep))
+    at_twelve, _ = _period_candidates(_Table(), swap_invariant=True)
+
+    assert set(at_eight) <= set(at_twelve) and len(at_twelve) > len(at_eight)
+    # It is not only a superset: the shallow proposal is the head of the deeper one, since
+    # the extra ranks fall after every rank the shallow setting reached.
+    assert at_twelve[: len(at_eight)] == at_eight
+    # The deeper setting's own new peak at 4.05 is the one dropped, not the invariant
+    # search's 4.0, which outranks it.
+    assert 4.0 in at_twelve and 4.05 not in at_twelve
+
+
+def test_the_best_peak_of_the_last_search_is_not_displaced_by_a_deep_earlier_one(monkeypatch):
+    """A lower-ranked peak of an earlier source no longer pre-empts a better peak of a later.
+
+    The case is the blind-tier star gaia-37608387208382848 of D64. The start within 0.03% of
+    its true 6.1037 d period is the double of the swap-invariant search's top peak, and a
+    one-harmonic peak at 6.079648 d, 0.4% away and deep in that search's list, displaced it
+    under the old concatenation: the orbit started at 6.103977 d reaches chi-square 2028 and
+    the one started at 6.079648 d reaches 10072.
+    """
+    import albireo.rvorbit as rvorbit_module
+    from albireo.pipeline import _period_candidates
+
+    class _Table:
+        n_components = 2
+        names = ("A", "B")
+
+    monkeypatch.setattr(
+        rvorbit_module,
+        "find_period",
+        _peak_list_stub(
+            {
+                "single": [1.0134, 2.0271, 0.5067, 12.3305, 6.079648],
+                "harmonic": [1.0133, 3.4021, 0.6712, 24.7712, 8.8814],
+                "first": [1.0135, 2.0273, 0.5068, 40.1122, 15.7781],
+                "invariant": [3.0519885, 1.2231, 0.8114, 4.4457],
+            }
+        ),
+    )
+    candidates, _ = _period_candidates(_Table(), swap_invariant=True)
+    assert 6.103977 in candidates and 6.079648 not in candidates
+    # The double of the invariant search's top peak is rank two of its source, so it is
+    # proposed in the second round, well before the earlier source's fifth peak.
+    assert candidates.index(6.103977) < candidates.index(12.3305)
 
 
 def test_an_orbit_outside_the_declared_ranges_cannot_win(monkeypatch):

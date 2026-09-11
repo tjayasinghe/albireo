@@ -2609,19 +2609,53 @@ def _bootstrap(ctx: _Context, dataset: Dataset, lsf, library):
     }
 
 
+# Peaks taken from each periodogram that grows with this number. Fifty rather than the twenty
+# `find_period` defaults to, on a measurement (D64): over the 33 blind systems of the third run
+# fifty takes the true period to the top of the chi-square ranking on one further system and
+# costs no system its place, for twice the candidate-fitting wall (30 to 58 seconds a star on
+# the Gaia population, 40 to 80 on the field, against some 670 seconds a star overall). A
+# hundred was measured too and gains nothing beyond fifty. The count is only safe to raise
+# because the merge below is round robin by rank: under the concatenation this function used
+# before D64 the proposal was not monotone in the count, and 233 of 1296 starts present at
+# twenty were gone at fifty.
+_PERIODOGRAM_PEAKS = 50
+
+
 def _period_candidates(table, *, swap_invariant: bool):
     """The starting periods the orbit fit chooses among, and the searches that proposed them.
 
-    Three periodograms on the same grid (:func:`albireo.rvorbit.find_period`): the twenty
-    highest peaks of the floating-mean generalized Lomb-Scargle of the relative velocity,
-    the twenty highest of its two-harmonic form, which ranks an eccentric orbit's period
-    higher, and, for two components, the first four peaks of the swap-invariant search
-    with their doubles, the only source that survives components exchanged between epochs;
-    and, for two or more components, the twenty highest peaks of the first component's own
-    velocities, the source that survives a companion the templates could not follow (its
-    relative velocity is then noise while the primary's curve is intact). The union is
-    deduplicated at the same 2% the fit loop uses, which on the D62 oracle tables left a
-    median of 37 starting periods out of 48 before the fourth source was added.
+    Three periodograms on the same grid (:func:`albireo.rvorbit.find_period`): the
+    ``_PERIODOGRAM_PEAKS`` highest peaks of the floating-mean generalized Lomb-Scargle of
+    the relative velocity, the same number of its two-harmonic form, which ranks an
+    eccentric orbit's period higher, and, for two components, the first four peaks of the
+    swap-invariant search with their doubles, the only source that survives components
+    exchanged between epochs; and, for two or more components, that number of peaks of the
+    first component's own velocities, the source that survives a companion the templates
+    could not follow (its relative velocity is then noise while the primary's curve is
+    intact). The lists are
+    merged round robin by rank, every source's highest peak, then every source's second,
+    and so on, a source dropping out when its list is exhausted, and the merged sequence is
+    deduplicated greedily at the same 2% the fit loop uses, which on the D62 oracle tables
+    left a median of 37 starting periods out of 48 before the fourth source was added.
+
+    The merge is by rank because the greedy deduplication settles a collision in favour of
+    whichever period it reaches first. Concatenating the sources instead, as this function
+    did before D64, let a deep peak of an early source displace the top peak of a later
+    one, and the source that lost was the swap-invariant one, which comes last and does not
+    grow with the peak count. It also made the proposal non-monotone in that count, so that
+    asking for more peaks could remove a candidate: over the 33 blind-tier stars of D64,
+    233 of the 1296 starts proposed at twenty peaks were absent at fifty and 403 at a
+    hundred, and on one Gaia system the start displaced at a hundred was the one within
+    0.03% of the true period, whose orbit fits at chi-square 2028 against 10072 for the
+    peak that displaced it. Merging by rank settles both: the highest-ranked peak of each
+    source wins its collisions, and a larger peak count only appends entries at ranks
+    beyond the old limit, so the list proposed at the larger count contains the list
+    proposed at the smaller, exactly so for any count at or above the eight entries the
+    swap-invariant source contributes. Ranking the four sources against each other by
+    periodogram power is not available in place of this, because they are different
+    statistics on different series, a relative velocity, its two-harmonic form, one
+    component's own velocities and the magnitude of a difference, whose powers are not on a
+    common scale.
 
     Measured end to end over those 32 tables this recovers the period of 28 against 23 for
     the six peaks of the classical periodogram the route used before, and the two parts of
@@ -2635,25 +2669,35 @@ def _period_candidates(table, *, swap_invariant: bool):
     """
     from albireo.rvorbit import find_period
 
-    single = find_period(table)
+    single = find_period(table, n_peaks=_PERIODOGRAM_PEAKS)
     try:
-        harmonic = find_period(table, n_harmonics=2)
+        harmonic = find_period(table, n_harmonics=2, n_peaks=_PERIODOGRAM_PEAKS)
     except ValueError:
         harmonic = None
-    proposed = [single["period"], *single["aliases"]]
+    sources: list[list[float]] = [[single["period"], *single["aliases"]]]
     if harmonic is not None:
-        proposed += [harmonic["period"], *harmonic["aliases"]]
+        sources.append([harmonic["period"], *harmonic["aliases"]])
     first = None
     if table.n_components >= 2:
         # The first component alone: a faint companion the templates could not follow
         # leaves the relative velocity as noise, while the primary's own curve is intact.
-        first = find_period(table, components=[table.names[0]])
-        proposed += [first["period"], *first["aliases"]]
+        first = find_period(table, components=[table.names[0]], n_peaks=_PERIODOGRAM_PEAKS)
+        sources.append([first["period"], *first["aliases"]])
     invariant = None
     if swap_invariant and table.n_components == 2:
         invariant = find_period(table, swap_invariant=True)
+        doubled: list[float] = []
         for peak in [invariant["period"], *invariant["aliases"][:3]]:
-            proposed.extend([peak, 2.0 * peak])
+            doubled.extend([peak, 2.0 * peak])
+        sources.append(doubled)
+    # Round robin by rank, so that the deduplication below settles a collision in favour of
+    # the higher-ranked peak whichever source proposed it.
+    proposed = [
+        peaks[rank]
+        for rank in range(max(len(entries) for entries in sources))
+        for peaks in sources
+        if rank < len(peaks)
+    ]
     candidates: list[float] = []
     for period in proposed:
         period = float(period)
