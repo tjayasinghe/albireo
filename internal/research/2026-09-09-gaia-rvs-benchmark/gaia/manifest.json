@@ -1,0 +1,312 @@
+{
+ "albireo": "0.1.0.dev0",
+ "created": "2026-09-10T18:11:12+00:00",
+ "machine": "Windows 11, AMD64 Family 26 Model 68 Stepping 0, AuthenticAMD, 32 threads",
+ "title": "albireo on Gaia RVS double-lined binaries: Gaia DR3 orbits (D62)",
+ "product": "dr4-epoch",
+ "product_description": "DR4 epoch-spectrum sampling: 0.025 nm, 961 samples from 846.0 to 870.0 nm",
+ "library": "bosz2024-fgk-rvs",
+ "cadence": "scanning-law",
+ "resolving_power": "nominal",
+ "tiers": [
+  {
+   "name": "oracle",
+   "period": "known",
+   "period_sigma": 0.0001,
+   "t_conj": "known",
+   "elements": "known",
+   "light": "truth",
+   "labels": "narrow",
+   "eclipsing_only": false,
+   "sample": false
+  },
+  {
+   "name": "eclipsing",
+   "period": "known",
+   "period_sigma": 0.0001,
+   "t_conj": "known",
+   "elements": "free",
+   "light": "truth",
+   "labels": "narrow",
+   "eclipsing_only": true,
+   "sample": false
+  },
+  {
+   "name": "orbit",
+   "period": "known",
+   "period_sigma": 0.0001,
+   "t_conj": "scan",
+   "elements": "free",
+   "light": "measure",
+   "labels": "wide",
+   "eclipsing_only": false,
+   "sample": false
+  },
+  {
+   "name": "blind",
+   "period": "search",
+   "period_sigma": 0.0001,
+   "t_conj": "scan",
+   "elements": "free",
+   "light": "measure",
+   "labels": "wide",
+   "eclipsing_only": false,
+   "sample": false
+  }
+ ],
+ "settings": {
+  "dv_kms": 3.0,
+  "k_min": 2.0,
+  "k_max": 250.0,
+  "ecc_max": 0.9,
+  "max_steps": 100,
+  "label_steps": 80,
+  "mask_ca": false,
+  "noise_model": "correlated",
+  "min_transits": 10,
+  "fast": false,
+  "seed": 0,
+  "jobs": 5
+ },
+ "windows": {
+  "ca_triplet": [
+   [
+    8490.0,
+    8506.0
+   ],
+   [
+    8534.0,
+    8552.0
+   ],
+   [
+    8654.0,
+    8672.0
+   ]
+  ],
+  "metal": [
+   [
+    8460.0,
+    8490.0
+   ],
+   [
+    8506.0,
+    8534.0
+   ],
+   [
+    8552.0,
+    8654.0
+   ],
+   [
+    8672.0,
+    8700.0
+   ]
+  ]
+ },
+ "n_systems": 14,
+ "n_planned": 46,
+ "stars": [
+  "gaia-7289006178185856__oracle",
+  "gaia-7289006178185856__eclipsing",
+  "gaia-7289006178185856__orbit",
+  "gaia-7289006178185856__blind",
+  "gaia-17170287112790656__oracle",
+  "gaia-17170287112790656__eclipsing",
+  "gaia-17170287112790656__orbit",
+  "gaia-17170287112790656__blind",
+  "gaia-37608387208382848__oracle",
+  "gaia-37608387208382848__orbit",
+  "gaia-37608387208382848__blind",
+  "gaia-40041022325608704__oracle",
+  "gaia-40041022325608704__eclipsing",
+  "gaia-40041022325608704__orbit",
+  "gaia-40041022325608704__blind",
+  "gaia-45354171749336960__oracle",
+  "gaia-45354171749336960__orbit",
+  "gaia-45354171749336960__blind",
+  "gaia-45788547559850496__oracle",
+  "gaia-45788547559850496__orbit",
+  "gaia-45788547559850496__blind",
+  "gaia-47620265212420096__oracle",
+  "gaia-47620265212420096__orbit",
+  "gaia-47620265212420096__blind",
+  "gaia-50868531799454720__oracle",
+  "gaia-50868531799454720__orbit",
+  "gaia-50868531799454720__blind",
+  "gaia-51574864941234048__oracle",
+  "gaia-51574864941234048__orbit",
+  "gaia-51574864941234048__blind",
+  "gaia-51884824140205824__oracle",
+  "gaia-51884824140205824__orbit",
+  "gaia-51884824140205824__blind",
+  "gaia-53290511099783296__oracle",
+  "gaia-53290511099783296__orbit",
+  "gaia-53290511099783296__blind",
+  "gaia-53680017390963072__oracle",
+  "gaia-53680017390963072__eclipsing",
+  "gaia-53680017390963072__orbit",
+  "gaia-53680017390963072__blind",
+  "gaia-56716765427964800__oracle",
+  "gaia-56716765427964800__orbit",
+  "gaia-56716765427964800__blind",
+  "gaia-56861694804053120__oracle",
+  "gaia-56861694804053120__orbit",
+  "gaia-56861694804053120__blind"
+ ],
+ "skipped_transits": [],
+ "simulation": {
+  "gaia-7289006178185856": {
+   "seed": 0,
+   "snr_epoch": 18.833628703298672,
+   "n_epochs": 10,
+   "lag1": 0.27023192815352304,
+   "pixel_ratio": 0.9795918367346937,
+   "resolving_power_min": 11500.0,
+   "resolving_power_max": 11500.0,
+   "grid_n": 4574,
+   "baseline_days": 1793.2279153461568
+  },
+  "gaia-17170287112790656": {
+   "seed": 1,
+   "snr_epoch": 21.038600162198243,
+   "n_epochs": 11,
+   "lag1": 0.27023359625423926,
+   "pixel_ratio": 0.9795918367346936,
+   "resolving_power_min": 11500.0,
+   "resolving_power_max": 11500.0,
+   "grid_n": 4613,
+   "baseline_days": 1615.6442610388622
+  },
+  "gaia-37608387208382848": {
+   "seed": 2,
+   "snr_epoch": 15.958237467864212,
+   "n_epochs": 15,
+   "lag1": 0.2702357676791195,
+   "pixel_ratio": 0.9795918367346935,
+   "resolving_power_min": 11500.0,
+   "resolving_power_max": 11500.0,
+   "grid_n": 4374,
+   "baseline_days": 1525.3871785514057
+  },
+  "gaia-40041022325608704": {
+   "seed": 3,
+   "snr_epoch": 14.003465448678707,
+   "n_epochs": 12,
+   "lag1": 0.2702606508864004,
+   "pixel_ratio": 0.9795918367346936,
+   "resolving_power_min": 11500.0,
+   "resolving_power_max": 11500.0,
+   "grid_n": 4426,
+   "baseline_days": 1437.8557955170982
+  },
+  "gaia-45354171749336960": {
+   "seed": 4,
+   "snr_epoch": 69.23975881497624,
+   "n_epochs": 25,
+   "lag1": 0.27022877482680974,
+   "pixel_ratio": 0.9795918367346939,
+   "resolving_power_min": 11500.0,
+   "resolving_power_max": 11500.0,
+   "grid_n": 4389,
+   "baseline_days": 1811.0150316529907
+  },
+  "gaia-45788547559850496": {
+   "seed": 5,
+   "snr_epoch": 72.34756391197487,
+   "n_epochs": 15,
+   "lag1": 0.2702843897938883,
+   "pixel_ratio": 0.9795918367346935,
+   "resolving_power_min": 11500.0,
+   "resolving_power_max": 11500.0,
+   "grid_n": 4430,
+   "baseline_days": 1907.6275656539947
+  },
+  "gaia-47620265212420096": {
+   "seed": 6,
+   "snr_epoch": 97.11726411940307,
+   "n_epochs": 13,
+   "lag1": 0.270304554003159,
+   "pixel_ratio": 0.9795918367346936,
+   "resolving_power_min": 11500.0,
+   "resolving_power_max": 11500.0,
+   "grid_n": 4354,
+   "baseline_days": 1324.6086974185891
+  },
+  "gaia-50868531799454720": {
+   "seed": 7,
+   "snr_epoch": 33.9658148545406,
+   "n_epochs": 16,
+   "lag1": 0.2703090115066514,
+   "pixel_ratio": 0.9795918367346939,
+   "resolving_power_min": 11500.0,
+   "resolving_power_max": 11500.0,
+   "grid_n": 4407,
+   "baseline_days": 1786.5091142924502
+  },
+  "gaia-51574864941234048": {
+   "seed": 8,
+   "snr_epoch": 40.78214926809605,
+   "n_epochs": 14,
+   "lag1": 0.2702833614137606,
+   "pixel_ratio": 0.9795918367346935,
+   "resolving_power_min": 11500.0,
+   "resolving_power_max": 11500.0,
+   "grid_n": 4329,
+   "baseline_days": 1762.7155033373274
+  },
+  "gaia-51884824140205824": {
+   "seed": 9,
+   "snr_epoch": 61.32208413631231,
+   "n_epochs": 24,
+   "lag1": 0.27027014783999953,
+   "pixel_ratio": 0.9795918367346937,
+   "resolving_power_min": 11500.0,
+   "resolving_power_max": 11500.0,
+   "grid_n": 4380,
+   "baseline_days": 1954.7364632096142
+  },
+  "gaia-53290511099783296": {
+   "seed": 10,
+   "snr_epoch": 40.03465107515865,
+   "n_epochs": 16,
+   "lag1": 0.2702618650146875,
+   "pixel_ratio": 0.9795918367346939,
+   "resolving_power_min": 11500.0,
+   "resolving_power_max": 11500.0,
+   "grid_n": 4424,
+   "baseline_days": 1647.5305300895125
+  },
+  "gaia-53680017390963072": {
+   "seed": 11,
+   "snr_epoch": 23.159947227554564,
+   "n_epochs": 17,
+   "lag1": 0.27022170111613275,
+   "pixel_ratio": 0.979591836734694,
+   "resolving_power_min": 11500.0,
+   "resolving_power_max": 11500.0,
+   "grid_n": 4561,
+   "baseline_days": 1840.727991486434
+  },
+  "gaia-56716765427964800": {
+   "seed": 12,
+   "snr_epoch": 70.57139037809911,
+   "n_epochs": 12,
+   "lag1": 0.2702948530512191,
+   "pixel_ratio": 0.9795918367346936,
+   "resolving_power_min": 11500.0,
+   "resolving_power_max": 11500.0,
+   "grid_n": 4420,
+   "baseline_days": 1666.3969146497548
+  },
+  "gaia-56861694804053120": {
+   "seed": 13,
+   "snr_epoch": 77.21802579392482,
+   "n_epochs": 15,
+   "lag1": 0.27025851022108427,
+   "pixel_ratio": 0.9795918367346935,
+   "resolving_power_min": 11500.0,
+   "resolving_power_max": 11500.0,
+   "grid_n": 4398,
+   "baseline_days": 1963.022879801225
+  }
+ }
+}

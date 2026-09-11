@@ -347,7 +347,17 @@ Not forecast, by decision: the orbit. The Fisher information for a velocity runs
 been measured yet. Forecasting it against an assumed template would present the assumption as a
 result, which is the failure mode the rest of this page exists to avoid.
 
-### 7. A Gaia RVS loader, before December
+### 7. A Gaia RVS loader, before December — **the half that can be built now is built** (D60, D61)
+
+Built 2026-09-09: `albireo.gaia` (the instrument as a simulator: the S/N model from G_RVS
+verified against the archive to 3-8%, the detector and delivered grids with the correlated
+noise the archive's resampling introduces, the in-flight resolving powers per CCD row, and
+the scanning-law cadence in distribution), `albireo.population` (double-lined binaries from
+the field's distributions, from DEBCat and from the Gaia DR3 double-lined orbits), and
+`albireo.benchmark` (every system through the pipeline under knowledge tiers, with a report;
+`scripts/gaia_rvs_benchmark.py`). The reader and the DataLink client remain for release day,
+and the simulator's product presets are what they will be validated against. What follows is
+the record that motivated the ordering.
 
 Gaia DR4 is scheduled for 2 December 2026 and is the first release to publish epoch RVS spectra,
 6,910,785,949 of them (49 TB), already normalized and already in the barycentric frame, alongside
