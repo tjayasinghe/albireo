@@ -80,7 +80,7 @@ eccentricity are right. Either error alone destroys it. With the right eccentric
 table's period nothing on the grid exceeds 22261.35, and with the right period and the
 table's eccentricity nothing exceeds 22162.94, both some 280 to 380 nats below the winner.
 
-**The period peak inside the declared window is 0.05 percent wide and the comparison samples
+**[Superseded in part by `d64_period_decision_window.md`: the 0.05 percent below is this profile's own node spacing, not the peak's width, which is 0.0969 percent when resolved. The conclusion that the candidate at 0.25 percent lies outside the peak is unchanged.]** **The period peak inside the declared window is 0.05 percent wide and the comparison samples
 it once, 0.25 percent away.** Profiling the coarse marginal at the true semi-amplitudes and
 the true eccentricity over the full window the declaration hands the fit, 5.935460 to
 6.302602 d at 121 nodes with the conjunction relocated by a 41-point scan at each node

@@ -300,6 +300,22 @@ class Analysis:
         compared it lost by 251 nats, and the same model at the true period, eccentricity
         and conjunction beats the winner by 185. The stage has so far converted no miss into
         a hit on either population, and it has cost none.
+
+        Scoring each candidate over its whole declared window rather than at a point, which
+        is the obvious repair, does not work and cannot be afforded. The window maximum
+        favours the shortest period, because peaks are spaced by about ``0.28 P / T`` and a
+        three percent window therefore holds some 50 independent trials for a candidate near
+        the truth against 550 to 1500 for its shorter rivals; correcting that bias by extreme
+        value extrapolation leaves two estimators disagreeing over which candidate wins. The
+        semi-amplitudes have to be scanned inside the period loop for the truth to be found
+        at all, and that costs about 62 hours for four candidates against the 116 seconds the
+        point comparison takes, scaling as ``T / P``.
+
+        What the stage is good for is therefore a warning rather than a correction. On the
+        Gaia blind tier it overruled the table on four systems and every one of those four
+        ended on a wrong period, while three further misses drew no overrule, so the flag it
+        raises reads as "this period is not to be trusted" and not as "this period is
+        better".
     vsini_max, v_zero_range
         Default ceiling of the ``vsini`` prior, and the half-range of the per-component
         frame offset the label fit may measure, both in km/s. The disentangled frame sits
