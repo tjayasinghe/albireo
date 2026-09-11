@@ -35,6 +35,45 @@ expression and the fixed-ratio one). The least-squares form has these properties
 - **Errors are the maximum-likelihood errors of Zucker (2003)**: the curvature of the
   surface rescaled by the reduced chi-square, so that the noise level is measured from the
   residuals, with the trusted-weights version reported alongside.
+- **A declared noise correlation widens them.** Resampled spectra carry correlated pixel
+  noise, which leaves the estimator alone and makes the curvature error optimistic;
+  `noise_correlation` (one lag-one coefficient, or one per instrument) replaces the
+  curvature by the sandwich of [§10.4](../math.md#104-uncertainties-and-detection). The
+  façade passes the value it was declared with, and the pipeline its
+  `noise_correlation` setting.
+
+## The search window
+
+`v_range` is the interval of velocity the correlation searches, and the search does not
+leave it: the coarse pass strides over it, and the full-resolution window that refines the
+coarse minimum is kept inside it. The interval is stated in each template's *own* rest
+frame. A template that carries a zero point (`v_zero_kms`, which a label match measures)
+has that zero point composed into every velocity reported against it, so one shared
+`(lo, hi)` searches a different interval of reported velocity for every component whose
+zero point differs, and the window has to be declared per template instead: `v_range`
+accepts one pair per template as readily as one shared pair.
+
+`Fit.measure_velocities()` builds them that way. The common interval is the span of the
+fitted velocities widened by 40 km/s at each end; each template's window is that interval
+moved by its own zero point relative to the median of them, so that every component
+searches the same reported velocities. Where the zero points disagree by more than the
+fitted velocities span, no interval holds every component's own velocities, and the façade
+raises and names the component rather than searching a window that cannot contain it. That
+case is not hypothetical: a label fit whose frame-offset scan stopped at its bound reports a
+zero point which is a bound rather than a measurement, and one shared window built around it
+misses the other component's velocities entirely.
+
+Where the chi-square is still falling as the search runs out of room, nothing has been
+measured. The last point evaluated is the edge of the search, not a minimum of anything, so
+that component is flagged `at_edge` and its `velocity`, `sigma` and `sigma_ivar` are `nan`,
+in the table and in the file `write()` produces alike. The diagnostics of the point that
+was evaluated are kept, since they are what says the epoch sat at an edge rather than at a
+peak: `chi2`, `light`, `delta_chi2`, `r_squared`, the pixel count and the curvature.
+`good` is false for such an epoch and `summary()` counts them, "*N* at the search edge, not
+measured". The flag fires for a minimum on the coarse grid's first or last node, and for
+one still on the boundary of the refinement window after that window has walked as far as
+the range allows. The remedy is to widen `v_range`, unless it is already wide, in which
+case the templates and the data disagree about where the lines are.
 
 ## The velocity table
 
@@ -42,7 +81,8 @@ expression and the fixed-ratio one). The least-squares form has these properties
 with them: which components are absolute and which carry an unidentified zero point (a
 disentangled template does; [§7.6](../math.md#76-free-per-epoch-velocities-the-rv-table));
 which epochs are blended (the velocities lie on a ridge, with a covariance correlation
-above 0.9); which epochs sat at the search edge; the per-component detection statistic
+above 0.9); which epochs sat at the search edge and were therefore not measured; the
+per-component detection statistic
 $`\Delta\chi^2`$ (the increase in chi-square when that component is removed, small for a
 companion the epoch does not detect); and the Wilson slope, which equals $`-K_2/K_1`$ and is
 independent of both zero points.

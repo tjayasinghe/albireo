@@ -152,7 +152,11 @@ of one velocity against the other (Wilson 1941), survive.
 combined with intrinsically narrower lines is observationally almost identical to the
 reverse, so a template-free model cannot measure an absolute LSF width. Instruments that
 share the same component spectra identify the differences between their widths; the
-absolute scale must come from one instrument whose profile is known.
+absolute scale must come from one instrument whose profile is known. The width is declared
+per exposure, not per instrument name, because one spectrograph observes in more than one
+mode: the HARPS archive of AI Phoenicis mixes R = 115,000 and R = 80,000 exposures under
+one `INSTRUME`, and modelling the second kind at the first width was measured to move the
+semi-amplitudes (see the benchmarks page).
 
 ## 4. The albireo model
 
@@ -329,9 +333,11 @@ Templates may come from a synthetic library, from the label fit of Section 7, or
 disentangled components themselves. Velocities measured against a disentangled component
 are differential, with one unknown zero point per component, for the reason given in
 Section 3. A Keplerian is fitted to the resulting table by weighted nonlinear least
-squares, with a period search by the Lomb-Scargle periodogram (Lomb 1976; Scargle 1982;
-VanderPlas 2018) and with one systemic velocity per component whenever a component is
-differential.
+squares, with a period search by the floating-mean generalized Lomb-Scargle periodogram
+(Lomb 1976; Scargle 1982; Zechmeister & Kürster 2009; VanderPlas 2018) and with one systemic
+velocity per component whenever a component is differential. The periodogram proposes
+candidate periods and the Keplerian decides among them, which on a survey cadence is not a
+refinement but the difference between finding the period and not.
 
 ## 9. Systems used for validation
 
@@ -359,6 +365,19 @@ resolve a BLOeM identifier to its archival spectra ([tutorial](tutorials/bloem-s
 
 **LB-1** (Liu et al. 2019; Shenar et al. 2020) is the reference case for the SB1 companion
 scan, which is validated on simulated data with injected companions.
+
+**Synthetic Gaia RVS binaries** are the test of the survey case. Gaia DR4 (December 2026)
+publishes an epoch RVS spectrum per transit for the double-lined sources its own pipeline
+rejects (Katz et al. 2023; the ESA DR4 content page), and `albireo.gaia` reproduces the
+observation chain, following Rowan's reference implementation, with the constants of
+Cropper et al. (2018) and Sartoretti et al. (2023): photon noise per detector pixel at the
+signal-to-noise that follows from G_RVS, delivery onto the archive grid with the noise
+correlation that resampling introduces, the resolving powers measured per CCD, and the
+transit cadence of the scanning law in distribution. Populations of systems drawn from the
+field's distributions (Moe & Di Stefano 2017) or from real catalogues (Southworth 2015;
+Gaia Collaboration, Arenou et al. 2023) are run through the pipeline under knowledge tiers,
+and the recovery of orbits, velocities, spectra and labels is tabulated against the
+injected truth ([tutorial](tutorials/gaia-rvs.md)).
 
 ## 10. Software foundations
 
@@ -426,7 +445,7 @@ Each entry links to its record in the NASA Astrophysics Data System where one ex
 - Mahy, L., Sana, H., Abdul-Masih, M., et al. 2020, A&A, 634, A118. [ADS](https://ui.adsabs.harvard.edu/abs/2020A%26A...634A.118M)
 - Maxted, P. F. L., Gaulme, P., Graczyk, D., et al. 2020, MNRAS, 498, 332. [ADS](https://ui.adsabs.harvard.edu/abs/2020MNRAS.498..332M)
 - Mészáros, Sz. & Allende Prieto, C. 2013, MNRAS, 430, 3285. [ADS](https://ui.adsabs.harvard.edu/abs/2013MNRAS.430.3285M)
-- Mészáros, Sz., Bohlin, R., Allende Prieto, C., et al. 2024, A&A, 688, A171. [ADS](https://ui.adsabs.harvard.edu/abs/2024A%26A...688A.171M)
+- Mészáros, Sz., Bohlin, R., Allende Prieto, C., et al. 2024, A&A, 688, A197. [ADS](https://ui.adsabs.harvard.edu/abs/2024A%26A...688A.171M)
 - Miller, N. J., Maxted, P. F. L. & Smalley, B. 2020, MNRAS, 497, 2899. [ADS](https://ui.adsabs.harvard.edu/abs/2020MNRAS.497.2899M)
 - Morton, D. C. 2000, ApJS, 130, 403. [ADS](https://ui.adsabs.harvard.edu/abs/2000ApJS..130..403M)
 - Osterbrock, D. E. & Ferland, G. J. 2006, Astrophysics of Gaseous Nebulae and Active Galactic Nuclei, 2nd ed. (Sausalito: University Science Books). [ADS](https://ui.adsabs.harvard.edu/abs/2006agna.book.....O)
@@ -469,6 +488,7 @@ Each entry links to its record in the NASA Astrophysics Data System where one ex
 - Wheeler, A. J., Abruzzo, M. W., Casey, A. R. & Ness, M. K. 2023, AJ, 165, 68. [ADS](https://ui.adsabs.harvard.edu/abs/2023AJ....165...68W)
 - Wilson, O. C. 1941, ApJ, 93, 29. [ADS](https://ui.adsabs.harvard.edu/abs/1941ApJ....93...29W)
 - Wright, J. T. & Eastman, J. D. 2014, PASP, 126, 838. [ADS](https://ui.adsabs.harvard.edu/abs/2014PASP..126..838W)
+- Zechmeister, M. & Kürster, M. 2009, A&A, 496, 577. [ADS](https://ui.adsabs.harvard.edu/abs/2009A%26A...496..577Z)
 - Zucker, S. 2003, MNRAS, 342, 1291. [ADS](https://ui.adsabs.harvard.edu/abs/2003MNRAS.342.1291Z)
 - Zucker, S. & Mazeh, T. 1994, ApJ, 420, 806. [ADS](https://ui.adsabs.harvard.edu/abs/1994ApJ...420..806Z)
 - Zucker, S., Torres, G. & Mazeh, T. 1995, ApJ, 452, 863. [ADS](https://ui.adsabs.harvard.edu/abs/1995ApJ...452..863Z)

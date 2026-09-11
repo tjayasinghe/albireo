@@ -40,7 +40,7 @@ dis = ab.Disentangler(
     dataset,
     components=[ab.Star("primary", light=0.62), ab.Star("secondary", light=0.38)],
     orbit=ab.Orbit(period=ab.Between(5.5, 6.5), k=ab.Between([10.0, 10.0], [90.0, 90.0])),
-    lsf={"DEMO": 6.5},                       # Gaussian sigma [km/s]; LSF.from_resolution(R) too
+    lsf={"DEMO": 6.5},                       # sigma [km/s]; LSF.from_resolution(R); LSF.per_epoch()
 )
 fit = dis.fit()
 print(fit.summary())
@@ -84,7 +84,7 @@ print(dis.explain())
   from the support of the `k` priors, and narrowing those priors reduces the cost of a fit.
 - **The model grid**, which is widened by that budget plus the LSF kernel radius so that
   the shifted model does not run off the grid.
-- **The conjunction phase**, located by a 41-point scan before optimization. The marginal
+- **The conjunction phase**, located by a 42-point scan before optimization. The marginal
   likelihood is strongly multimodal in phase (about 10⁵ nats between the best and worst
   phase here), and an optimizer started in the wrong trough converges to the wrong answer.
 - **The smoothness hyperparameters**, fitted by empirical Bayes and then frozen. The

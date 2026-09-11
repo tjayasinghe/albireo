@@ -32,6 +32,12 @@ approximately this order:
 | Solve | [`albireo.rvorbit`](rvorbit.md) | a Keplerian fitted to that table with the same solver and conventions as the joint model, and a period search |
 | Run | [`albireo.pipeline`](pipeline.md) | every stage above for a list of stars from one declaration (`albireo run config.toml`), in worker processes, with structured products, figures and a record of failures |
 
+[`albireo.gaia`](gaia.md), [`albireo.population`](gaia.md) and
+[`albireo.benchmark`](gaia.md) sit beside the path and exercise it: a simulator of Gaia RVS
+epoch spectra, populations of double-lined binaries drawn from the field or from real
+catalogues, and a harness that runs them through the pipeline under knowledge tiers and
+reports the recovery.
+
 [`albireo.simulate`](simulate.md) sits outside that path and feeds it: every closed-loop test
 is written against the truths it generates.
 

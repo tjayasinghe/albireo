@@ -463,6 +463,28 @@ $`\tilde{\boldsymbol\Lambda} = \mathbf{L}\mathbf{L}^\top`$:
 $`b^\top\tilde{\boldsymbol\Lambda}^{-1}b = \|\mathbf{L}^{-1}b\|^2`$ and
 $`\log\det\tilde{\boldsymbol\Lambda} = 2\sum_k \log L_{kk}`$.
 
+Two guards keep this evaluation honest when the prior is far stiffer than the data term. By
+the Woodbury identity the bracketed quadratic is
+$`\tilde y^\top(\mathbf{W}^{-1} + \mathbf{A}\boldsymbol\Lambda^{-1}\mathbf{A}^\top)^{-1}\tilde y`$,
+whose matrix is positive definite over the unmasked pixels, so the difference is nonnegative
+for any data and a negative value is a destroyed evaluation rather than a fit. It is destroyed
+by the same ratio in both terms of the marginal: the pivot of the pentadiagonal Cholesky
+recursion for $`\log\det\boldsymbol\Lambda`$ is a difference of like-sized quantities and
+rounds to zero below $`\eta_i/\tau_i \approx 10^{-13}`$, and past it the assembled
+$`\tilde{\boldsymbol\Lambda}`$ is prior-dominated as well: at the ratio
+$`\eta_i/\tau_i \approx 10^{-17}`$ that an ML-II fit reached on a survey-scale benchmark, its
+largest Cholesky pivot stood five orders of magnitude above the data term, so the forward
+substitution $`\mathbf{L}^{-1}b`$ loses every significant digit and $`\|\mathbf{L}^{-1}b\|^2`$
+can come out above $`\tilde y^\top\mathbf{W}\tilde y`$. Unguarded,
+that reports itself as an arbitrarily large *improvement*, which a line search will accept;
+the ML-II fit of §7.3 reaches the region on its own, because the interior optimum in
+$`\tau_i`$ is broad and nothing bounds $`\eta_i`$ from below. The first guard returns
+$`\log p = -\infty`$ whenever the bracketed quadratic is negative or undefined, on the valid
+branch leaving the value and its gradient unchanged. The second keeps the optimizer and the
+sampler out of the region altogether: the model of §7.1 adds a $`-\infty`$ factor whenever
+$`\log\tau_i - \log\eta_i > 30`$ for any component, a ratio the defaults start about six
+hyperprior standard deviations inside.
+
 ### 3.2 Relation to profile likelihood + Laplace
 
 $`\hat d(\theta)`$ is exactly the (regularized) profile solution, and the bracketed quadratic is
@@ -871,14 +893,23 @@ is broken only by:
    geometry makes the products epoch-dependent while $`d_i`$ is shared, which is why per-epoch
    light fractions are supported directly.
 2. **External photometric priors** on $`\ell_i`$ (from light-curve solutions or SED fits).
-3. **Physicality floor**: $`s_i \ge 0 \Rightarrow \ell_i d_i \ge -\ell_i`$; a saturated line in
-   the composite bounds $`\ell_i`$ from below. The bound is weak but real, and is available as
-   an optional constraint.
+3. **Physicality floor**: $`s_i \ge 0 \Rightarrow \ell_i d_i \ge -\ell_i`$; a deep line in the
+   composite bounds $`\ell_i`$ from below by the depth of that star's own contribution. The
+   bound is real rather than nominal: over the 66 disentangled components of the D63
+   benchmark's oracle tier it is never violated and recovers a median 0.61 of the true
+   fraction, which brackets a near-equal pair to about a factor two. It is **not imposed**
+   anywhere in the package, and it is a bound to report beside a declared light rather than
+   a check on one, because a wrong declared $`\ell`$ is absorbed by reshaping $`d_i`$ within
+   the physical range rather than by driving it out (2 of 66 orbit-tier and blind-tier runs),
+   and it weakens on exactly the components whose lines the disentangling failed to recover.
 4. **Fixing $`\ell`$** by assumption.
 
-The API requires an explicit choice: `light_ratio=` must be given as `Fixed(values)`,
-`Free(prior=...)` (requires 1–3 to be informative, and the docs say so), or
-`PerEpoch(...)`.
+The API requires an explicit choice rather than a default. The façade takes option 4:
+`Star(light=)` is required per star, the stellar fractions must sum to 1, and the value is
+repeated in an `Assumed, not measured` block on every summary. The low-level path also
+accepts option 1 directly, `light` being `(n_epochs, n_stellar)` rather than `(n_stellar,)`
+and inferrable under Dirichlet priors, which is how an eclipse or an external photometric
+prior (option 2) enters. There is no dedicated declaration for options 2 and 3.
 
 ### 5.3 Systemic velocity / zero-point
 
@@ -896,7 +927,7 @@ prior. $`K_i`$, $`e`$, $`\omega`$, $`P_{\rm orb}`$, $`T_{\rm p}`$ are unaffected
 | Degeneracy | Exact/approx | Broken by | albireo policy |
 |---|---|---|---|
 | low-$`k`$ mode exchange between components | exact at $`k=0`$, $`\propto 1/k`$ | phase coverage ($`\mathrm{Var}\,\Delta`$), priors | proper priors; covariance reported; forecast tool (§5.5) returns it as the leading eigenvector, at ~1× the prior for *every* design |
-| $`\ell_i`$ vs. line depth | exact (constant $`\ell`$) | eclipses, photometry, saturation floor, assumption | explicit `light_ratio=` choice required |
+| $`\ell_i`$ vs. line depth | exact (constant $`\ell`$) | eclipses, photometry, saturation floor, assumption | `Star(light=)` required per star, fractions summing to 1; per-epoch `light` and Dirichlet priors on the low-level path; the saturation floor is not imposed |
 | $`\gamma`$ vs. common shift | exact up to edges | external rest-frame info | $`\gamma \equiv 0`$ default, post-hoc measurement |
 | per-epoch constants vs. response | approx | low poly order | order $`\le 2`$ default, covariance reported |
 | telluric constant vs. common stellar constant | exact up to edges | ridge anchors ($`\eta`$) on both | measured in the telluric closed loop: the two offsets cancel in the sum to $`\lesssim 10^{-3}`$; report both |
@@ -1648,6 +1679,29 @@ the curvature error rescaled by the reduced chi-square (what `errors="profiled"`
 against $`2\mathbf{H}^{-1}`$ with the declared weights taken at face value (`errors="ivar"`). The
 off-diagonal of $`\mathbf{H}^{-1}`$ is the blending diagnostic: near conjunction the two shifts
 are measured along a ridge, their correlation approaches one, and the table flags the epoch.
+
+Both forms take the pixels as independent. A pipeline that resampled the spectra onto a
+common step correlates neighbouring pixels (§1.4a; Gaia's RVS grids carry lag-one
+correlations of 0.27 and 0.81), and the weighted least squares is then still the right
+estimator, but its covariance is not the curvature. With $`\mathbf{J}`$ the Jacobian of the
+model at the solution (the shifted templates' derivatives, the amplitudes and the nuisance
+basis), $`\mathbf{W} = \mathrm{diag}(w)`$ and $`\mathbf{R}`$ the AR(1) correlation of the
+standardized noise along the pixel index,
+
+```math
+\mathrm{Cov}(\hat{\mathbf{s}}) = (\mathbf{J}^{\!\top}\mathbf{W}\mathbf{J})^{-1}\,
+\mathbf{J}^{\!\top}\mathbf{W}^{1/2}\mathbf{R}\,\mathbf{W}^{1/2}\mathbf{J}\,
+(\mathbf{J}^{\!\top}\mathbf{W}\mathbf{J})^{-1},
+```
+
+the sandwich, whose shift block `todcor` reports when a `noise_correlation` is declared
+($`\phi = 0`$ gives back the curvature). The model is linear in every parameter within a
+shift's cell, by the interpolation identity of §10.3, so $`\mathbf{J}`$ is assembled from
+the projected templates at the two integer shifts bracketing each position, and
+$`\mathbf{R}`$ is applied by two first-order recursions. The correction grows with the
+correlation and with how much of the template derivative's power lies within the
+correlation length; on Gaia's DR4 grid it widens the errors by 10 to 20 percent, which is
+where the epoch-velocity pulls of the benchmark sat before it.
 Each component's detection statistic is $`\Delta\chi^2_i = \chi^2_{\min}(\text{without } i) -
 \chi^2_{\min}`$ with the remaining amplitudes refitted, which is small for a companion the epoch
 does not constrain, the case a batch run has to detect.

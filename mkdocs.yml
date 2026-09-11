@@ -44,6 +44,7 @@ nav:
       - Turn a component into an RV template: tutorials/labels.md
       - Measure epoch velocities with TODCOR: tutorials/todcor.md
       - Run everything in one command: tutorials/pipeline.md
+      - Simulate Gaia RVS binaries and measure recovery: tutorials/gaia-rvs.md
   - Mathematical foundations: math.md
   - Benchmarks: benchmarks.md
   - API reference:
@@ -64,6 +65,7 @@ nav:
       - Epoch velocities (TODCOR): api/todcor.md
       - Orbits from velocity tables: api/rvorbit.md
       - Pipeline and command line: api/pipeline.md
+      - Gaia RVS simulator, populations, benchmark: api/gaia.md
       - Results and plotting: api/results.md
       - Downstream handoff: api/handoff.md
       - Simulator: api/simulate.md

@@ -64,7 +64,11 @@ them beside every result, as every report does under *Assumed, not measured*.
 spectrum belongs to which star: with a symmetric semi-amplitude prior the conjunction scan sees
 the declared assignment and its mirror as equally good. The pipeline therefore starts the fit
 with $`K_1 < K_2`$ and lets the label stage check it afterwards, flagging a fitted light fraction
-far from the declared one as the signature of an order declared the wrong way round.
+far from the declared one as the signature of an order declared the wrong way round. With a
+library configured the starting values themselves come from a template table fitted at the
+declared period, so the convention only breaks the ties the data leave; a component the table
+cannot measure starts from its nearest measured neighbour, above it for a lighter star and
+below it for a heavier one.
 
 **The wavelength scale is declared before a synthetic grid is consulted.** ESO files declare
 it and the reader takes it from them; a file that does not gets `medium = "air"` (or
@@ -75,7 +79,7 @@ skipped with a flag rather than run on an 83 km/s guess.
 
 ```toml
 [labels]
-library = "bosz2024-fgk-r20000"   # albireo.library_names(); ~645 MB once, then cached
+library = "bosz2024-fgk-r20000"   # albireo.library_names(); ~621 MB once, then cached
 mh = [-1.0, 0.5]
 ```
 
@@ -83,7 +87,10 @@ With a library declared, each disentangled component is fitted for Teff, log *g*
 *v* sin *i* against the grid ([the previous tutorial](labels.md)) and, for the velocities, for
 the offset of its rest frame. A disentangled component's zero point is not identified
 ([§5.3](../math.md#53-systemic-velocity-zero-point)); the label fit measures it, and the
-pipeline applies it to the templates so that the epoch velocities come out absolute. Without a
+pipeline applies it to the templates so that the epoch velocities come out absolute, unless
+the fit disowned that offset (it beat neither of its nulls, the offset was pinned on the bound
+of its own scan, or the two components disagree by more than one systemic velocity can hold),
+in which case the offset is refused with a flag and the table stays differential. Without a
 library the velocities are differential: semi-amplitudes, eccentricity and mass ratio exact,
 systemic velocity meaningless, and the orbit fit gives each component its own $`\gamma`$. Every
 report states which it got, in the first lines of the velocity table's summary and in
@@ -101,8 +108,8 @@ period = "search"
 ```
 
 renders library templates at the starting labels, measures a first velocity table against them,
-finds the period by Lomb-Scargle, fits an orbit to the table, and warm-starts the disentangling
-from it. Template mismatch costs a constant per component here, which the period and the
+proposes candidate periods from three periodograms, fits an orbit to the table from each and
+keeps the one with the lowest chi-square, and warm-starts the disentangling from it. Template mismatch costs a constant per component here, which the period and the
 semi-amplitudes are insensitive to. This route needs the library.
 
 ```toml

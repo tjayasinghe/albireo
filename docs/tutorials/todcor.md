@@ -117,7 +117,7 @@ checkable:
 - `delta_chi2` is how much worse the fit becomes when each component is removed and the rest
   refitted. A small value means the epoch does not detect that star, which is what a
   faint-companion search must notice epoch by epoch.
-- `at_edge` marks a minimum at the boundary of `v_range`: widen it.
+- `at_edge` marks a minimum on the boundary of `v_range` after the coarse or the fine pass; the velocity and its error are then `nan` (nothing was measured) and the epoch is not `good`: widen the range.
 - `light` is the amplitude assigned to each template. With `scale="free"` its column sum is the
   composite's fitted scale, and a value far from one indicates the normalization is off.
 
@@ -148,7 +148,7 @@ model.
 ## The orbit from the table
 
 ```python
-search = ab.find_period(table, period_range=(2.0, 20.0))   # Lomb-Scargle on v1 - v2
+search = ab.find_period(table, period_range=(2.0, 20.0))   # generalized Lomb-Scargle on v1 - v2
 orbit = ab.fit_rv_orbit(table, period=search["period"])
 print(orbit.summary())
 ```
@@ -168,9 +168,10 @@ Keplerian fit to 24 velocities of 2 component(s): chi2 15.65 for 17 dof (errors 
 against an injected $`P = 6`$, $`e = 0.15`$, $`\omega = 40.1^\circ`$, $`K = 42, 63`$. The fit uses the
 same Kepler solver and angle conventions as the joint model, so `orbit.to_theta()` is what
 `Disentangler(orbit=...)` takes as a warm start: measure against a library template, fit the
-orbit, disentangle from it. The period search returns its aliases as well (6.083, 5.843,
-6.205 d here); a sparsely sampled table's periodogram is rarely unambiguous, and the aliases
-should be inspected.
+orbit, disentangle from it. The period search returns nineteen further peaks as well, under
+`aliases`; a sparsely sampled table's periodogram is rarely unambiguous, and the aliases
+should be inspected. The pipeline's search route does that automatically, fitting an orbit
+from each of about three dozen candidates and keeping the best.
 
 ## Closing the loop
 

@@ -90,6 +90,12 @@ low-level equivalent is [`examples/00_quickstart.py`](examples/00_quickstart.py)
   disentangles them, fits labels, measures velocities, fits the orbit, and writes tables,
   spectra with uncertainty bands, a JSON report and diagnostic figures, running stars in
   parallel worker processes and recording failures without stopping the batch.
+- **Gaia RVS, simulated and benchmarked.** `albireo.gaia` builds RVS epoch spectra of a
+  binary as the archive delivers them (the S/N that follows from G_RVS, photon noise on the
+  detector grid, the correlated noise of the delivered grid, the scanning-law cadence),
+  `albireo.population` draws double-lined binaries from the field or from real catalogues,
+  and `scripts/gaia_rvs_benchmark.py` runs them through the pipeline under knowledge tiers
+  and reports how well the orbits, velocities, spectra and labels come back.
 
 The scientific background and the literature each method rests on are summarized in
 [`docs/science.md`](docs/science.md).

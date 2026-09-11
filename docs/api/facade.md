@@ -36,7 +36,8 @@ prints each one:
 |---|---|
 | The **velocity budget** | It must bound the largest relative velocity the priors allow, not the one the answer turns out to have. Too small a budget stalls the sampler against a guard it cannot see; reached through `log_likelihood` directly, too small a budget gives a wrong result without an error. The information is already in the support of the `k` priors. |
 | The **model grid** | Wide enough for that budget plus the LSF kernel radius. Short of that margin the shifted model runs off the grid and the fit silently loses flux there. |
-| The **conjunction phase** | Located by a 41-point scan before anything is optimized. The likelihood is sharply multimodal in phase, and L-BFGS started in the wrong trough converges tightly on the wrong answer. |
+| The **conjunction phase** | Located by a 42-point scan over one period before anything is optimized. The likelihood is sharply multimodal in phase, and L-BFGS started in the wrong trough converges tightly on the wrong answer. The count is even so that the grid holds the antipode of every trial it samples, which an odd count leaves midway between two trials; for a near-equal pair the two mirrors are nearly equally good and the scan can only choose between them if both are on the grid. |
+| The **semi-amplitude basin** | When a semi-amplitude is declared as a `Between` range, a scan of the marginal likelihood precedes the fit: the first ranged component crosses a geometric grid over its range (a factor of 1.25 between neighbours) together with eight conjunction phases, each further ranged component crosses its own grid at what has been located so far, two joint refinements halve the spacings around the best trial, a final pass takes each component once more over its whole grid at the refined best, and for two ranged components the exchange-symmetric twin of the best is tried; L-BFGS starts from the best trial when it beats the declared start. Between the two passes each star's prior amplitude is profiled at the orbit located so far: the marginal likelihood is exactly invariant under scaling a star's light by a factor and its two smoothness hyperparameters by the factor squared, so a profile over the light at fixed hyperparameters is a profile over the amplitude the data want for that star (not a measurement of its light, which it puts at 0.3 to 0.7 of the truth), and where it asks for a factor of two or more the hyperparameter starts are moved and the scan repeated (`fit.k_scan.prior_scales`); a companion declared at six times its light had made the scan prefer a static secondary, and the profile rejected that amplitude by 150 nats. The axes are taken in turn rather than as a product because a companion of a few percent of the light prefers its true semi-amplitude only while the primary's is within about ten percent of the truth, which no product grid coarse enough to afford holds. The likelihood is multimodal in the semi-amplitudes too: a start at half the true value settles at half, a start far above it in the static-component minimum, and a phase located at semi-amplitudes a factor of three off can sit a quarter of a period from the truth, which is why the two are scanned together. The scans run on a copy of the declaration with the model grid at twice the pixel, a quarter of the cost at a dozen epochs, and the fit itself on the full grid. Two guards keep a scan on a coarse model of the wrong shape from doing harm: a best trial with every ranged semi-amplitude at the floor of its grid is the static-component minimum and is refused, and the start moves only when the best trial beats it by more than 25 nats jointly, after which a component whose own move is worth less than 5 nats, with the others at the best trial, returns to its start (a companion of a few percent of the light commands some 25 nats over its whole range, so the evidence is judged jointly and a template table's seed is kept where the data are indifferent). `fit.k_scan` retains the trials, the hold losses and the notes; `fit(k_scan=False)` skips it. |
 | The **smoothness hyperparameters** | Fitted by empirical Bayes, then frozen for sampling, and reported per component with a flag on any that did not move from its start. |
 
 A fifth quantity is structural rather than derived: a spec such as `Between(5.5, 6.5)`
@@ -77,6 +78,27 @@ Three properties of the declaration:
   Velocities that never resolve the pair beyond the LSF width produce a warning.
 - `scan()` and `detection_limit()` require a known SB1 orbit and refuse without one.
 
+## One instrument name, two resolving powers
+
+The line-spread width is a property of the exposure, not of the instrument name. HARPS
+observes at R = 115,000 in its high-accuracy mode and at R = 80,000 in its high-efficiency
+mode, and both write `INSTRUME = 'HARPS'`; FEROS, UVES and X-shooter settings differ between
+programmes on one target. The reader records each file's resolving power on its epoch
+(`EpochData.lsf_sigma_kms`), `Dataset.summary()` lists the distinct widths under each key,
+and the declaration can defer to them:
+
+```python
+dis = ab.Disentangler(dataset, components=[...], orbit=...,
+                      lsf={"HARPS": ab.LSF.per_epoch()})   # or the string "per-epoch"
+```
+
+Each epoch is then modelled at its own width, and `dis.explain()` prints the widths and how
+many epochs carry each. A width given as one number for a key whose epochs declare several
+is applied to all of them, and produces a warning naming the epochs, because on AI Phoenicis
+six EGGS exposures modelled at the HAM width went unnoticed for a month. A per-epoch width
+is what the file declared, so it cannot be inferred: an `lsf_sigma` site on such an
+instrument is refused at the low level.
+
 ## Required declarations
 
 In each of the following a default would amount to a scientific claim, so the value is
@@ -100,13 +122,31 @@ required or the call is refused.
 - **The eccentricity singularity is handled by construction.** A free `ecc` never starts at
   the origin, and `ecc=ab.Fixed(0.0)` does not sample those sites at all.
 
+## The noise model
+
+The pixels are independent by default. A pipeline that resampled the spectra onto a
+common step correlates neighbouring pixels (Gaia's RVS grids carry lag-one correlations of
+0.27 and 0.81, which the archive's errors do not express), and the declaration can say so:
+
+```python
+dis = ab.Disentangler(dataset, components=[...], orbit=..., lsf={"RVS": ab.LSF.from_resolution(11_500)},
+                      noise_correlation={"RVS": 0.27})       # or ab.Between(-0.9, 0.9) to fit one value
+```
+
+The noise model becomes AR(1) along the pixel index
+([§1.4a](../math.md#14a-correlated-noise-the-ar1-chain)), held at the declared values per
+epoch or fitted as one shared `ar1_phi` site; `dis.explain()` states which, and a declared
+value is listed among the assumptions. The same value reaches `fit.measure_velocities()`,
+whose errors carry it through the sandwich of
+[§10.4](../math.md#104-uncertainties-and-detection).
+
 ## Outside the scope of v1
 
-Per-epoch jitter, AR(1) correlated noise, inferred light fractions and inferred LSF widths
-are not offered through the façade. Each is a one-line site in the low-level API, and each
-is a scientific claim rather than a convenience, which a keyword such as `jitter=True`
-would present as the latter. `fit.z_rms` is printed unconditionally as the diagnostic for
-whether they are needed, and `dis.expert()` is the route to adding them.
+Per-epoch jitter, inferred light fractions and inferred LSF widths are not offered through
+the façade. Each is a one-line site in the low-level API, and each is a scientific claim
+rather than a convenience, which a keyword such as `jitter=True` would present as the
+latter. `fit.z_rms` is printed unconditionally as the diagnostic for whether they are
+needed, and `dis.expert()` is the route to adding them.
 
 Three further declarations are refused rather than approximated:
 

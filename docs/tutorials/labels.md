@@ -155,13 +155,14 @@ caches a published one:
 
 ```python
 ab.library_names()
-# ['bosz2024-fgk-r20000', 'bosz2024-fgk-rvs', 'pollux-ob-smc24']
+# ['bosz2024-fgk-r20000', 'bosz2024-fgk-rvs', 'bosz2024-hot-r20000',
+#  'bosz2024-hot-rvs', 'pollux-ob-smc24']
 
 ab.library_info("bosz2024-fgk-r20000")          # coverage, licence, citation, sizes
 library = ab.fetch_library("bosz2024-fgk-r20000")
 ```
 
-The first call downloads about 645 MB from MAST and leaves a ~95 MB cache; every later call
+The first call downloads about 621 MB from MAST and leaves a ~51 MB cache; every later call
 reads the cache. `$ALBIREO_DATA_DIR` moves the cache to a volume with room, or points at a
 directory somebody has already populated. A subset of the band can be requested with
 `fetch_library(name, wave_range=(5150.0, 5250.0))`, which slices what is already cached.

@@ -31,6 +31,324 @@ This file records what changed. The reasons are recorded elsewhere:
 
 ### Added
 
+- **The table the period search ran on is kept beside the delivered one (D64).** On the
+  search route the delivered `template_velocities.rv` carries the winning orbit's component
+  assignment rather than the correlation's, because the bootstrap re-assigns the epochs
+  where the correlation exchanged two alike spectra. Its header now says so and names the
+  count, and the table as measured is written beside it as
+  `template_velocities_unexchanged.rv` whenever an epoch moved. Without it the period search
+  cannot be reproduced from the written products, which was found by an analysis that tried
+  and could not.
+
+- **The template velocity table is a product of every run that measures one (D63).** The
+  bootstrap of the search route, the light measurement and the semi-amplitude start each
+  measure the epochs against library templates at the declared starting labels before
+  anything is disentangled; that table decides the period and seeds the semi-amplitudes,
+  and it is now written as soon as it exists (`template_velocities.rv` and `.csv`, with the
+  purpose in the header), so it is on disk when a later stage fails and the decision it
+  fed can be examined.
+- **Real Gaia transit times from GOST (D63).** `gost_transits(ra_deg, dec_deg)` fetches
+  the forecast of a sky position's field-of-view crossings from ESA's ObjVisSAP endpoint
+  (the nominal scanning law, barycentric MJD in TCB, no CCD row and no scan angle),
+  parses the VOTable with the standard library and caches the response under the cache
+  directory; `rvs_transit_times_from_gost` keeps the crossings inside the release span,
+  draws the RVS rows (four of the seven, the service not publishing which) and thins
+  them to the usable fraction of 0.78 (GOST's own reception rate, Katz et al. 2023 and
+  the DR3 counts agree on it). `BinarySystem` carries `ra_deg` and `dec_deg`, filled
+  from the Gaia query or drawn at the population's ecliptic latitude and rotated to ICRS
+  (`ecliptic_to_icrs`, within an arcsecond of astropy's mean ecliptic), and the
+  benchmark's `cadence="gost"` (`--cadence gost`) simulates each system at its own
+  forecast epochs, with `system_transit_times` to compute them first and the minimum
+  transit rule applied to the forecast. The statistical cadence stays the default; where
+  a position is known the phase of the scanning law is now reproduced, which the first
+  two benchmark runs had stated as an approximation.
+- **A BOSZ 2024 box above 7000 K for A and early-F stars (D63).** `bosz2024-hot-rvs` and
+  `bosz2024-hot-r20000` cover 7000 to 10,000 K in 250 K steps, log g 3.5 to 5.0 and [M/H]
+  -1.0 to +0.5: 364 nodes, every one published (verified against the archive listing on
+  2026-09-10, a harvest of which is a test fixture), so the cubic interpolant applies with
+  nothing filled. The box crosses the MARCS/ATLAS9 seam between 8000 and 8250 K, and its
+  caveats say what that costs, what the Paschen series does to a velocity from the RVS
+  band above 8000 K, that A stars rotate faster than R = 11,500 resolves, that the LTE
+  error there is unquantified, and that the archive's hot shards predate the hydrogen-line
+  recomputation date. 532 MB to fetch once (`fetch_library`), 4 MB cached for the RVS
+  slice. The benchmark script's `--library` admits the catalogue systems above 7000 K with
+  it. The FGK entries' declared sizes are corrected to the measured ones (621 MB to fetch,
+  5 MB and 51 MB cached; they had said 645, 16 and 95).
+
+- **The measured epoch velocities are a product of every run, and of the benchmark (D62).**
+  The pipeline has always written one velocity per component per epoch, by TODCOR against
+  the disentangled components with the label fit's zero points (`velocities.rv`,
+  `velocities.csv`); `result.json` now also carries the disentangling's own Keplerian at
+  every epoch and, for a simulation, the injected velocity of every epoch in the order the
+  components were compared in. The benchmark gathers them: `collect_velocities` writes
+  `velocities.csv` (one row per system, tier, epoch and component, with the error, the
+  flags, the injected velocity and the pull), `summarize_velocities` pools the usable
+  epochs per tier into an "Epoch velocities" section of the report, and every tier's
+  systems are drawn phase-folded against the injected orbit (`figures/rv_curves_<tier>.png`).
+- **A declared noise correlation, end to end.** `Disentangler(noise_correlation=...)`
+  (a number, a table per instrument, or a `Between`/`Known` to fit one shared value)
+  makes the noise model AR(1) along the pixel index, held or fitted through the
+  `ar1_phi` site the low-level model already had; `explain()` states it and a declared
+  value is listed as an assumption. `todcor(noise_correlation=...)` replaces the
+  curvature error by the sandwich through it (math.md §10.4), which
+  `Fit.measure_velocities` applies with the declaration's value. The pipeline's
+  `noise_correlation` setting carries it to every stage, and the benchmark declares the
+  delivered grid's lag-one correlation to every tier as the simulation measured it
+  (`noise_model="correlated"`, the default): the pixels of a resampled spectrum are not
+  independent, and the archive's errors do not say so.
+- **A joint scan over the semi-amplitudes and the phase before the fit.** With a
+  semi-amplitude declared as a range, `Disentangler.fit` (`k_scan="auto"`) scans the
+  marginal likelihood over a geometric grid of the ranged semi-amplitudes crossed with a
+  grid of conjunction phases, refined twice around the best trial, on a copy of the
+  declaration with the model grid at twice the pixel, and starts L-BFGS from the best
+  trial when it beats the declared start; the record is `fit.k_scan` and the pipeline's
+  `k_scan` setting, on by default, reports and flags what it moved. The Gaia DR3
+  population had shown a template table of a dozen epochs seeding the range-K routes in
+  the wrong basin on half the systems, and a first scan over the semi-amplitudes alone
+  showed why the phase must be scanned with them: located at semi-amplitudes a factor of
+  three off, the phase can sit a quarter of a period from the truth. The template table's
+  orbit now also starts a free eccentricity and argument of periastron
+  (`Orbit(ecc=Between(0, hi, start_at=e), omega=w)`) when it detected them at three sigma,
+  so the scan runs on the right shape of velocity curve.
+- **The one gap in the BOSZ FGK box is filled, and the cubic interpolant returns.** BOSZ
+  publishes no model at 5750 K, log g 3.0, [M/H] -0.75, and that single gap cost the whole
+  grid its box structure: `library_interpolator` fell back to the barycentric simplex path,
+  which is piecewise linear over an arbitrary triangulation of the lattice, and the label
+  fit stopped at its kinks. On a perfect spectrum drawn from the grid itself the fit ended
+  20 to 150 K from the truth with a chi-square above the truth's; with the box completed
+  and the Catmull-Rom cubic in use the same fits end within about 30 K. `ingest_bosz` now
+  fills a missing node that two published neighbours bracket along one axis by linear
+  interpolation between them (metallicity first), records it in `meta["filled_nodes"]`,
+  and the library summary and the label report name it; an unbracketed node is still
+  dropped. The registry version of both BOSZ libraries moves to 2, so cached builds are
+  remade from the raw shards on first use. This is the temperature bias the first Gaia
+  RVS benchmark reported as open (D61).
+- **Gaia RVS as a simulator, populations of double-lined binaries, and a benchmark that
+  runs them through the pipeline (D60, D61).** `albireo.gaia` reproduces the Gaia RVS
+  observation chain of Rowan's reference notebook with every constant verified against a
+  primary source: G_RVS from the colour, the S/N per detector pixel from G_RVS and the
+  transit count, photon noise on the detector grid, delivery onto the DR3 mean-spectrum or
+  the DR4 epoch grid with the variance propagated and the noise correlation recorded, the
+  in-flight resolving powers per CCD row, and a transit cadence with the scanning law's
+  measured structure. `albireo.population` draws systems from the field's distributions
+  (Moe & Di Stefano 2017, a dwarf sequence, the eclipse geometry, tidal synchronisation,
+  the RVS light ratio from the library continua) as a magnitude-limited double-lined
+  survey sees them, or builds them from DEBCat and the Gaia DR3 double-lined orbits. `albireo.benchmark` simulates each system once, runs it under
+  knowledge tiers (`oracle`, `eclipsing`, `orbit`, `blind`) through `run_pipeline`, and
+  writes `report.md` with figures, `rows.csv` and `summary.json`; `scripts/gaia_rvs_benchmark.py`
+  drives it and resumes. New names: `simulate_rvs_dataset`, `rvs_snr_per_pixel`,
+  `predict_grvs`, `rvs_transit_times`, `RVS_DR3_MEAN`, `RVS_DR4_EPOCH`, `RVSProduct`,
+  `RVSTruth`, `BinarySystem`, `MainSequence`, `draw_population`, `from_debcat`,
+  `from_gaia_sb2`, `query_gaia_sb2`, `read_population`, `write_population`,
+  `BenchmarkConfig`, `BenchmarkRun`, `Tier`, `run_benchmark`, `write_report`,
+  `t_conj_from_t_peri`. `simulate_dataset` gains photon-counting noise
+  (`InstrumentSpec.shot_noise`, `snr_window`) and a per-epoch `epoch_snr`; the truth
+  records the noise sigma. `examples/14_gaia_rvs.py` reproduces the notebook's system.
+- **Pipeline declarations for what an eclipsing-binary user knows.** `StarConfig` takes
+  `t_conj` (a known conjunction instead of the phase scan), `ecc` (held or a range) and
+  `omega`; `ComponentConfig(light="measure")` measures the light fractions against library
+  templates on any route with a library; the truth block reports element and velocity
+  pulls, the recovered spectra's correlation and equivalent widths per window, and the light
+  fractions as declared and as measured. `find_period` oversamples the baseline.
+  `reassign_by_orbit` exchanges the two components of a velocity table at the epochs
+  where the disentangling's orbit says the correlation picked the mirror minimum, which
+  alike components at similar light fractions make it do; the pipeline applies it and
+  flags the count. `find_period(swap_invariant=True)` searches the magnitude of the
+  relative velocity, which the exchange leaves unchanged; the search route's bootstrap
+  tries its peaks and their doubles, re-assigns the table by each candidate orbit, and
+  falls back to the declared K range when a bootstrap semi-amplitude is degenerate. A
+  semi-amplitude declared as a range now starts where a library-template table fitted at
+  the declared period puts it (a component the table could not measure starts from its
+  nearest measured neighbour, above it for a lighter star and below it for a heavier one,
+  and every start is held strictly inside the range; `Between.start` now refuses a start on
+  a bound instead of leaving numpyro to say "cannot find valid initial parameters"),
+  instead of at evenly spaced points of the range: over a range of
+  2 to 250 km/s those points started a 23 km/s primary at 85 km/s, and the fit settled in
+  the static-component minimum. The truth block recognises a pair recovered in the other
+  order (twins, where the mass-order convention has nothing to work on), flags it, and
+  compares in that order.
+### Changed
+
+- **The period search is a floating-mean periodogram with twenty candidates, and the
+  orbit fit decides among more of them (D63).** `find_period` computes the weighted
+  generalized Lomb-Scargle periodogram of Zechmeister and Kurster (2009), with a free
+  constant, in numpy, in place of `scipy.signal.lombscargle` on the series scaled by the
+  square root of its weights: ten to twenty-five epochs falling into a dozen visibility
+  windows hundreds of days apart have a sampling window whose mean is large at most
+  frequencies, and a sinusoid with no constant term absorbs it as spurious power. On the
+  oracle-tier tables of the second Gaia benchmark the true period ranked 9, 9, 15, 25 and
+  103 among the distinct peaks on the five Gaia-like systems the search had lost, and 1, 1,
+  1, 10 and 3 with the floating mean. `n_peaks` (default twenty, the best plus nineteen
+  aliases) replaces the fixed six, the greedy peak loop walks the local maxima only, and
+  `n_harmonics=2` fits a fundamental and its first harmonic for eccentric orbits. The
+  pipeline's search route proposes the union of the twenty single-harmonic peaks, the
+  twenty two-harmonic peaks, the twenty peaks of the first component's own velocities
+  (the source that survives a companion the templates could not follow, whose relative
+  velocity is then noise while the primary's curve is intact) and the swap-invariant
+  peaks with their doubles, sets aside every candidate orbit above the declared
+  semi-amplitude ceiling or eccentricity maximum (a 7-percent secondary's garbage
+  velocities had let a wrong period win at 1537 km/s and e = 0.94; a semi-amplitude
+  below the floor is what an unmeasurable companion leaves at any period and is not
+  tested), fits the
+  eccentric Keplerian at every distinct start, merges fits agreeing within 2 percent on
+  the fitted period, keeps the lowest chi-square, and names every distinct fitted period
+  within 25 in chi-square of the winner as an ambiguity (`bootstrap.ambiguous`,
+  `n_candidates`, `harmonic_peak` in the report). On the same 32 tables the recovery within
+  2 percent went from 23 to 28, the four left being two tables of ten or eleven epochs whose
+  true Keplerian fits worse than an alias (the flag fires on both), one period 2.04 percent
+  off and one decision lost by 4.4 in chi-square. The frequency grid (ten per inverse
+  baseline) and the 2 percent distinctness rule were tested and kept; a period near a
+  third of the baseline is quoted to a few percent by the grid and pinned by the fit.
+  On the third Gaia run the table's chi-square still chose absurd orbits on the noisier
+  bootstrap tables (twins at 6.10 d sent to 0.248 d with K 233/239 at e 0.73; a 5.36-day
+  pair to 1.13 d), inside the declared ranges, so the disentangling itself now decides
+  among the best few candidates (`Analysis.period_decision_candidates`, default 8: on the third run's misses the truth ranked 4 to 14 in the table's chi-square): each
+  candidate is declared with every semi-amplitude as the same range, so the model grids
+  match, its conjunction and semi-amplitudes located by the coarse scans, and the prior-free
+  marginal log-likelihood compared; the table is overruled with a flag that names both
+  choices and the margin in nats, and `bootstrap.decision` records every candidate. About
+  340 coarse solves per candidate.
+- **The semi-amplitude scan takes its axes in turn, and judges the move jointly (D63).**
+  A measurement on the Gaia system whose 7-percent secondary the D62 scan had lost showed
+  where a product grid fails: the companion commands some 25 nats over its whole range
+  and prefers its true semi-amplitude only while the primary's is within about ten
+  percent of the truth, whereas the primary's own peak falls by 50 nats within twenty
+  percent, so on a grid at ratio 1.8 no trial held the primary close enough for the
+  companion's evidence to point the right way, and the local refinement could not carry
+  the companion out of the basin it was placed in; the guard then refused the correct
+  joint move (39 nats) as two single-component holds of 15 nats each. The scan now takes
+  the first ranged component over a geometric grid at ratio 1.25 with eight phases, each
+  further component over its own grid at what has been located, refines jointly twice,
+  takes each component once more over its whole grid at the refined best, and tries the
+  exchange-symmetric twin of the best for two ranged components; the start moves when the
+  best trial beats it by more than 25 nats jointly, and a component whose own move is
+  worth less than 5 nats returns to its start. Fewer trials than before (about 270
+  against 446 for two components), and the record's notes say which guard acted.
+  Between two passes each star's prior amplitude is profiled at the located orbit
+  through the model's light site: the marginal likelihood is exactly invariant under
+  scaling a star's light by a factor and its smoothness hyperparameters by the factor
+  squared (to 5e-10 nats), so the profile measures the amplitude the data want and not
+  the light (it sat at 0.3 to 0.7 of the injected fraction on four systems), and where
+  it asks for a factor of two or more the hyperparameter starts are moved and the scan
+  repeated (`fit.k_scan.prior_scales`, a note in the record). A secondary declared at
+  six times its light, which had sent the scan to a static companion, came back at 4
+  percent of its semi-amplitude that way.
+
+### Fixed
+
+- **The conjunction-phase grid holds its own antipodes (D64).** `Disentangler._scan_phase`
+  laid 41 trials over one period, an odd count, so the antipode of every trial it sampled
+  fell midway between two others and the grid could not choose between the two mirrors of a
+  near-equal pair. The count is now 42, which is even and also finer. On one benchmark star
+  the antipode the old grid could not reach was better by 672 nats, and the later
+  semi-amplitude scan found it and moved the conjunction half a period on, which is how the
+  D63 initialisation failure began.
+- **A star whose files declare no wavelength medium no longer fails at the semi-amplitude
+  start (D64).** Where a semi-amplitude is a range and a library is configured, the pipeline
+  seeds the starting values from a template table. Nobody asks for that table, but it raised
+  the medium refusal when the files declared no air-or-vacuum scale, which failed the star
+  and, among others, the shipped `albireo demo`. The stage is now skipped with a flag saying
+  what was lost and how to get it back, which is what the module's policy says an unrunnable
+  stage should do. The refusal stands unchanged where the user declared `period = "search"`
+  or `light = "measure"`, which are stages that cannot proceed without the medium.
+- **Three claims in `docs/math.md` section 5.2 that the package does not back (D64).** The
+  physicality floor was described as "available as an optional constraint"; nothing imposes
+  it anywhere, and it is now described as what it is, a bound worth reporting beside a
+  declared light and measured over 66 components to reach a median 0.61 of the true fraction
+  without ever exceeding it. The section also documented a `light_ratio=` argument taking
+  `Fixed(values)`, `Free(prior=...)` or `PerEpoch(...)`; none of those names exist, the D46
+  façade review having rejected that one in favour of `light=` on the `Star`. What the two
+  paths actually offer is now stated.
+
+- **The marginal likelihood rejects an evaluation the arithmetic destroyed (D63).** One
+  oracle-tier fit of the second Gaia benchmark diverged: ML-II was raising a component's
+  smoothness precision toward its interior optimum when a line search accepted a trial at
+  tau of 2e19, where the assembled posterior precision has a Cholesky pivot of 5e9 against
+  a data scale of 1e4, the forward substitution loses every digit, and the quadratic form
+  came out above the data term, a negative chi-square reported as a 216,000-nat
+  improvement; the period then walked 228 prior sigma and the residual z-score rms ended at
+  45. `marginal_loglikelihood` now returns minus infinity when the chi-square is negative
+  (the form is positive definite by Woodbury, so a negative value is a destroyed
+  evaluation; a healthy value and its gradient are bit-identical to before, a rejected
+  point has a zero gradient), and `MarginalOrbitModel` carries a `smoothness_bound` factor
+  beside its AR(1) and LSF bounds rejecting `log_tau - log_eta` above 30, the ratio at
+  which the prior's own factorization is documented to round its pivot to zero (defaults
+  start six hyperprior sigma inside it). The same fit now ends at z-score rms 0.97 with the
+  period and both semi-amplitudes within 0.1 percent of the truth, the potential falling at
+  every step; the sign guard alone does it, the bound never fires there. Traced in
+  `internal/research/2026-09-09-gaia-rvs-benchmark/`. Not the AR(1) noise model's doing:
+  at correlations of 0.0, 0.1 and 0.5 the same fit converged, only the trajectory differed.
+- **The correlation stage no longer writes a velocity it did not measure (D63).** An
+  archived oracle-tier star whose disentangling had diverged came out with fifteen rows of
+  plausible velocities pinned at one value: the label fit had put the primary's zero point
+  on the bound of its frame-offset scan, the shared search window built from the fitted
+  Keplerian then could not contain any of that component's true velocities once composed
+  with that zero point, the coarse pass sat on the top node of the range in every epoch,
+  and the fine pass walked its window out of the range four times and reported a shift
+  five pixels beyond the last point at which the chi-square had been evaluated (the update
+  of the window start was applied after the last evaluation and added to a position from
+  the previous window). `todcor` now reports the position it evaluated, clamps the fine
+  window inside the requested range, flags `at_edge` when the fine minimum is still on the
+  window boundary after the last attempt, and writes `nan` for the velocity and error of a
+  component it could not measure while keeping every diagnostic of the point it did
+  evaluate; the summary counts such epochs as "at the search edge, not measured".
+  `Fit.measure_velocities` builds one window per template, each offset by that template's
+  zero point relative to the median, so every component searches the same interval of
+  reported velocity, and refuses by name a zero point that puts a component's window off
+  its own fitted velocities (the disowned zero point here was 247 km/s from the other
+  component's on a fit where both are one systemic velocity), naming the two ways out.
+- **The pipeline stops at a diverged fit, refuses a disowned zero point, and marks a
+  failed table (D63).** The same archived star had passed three gates it should not
+  have. `Analysis.z_rms_max` (default 10; healthy fits sit near 1, a fit at a wrong period
+  on the blind route near 2 to 3, the one divergence seen at 45) now stops a star after
+  the disentangling with a flag and a recorded failure, the label and velocity stages not
+  run, the template table already on disk. A label fit that beats neither null, or whose
+  frame offset sits within one trial step of its scan's bound, or whose components' offsets
+  differ by more than the velocity budget on a Keplerian fit (one systemic velocity by
+  construction), no longer pins the templates' zero points: the table stays differential
+  with one gamma per component, and `velocities.zero_points` records what was adopted or
+  refused and why. A table whose median R-squared is negative (the templates fit worse than
+  no template) or with no usable epoch is `velocities.status = "failed"`, its orbit stage
+  skipped and its `velocities.rv` headed by a `FAILED` line; the "weakly detected" guard
+  stays. And a declared velocity table (`velocities = "file"`) with a non-finite entry for a
+  matched epoch is refused by component and epoch, the free fit having no site for an
+  unmeasured epoch.
+  Zero points that leave no search window holding every component (a label fit of a
+  broad-lined contact pair put them 95 km/s apart) are dropped with a flag and the
+  velocities measured differential, rather than the star failing at the refusal.
+- **The velocity table stops losing a component to the exchange step, to shrunk templates
+  and to an unlearned zero point (D63).** Three failures of the third run's tables, each
+  traced on the archived products with the fit's own templates. The exchange of two
+  components by the orbit assumed alike spectra at alike light fractions; on a 95/5 pair it
+  swapped 19 of 80 epochs on noise draws of the faint component's velocity and moved the
+  primary's semi-amplitude from 5 to 56 percent off, so the exchange now runs only when the
+  two fractions are within a factor 3 of each other, and the table as measured is kept
+  beside the delivered one (`velocities_unexchanged.rv`) whenever an epoch was exchanged.
+  The correlation held the light at the declared fractions on the argument that the
+  disentangling recovers each component at that amplitude; once ML-II has raised a
+  component's smoothness precision by an order of magnitude the recovered lines are
+  shallower (a secondary lost a quarter of its depth as tau went from 400 to 2000 and the
+  table lost it at -89 percent; a free amplitude brought it back to -25), so the amplitudes
+  are fitted freely when any smoothness precision moved more than a factor 10 from its
+  start, with a flag saying the light column is then a template scale and not a fraction.
+  And a label fit that learned nothing about a component's frame offset (posterior as wide
+  as the prior, the component mostly noise) no longer pins that component's zero point (a
+  secondary keeping 11 percent of its equivalent width had every velocity 46 km/s off):
+  that component's velocities stay differential with their own systemic velocity, the
+  other's remain absolute.
+- **The conjunction window is centred on the start the fit carries (D63).** One field
+  star failed twice at the optimizer's initialisation: the semi-amplitude scan had moved
+  the conjunction half a period on (its phase grid holds the antipode the 41-point phase
+  scan cannot sample, and there it was 672 nats better), the second scan pass gained
+  exactly nothing so the final phase scan did not run, and the one-period window was
+  still centred on the phase scan's best, which put the start on the window's edge,
+  where the unconstraining transform is infinite. The window of the fit, and the
+  sampler's, are now centred on the conjunction they start from.
+- The pipeline's label and bootstrap stages sliced the library in its own wavelength scale
+  before converting to the dataset's, which on a vacuum dataset lost about 2.3 A of coverage
+  at each edge and failed the label fit; the library is now converted first.
+- The BOSZ 2024 citation is A&A 688, A197, not A171.
+
 - **One command from a list of stars to spectra, labels, velocities and orbits:
   `albireo.pipeline` and the `albireo` command line (D58).** `albireo init` writes an
   annotated TOML, `albireo run config.toml --jobs 4` runs every star in it, and `albireo demo`
@@ -233,7 +551,6 @@ This file records what changed. The reasons are recorded elsewhere:
   distribution (unlicensed research scripts against a BSD-3 package). Written from the
   repository's README and GitHub API metadata only; the source was never opened, so the
   clean-room provenance of `scripts/shift_and_add.py` survives the comparison.
-
 ### Fixed
 
 - **`docs/quickstart.md` overlaid the injected truth on the wrong wavelength grid.** A
