@@ -169,6 +169,30 @@ This file records what changed. The reasons are recorded elsewhere:
   compares in that order.
 ### Changed
 
+- **The candidate periods are merged by rank, and fifty peaks are taken instead of twenty
+  (D64).** `_period_candidates` concatenated its four periodogram sources in a fixed order with
+  the swap-invariant peaks last, then deduplicated greedily at two percent, so a deep peak of an
+  early source displaced the top peak of a late one and the proposal was not monotone in the peak
+  count: 233 of 1296 starts present at twenty peaks were absent at fifty. The sources are now
+  merged round robin by rank, which settles a collision in favour of the higher-ranked peak
+  whichever source proposed it and makes a larger count strictly additive. Measured over the 33
+  blind systems of the benchmark's third run, the merge alone takes the true period to chi-square
+  rank 1 on one further system and costs none its place, and the count then rises to fifty
+  (`_PERIODOGRAM_PEAKS`) for one further system again, at twice the candidate-fitting wall. A
+  hundred peaks was measured and gains nothing beyond fifty.
+- **`Analysis.period_decision_candidates` is four, not eight (D64).** Eight was set on the belief
+  that the true period ranked fourth to fourteenth among the candidates on the systems the search
+  missed. Rebuilding the whole chi-square ranking offline shows it ranks first on every system
+  recovered and is absent from the candidate list on nine of thirty-three, so eight would reach
+  one further system per population at four more coarse scans per blind star. The docstring now
+  records what the stage can and cannot do: it scores each candidate at a single point in the
+  period and the eccentricity, which are the two quantities a sparse velocity table measures
+  worst, and scanning each candidate's whole window instead is both biased toward the shortest
+  period, since peaks are spaced by about `0.28 P / T` and a short period's window holds ten to
+  thirty times more independent trials, and unaffordable at about 62 hours for four candidates
+  against 116 seconds. It has converted no benchmark miss into a hit; its value is the flag it
+  raises, every one of whose four firings on the Gaia blind tier landed on a system that ended
+  with a wrong period.
 - **The period search is a floating-mean periodogram with twenty candidates, and the
   orbit fit decides among more of them (D63).** `find_period` computes the weighted
   generalized Lomb-Scargle periodogram of Zechmeister and Kurster (2009), with a free
