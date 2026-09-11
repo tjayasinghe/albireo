@@ -15,6 +15,7 @@ from numpyro.infer.util import initialize_model, log_density
 import albireo as ab
 from albireo.forward import build_problem, with_velocities
 from albireo.inference import (
+    _LOG_TAU_ETA_MAX,
     MarginalOrbitModel,
     laplace_inverse_mass,
     orbit_parameters,
@@ -278,6 +279,43 @@ def test_bandwidth_guard_rejects_out_of_bound_orbits(gate_data):
     assert outside is not None, "no epoch-realized violation found; loosen the scan"
     ld, _ = log_density(numpyro_model, (), {}, outside)
     assert not np.isfinite(float(ld))
+
+
+def test_smoothness_bound_rejects_extreme_stiffness_ratios(gate_data):
+    """``log_tau - log_eta`` past 30 is where the prior arithmetic stops working.
+
+    ML-II walks up ``log_tau`` on its own (the interior optimum is broad and nothing
+    bounds ``log_eta`` from below), and beyond this ratio the prior determinant's pivot
+    is floored and the posterior precision's Cholesky solve loses every digit, so the
+    marginal is arithmetic noise. Inside the bound the factor must contribute exactly
+    zero, so that the potential everywhere the fit actually runs is the one it was.
+    """
+    _, _, model = gate_data
+    numpyro_model = model.model(PRIORS)
+
+    ld, tr = log_density(numpyro_model, (), {}, {**INIT})
+    assert np.isfinite(float(ld))
+    # the declared start is far inside: log(300) - log(5) = 4.09 against a bound of 30
+    ratio = np.asarray(INIT["log_tau"]) - np.asarray(INIT["log_eta"])
+    assert np.all(ratio < 0.2 * _LOG_TAU_ETA_MAX), ratio
+    assert float(tr["smoothness_bound"]["fn"].log_factor) == 0.0
+
+    # exactly at the bound is still inside; one component past it is rejected
+    at_bound = {
+        **INIT,
+        "log_tau": jnp.asarray(INIT["log_eta"]) + _LOG_TAU_ETA_MAX,
+    }
+    _, tr_at = log_density(numpyro_model, (), {}, at_bound)
+    assert float(tr_at["smoothness_bound"]["fn"].log_factor) == 0.0
+
+    outside = {
+        **INIT,
+        "log_tau": jnp.asarray(INIT["log_eta"]) + jnp.array([0.0, _LOG_TAU_ETA_MAX + 0.5]),
+    }
+    ld_out, tr_out = log_density(numpyro_model, (), {}, outside)
+    assert float(tr_out["smoothness_bound"]["fn"].log_factor) == -np.inf
+    # the potential run_map minimizes is -log_density: +inf, not a finite number
+    assert not np.isfinite(float(ld_out)) and not np.isnan(float(ld_out))
 
 
 # ---------------------------------------------------------------------------

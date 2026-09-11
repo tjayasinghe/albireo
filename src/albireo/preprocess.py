@@ -592,6 +592,7 @@ def _replace(epoch: EpochData, **changes) -> EpochData:
         # here is dropped when an epoch is trimmed or masked, without any error: `medium`
         # must be carried through so that trimming does not discard the wavelength scale.
         medium=changes.get("medium", epoch.medium),
+        lsf_sigma_kms=changes.get("lsf_sigma_kms", epoch.lsf_sigma_kms),
     )
 
 

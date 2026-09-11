@@ -20,6 +20,7 @@ import jax.numpy as jnp
 __all__ = [
     "radial_velocity",
     "solve_kepler",
+    "t_conj_from_t_peri",
     "t_peri_from_t_conj",
     "true_anomaly",
 ]
@@ -133,3 +134,19 @@ def t_peri_from_t_conj(t_conj, *, period, ecc, omega):
     )
     m_conj = e_conj - ecc * jnp.sin(e_conj)
     return t_conj - m_conj * period / (2.0 * jnp.pi)
+
+
+def t_conj_from_t_peri(t_peri, *, period, ecc, omega):
+    """Time of conjunction from a time of periastron: the inverse of :func:`t_peri_from_t_conj`.
+
+    Same convention, ``nu(t_conj) + omega = pi/2``, the superior conjunction of the
+    component whose ``omega`` is given (its eclipse in an eclipsing system). Returns the
+    conjunction in the same cycle as ``t_peri``, at or after it by less than one period.
+    """
+    nu_conj = 0.5 * jnp.pi - omega
+    e_conj = 2.0 * jnp.arctan2(
+        jnp.sqrt(1.0 - ecc) * jnp.sin(0.5 * nu_conj),
+        jnp.sqrt(1.0 + ecc) * jnp.cos(0.5 * nu_conj),
+    )
+    m_conj = e_conj - ecc * jnp.sin(e_conj)
+    return t_peri + jnp.mod(m_conj, 2.0 * jnp.pi) * period / (2.0 * jnp.pi)

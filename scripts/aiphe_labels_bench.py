@@ -51,6 +51,8 @@ from aiphe_bench import (
     ETA,
     K1_PUB,
     K2_PUB,
+    LSF,
+    LSF_SIGMA_EGGS,
     LSF_SIGMA_V,
     P_PUB,
     R1_FRAC,
@@ -106,14 +108,14 @@ def disentangle(dataset):
     """Component spectra with the orbit held at the published solution."""
     ell = light_fractions(float(np.mean(WINDOW)))
     grid = ab.LogGrid.covering(
-        dataset, dv_kms=DV_KMS, v_margin_kms=140.0, lsf_sigma_kms=LSF_SIGMA_V
+        dataset, dv_kms=DV_KMS, v_margin_kms=140.0, lsf_sigma_kms=LSF_SIGMA_EGGS
     )
     problem = build_problem(
         grid,
         dataset,
         velocities=published_velocities(np.asarray(dataset.bjd)),
         light_fractions=ell,
-        lsf_sigma_v={name: LSF_SIGMA_V for name in dataset.instruments},
+        lsf_sigma_v=LSF,  # each epoch at its own header width (D59)
     )
     result = marginal_loglikelihood(problem, SmoothnessPrior(jnp.full(2, TAU), jnp.full(2, ETA)))
     return grid, np.asarray(result.d_hat), np.asarray(ab.spectra_std(result)), ell

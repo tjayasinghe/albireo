@@ -5,7 +5,8 @@ through the same operator stack the inference code uses: shift, LSF convolution,
 the native grid, then multiplicative response. Closed-loop tests therefore exercise the
 forward model itself, under the pathologies the model claims to handle: chip gaps, cosmic
 hits, mixed instruments and resolutions, tellurics, nebular emission with a per-epoch
-amplitude, barycentric frames, and per-epoch light fractions.
+amplitude, barycentric frames, per-epoch light fractions, and photon-counting noise whose
+signal-to-noise is defined at a reference flux (:class:`InstrumentSpec`).
 
 Component spectra are deviation spectra ``d = s - 1`` on the model
 :class:`~albireo.grids.LogGrid`, zero in the continuum and negative in absorption. Frame
@@ -83,6 +84,18 @@ class InstrumentSpec:
     lsf_h3
         Optional Gauss-Hermite skewness: a scalar or one value per anchor,
         anchored instruments only; None keeps pure Gaussian profiles.
+    shot_noise
+        If True, the noise scales with the flux as photon counting does:
+        ``sigma_p = (F_ref / snr) * sqrt(F_p / F_ref)``, so that line cores are quieter
+        than the continuum and ``snr`` is the signal-to-noise at the reference flux
+        ``F_ref``, the mean noiseless flux inside ``snr_window``. This is the noise model
+        of a detector that delivers an S/N per pixel, such as Gaia RVS. Default False:
+        one ``sigma = 1 / snr`` at every pixel, the continuum convention. The flux ratio
+        is floored at 0.1% so that a pixel with no flux keeps a finite weight.
+    snr_window
+        ``(lo, hi)`` in Angstrom over which the reference flux is averaged. Default
+        ``None``: with ``shot_noise`` the whole native grid, without it the continuum
+        (``F_ref = 1``), which keeps the historical behaviour bit for bit.
     """
 
     wave: np.ndarray
@@ -90,6 +103,8 @@ class InstrumentSpec:
     snr: float
     lsf_anchors_angstrom: tuple[float, ...] | None = None
     lsf_h3: float | Sequence[float] | None = None
+    shot_noise: bool = False
+    snr_window: tuple[float, float] | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -163,6 +178,7 @@ class SimulationTruth:
     nebular: np.ndarray | None = None  # injected nebular deviation spectrum
     nebular_amplitudes: np.ndarray | None = None  # (n_ep,) as injected, un-normalized
     nebular_v_kms: float = 0.0
+    noise_sigma: tuple[np.ndarray, ...] = ()  # per-epoch native-grid noise sigma, as drawn
 
 
 def synthetic_deviation_spectrum(
@@ -339,6 +355,7 @@ def simulate_dataset(
     ar1_phi: float = 0.0,
     gap_fraction: float = 0.0,
     cosmic_fraction: float = 0.0,
+    epoch_snr: Sequence[float] | None = None,
     seed: int = 0,
 ) -> tuple[Dataset, SimulationTruth]:
     """Generate a synthetic multi-epoch dataset plus the injected truth.
@@ -405,6 +422,10 @@ def simulate_dataset(
         honor the mask.
     cosmic_fraction
         Fraction of pixels hit by cosmics (large positive spikes, ivar = 0).
+    epoch_snr
+        Optional per-epoch signal-to-noise, ``(n_ep,)``, overriding the instrument's
+        ``snr`` epoch by epoch. A survey whose transits differ in exposure or in the
+        number of co-added CCDs delivers a different S/N per visit under one instrument.
     seed
         Seed for all randomness (noise, v_bary, response, gaps, cosmics).
 
@@ -456,6 +477,12 @@ def simulate_dataset(
     epoch_instruments = tuple(epoch_instruments)
     if len(epoch_instruments) != n_ep:
         raise ValueError("epoch_instruments must have one entry per epoch")
+    if epoch_snr is not None:
+        epoch_snr = np.asarray(epoch_snr, dtype=np.float64)
+        if epoch_snr.shape != (n_ep,):
+            raise ValueError(f"epoch_snr must have shape ({n_ep},); got {epoch_snr.shape}")
+        if not np.all(np.isfinite(epoch_snr) & (epoch_snr > 0.0)):
+            raise ValueError("epoch_snr must be finite and positive")
 
     # Per-instrument static operators, built once.
     rebin_ops, kernels = {}, {}
@@ -523,6 +550,7 @@ def simulate_dataset(
     epochs = []
     response_coeffs = []
     noiseless_fluxes = []
+    noise_sigmas = []
     for j in range(n_ep):
         spec = instruments[epoch_instruments[j]]
         wave_native = np.asarray(spec.wave, dtype=np.float64)
@@ -549,7 +577,8 @@ def simulate_dataset(
         noiseless = chebyshev_response(wave_native, coeffs) * flux_native
         noiseless_fluxes.append(noiseless)
 
-        sigma = 1.0 / spec.snr
+        snr_j = float(spec.snr) if epoch_snr is None else float(epoch_snr[j])
+        sigma = _noise_sigma(spec, wave_native, noiseless, snr_j)
         if ar1_phi != 0.0:
             if not -1.0 < ar1_phi < 1.0:
                 raise ValueError(f"ar1_phi must lie in (-1, 1); got {ar1_phi}")
@@ -562,7 +591,9 @@ def simulate_dataset(
             flux = noiseless + sigma * noise
         else:
             flux = noiseless + rng.normal(0.0, sigma, size=n_native)
-        ivar = np.full(n_native, spec.snr**2, dtype=np.float64)
+        sigma_arr = np.broadcast_to(np.asarray(sigma, dtype=np.float64), (n_native,)).copy()
+        noise_sigmas.append(sigma_arr)
+        ivar = 1.0 / sigma_arr**2
 
         if gap_fraction > 0:
             width = max(1, round(gap_fraction * n_native))
@@ -584,6 +615,12 @@ def simulate_dataset(
                 bjd=float(bjd[j]),
                 v_bary=float(v_bary[j]),
                 instrument=epoch_instruments[j],
+                # A scalar width is recorded on the epoch, as a reader would record the
+                # header's resolving power; an anchored (per-wavelength) LSF has no
+                # single number to declare.
+                lsf_sigma_kms=(
+                    float(spec.sigma_v_lsf) if isinstance(spec.sigma_v_lsf, (int, float)) else None
+                ),
             )
         )
 
@@ -602,8 +639,37 @@ def simulate_dataset(
         nebular=nebular,
         nebular_amplitudes=neb_amp,
         nebular_v_kms=float(nebular_v_kms),
+        noise_sigma=tuple(noise_sigmas),
     )
     return Dataset(epochs=tuple(epochs), frame=frame), truth
+
+
+def _noise_sigma(spec: InstrumentSpec, wave: np.ndarray, noiseless: np.ndarray, snr: float):
+    """The per-pixel noise standard deviation of one epoch, per the instrument's model.
+
+    Returns a scalar in the continuum convention (``1 / snr``), which keeps the historical
+    draws bit-identical, and an array under photon-counting noise or a reference window.
+    """
+    if not spec.shot_noise and spec.snr_window is None:
+        return 1.0 / snr
+    if spec.snr_window is None:
+        sel = np.ones(wave.size, dtype=bool)
+    else:
+        lo, hi = float(spec.snr_window[0]), float(spec.snr_window[1])
+        sel = (wave >= lo) & (wave <= hi)
+        if not sel.any():
+            raise ValueError(
+                f"snr_window {spec.snr_window} contains no pixel of the native grid "
+                f"({wave[0]:.2f}-{wave[-1]:.2f} A)"
+            )
+    f_ref = float(np.mean(noiseless[sel]))
+    if not f_ref > 0.0:
+        raise ValueError("the mean noiseless flux in snr_window must be positive")
+    sigma_ref = f_ref / snr
+    if not spec.shot_noise:
+        return sigma_ref
+    ratio = np.maximum(noiseless / f_ref, 1e-3)
+    return sigma_ref * np.sqrt(ratio)
 
 
 @functools.cache

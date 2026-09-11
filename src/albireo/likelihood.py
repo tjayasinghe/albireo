@@ -220,6 +220,13 @@ def marginal_loglikelihood(
     the posterior-mean deviation spectra and the posterior precision from which the
     conditional spectra are recovered (§3.3).
 
+    The log-likelihood is ``-inf`` wherever the chi-square term ``z^T W z - b^T Lt^-1 b``
+    evaluates negative: it equals ``z^T (W^-1 + A Lambda_p^-1 A^T)^-1 z`` and is therefore
+    positive definite, so a negative value means the forward substitution against ``Lt``
+    has lost every significant digit, which happens once the assembled pivots outrun the
+    data term (measured at a prior stiffness ratio ``tau/eta`` above about ``1e13``, which
+    :class:`albireo.inference.MarginalOrbitModel` bounds away).
+
     Parameters
     ----------
     problem
@@ -332,13 +339,16 @@ def marginal_loglikelihood(
     d_hat = _unpack(d_pad[:n], n_comp, n_pix)
 
     zwz, logw, n_good = weighted_data_terms(problem)
+    chi2 = zwz - quad
     logp = (
-        -0.5 * (zwz - quad)
-        - 0.5 * ld
-        + 0.5 * ld_prior
-        + 0.5 * logw
-        - 0.5 * n_good * jnp.log(2.0 * jnp.pi)
+        -0.5 * chi2 - 0.5 * ld + 0.5 * ld_prior + 0.5 * logw - 0.5 * n_good * jnp.log(2.0 * jnp.pi)
     )
+    # See the chi-square note in the docstring: the difference is a positive definite
+    # quadratic form, so a negative (or nan) value is a destroyed evaluation, not a fit,
+    # and reporting it would hand the optimizer an arbitrarily large improvement. The
+    # comparison also rejects a nan chi-square, since nan >= 0 is False. jnp.where keeps
+    # the valid branch's value and gradient exactly as they were.
+    logp = jnp.where(chi2 >= 0.0, logp, -jnp.inf)
     return MarginalResult(
         log_likelihood=logp, d_hat=d_hat, precision=bt, n_components=n_comp, n_pixels=n_pix
     )

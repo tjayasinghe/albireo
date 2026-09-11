@@ -59,6 +59,7 @@ import contextlib
 import csv
 import dataclasses
 import datetime as _dt
+import gc
 import importlib.util
 import json
 import math
@@ -91,7 +92,9 @@ from albireo.facade import (
     Spec,
     Star,
     Telluric,
+    _smoothness_of,
 )
+from albireo.forward import PER_EPOCH, declared_lsf_widths
 from albireo.grids import LogGrid
 
 __all__ = [
@@ -159,6 +162,8 @@ def _lsf(value: Any, key: str) -> LSF:
         raise TypeError(f"lsf[{key!r}]: a boolean is not a line-spread function")
     if isinstance(value, int | float | np.floating):
         return LSF(sigma_kms=float(value))
+    if isinstance(value, str) and value == PER_EPOCH:
+        return LSF.per_epoch()
     if isinstance(value, Mapping):
         if "resolving_power" in value:
             return LSF.from_resolution(float(value["resolving_power"]))
@@ -169,7 +174,7 @@ def _lsf(value: Any, key: str) -> LSF:
                 anchors_angstrom=None if anchors is None else tuple(float(a) for a in anchors),
             )
         raise ValueError(f"lsf[{key!r}]: give resolving_power or sigma_kms")
-    raise TypeError(f"lsf[{key!r}]: expected a sigma in km/s, a table, or an LSF")
+    raise TypeError(f"lsf[{key!r}]: expected a sigma in km/s, a table, {PER_EPOCH!r}, or an LSF")
 
 
 @dataclass(frozen=True)
@@ -184,7 +189,12 @@ class ComponentConfig:
         Its light fraction. Required, with no default, because it is an assumption: the
         light fractions of a star must sum to one, and no part of the fit can detect a
         wrong value (``docs/math.md`` §5.2). It should be quoted beside every result
-        derived from the spectra.
+        derived from the spectra. The string ``"measure"`` (for every component of the
+        star) takes the fractions from a correlation against library templates instead:
+        the amplitudes the templates receive in the well-detected epochs
+        (``light="global"`` of :func:`albireo.todcor`), which is a measurement rather
+        than a default, recorded in the report and flagged. It needs a library, and on
+        the ``period = "search"`` route it reuses the bootstrap's own table.
     teff, logg, vsini
         Label priors for the template-identification stage, in K, cgs dex and km/s: a
         number to hold, a ``[lo, hi]`` range, or ``None`` for the library's own range
@@ -210,11 +220,19 @@ class ComponentConfig:
     def __post_init__(self) -> None:
         if not str(self.name).strip():
             raise ValueError("every component needs a name")
-        light = float(self.light)
-        if not (math.isfinite(light) and light > 0.0):
-            raise ValueError(f"component {self.name!r}: light must be finite and positive")
+        if isinstance(self.light, str):
+            if self.light.strip().lower() != _MEASURE:
+                raise ValueError(
+                    f"component {self.name!r}: light must be a fraction or the string "
+                    f"{_MEASURE!r}; got {self.light!r}"
+                )
+            object.__setattr__(self, "light", _MEASURE)
+        else:
+            light = float(self.light)
+            if not (math.isfinite(light) and light > 0.0):
+                raise ValueError(f"component {self.name!r}: light must be finite and positive")
+            object.__setattr__(self, "light", light)
         object.__setattr__(self, "name", str(self.name))
-        object.__setattr__(self, "light", light)
         for label in ("teff", "logg", "vsini", "k"):
             _spec(getattr(self, label), f"component {self.name!r}: {label}")
 
@@ -249,11 +267,39 @@ class Analysis:
         Upper bound of the eccentricity prior; ``circular`` holds ``e = 0`` exactly.
     max_steps
         L-BFGS cap for the disentangling.
+    z_rms_max
+        Ceiling on the residual z-score rms of the disentangling
+        (:attr:`albireo.Fit.z_rms`). Above it the fit is taken as diverged and the star
+        stops with an error before the label and velocity stages, which would otherwise
+        report velocities measured against components that fit nothing. A healthy fit sits
+        near 1; a fit at the wrong period on the blind route sits near 2 to 3; the one
+        divergence seen in the D62 benchmark sat at 45, with the semi-amplitudes held only
+        by their priors.
     dv_kms
         Model-grid pixel size in km/s; the default is the finest sampling in the data.
     v_range
         Search half-range in km/s for the library-template velocity table of the
         ``period = "search"`` route.
+    period_decision_candidates
+        How many of the best candidate periods the disentangling itself decides among on
+        the ``period = "search"`` route (:func:`_decide_period_by_disentangling`). The
+        velocity table's chi-square ranks the candidates; the top few are then measured
+        against each other by the disentangling's own marginal likelihood, which uses
+        every pixel of every epoch and has no per-epoch freedom, and the best of those is
+        the period the fit is started from. ``0`` or ``1`` leaves the decision to the
+        table. The comparison costs one coarse scan per candidate.
+
+        Four, and not more, on a measurement (D64). Over the 33 blind systems of the third
+        run the true period is first in the chi-square ranking on the 18 the run recovered
+        and absent from the candidate list altogether on 9, so raising the count to eight
+        would put the truth in front of this comparison on exactly one further system while
+        costing every blind star four more coarse scans. The comparison is also weaker than
+        it looks: it scans the semi-amplitudes and the conjunction but scores each candidate
+        at a single point in the period and the eccentricity, which are the two quantities a
+        sparse table measures worst. On the one system where the truth was among the four
+        compared it lost by 251 nats, and the same model at the true period, eccentricity
+        and conjunction beats the winner by 185. The stage has so far converted no miss into
+        a hit on either population, and it has cost none.
     vsini_max, v_zero_range
         Default ceiling of the ``vsini`` prior, and the half-range of the per-component
         frame offset the label fit may measure, both in km/s. The disentangled frame sits
@@ -267,6 +313,22 @@ class Analysis:
         Whether to run NUTS after the MAP, and how much.
     telluric, nebular, nebular_v_kms
         Extra components, as the façade declares them.
+    noise_correlation
+        Lag-one correlation of each epoch's noise along its pixel index, the signature of
+        a pipeline that resampled the spectra onto a common step (Gaia's RVS grids carry
+        0.27 and 0.81). ``None`` (default) takes the pixels as independent. A number
+        declares it for every instrument, a table ``{instrument = value}`` per instrument
+        (instruments left out are taken as independent), and ``"fit"`` fits one shared
+        value. A declared value makes the disentangling's noise model AR(1) along the
+        pixel index and widens the velocity table's errors by the sandwich the
+        correlation implies (:func:`albireo.todcor`); the routes that correlate library
+        templates before the disentangling carry a declared value too.
+    k_scan
+        Scan the marginal likelihood over a coarse grid of every semi-amplitude declared
+        as a range before the disentangling's L-BFGS, and start from the best trial when
+        it beats the declared start (:meth:`albireo.Disentangler.fit`). Default on: the
+        likelihood is multimodal in the semi-amplitudes, and a start from a template
+        table of a dozen epochs can sit in the wrong basin.
     plots
         Write the diagnostic figures (needs matplotlib).
     fast
@@ -282,8 +344,10 @@ class Analysis:
     ecc_max: float = 0.5
     circular: bool = False
     max_steps: int = 300
+    z_rms_max: float = 10.0
     dv_kms: float | None = None
     v_range: float = 300.0
+    period_decision_candidates: int = 4
     vsini_max: float = 300.0
     v_zero_range: float = 300.0
     label_steps: int = 500
@@ -295,6 +359,8 @@ class Analysis:
     telluric: bool = False
     nebular: bool = False
     nebular_v_kms: float = 0.0
+    noise_correlation: Any = None
+    k_scan: bool = True
     plots: bool = True
     fast: bool = False
 
@@ -315,6 +381,28 @@ class Analysis:
             raise ValueError("dilution must be 'radius_ratio', 'scalar' or 'fixed'")
         if self.max_steps < 1 or self.label_steps < 1:
             raise ValueError("max_steps and label_steps must be positive")
+        if not float(self.z_rms_max) > 0.0:
+            raise ValueError(f"z_rms_max must be positive; got {self.z_rms_max}")
+        if isinstance(self.period_decision_candidates, bool) or self.period_decision_candidates < 0:
+            raise ValueError(
+                "period_decision_candidates must be a non-negative count of candidate "
+                f"periods; got {self.period_decision_candidates!r}"
+            )
+        declared = self.noise_correlation
+        if isinstance(declared, str):
+            if declared != "fit":
+                raise ValueError(
+                    f"noise_correlation must be a number, a table per instrument or 'fit'; "
+                    f"got {declared!r}"
+                )
+        elif declared is not None:
+            values = list(declared.values()) if isinstance(declared, Mapping) else [declared]
+            for value in values:
+                if isinstance(value, bool) or not -1.0 < float(value) < 1.0:
+                    raise ValueError(
+                        f"noise_correlation must lie in (-1, 1); got {declared!r}. It is the "
+                        "lag-one correlation of the pixel noise, not a variance."
+                    )
 
     def effective(self) -> Analysis:
         """These settings with the ``fast`` trims applied."""
@@ -331,6 +419,7 @@ class Analysis:
 
 
 _ANALYSIS_KEYS = frozenset(f.name for f in dataclasses.fields(Analysis))
+_MEASURE = "measure"
 
 
 @dataclass(frozen=True)
@@ -354,6 +443,18 @@ class StarConfig:
         The orbital period in days: ``[lo, hi]`` for a uniform prior, a number to hold it,
         ``{value, sigma}`` for a Gaussian, or ``"search"`` to bootstrap from library
         templates (which needs a library).
+    t_conj
+        The time of conjunction (the primary eclipse of an eclipsing binary, in the
+        epochs' time system): ``{value, sigma}`` for a Gaussian, ``[lo, hi]`` for a
+        range, or a number to hold it. Default ``None``: the conjunction phase is located
+        by a scan over one period before the fit.
+    ecc
+        The eccentricity: a number to hold it (with ``omega``), or ``[0, hi]`` for a
+        range. Default ``None``: ``[0, ecc_max]`` from the settings, or held at zero when
+        ``circular`` is set.
+    omega
+        The argument of periastron of the first component in radians, needed only with
+        a held non-zero ``ecc``.
     velocities
         Alternative to ``period``: a text file of measured per-epoch velocities in km/s,
         one column per component (optionally preceded by a BJD column, matched to the
@@ -370,9 +471,13 @@ class StarConfig:
     labels
         Set ``False`` to skip the label stage for this star even when a library is given.
     truth
-        For simulated stars only: injected values to compare against
-        (``k``, ``period``, ``ecc``, ``gamma``, ``velocities``, ``labels``, and
-        ``components`` on ``grid``).
+        For simulated stars only: injected values to compare against. Keys: ``k`` (one
+        per component, km/s), ``period`` (d), ``ecc``, ``omega`` (rad), ``t_conj``,
+        ``gamma`` (km/s), ``velocities`` (``(n_components, n_epochs)``, barycentric),
+        ``light_fractions``, ``labels`` (per component name), ``components`` (deviation
+        spectra on ``grid``), and ``windows`` (a mapping of window name to a list of
+        ``(lo, hi)`` in Angstrom over which the component spectra are compared by
+        equivalent width). Every key is optional; the report compares what is given.
     overrides
         Per-star values for any :class:`Analysis` field.
     """
@@ -384,6 +489,9 @@ class StarConfig:
     period: Any = None
     velocities: Any = None
     components: Sequence[ComponentConfig] = ()
+    t_conj: Any = None
+    ecc: Any = None
+    omega: Any = None
     instrument: str | None = None
     medium: str | None = None
     lsf: Mapping[str, Any] = field(default_factory=dict)
@@ -413,15 +521,36 @@ class StarConfig:
         names = [c.name for c in components]
         if len(set(names)) != len(names):
             raise ValueError(f"star {name!r}: component names must be unique; got {names}")
-        total = sum(c.light for c in components)
-        if abs(total - 1.0) > 1e-6:
-            listed = ", ".join(f"{c.name}={c.light:g}" for c in components)
-            raise ValueError(
-                f"star {name!r}: the light fractions must sum to 1; {listed} sums to "
-                f"{total:g}. This is an assumption the data cannot check, which is why it "
-                "has no default."
-            )
+        measured = [c.light == _MEASURE for c in components]
+        if any(measured):
+            if not all(measured):
+                raise ValueError(
+                    f"star {name!r}: light = 'measure' applies to every component or to "
+                    "none; the fractions are measured together"
+                )
+        else:
+            total = sum(c.light for c in components)
+            if abs(total - 1.0) > 1e-6:
+                listed = ", ".join(f"{c.name}={c.light:g}" for c in components)
+                raise ValueError(
+                    f"star {name!r}: the light fractions must sum to 1; {listed} sums to "
+                    f"{total:g}. This is an assumption the data cannot check, which is why "
+                    "it has no default."
+                )
         object.__setattr__(self, "components", components)
+        t_conj = _spec(self.t_conj, f"star {name!r}: t_conj")
+        ecc = _spec(self.ecc, f"star {name!r}: ecc")
+        if isinstance(ecc, Known):
+            raise ValueError(
+                f"star {name!r}: ecc takes a number to hold or a [0, hi] range; a Gaussian "
+                "cannot be expressed in the (sqrt(e) cos w, sqrt(e) sin w) parameterization"
+            )
+        if isinstance(ecc, Between) and float(np.asarray(ecc.lo)) != 0.0:
+            raise ValueError(f"star {name!r}: an ecc range must start at 0")
+        omega = _spec(self.omega, f"star {name!r}: omega")
+        if isinstance(ecc, Fixed) and float(np.asarray(ecc.value)) > 0.0 and omega is None:
+            raise ValueError(f"star {name!r}: a held non-zero ecc needs omega (radians) as well")
+        del t_conj
         if (self.period is None) == (self.velocities is None):
             raise ValueError(
                 f"star {name!r}: declare exactly one of period= and velocities=. A period "
@@ -450,6 +579,11 @@ class StarConfig:
         """Whether the orbit is to be bootstrapped from library templates."""
         return isinstance(self.period, str) and self.period.lower() == "search"
 
+    @property
+    def measures_light(self) -> bool:
+        """Whether the light fractions are to be measured by the bootstrap correlation."""
+        return any(c.light == _MEASURE for c in self.components)
+
     def settings(self, base: Analysis) -> Analysis:
         """The batch settings with this star's overrides and the ``fast`` trims applied."""
         return replace(base, **self.overrides).effective()
@@ -468,8 +602,9 @@ class PipelineConfig:
     lsf
         Per-instrument line-spread functions shared by every star, keyed by the
         instrument name the files resolve to: a sigma in km/s, ``{"resolving_power": R}``,
-        ``{"sigma_kms": ...}`` or an :class:`~albireo.LSF`. An instrument with no entry
-        anywhere takes ``R`` from its own FITS header when the header carries one.
+        ``{"sigma_kms": ...}``, ``"per-epoch"`` or an :class:`~albireo.LSF`. An instrument
+        with no entry anywhere takes ``R`` from each file's own header when every file
+        carries one, which is the per-epoch declaration.
     library
         The synthetic grid for the label stage: a registry name
         (:func:`albireo.library_names`), a path to a saved library, or a
@@ -512,6 +647,11 @@ class PipelineConfig:
                 raise ValueError(
                     f"star {star.name!r} declares period = 'search', which bootstraps the "
                     "orbit from library templates, so a library is required."
+                )
+            if star.measures_light and self.library is None:
+                raise ValueError(
+                    f"star {star.name!r} declares light = 'measure', which correlates the "
+                    "epochs against library templates, so a library is required."
                 )
 
     def star(self, name: str) -> StarConfig:
@@ -579,6 +719,9 @@ def _describe_star(star: StarConfig) -> dict[str, Any]:
         "velocities": None
         if star.velocities is None
         else (star.velocities if isinstance(star.velocities, str) else "array"),
+        "t_conj": "scan" if star.t_conj is None else _describe_spec(_spec(star.t_conj, "t_conj")),
+        "ecc": _describe_spec(_spec(star.ecc, "ecc")),
+        "omega": _describe_spec(_spec(star.omega, "omega")),
         "components": [
             {
                 "name": c.name,
@@ -624,7 +767,11 @@ plots = true                    # diagnostic figures (needs matplotlib)
 
 # Line-spread function per instrument. The key is the instrument name the FITS headers
 # resolve to (INSTRUME), or the `instrument =` override on a star. An instrument with no
-# entry takes its resolving power from its own header (SPEC_RES) when there is one.
+# entry takes its resolving power from each file's own header (SPEC_RES) when every file
+# has one, so exposures at two resolving powers under one name (HARPS HAM and EGGS) are
+# each modelled at their own; `"per-epoch"` says so explicitly.
+# [instrument]
+# UVES = "per-epoch"           # each file's own SPEC_RES, stated rather than defaulted
 [instrument.HARPS]
 resolving_power = 115000
 # [instrument.FEROS]
@@ -637,13 +784,21 @@ k_min = 1.0                     # semi-amplitude prior, km/s, for components wit
 k_max = 120.0                   # sets the solver's velocity budget; a large value costs time only
 ecc_max = 0.5                   # eccentricity prior ceiling; `circular = true` holds e = 0
 max_steps = 300                 # L-BFGS cap for the disentangling
+z_rms_max = 10.0                # stop a star whose disentangling diverged: the residual
+#                               # z-score rms is near 1 for a healthy fit
+# noise_correlation = 0.3       # lag-one correlation of the pixel noise, from the resampling
+#                               # that produced the spectra: a number, a table per
+#                               # instrument ({HARPS = 0.3}), or "fit"
+# k_scan = true                 # scan the semi-amplitudes declared as ranges before the fit
+# period_decision_candidates = 4  # candidate periods the disentangling itself decides among
+#                               # on the search route; 0 leaves the decision to the table
 # sample = true                 # NUTS after the MAP: posterior widths, slow
 
 # Template identification: fit Teff, log g, [M/H] and v sin i to the disentangled
 # components against a published grid, and use the fitted frame offset to make the epoch
 # velocities absolute. Delete this table to skip the stage (velocities stay differential).
 [labels]
-library = "bosz2024-fgk-r20000"   # albireo.library_names(); downloads ~645 MB once
+library = "bosz2024-fgk-r20000"   # albireo.library_names(); downloads ~621 MB once
 mh = [-1.0, 0.5]                  # shared metallicity range, or a number to hold it
 v_zero_range = 300.0              # how far the disentangled frame may sit from rest, km/s
 
@@ -652,6 +807,10 @@ name = "AI Phe"
 spectra = "data/aiphe/*.fits"   # a glob, a directory, or a list of files
 period = [24.5, 24.7]           # days: [lo, hi] uniform, a value to hold, or "search"
 # velocities = "aiphe_rv.txt"   # instead of period: measured per-epoch velocities
+# t_conj = {value = 2455000.12, sigma = 0.01}   # a known conjunction (primary eclipse)
+#                                                 instead of the phase scan
+# ecc = 0.19                    # hold the eccentricity (then give omega, radians), or
+# ecc = [0.0, 0.5]              # a range; default: [0, ecc_max] from [analysis]
 
 # Components in order of decreasing mass (the brighter star first for a main-sequence
 # pair): the fit is started with K_1 < K_2, which is the convention that assigns the
@@ -674,6 +833,10 @@ logg = 3.6
 # period = "search"             # bootstrapped from library templates (needs [labels])
 # region = [4120.0, 4300.0]     # any [analysis] key can be overridden per star
 # medium = "air"
+# [[stars.components]]
+# name = "A"
+# light = "measure"             # on the "search" route only: the fractions the library
+#                               # templates receive in the bootstrap correlation
 """
 
 
@@ -780,6 +943,9 @@ def config_from_dict(data: Mapping[str, Any], *, base_dir: str | os.PathLike | N
             "bloem",
             "period",
             "velocities",
+            "t_conj",
+            "ecc",
+            "omega",
             "instrument",
             "medium",
             "lsf",
@@ -808,6 +974,9 @@ def config_from_dict(data: Mapping[str, Any], *, base_dir: str | os.PathLike | N
                 period=entry.get("period"),
                 velocities=velocities,
                 components=[ComponentConfig(**c) for c in components],
+                t_conj=entry.get("t_conj"),
+                ecc=entry.get("ecc"),
+                omega=entry.get("omega"),
                 instrument=entry.get("instrument"),
                 medium=entry.get("medium"),
                 lsf=dict(entry.get("lsf", {})),
@@ -1071,6 +1240,7 @@ class _Context:
     flags: list[str] = field(default_factory=list)
     seconds: dict[str, float] = field(default_factory=dict)
     files: dict[str, str] = field(default_factory=dict)
+    zero_points: dict[str, Any] | None = None
 
     def flag(self, text: str) -> None:
         self.flags.append(text)
@@ -1210,7 +1380,12 @@ def _run_stages(ctx: _Context) -> tuple[dict[str, Any], str, dict[str, Any]]:
 
     # 2. the library, if any
     library = None
-    if ctx.config.library is not None and (star.labels or star.searching):
+    if ctx.config.library is not None and (
+        star.labels
+        or star.searching
+        or star.measures_light
+        or any(c.k is None for c in star.components)
+    ):
         with ctx.stage("library"):
             library = _resolve_library(ctx.config.library, log)
 
@@ -1223,11 +1398,52 @@ def _run_stages(ctx: _Context) -> tuple[dict[str, Any], str, dict[str, Any]]:
     elif star.searching:
         with ctx.stage("bootstrap"):
             orbit_spec, bootstrap = _bootstrap(ctx, dataset, lsf, library)
+            _write_template_table(
+                ctx,
+                bootstrap["objects"]["table"],
+                "bootstrap",
+                unexchanged=bootstrap["objects"]["table_unexchanged"],
+            )
+        star = ctx.star  # the bootstrap may have filled in measured light fractions
         sections.append(bootstrap["text"])
         report["bootstrap"] = bootstrap["report"]
         live["bootstrap"] = bootstrap["objects"]
     else:
-        orbit_spec = _declared_orbit(star, settings)
+        starts = None
+        elements = None
+        if star.measures_light:
+            with ctx.stage("light"):
+                measured = _measure_light(ctx, dataset, lsf, library)
+                _write_template_table(ctx, measured["objects"]["table"], "light")
+            star = ctx.star  # the measured fractions replaced the declaration
+            sections.append(measured["text"])
+            report["light"] = measured["report"]
+            live["light"] = measured["objects"]
+            table_orbit = _table_orbit(ctx, measured["objects"]["table"], star, settings)
+            starts = _k_starts(ctx, table_orbit, star, settings)
+            elements = _element_starts(ctx, table_orbit, star, settings)
+        elif library is not None and any(c.k is None for c in star.components):
+            # A semi-amplitude is a range and a library is at hand: a template table at
+            # the declared period seeds the starting values, for a few seconds' work.
+            # Nobody asked for this table, so where it cannot be rendered the star goes on
+            # without it: the declared ranges are started at their evenly spaced points,
+            # which is where they start when no library is declared at all.
+            if dataset[0].medium is None:
+                ctx.flag(
+                    "semi-amplitude starts skipped: the files do not declare whether their "
+                    "wavelengths are air or vacuum (an 83 km/s question), so no library "
+                    "template can be rendered; the range's evenly spaced starts are used, and "
+                    "setting medium = 'air' or 'vacuum' on the star once you have checked "
+                    "would seed them from a template table instead"
+                )
+            else:
+                with ctx.stage("k-start"):
+                    table, _ = _library_table(ctx, dataset, lsf, library, "semi-amplitude")
+                    _write_template_table(ctx, table, "semi-amplitude start")
+                    table_orbit = _table_orbit(ctx, table, star, settings)
+                    starts = _k_starts(ctx, table_orbit, star, settings)
+                    elements = _element_starts(ctx, table_orbit, star, settings)
+        orbit_spec = _declared_orbit(star, settings, starts=starts, elements=elements)
 
     # 4. disentangle
     with ctx.stage("disentangle"):
@@ -1241,15 +1457,27 @@ def _run_stages(ctx: _Context) -> tuple[dict[str, Any], str, dict[str, Any]]:
         log(
             f"disentangling: {dis.n_stellar} stars, grid {dis.grid.n} px, "
             f"budget {dis.velocity_budget.total:.0f} km/s, half-bandwidth "
-            f"{dis.model.half_bandwidth}, {settings.max_steps} steps"
+            f"{dis.model.half_bandwidth}, {settings.max_steps} steps, noise " + _noise_words(dis)
         )
-        fit = dis.fit(max_steps=settings.max_steps)
+        fit = dis.fit(max_steps=settings.max_steps, k_scan=settings.k_scan)
     live["fit"] = fit
     sections.append(dis.explain())
     sections.append(fit.summary())
     report["declaration"] = _describe_declaration(dis)
     report["disentangling"] = _describe_fit(fit)
     _assess_fit(ctx, fit)
+    _refuse_diverged(ctx, fit)
+    if fit.k_scan is not None:
+        scan = fit.k_scan
+        chosen = ", ".join(f"{s.name} {k:.1f}" for s, k in zip(dis.stars, scan.best, strict=True))
+        log(
+            f"semi-amplitude scan: {scan.n_trials} trials, best {chosen} km/s, "
+            + (
+                f"{scan.gain:+.0f} nats over the start; started there"
+                if scan.gain > 0.0
+                else "the start was better and was kept"
+            )
+        )
     if fit.mode == "keplerian":
         k_text = ", ".join(f"K_{s.name} {fit.star(s.name)['k']:.2f}" for s in dis.stars)
         log(f"disentangled: P {float(fit.orbit()['period']):.5f} d, {k_text} km/s")
@@ -1283,11 +1511,36 @@ def _run_stages(ctx: _Context) -> tuple[dict[str, Any], str, dict[str, Any]]:
     # 6. epoch velocities
     with ctx.stage("velocities"):
         templates = _templates(ctx, fit, match)
-        table = fit.measure_velocities(templates=templates, light=[s.light for s in dis.stars])
+        lights = [s.light for s in dis.stars]
+        table, templates = _measure_epoch_velocities(
+            ctx, fit, templates, _template_light(ctx, fit, lights)
+        )
+        if fit.mode == "keplerian" and table.n_components == 2 and _exchange_allowed(ctx, lights):
+            # Two alike components cannot be told apart in one epoch; the orbit can.
+            from albireo.rvorbit import reassign_by_orbit
+
+            unexchanged = table
+            table, swapped = reassign_by_orbit(table, np.asarray(fit.velocities()))
+            if swapped.any():
+                ctx.flag(
+                    f"{int(swapped.sum())} of {table.n_epochs} epochs had their components "
+                    "re-assigned by the disentangling's orbit: the two spectra are alike "
+                    "enough that the correlation alone could not tell them apart there"
+                )
+                # The table as measured is what separates a genuine exchange from a swap
+                # made on noise, so it is kept beside the delivered one.
+                ctx.directory.mkdir(parents=True, exist_ok=True)
+                ctx.files["velocities_unexchanged"] = os.fspath(
+                    unexchanged.write(
+                        ctx.directory / "velocities_unexchanged.rv",
+                        header=f"star: {ctx.star.name}\nas measured, before the exchange",
+                    )
+                )
     live["templates"] = templates
     live["velocities"] = table
     sections.append(table.summary())
     report["velocities"] = _describe_table(table)
+    report["velocities"]["zero_points"] = ctx.zero_points
     _assess_table(ctx, table)
     log(
         f"velocities: {int(table.good.sum())}/{table.n_epochs} usable epochs, median sigma "
@@ -1368,10 +1621,12 @@ def _load_dataset(ctx: _Context) -> tuple[Dataset, dict[str, float]]:
         raws = read_raw_spectra(
             paths, instrument=star.instrument, read_kwargs=ctx.config.read_kwargs
         )
+        # The widest header width per instrument, kept for the log line; the model
+        # reads each epoch's own (a PER_EPOCH declaration) rather than this number.
         for raw in raws:
             sigma = raw.lsf_sigma_kms
-            if sigma is not None and raw.instrument not in header_lsf:
-                header_lsf[raw.instrument] = float(sigma)
+            if sigma is not None:
+                header_lsf[raw.instrument] = max(float(sigma), header_lsf.get(raw.instrument, 0.0))
         log(f"read {len(raws)} files; first: {raws[0].summary()}")
         options: dict[str, Any] = {}
         if settings.region is not None:
@@ -1452,17 +1707,22 @@ def _resolve_lsf(ctx: _Context, dataset: Dataset, header_lsf: Mapping[str, float
             out[key] = _lsf(ctx.star.lsf[key], key)
         elif key in ctx.config.lsf:
             out[key] = _lsf(ctx.config.lsf[key], key)
-        elif key in header_lsf:
-            out[key] = LSF(sigma_kms=header_lsf[key])
+        elif (
+            key in header_lsf
+            and not np.isnan(dataset.lsf_sigma_kms[[e.instrument == key for e in dataset]]).any()
+        ):
+            out[key] = LSF.per_epoch()
+            widths = declared_lsf_widths(dataset, key)
+            detail = ", ".join(f"{s:.3f} km/s x{len(idx)}" for s, idx in widths.items())
             ctx.log(
-                f"instrument {key!r}: LSF sigma {header_lsf[key]:.3f} km/s taken from the "
-                "files' own SPEC_RES header"
+                f"instrument {key!r}: LSF width taken per epoch from the files' own "
+                f"SPEC_RES header ({detail})"
             )
         else:
             raise ValueError(
-                f"no line-spread function for instrument {key!r} and its files declare no "
-                f"resolving power. Add [instrument.{key}] with resolving_power or sigma_kms "
-                "to the configuration (or lsf={...} on the star)."
+                f"no line-spread function for instrument {key!r} and its files do not all "
+                f"declare a resolving power. Add [instrument.{key}] with resolving_power or "
+                "sigma_kms to the configuration (or lsf={...} on the star)."
             )
     return out
 
@@ -1492,18 +1752,134 @@ def _resolve_library(spec: Any, log: _Log):
     return library
 
 
-def _declared_orbit(star: StarConfig, settings: Analysis) -> Orbit:
+def _ecc_omega_specs(
+    star: StarConfig, settings: Analysis, elements: tuple[float, float] | None = None
+) -> tuple[Spec, Spec | None]:
+    """The eccentricity and omega declarations, or the settings' default range.
+
+    With ``elements`` (an eccentricity and an argument of periastron from a velocity
+    table's orbit) a free eccentricity is started there rather than at the façade's
+    default of 0.05, so that the scans that precede the fit run on the right shape of
+    velocity curve.
+    """
+    ecc = _spec(star.ecc, f"star {star.name!r}: ecc")
+    omega = _spec(star.omega, f"star {star.name!r}: omega")
+    if ecc is None:
+        if settings.circular:
+            ecc = Fixed(0.0)
+        elif elements is not None:
+            ecc = Between(0.0, settings.ecc_max, start_at=elements[0])
+            omega = Fixed(elements[1]) if omega is None else omega
+        else:
+            ecc = Between(0.0, settings.ecc_max)
+    return ecc, omega
+
+
+def _declared_orbit(
+    star: StarConfig,
+    settings: Analysis,
+    starts: Sequence[float | None] | None = None,
+    elements: tuple[float, float] | None = None,
+) -> Orbit:
     period = _spec(star.period, "period")
     if isinstance(period, Fixed) and not float(np.asarray(period.value)) > 0.0:
         raise ValueError(f"star {star.name!r}: the period must be positive")
+    ecc, omega = _ecc_omega_specs(star, settings, elements)
+    t_conj = "scan" if star.t_conj is None else _spec(star.t_conj, "t_conj")
     return Orbit(
         period=period,
-        k=_k_prior(star, settings),
-        ecc=Fixed(0.0) if settings.circular else Between(0.0, settings.ecc_max),
+        k=_k_prior(star, settings, starts=starts),
+        t_conj=t_conj,
+        ecc=ecc,
+        omega=omega,
     )
 
 
-def _k_prior(star: StarConfig, settings: Analysis) -> list[Spec]:
+def _table_orbit(ctx: _Context, table, star: StarConfig, settings: Analysis):
+    """The orbit fitted to a template table at the declared period, or ``None``.
+
+    Fitted at the period's central value, with exchanged epochs re-assigned as on the
+    search route. ``None`` when every semi-amplitude is declared (there is nothing to
+    start), the period has no central value, or the table gave no orbit.
+    """
+    if all(c.k is not None for c in star.components):
+        return None
+    central = float(np.asarray(_spec(star.period, "period").start(), dtype=float))
+    if not central > 0.0:
+        return None
+    try:
+        orbit, _, _ = _orbit_over_candidates(ctx, table, [central], circular=settings.circular)
+    except (ValueError, RuntimeError, np.linalg.LinAlgError) as exc:
+        ctx.log(
+            "starting values: the template table gave no orbit at the declared period "
+            f"({type(exc).__name__}); the range's evenly spaced starts are used"
+        )
+        return None
+    return orbit
+
+
+def _element_starts(
+    ctx: _Context, orbit, star: StarConfig, settings: Analysis
+) -> tuple[float, float] | None:
+    """An eccentricity and argument of periastron to start a free eccentricity from.
+
+    Taken from the table's orbit when the star declares no eccentricity, the orbit is not
+    held circular, and the fitted eccentricity is usable: finite, at least 0.02 (below
+    which the default start is as good and the argument is undefined), inside the prior
+    by a margin, and detected, at more than three times its own error. A table of a dozen
+    epochs fits an eccentricity of 0.2 to a circular pair as readily as not, and a scan
+    started on that shape of curve loses a faint companion; the default start of 0.05 is
+    the better guess until the table can tell. ``None`` otherwise.
+    """
+    if orbit is None or star.ecc is not None or settings.circular:
+        return None
+    e = float(orbit.ecc)
+    omega = float(orbit.omega)
+    error = orbit.errors.get("ecc") if isinstance(orbit.errors, Mapping) else None
+    error = float(error) if error is not None else float("nan")
+    if not (np.isfinite(e) and np.isfinite(omega)) or e < 0.02 or e > 0.9 * settings.ecc_max:
+        return None
+    if not (np.isfinite(error) and error > 0.0 and e > 3.0 * error):
+        ctx.log(
+            f"eccentricity from the template table's orbit not used: e {e:.3f} +- "
+            f"{error:.3f} is not detected at three sigma; the default start applies"
+        )
+        return None
+    ctx.log(
+        f"eccentricity started from the template table's orbit: e {e:.3f} +- {error:.3f}, "
+        f"omega {omega:.3f} rad"
+    )
+    return e, omega
+
+
+def _k_starts(
+    ctx: _Context, orbit, star: StarConfig, settings: Analysis
+) -> list[float | None] | None:
+    """Semi-amplitude starting values from a table's orbit (:func:`_table_orbit`).
+
+    A component whose fitted semi-amplitude falls outside the declared range is reported
+    as ``None`` and :func:`_k_prior` starts it from the others. ``None`` altogether when
+    there is no orbit.
+    """
+    if orbit is None:
+        return None
+    starts: list[float | None] = []
+    for k in np.asarray(orbit.k, dtype=float):
+        usable = bool(np.isfinite(k)) and settings.k_min <= float(k) <= settings.k_max
+        starts.append(float(k) if usable else None)
+    ctx.log(
+        "semi-amplitudes started from the template table at the declared period: "
+        + ", ".join(
+            f"{c.name} " + ("unusable" if s is None else f"{s:.1f} km/s")
+            for c, s in zip(star.components, starts, strict=True)
+        )
+    )
+    return starts
+
+
+def _k_prior(
+    star: StarConfig, settings: Analysis, starts: Sequence[float | None] | None = None
+) -> list[Spec]:
     """One semi-amplitude prior per component, started in the declared order.
 
     A symmetric prior cannot assign the spectra to the stars: with every component
@@ -1517,16 +1893,49 @@ def _k_prior(star: StarConfig, settings: Analysis) -> list[Spec]:
     (the bounds are the same for every component), and the label stage checks the
     outcome: a fitted light fraction far from the declared one is the signature of a
     reversed order.
+
+    With ``starts`` (one entry per component, ``None`` where no table could measure the
+    star) each undeclared component starts where the data put it: the semi-amplitudes of
+    an orbit fitted to a library-template table at the declared period, or a bootstrap's.
+    A component without a usable entry starts from the nearest measured one, in the
+    direction the declared order implies: a later-declared (lighter) star at 1.5 times its
+    neighbour's semi-amplitude, an earlier-declared (heavier) one at two thirds of it; with
+    nothing measured, at its evenly spaced point. Every start is held strictly inside the
+    range, a start on a bound having no valid initial parameters (a Gaia pair whose
+    synchronised primary the table could not measure started at the 250 km/s bound and the
+    run failed there). The first Gaia RVS simulations showed why the evenly spaced points are
+    not enough on their own: over a range of 2 to 250 km/s they start a 23 km/s primary at
+    85 km/s, from where the fit settled in the static-component minimum, both
+    semi-amplitudes at the floor, on a pair whose secondary carries 5 percent of the light.
     """
     n = len(star.components)
     declared = [_spec(c.k, f"component {c.name!r}: k") for c in star.components]
+    seeds = list(starts) if starts is not None else [None] * n
+    if len(seeds) != n:
+        raise ValueError(f"{len(seeds)} semi-amplitude starts for {n} components")
+    lo, hi = float(settings.k_min), float(settings.k_max)
+    inside = (lo + 0.02 * (hi - lo), hi - 0.02 * (hi - lo))
+
+    def usable(value) -> bool:
+        return value is not None and bool(np.isfinite(value)) and lo <= float(value) <= hi
+
+    measured = {j: float(s) for j, s in enumerate(seeds) if usable(s)}
     out: list[Spec] = []
     for i, spec in enumerate(declared):
         if spec is not None:
             out.append(spec)
             continue
-        start = settings.k_min + (settings.k_max - settings.k_min) * (i + 1) / (n + 1)
-        out.append(Between(settings.k_min, settings.k_max, start_at=start))
+        if i in measured:
+            start = measured[i]
+        elif measured:
+            # The nearest measured component sets the scale, and the declared order the
+            # direction: a later (lighter) star moves more, an earlier (heavier) one less.
+            j = min(measured, key=lambda j: (abs(j - i), j))
+            start = measured[j] * 1.5 if j < i else measured[j] / 1.5
+        else:
+            start = lo + (hi - lo) * (i + 1) / (n + 1)
+        start = float(min(max(start, inside[0]), inside[1]))
+        out.append(Between(lo, hi, start_at=start))
     return out
 
 
@@ -1552,7 +1961,30 @@ def _declare(ctx: _Context, dataset: Dataset, lsf, orbit: Orbit | None, velociti
         lsf=lsf,
         dv_kms=settings.dv_kms,
         ecc_max=max(settings.ecc_max, 0.05) if not settings.circular else 0.95,
+        noise_correlation=_noise_declaration(settings, dataset),
     )
+
+
+def _noise_declaration(settings: Analysis, dataset: Dataset):
+    """The facade's ``noise_correlation`` from the settings: values per instrument, or a site."""
+    declared = settings.noise_correlation
+    if declared is None:
+        return None
+    if isinstance(declared, str):
+        return Between(-0.9, 0.9, start_at=0.0)
+    if isinstance(declared, Mapping):
+        return {name: float(declared.get(name, 0.0)) for name in dataset.instruments}
+    return float(declared)
+
+
+def _noise_values(settings: Analysis, dataset: Dataset) -> dict[str, float] | None:
+    """The declared correlation per instrument for a template table, or ``None`` when fitted."""
+    declared = _noise_declaration(settings, dataset)
+    if declared is None or isinstance(declared, Spec):
+        return None
+    if isinstance(declared, Mapping):
+        return dict(declared)
+    return dict.fromkeys(dataset.instruments, float(declared))
 
 
 def _read_velocities(star: StarConfig, dataset: Dataset) -> np.ndarray:
@@ -1563,9 +1995,9 @@ def _read_velocities(star: StarConfig, dataset: Dataset) -> np.ndarray:
     else:
         table = np.asarray(star.velocities, dtype=float)
         if table.shape == (n, dataset.n_epochs):
-            return table
+            return _checked_velocities(star, dataset, table)
         if table.shape == (dataset.n_epochs, n):
-            return table.T
+            return _checked_velocities(star, dataset, table.T)
     if table.ndim != 2:
         raise ValueError(f"star {star.name!r}: the velocity table must be two-dimensional")
     if table.shape[1] == n:
@@ -1574,7 +2006,7 @@ def _read_velocities(star: StarConfig, dataset: Dataset) -> np.ndarray:
                 f"star {star.name!r}: {table.shape[0]} velocity rows for "
                 f"{dataset.n_epochs} epochs; add a leading BJD column to match by time"
             )
-        return table.T
+        return _checked_velocities(star, dataset, table.T)
     if table.shape[1] == n + 1:
         bjd = table[:, 0]
         out = np.empty((n, dataset.n_epochs))
@@ -1586,53 +2018,76 @@ def _read_velocities(star: StarConfig, dataset: Dataset) -> np.ndarray:
                     f"{j} (BJD {t:.5f}); nearest is {bjd[k]:.5f}"
                 )
             out[:, j] = table[k, 1:]
-        return out
+        return _checked_velocities(star, dataset, out)
     raise ValueError(
         f"star {star.name!r}: the velocity table has {table.shape[1]} columns; expected one "
         f"per component ({n}) or BJD plus one per component ({n + 1})"
     )
 
 
-def _bootstrap(ctx: _Context, dataset: Dataset, lsf, library):
-    """Bootstrap the orbit from library templates for the ``period = "search"`` route.
+def _checked_velocities(star: StarConfig, dataset: Dataset, values: np.ndarray) -> np.ndarray:
+    """Refuse a declared table that leaves an epoch unmeasured, naming it.
 
-    Templates at the declared starting labels measure a velocity table, a period search
-    proposes candidates, an orbit is fitted from each, and the best orbit becomes a warm
-    Keplerian prior for the disentangling.
+    The free-velocity fit has one velocity site per component per epoch and no site for
+    an epoch that was not measured, so a non-finite entry cannot be carried through it.
+    The correlation stage writes ``nan`` where it measured nothing, and this is the route
+    that reads such a file back.
     """
-    from albireo.rvorbit import find_period
+    values = np.asarray(values, dtype=float)
+    bad = np.argwhere(~np.isfinite(values))
+    if bad.size:
+        i, j = (int(k) for k in bad[0])
+        others = (
+            ""
+            if len(bad) == 1
+            else f", and {len(bad) - 1} further entr{'y' if len(bad) == 2 else 'ies'}"
+        )
+        raise ValueError(
+            f"star {star.name!r}: the declared velocity of component "
+            f"{star.components[i].name!r} at epoch {j} (BJD {float(dataset.bjd[j]):.5f}) is "
+            f"not a number{others}. The free-velocity fit has one site per component per "
+            "epoch and no site for an unmeasured one: remove that epoch from the dataset, "
+            "or measure it."
+        )
+    return values
+
+
+def _library_table(ctx: _Context, dataset: Dataset, lsf, library, purpose: str):
+    """A velocity table from library templates at the declared starting labels.
+
+    Shared by the ``period = "search"`` bootstrap and the ``light = "measure"`` stage:
+    the templates are rendered on a grid covering the search, and the epochs are
+    correlated against them with free-then-held light fractions.
+    """
     from albireo.todcor import Template, todcor
 
     star, settings, log = ctx.star, ctx.settings, ctx.log
     medium = dataset[0].medium
     if medium is None:
         raise ValueError(
-            f"star {star.name!r}: period = 'search' renders library templates, which needs "
+            f"star {star.name!r}: {purpose} renders library templates, which needs "
             "the wavelength medium; the files did not declare one, so set medium = 'air' "
             "(or 'vacuum') on the star once you have checked which it is"
         )
-    sigmas = [
-        float(np.min(np.atleast_1d(np.asarray(v.sigma_kms, dtype=float)))) for v in lsf.values()
-    ]
-    narrowest, widest = (
-        min(sigmas),
-        max(
-            float(np.max(np.atleast_1d(np.asarray(v.sigma_kms, dtype=float)))) for v in lsf.values()
-        ),
-    )
+    resolved = [v.widths(dataset, k) for k, v in lsf.items() if k in dataset.instruments]
+    narrowest = min(float(np.min(w)) for w in resolved)
+    widest = max(float(np.max(w)) for w in resolved)
     grid = LogGrid.covering(
         dataset,
         max(narrowest / 3.0, 0.2),
         v_margin_kms=settings.v_range + 60.0,
         lsf_sigma_kms=widest,
     )
-    lib = library.sliced(
+    # Converted to the data's scale before slicing: air and vacuum differ by about 2.3 A
+    # here, more than the pad, and a slice taken in the library's own scale would fall
+    # short of the grid once the templates are rendered on the data's.
+    lib = library.in_medium(medium).sliced(
         grid.wave[0] - _LIBRARY_PAD_ANGSTROM, grid.wave[-1] + _LIBRARY_PAD_ANGSTROM
     )
     resolving = lib.meta.get("resolution")
-    templates = []
-    for c in star.components:
-        start = c.labels_start()
+    starts = [c.labels_start() for c in star.components]
+    label_sets = []
+    for start in starts:
         labels = {}
         for axis in lib.label_names:
             if axis in start:
@@ -1646,6 +2101,23 @@ def _bootstrap(ctx: _Context, dataset: Dataset, lsf, library):
                 )
             else:
                 labels[axis] = float(np.mean(lib.bounds[axis]))
+        label_sets.append(labels)
+    if (
+        len(label_sets) > 1
+        and "teff" in lib.label_names
+        and not any("teff" in start for start in starts)
+    ):
+        # With no temperature prior every component would get the same template, the box
+        # midpoint, and identical templates coincide at equal shifts, where the correlation
+        # cannot tell the components apart. The components are declared in order of
+        # decreasing mass, so the starts are spread across the box, hotter first.
+        lo, hi = lib.bounds["teff"]
+        n = len(label_sets)
+        for i, labels in enumerate(label_sets):
+            labels["teff"] = float(lo + (hi - lo) * (n - i) / (n + 1))
+        log("no temperature priors: template starts spread across the library box, hotter first")
+    templates = []
+    for c, start, labels in zip(star.components, starts, label_sets, strict=True):
         vsini = start.get("vsini", 0.0)
         templates.append(
             Template.from_library(
@@ -1672,52 +2144,510 @@ def _bootstrap(ctx: _Context, dataset: Dataset, lsf, library):
         light="global",
         lsf_sigma_v=lsf_sigma,
         lsf_anchors_angstrom=anchors or None,
+        noise_correlation=_noise_values(settings, dataset),
     )
     log(
-        f"bootstrap velocities: {int(table.good.sum())}/{table.n_epochs} usable epochs "
+        f"{purpose} velocities: {int(table.good.sum())}/{table.n_epochs} usable epochs "
         f"(library templates, absolute)"
     )
-    search = find_period(table)
-    orbit = _orbit_over_candidates(
-        ctx, table, [search["period"], *search["aliases"]], circular=settings.circular
+    return table, templates
+
+
+def _apply_measured_light(ctx: _Context, table) -> np.ndarray:
+    """Replace the star's ``"measure"`` fractions by the table's held amplitudes."""
+    star = ctx.star
+    usable = table.good & np.all(np.isfinite(table.light), axis=0)
+    if not usable.any():
+        raise ValueError(f"star {star.name!r}: no usable epoch to measure the light fractions from")
+    fractions = table.light[:, usable] / table.light[:, usable].sum(axis=0, keepdims=True)
+    measured = np.median(fractions, axis=1)
+    measured = measured / measured.sum()
+    if np.any(measured <= 0.0):
+        raise ValueError(
+            f"star {star.name!r}: the correlation measured a non-positive light fraction "
+            f"({np.round(measured, 3).tolist()}); declare the fractions instead"
+        )
+    ctx.star = replace(
+        star,
+        components=[
+            replace(c, light=float(l)) for c, l in zip(star.components, measured, strict=True)
+        ],
     )
+    ctx.flag(
+        "light fractions measured by correlation against library templates rather than "
+        "declared: "
+        + ", ".join(f"{c.name} {l:.3f}" for c, l in zip(star.components, measured, strict=True))
+        + " (the amplitudes the templates received; a template mismatch moves them)"
+    )
+    return measured
+
+
+def _measure_light(ctx: _Context, dataset: Dataset, lsf, library) -> dict[str, Any]:
+    """The ``light = "measure"`` stage on a route with a declared period."""
+    table, templates = _library_table(ctx, dataset, lsf, library, "light = 'measure'")
+    measured = _apply_measured_light(ctx, table)
+    text = (
+        "Light fractions measured by correlation against library templates:\n"
+        + table.summary()
+        + "\n  -> declared for the disentangling: "
+        + ", ".join(f"{c.name} {l:.3f}" for c, l in zip(ctx.star.components, measured, strict=True))
+    )
+    return {
+        "text": text,
+        "report": {
+            "light_measured": {
+                c.name: float(l) for c, l in zip(ctx.star.components, measured, strict=True)
+            },
+            "n_usable": int(table.good.sum()),
+            "templates": [t.meta for t in templates],
+        },
+        "objects": {"table": table, "templates": templates},
+    }
+
+
+def _bootstrap_spec(
+    ctx: _Context,
+    orbit,
+    *,
+    comparison: bool = False,
+    k_starts: Sequence[float] | None = None,
+) -> tuple[Orbit, str]:
+    """The disentangling's orbit declaration built from one bootstrap orbit.
+
+    Shared by the two paths of :func:`_bootstrap`: the declaration the chosen orbit
+    becomes (``comparison=False``), and the declaration each candidate period is measured
+    on (``comparison=True``). Common to both, the period is the fitted one to within 3
+    percent, and the eccentricity and argument of periastron are started from the table's
+    orbit wherever it measured them at three sigma (:func:`_element_starts`).
+
+    The two differ in the semi-amplitudes and the conjunction, and both differences are
+    what makes the candidates comparable with each other rather than each with its own
+    declaration. The comparison declares every semi-amplitude as the settings' range
+    started at the table's value, where the final declaration makes a usable table
+    semi-amplitude a Gaussian around itself: the velocity budget is the sum of the
+    semi-amplitude priors' upper bounds, and the budget fixes the model grid's extent, so
+    a Gaussian centred on 233 km/s and one centred on 40 km/s would put two candidates on
+    grids of different length, on which a marginal likelihood is not one number twice.
+    The comparison also scans the conjunction rather than holding it at the table's, the
+    table's conjunction being exactly as uncertain as its period, unless the star declares
+    one, which is a measurement that holds at every candidate period.
+
+    A semi-amplitude the table left outside the declared range is not a measurement, so
+    the final declaration falls back to the range there too (the flag says so, once).
+    ``k_starts``, the semi-amplitudes the chosen candidate's scan settled on, then replace
+    the table's as the starting values; they are ignored where the table's own
+    semi-amplitudes stand, since the Gaussian around them is a prior and not a start.
+
+    Returns the declaration and the phrase describing its semi-amplitudes.
+    """
+    star, settings = ctx.star, ctx.settings
+    k_boot = np.asarray(orbit.k, dtype=float)
+    degenerate = ~np.isfinite(k_boot) | (k_boot > settings.k_max) | (k_boot < settings.k_min)
+    starts: list[float | None] = [
+        None if d else float(k) for k, d in zip(k_boot, degenerate, strict=True)
+    ]
+    if comparison:
+        k_spec = _k_prior(star, settings, starts=starts)
+        k_text = f"K within {settings.k_min:g}-{settings.k_max:g}, started from the table"
+    elif degenerate.any():
+        # A component the correlation could not follow (a faint secondary, an exchanged
+        # twin) leaves a semi-amplitude of zero or of thousands of km/s, and a Gaussian
+        # prior would hold the disentangling to it. The period and the conjunction stand;
+        # the semi-amplitudes go back to the declared range, as on the known-period route.
+        names = [c.name for c, d in zip(star.components, degenerate, strict=True) if d]
+        ctx.flag(
+            f"bootstrap semi-amplitudes {np.round(k_boot, 1).tolist()} km/s fall outside the "
+            f"declared range {settings.k_min:g}-{settings.k_max:g} for {names}: the "
+            "disentangling searches the range instead, from the bootstrap's period"
+        )
+        if k_starts is not None:
+            starts = [float(k) for k in k_starts]
+        k_spec = _k_prior(star, settings, starts=starts)
+        k_text = (
+            f"K within {settings.k_min:g}-{settings.k_max:g}, started from the bootstrap "
+            "where it measured a semi-amplitude"
+        )
+    else:
+        k_sigma = np.maximum(3.0 * np.asarray(orbit.errors["k"]), 0.15 * k_boot)
+        k_sigma = np.where(np.isfinite(k_sigma), k_sigma, 0.3 * k_boot)
+        k_sigma = np.minimum(k_sigma, 0.3 * settings.k_max)
+        k_spec = Known(k_boot, np.asarray(k_sigma, dtype=float))
+        k_text = f"K Gaussian with sigma {np.round(k_sigma, 2).tolist()} km/s"
+    if star.t_conj is not None:
+        t_conj: Any = _spec(star.t_conj, "t_conj")
+    elif comparison:
+        t_conj = "scan"
+    else:
+        t_conj = Known(float(orbit.t_conj), 0.05 * orbit.period)
+    ecc_spec, omega_spec = _ecc_omega_specs(
+        star, settings, _element_starts(ctx, orbit, star, settings)
+    )
+    width = 0.03 * orbit.period
+    spec = Orbit(
+        period=Between(orbit.period - width, orbit.period + width),
+        k=k_spec,
+        t_conj=t_conj,
+        ecc=ecc_spec,
+        omega=omega_spec,
+    )
+    return spec, k_text
+
+
+def _coarse_marginal(scanner: Disentangler, init: Mapping[str, Any]) -> float:
+    """The coarse declaration's marginal log-likelihood at ``init``, in nats.
+
+    The fallback for a candidate whose declaration has nothing to scan (a declared
+    conjunction and a declared semi-amplitude for every component). Prior-free, as the
+    scans are: :meth:`albireo.inference.MarginalOrbitModel.log_likelihood` is the marginal
+    of the data over the spectra alone, and the priors over the orbital parameters enter
+    only through the numpyro model the optimizer runs.
+    """
+    theta = {**dict(init), **dict(scanner.fixed)}
+    return float(scanner.model.log_likelihood(theta))
+
+
+def _decide_period_by_disentangling(ctx: _Context, dataset: Dataset, lsf, ranked) -> dict | None:
+    """Decide among the best few candidate periods by the disentangling's own likelihood.
+
+    The velocity table's chi-square cannot separate the aliases of a poor table. Two blind
+    Gaia systems of the D62 population make the case: on a table of fifteen epochs an
+    eccentric Keplerian at 0.2485 d with semi-amplitudes of 233 and 239 km/s at e = 0.73
+    fitted better than the true 6.104 d, and on one of twelve epochs the same happened at
+    1.1293 d with 182 and 185 km/s at e = 0.72 against a true 5.356 d. Both absurd orbits
+    lie inside the declared ranges, so the range filter does not reach them, and both were
+    handed to the disentangling as a period known to 3 percent, which is not recoverable.
+    A Keplerian of five free parameters fitted to a dozen noisy velocities has that
+    freedom; the disentangling does not. Its marginal likelihood uses every pixel of every
+    epoch, the spectra are shared across the epochs rather than free in each, and a wrong
+    period has to explain the whole dataset with one pair of component spectra.
+
+    So the top ``period_decision_candidates`` orbits of the chi-square ranking are measured
+    against each other here. Each is declared as :func:`_bootstrap_spec` declares it for a
+    comparison, on the same coarse grid the façade's own scans use
+    (:meth:`albireo.Disentangler._scan_declaration`, twice the pixel, a quarter to an
+    eighth of the full model's cost), and its value is the best marginal log-likelihood the
+    coarse declaration reaches: the conjunction-phase scan over one period, then, where a
+    semi-amplitude is a range, the coarse semi-amplitude scan, whose best is taken when it
+    beat the start. The values are comparable because every candidate is measured on the
+    same data with the same noise model, the same declaration-wide semi-amplitude bounds
+    and therefore the same model grid, and because the marginal log-likelihood carries no
+    prior at all (:func:`_coarse_marginal`), so nothing rewards a period for being where a
+    prior expected it.
+
+    The prior-amplitude profile and the second scan pass of :meth:`albireo.Disentangler.fit`
+    are deliberately not run here: they refine a fit, and the question at this point is only
+    which basin. Each candidate's declaration is released as soon as its value is in hand,
+    since it holds a compiled model.
+
+    ``None`` when the comparison does not apply: fewer than two distinct candidates, or
+    ``period_decision_candidates`` below two.
+    """
+    settings, log = ctx.settings, ctx.log
+    n = min(int(settings.period_decision_candidates), len(ranked))
+    if settings.period_decision_candidates < 2 or n < 2:
+        return None
+    log(
+        f"deciding among the best {n} of {len(ranked)} candidate periods by the "
+        "disentangling's marginal likelihood on the coarse grid"
+    )
+    entries: list[dict[str, Any]] = []
+    for rank, (orbit, _) in enumerate(ranked[:n]):
+        started = time.perf_counter()
+        log(
+            f"  candidate {rank + 1}/{n}: P {orbit.period:.5f} d, table chi2 "
+            f"{float(orbit.chi2):.1f}, table K {np.round(orbit.k, 1).tolist()} km/s"
+        )
+        spec, _ = _bootstrap_spec(ctx, orbit, comparison=True)
+        dis = _declare(ctx, dataset, lsf, spec, None)
+        scanner = dis._scan_declaration()
+        init = dict(dis.init)
+        scan = None
+        if spec.t_conj == "scan":
+            scan = scanner._scan_phase(init)
+            init["t_conj"] = scan.best
+        amp = scanner._scan_semi_amplitudes(init) if dis._has_ranged_k() else None
+        if amp is not None and float(amp.gain) > 0.0:
+            value = float(amp.best_value)
+            k_best = [float(v) for v in np.atleast_1d(np.asarray(amp.best, dtype=float))]
+            t_conj = float(amp.best_t_conj)
+            moved = True
+        else:
+            # The best phase at the starting semi-amplitudes: the same number the
+            # semi-amplitude scan calls its start value, and the only one available when
+            # there is no semi-amplitude to scan.
+            value = (
+                float(np.max(np.asarray(scan.values, dtype=float)))
+                if scan is not None
+                else _coarse_marginal(scanner, init)
+            )
+            k_best = [float(v) for v in np.atleast_1d(np.asarray(init["k"], dtype=float))]
+            declared_t = init.get("t_conj", dis.fixed.get("t_conj", np.nan))
+            t_conj = float(np.asarray(declared_t, dtype=float))
+            moved = False
+        n_trials = (0 if scan is None else int(np.size(scan.values))) + (
+            0 if amp is None else int(amp.n_trials)
+        )
+        seconds = time.perf_counter() - started
+        entries.append(
+            {
+                "period": float(orbit.period),
+                "table_chi2": float(orbit.chi2),
+                "value_nats": value,
+                "k": [float(k) for k in k_best],
+                "t_conj": t_conj,
+                "scan_moved": moved,
+                "n_trials": n_trials,
+                "seconds": float(seconds),
+            }
+        )
+        log(
+            f"    -> marginal {value:.1f} nats at K {[round(k, 1) for k in k_best]} km/s, "
+            f"t_conj {t_conj:.4f} ({n_trials} trials, {seconds:.0f} s"
+            + ("; the scan moved the start)" if moved else "; the start was kept)")
+        )
+        del scanner, dis, amp, scan
+        gc.collect()
+    order = sorted(range(len(entries)), key=lambda i: entries[i]["value_nats"], reverse=True)
+    chosen, runner_up = order[0], order[1]
+    margin = entries[chosen]["value_nats"] - entries[runner_up]["value_nats"]
+    over_table = entries[chosen]["value_nats"] - entries[0]["value_nats"]
+    log(
+        f"period decided by the disentangling: P {entries[chosen]['period']:.5f} d, "
+        f"{margin:.0f} nats over the runner-up P {entries[runner_up]['period']:.5f} d "
+        + ("(the table's choice stands)" if chosen == 0 else "(the table had preferred another)")
+    )
+    if chosen != 0:
+        ctx.flag(
+            f"the table preferred P {entries[0]['period']:.5f} d at chi2 "
+            f"{entries[0]['table_chi2']:.1f}; the disentangling prefers P "
+            f"{entries[chosen]['period']:.5f} d by {over_table:.0f} nats of marginal "
+            "likelihood, and that period is the one the fit is started from. The table's "
+            "chi-square is fitted to a dozen velocities with five free parameters; the "
+            "marginal likelihood uses every pixel of every epoch"
+        )
+    return {
+        "index": chosen,
+        "entries": entries,
+        "margin_nats": float(margin),
+        "over_table_nats": float(over_table),
+    }
+
+
+def _describe_period_decision(decision: dict | None, *, period: float, reason: str) -> dict:
+    """The ``bootstrap.decision`` report block: who chose the period, and from what.
+
+    ``by`` is ``"disentangling"`` when the comparison overruled the velocity table's
+    chi-square and ``"table"`` when the table's choice stood, either because the
+    disentangling confirmed it or because the comparison did not run, which ``reason``
+    then says. ``margin_nats`` is the chosen candidate's lead over the runner-up in nats
+    of marginal log-likelihood, and ``over_table_nats`` its lead over the table's choice,
+    which is zero when the two agree.
+    """
+    if decision is None:
+        return {
+            "by": "table",
+            "candidates": [],
+            "chosen_period": float(period),
+            "margin_nats": None,
+            "over_table_nats": None,
+            "table_period": float(period),
+            "reason": reason,
+        }
+    entries, chosen = decision["entries"], decision["index"]
+    return {
+        "by": "table" if chosen == 0 else "disentangling",
+        "candidates": [{**entry, "chosen": i == chosen} for i, entry in enumerate(entries)],
+        "chosen_period": float(entries[chosen]["period"]),
+        "margin_nats": float(decision["margin_nats"]),
+        "over_table_nats": float(decision["over_table_nats"]),
+        "table_period": float(entries[0]["period"]),
+        "reason": reason,
+    }
+
+
+def _bootstrap(ctx: _Context, dataset: Dataset, lsf, library):
+    """Bootstrap the orbit from library templates for the ``period = "search"`` route.
+
+    Templates at the declared starting labels measure a velocity table, four periodograms
+    propose candidate periods (:func:`_period_candidates`), an orbit is fitted from each,
+    and the chi-square ranks them. The best few are then measured against each other by the
+    disentangling itself (:func:`_decide_period_by_disentangling`), because a velocity table
+    of a dozen epochs does not decide between a period and its aliases; the winner of that
+    comparison becomes the warm Keplerian prior for the fit. The report block records the
+    peak of each search, how many candidates were fitted, every other fitted period the
+    chi-square cannot separate from the winner, and, under ``decision``, what each compared
+    candidate was worth. The returned objects carry the table that goes with the winning
+    orbit and, under ``table_unexchanged``, the table the period search itself ran on; the
+    two differ at every epoch the winning orbit re-assigned.
+    """
+    star, settings, log = ctx.star, ctx.settings, ctx.log
+    table, templates = _library_table(ctx, dataset, lsf, library, "bootstrap")
+    unexchanged = table  # the table the period search runs on, before any re-assignment
+    candidates, searches = _period_candidates(table, swap_invariant=True)
+    search = searches["single"]
+    harmonic = searches["harmonic"]
+    orbit, table, record = _orbit_over_candidates(
+        ctx, table, candidates, circular=settings.circular
+    )
+    ranked = record["ranked"]
+    # The light fractions, when they are measured rather than declared, must be in hand
+    # before any declaration can be built, so they are measured from the table the
+    # chi-square chose, and again from the chosen one when the comparison moves elsewhere.
+    measured_light = _apply_measured_light(ctx, table) if star.measures_light else None
+    reason = (
+        "period_decision_candidates disabled"
+        if settings.period_decision_candidates < 2
+        else f"{len(ranked)} distinct candidate orbit(s), fewer than the two a comparison needs"
+    )
+    decision = _decide_period_by_disentangling(ctx, dataset, lsf, ranked)
+    k_starts = None
+    if decision is not None:
+        reason = (
+            f"top {len(decision['entries'])} of {len(ranked)} candidates compared on the "
+            "coarse declaration"
+        )
+        chosen = decision["index"]
+        orbit, chosen_table = ranked[chosen]
+        if decision["entries"][chosen]["scan_moved"]:
+            k_starts = decision["entries"][chosen]["k"]
+        if chosen_table is not table:
+            table = chosen_table
+            if star.measures_light:
+                measured_light = _apply_measured_light(ctx, table)
+    swapped = int(table.settings.get("reassigned_by_orbit", 0))
+    if swapped:
+        ctx.flag(
+            f"bootstrap: {swapped} of {table.n_epochs} epochs had their components "
+            "re-assigned by the orbit fitted to the table; alike components are exchanged "
+            "at random by a per-epoch correlation"
+        )
     log(
         f"bootstrap orbit: P {orbit.period:.5f} d (periodogram peak {search['period']:.4f}, "
-        f"aliases {[round(p, 3) for p in search['aliases'][:3]]}; the orbit fit decided), K "
-        f"{np.round(orbit.k, 2).tolist()} km/s"
+        f"aliases {[round(p, 3) for p in search['aliases'][:3]]}; "
+        f"{record['n_candidates']} candidates, "
+        + ("the disentangling decided" if decision is not None else "the orbit fit decided")
+        + f"), K {np.round(orbit.k, 2).tolist()} km/s"
     )
-    period_width = 0.03 * orbit.period
-    k_sigma = np.maximum(3.0 * np.asarray(orbit.errors["k"]), 0.15 * np.asarray(orbit.k))
-    k_sigma = np.where(np.isfinite(k_sigma), k_sigma, 0.3 * np.asarray(orbit.k))
-    spec = Orbit(
-        period=Between(orbit.period - period_width, orbit.period + period_width),
-        k=Known(np.asarray(orbit.k, dtype=float), np.asarray(k_sigma, dtype=float)),
-        t_conj=Known(float(orbit.t_conj), 0.05 * orbit.period),
-        ecc=Fixed(0.0) if settings.circular else Between(0.0, settings.ecc_max),
-    )
+    spec, k_text = _bootstrap_spec(ctx, orbit, k_starts=k_starts)
+    ambiguous = record["ambiguous"]
+    if ambiguous:
+        ambiguity = "; ".join(f"{a['period']:.4f} d at +{a['delta_chi2']:.1f}" for a in ambiguous)
+    else:
+        ambiguity = "none within delta chi2 25"
+    described = _describe_period_decision(decision, period=float(orbit.period), reason=reason)
+    if decision is None:
+        decided = "  the lowest chi-square candidate is the period; no comparison ran\n"
+    else:
+        decided = (
+            f"  {len(decision['entries'])} of them compared by the disentangling's marginal "
+            f"likelihood on the coarse grid: {described['chosen_period']:.5f} d, "
+            f"{described['margin_nats']:.0f} nats over the runner-up"
+            + (
+                "; the table's chi-square had preferred "
+                f"{described['table_period']:.5f} d, by {described['over_table_nats']:.0f} "
+                "nats the worse of the two\n"
+                if described["by"] == "disentangling"
+                else " (the table's choice confirmed)\n"
+            )
+        )
     text = (
         "Bootstrap from library templates (period = 'search'):\n"
         f"  templates at the declared starting labels; period search "
-        f"{search['period']:.5f} d, aliases {[round(p, 4) for p in search['aliases'][:4]]}\n"
+        f"{search['period']:.5f} d, aliases {[round(p, 4) for p in search['aliases'][:4]]}"
+        + (f"; two-harmonic search {harmonic['period']:.5f} d" if harmonic is not None else "")
+        + f"\n  {record['n_candidates']} candidate periods fitted; "
+        f"other fitted periods within reach: {ambiguity}\n"
+        + decided
         + table.summary()
         + "\n"
         + orbit.summary()
-        + "\n  -> disentangling prior: period within +-3%, K Gaussian with sigma "
-        + f"{np.round(k_sigma, 2).tolist()} km/s, t_conj Gaussian"
+        + "\n  -> disentangling prior: period within +-3%, "
+        + k_text
+        + ", t_conj Gaussian"
     )
     return spec, {
         "text": text,
         "report": {
             "period": float(orbit.period),
             "periodogram_peak": float(search["period"]),
+            "harmonic_peak": None if harmonic is None else float(harmonic["period"]),
             "aliases": [float(p) for p in search["aliases"]],
+            "n_candidates": int(record["n_candidates"]),
+            "ambiguous": ambiguous,
+            "decision": described,
             "k": {n: float(k) for n, k in zip(orbit.names, orbit.k, strict=True)},
             "t_conj": float(orbit.t_conj),
             "ecc": float(orbit.ecc),
             "n_usable": int(table.good.sum()),
             "templates": [t.meta for t in templates],
+            "light_measured": None
+            if measured_light is None
+            else {c.name: float(l) for c, l in zip(star.components, measured_light, strict=True)},
         },
-        "objects": {"table": table, "orbit": orbit, "templates": templates},
+        "objects": {
+            "table": table,
+            "table_unexchanged": unexchanged,
+            "orbit": orbit,
+            "templates": templates,
+        },
+    }
+
+
+def _period_candidates(table, *, swap_invariant: bool):
+    """The starting periods the orbit fit chooses among, and the searches that proposed them.
+
+    Three periodograms on the same grid (:func:`albireo.rvorbit.find_period`): the twenty
+    highest peaks of the floating-mean generalized Lomb-Scargle of the relative velocity,
+    the twenty highest of its two-harmonic form, which ranks an eccentric orbit's period
+    higher, and, for two components, the first four peaks of the swap-invariant search
+    with their doubles, the only source that survives components exchanged between epochs;
+    and, for two or more components, the twenty highest peaks of the first component's own
+    velocities, the source that survives a companion the templates could not follow (its
+    relative velocity is then noise while the primary's curve is intact). The union is
+    deduplicated at the same 2% the fit loop uses, which on the D62 oracle tables left a
+    median of 37 starting periods out of 48 before the fourth source was added.
+
+    Measured end to end over those 32 tables this recovers the period of 28 against 23 for
+    the six peaks of the classical periodogram the route used before, and the two parts of
+    the change are separable: the floating mean is worth about three systems and the longer
+    list about two. Halves and doubles of the ordinary peaks are deliberately not added:
+    they made one further truth reachable and changed no decision, every extra candidate
+    being one more chance for an alias to win the chi-square comparison.
+
+    A table too short for the five parameters of the two-harmonic fit contributes only the
+    other two sources.
+    """
+    from albireo.rvorbit import find_period
+
+    single = find_period(table)
+    try:
+        harmonic = find_period(table, n_harmonics=2)
+    except ValueError:
+        harmonic = None
+    proposed = [single["period"], *single["aliases"]]
+    if harmonic is not None:
+        proposed += [harmonic["period"], *harmonic["aliases"]]
+    first = None
+    if table.n_components >= 2:
+        # The first component alone: a faint companion the templates could not follow
+        # leaves the relative velocity as noise, while the primary's own curve is intact.
+        first = find_period(table, components=[table.names[0]])
+        proposed += [first["period"], *first["aliases"]]
+    invariant = None
+    if swap_invariant and table.n_components == 2:
+        invariant = find_period(table, swap_invariant=True)
+        for peak in [invariant["period"], *invariant["aliases"][:3]]:
+            proposed.extend([peak, 2.0 * peak])
+    candidates: list[float] = []
+    for period in proposed:
+        period = float(period)
+        if period > 0.0 and all(abs(period / other - 1.0) > 0.02 for other in candidates):
+            candidates.append(period)
+    return candidates, {
+        "single": single,
+        "harmonic": harmonic,
+        "invariant": invariant,
+        "first": first,
     }
 
 
@@ -1727,32 +2657,102 @@ def _orbit_over_candidates(ctx: _Context, table, periods, *, circular: bool):
     The periodogram of a sparsely sampled table is rarely unambiguous: on the ten-epoch
     test fixture the highest peak was a 2.25 d alias whose orbit fits at chi-square 73,
     against 16 at the true period, to which every other peak converged. The periodogram
-    peaks are therefore starting points, and the orbit fit decides. A runner-up at a
-    different period (more than 2% from the best) within a chi-square difference of 9 is
-    flagged as an ambiguity.
-    """
-    from albireo.rvorbit import fit_rv_orbit
+    peaks are therefore starting points, and the orbit fit decides. It decides well: over
+    the D62 oracle tables, wherever a candidate reached the true period the eccentric
+    chi-square preferred it in 27 of 29 systems, usually by hundreds, while an alias
+    outranked the truth on the periodogram in 10 of 32. That is the argument for proposing
+    many candidates and holding the model order fixed. A circular fit and a BIC choice
+    between the two orders were both measured and neither helped.
 
+    Distinct starting periods are all fitted, and the fits are then merged on the period
+    they converged to, since starts a few per cent apart reach the same optimum and the
+    same period twice is not an ambiguity. Every remaining fitted period within a
+    chi-square difference of 25 of the winner is named in one flag: a bootstrap hands the
+    disentangling a period to within 3%, which is unrecoverable if it is the wrong one.
+
+    For a two-component table each candidate's orbit is also used to re-assign the epochs
+    where the correlation exchanged two alike components (:func:`reassign_by_orbit`), and
+    the orbit is refitted to the re-assigned table; the table that goes with the winning
+    orbit is returned beside it, with a third value holding the number of candidates
+    fitted, the ambiguous periods, and under ``"ranked"`` every distinct valid orbit with
+    its own table in chi-square order, the winner first, which is what
+    :func:`_decide_period_by_disentangling` takes the top few of.
+    """
+    from albireo.rvorbit import fit_rv_orbit, reassign_by_orbit
+
+    seen: list[float] = []
     fitted = []
     for period in periods:
+        period = float(period)
+        if not period > 0.0 or any(abs(period / p - 1.0) < 0.02 for p in seen):
+            continue
+        seen.append(period)
+        candidate_table = table
         try:
-            orbit = fit_rv_orbit(table, period=float(period), circular=circular)
+            orbit = fit_rv_orbit(candidate_table, period=period, circular=circular)
+            if table.n_components == 2:
+                predicted = orbit.predict(table.bjd)
+                candidate_table, swapped = reassign_by_orbit(table, predicted)
+                if swapped.any():
+                    orbit = fit_rv_orbit(candidate_table, period=orbit.period, circular=circular)
         except (ValueError, RuntimeError, np.linalg.LinAlgError):
             continue
-        fitted.append(orbit)
+        fitted.append((orbit, candidate_table))
     if not fitted:
         raise ValueError("no candidate period gave an orbit fit")
-    fitted.sort(key=lambda o: o.chi2)
-    best = fitted[0]
-    for other in fitted[1:]:
-        if abs(other.period / best.period - 1.0) > 0.02:
-            if other.chi2 - best.chi2 < 9.0:
-                ctx.flag(
-                    f"period ambiguous: an orbit at {other.period:.4f} d fits within "
-                    f"delta chi2 {other.chi2 - best.chi2:.1f} of the chosen {best.period:.4f} d"
-                )
-            break
-    return best
+    fitted.sort(key=lambda pair: pair[0].chi2)
+    n_fitted = len(fitted)
+    # An orbit above the declared ranges is not a solution the run could accept, so it
+    # cannot win: a companion the templates could not follow leaves velocities that a wrong
+    # period fits with an absurd semi-amplitude and eccentricity at a lower chi-square than
+    # the truth (1537 km/s at e = 0.94 on a 7-percent secondary), and the table's own
+    # chi-square cannot tell the difference. A semi-amplitude below the floor is not tested:
+    # it is what an unmeasurable companion leaves at the true period as readily as at a
+    # wrong one, and the degenerate-K logic downstream is what handles it. The best orbit
+    # set aside is named when it was the lowest, and every fit is kept when none remains.
+    settings = ctx.settings
+    valid = [
+        pair
+        for pair in fitted
+        if np.all(np.asarray(pair[0].k) <= settings.k_max)
+        and float(pair[0].ecc) <= settings.ecc_max
+    ]
+    if valid and valid[0] is not fitted[0]:
+        outside = fitted[0][0]
+        ctx.flag(
+            f"the lowest chi-square candidate orbit (P {outside.period:.4f} d, K "
+            f"{np.round(outside.k, 1).tolist()} km/s, e {outside.ecc:.2f}) lies outside the "
+            f"declared ranges (K up to {settings.k_max:g}, e up to {settings.ecc_max:g}) and "
+            "was set aside"
+        )
+    if valid:
+        fitted = valid
+    else:
+        ctx.flag(
+            "no candidate orbit lies inside the declared ranges; the lowest chi-square one "
+            "is taken as it stands"
+        )
+    distinct = []
+    for orbit, candidate_table in fitted:
+        if all(abs(orbit.period / other.period - 1.0) > 0.02 for other, _ in distinct):
+            distinct.append((orbit, candidate_table))
+    best, best_table = distinct[0]
+    ambiguous = [
+        {"period": float(other.period), "delta_chi2": float(other.chi2 - best.chi2)}
+        for other, _ in distinct[1:]
+        if other.chi2 - best.chi2 < 25.0
+    ]
+    if ambiguous:
+        ctx.flag(
+            f"period ambiguous: {len(ambiguous)} other fitted period(s) lie within delta chi2 "
+            f"25 of the chosen {best.period:.4f} d: "
+            + ", ".join(f"{a['period']:.4f} d at +{a['delta_chi2']:.1f}" for a in ambiguous)
+        )
+    return (
+        best,
+        best_table,
+        {"n_candidates": n_fitted, "ambiguous": ambiguous, "ranked": list(distinct)},
+    )
 
 
 def _labels(ctx: _Context, fit: Fit, library):
@@ -1769,7 +2769,7 @@ def _labels(ctx: _Context, fit: Fit, library):
         return None
     grid = fit.dis.grid
     try:
-        lib = library.sliced(
+        lib = library.in_medium(medium).sliced(
             grid.wave[0] - _LIBRARY_PAD_ANGSTROM, grid.wave[-1] + _LIBRARY_PAD_ANGSTROM
         )
         if lib.wave[0] > grid.wave[0] or lib.wave[-1] < grid.wave[-1]:
@@ -1786,13 +2786,7 @@ def _labels(ctx: _Context, fit: Fit, library):
         dilution = FixedDilution()
     else:
         dilution = ScalarDilution()
-    reach = float(settings.v_zero_range)
-    narrowest = min(
-        float(np.min(np.atleast_1d(np.asarray(v.sigma_kms, dtype=float))))
-        for v in fit.dis.lsf.values()
-        if isinstance(v, LSF)
-    )
-    step = max(2.0 * narrowest, 5.0, 2.0 * reach / 120.0)
+    reach, step = _v_zero_scan(fit, settings)
     scan_velocities = np.arange(-reach, reach + 0.5 * step, step)
     stars = {}
     for c in star.components:
@@ -1843,7 +2837,7 @@ def _labels(ctx: _Context, fit: Fit, library):
             break
     if match.multimodal:
         ctx.flag("labels: the scan found a second basin within delta chi2 < 9")
-    if not match.chi2 < match.chi2_nearest_node < match.chi2_continuum:
+    if not _beats_both_nulls(match):
         ctx.flag(
             "labels: the fit does not beat both nulls (chi2 "
             f"{match.chi2:.1f}, nearest node {match.chi2_nearest_node:.1f}, no template "
@@ -1852,13 +2846,116 @@ def _labels(ctx: _Context, fit: Fit, library):
     return match
 
 
+def _v_zero_scan(fit: Fit, settings: Analysis) -> tuple[float, float]:
+    """Half-range and trial step of the label fit's scan over each component's frame offset."""
+    reach = float(settings.v_zero_range)
+    step = max(2.0 * fit.dis._narrowest_lsf(), 5.0, 2.0 * reach / 120.0)
+    return reach, step
+
+
+def _beats_both_nulls(match) -> bool:
+    """Whether the label fit beat the nearest-node and the no-template nulls.
+
+    The test the label stage flags on, and the first of the three the zero points are
+    refused on: a fit that is worse than no template at all has measured no frame offset,
+    whatever number its ``v_kms`` site holds.
+    """
+    return bool(match.chi2 < match.chi2_nearest_node < match.chi2_continuum)
+
+
+def _disowned_zero_points(
+    ctx: _Context, fit: Fit, match, offsets: Mapping[str, float]
+) -> list[str]:
+    """The reasons the label fit's frame offsets cannot serve as template zero points.
+
+    Each is a way for the fit to report a number it did not measure. The offset enters
+    every reported velocity as a constant, so an unmeasured one moves the whole table
+    without touching any diagnostic in it.
+    """
+    reasons = []
+    if not _beats_both_nulls(match):
+        reasons.append(
+            f"the label fit beats neither null (chi2 {match.chi2:.1f}, nearest node "
+            f"{match.chi2_nearest_node:.1f}, no template {match.chi2_continuum:.1f})"
+        )
+    reach, step = _v_zero_scan(fit, ctx.settings)
+    for name, offset in offsets.items():
+        gap = reach - abs(offset)
+        if gap <= step:
+            reasons.append(
+                f"the frame offset of {name!r} is pinned at {offset:+.4f} km/s, {gap:.4f} "
+                f"km/s from the {reach:g} km/s bound of its scan and inside one {step:.1f} "
+                "km/s trial step of it (widen v_zero_range if the frame really sits there)"
+            )
+    if fit.mode == "keplerian" and offsets:
+        budget = float(fit.dis.velocity_budget.total)
+        spread = max(offsets.values()) - min(offsets.values())
+        if spread > budget:
+            reasons.append(
+                f"the frame offsets differ by {spread:.1f} km/s, more than the "
+                f"{budget:.1f} km/s velocity budget of the declaration, while a Keplerian "
+                "fit gives every component the same systemic velocity by construction"
+            )
+    return reasons
+
+
 def _templates(ctx: _Context, fit: Fit, match) -> list:
+    """The disentangled components as correlation templates, with their zero points.
+
+    A disentangled component carries no rest frame (``docs/math.md`` §5.3), so the
+    templates leave ``v_zero_kms`` at ``None`` and the velocities measured against them
+    are differential. A label fit that measured each component's frame offset pins them
+    and the velocities come out absolute, unless the fit disowned that offset
+    (:func:`_disowned_zero_points`), in which case the table stays differential and the
+    orbit fit carries one systemic velocity per component, as on the no-library route.
+    """
     templates = fit.templates()
     if match is None:
+        ctx.zero_points = {"source": None, "adopted": False, "v_zero_kms": {}, "refused": []}
         return templates
+    offsets = {t.name: float(match.labels[t.name]["v_kms"]) for t in templates}
+    refused = _disowned_zero_points(ctx, fit, match, offsets)
+    ctx.zero_points = {
+        "source": "label match",
+        "adopted": not refused,
+        "v_zero_kms": offsets,
+        "refused": refused,
+    }
+    if refused:
+        ctx.flag(
+            "template zero points refused, so the velocities stay differential (one gamma "
+            "per component in the orbit fit): " + "; ".join(refused)
+        )
+        return templates
+    # A frame offset the label fit did not learn (its posterior as wide as the prior, the
+    # component being mostly noise) is refused for that component alone: a secondary of a
+    # third benchmark run kept 11 percent of its equivalent width, its offset came out
+    # 46 km/s from the systemic velocity, and every one of its velocities carried it.
+    widths = getattr(match, "posterior_over_prior", {}) or {}
+    unlearned = {
+        t.name: float(widths[f"v_{t.name}"])
+        for t in templates
+        if float(widths.get(f"v_{t.name}", 0.0)) > 0.8
+    }
+    if unlearned:
+        ctx.flag(
+            "zero point refused for "
+            + ", ".join(
+                f"{n} (frame offset posterior {w:.2f} of the prior)" for n, w in unlearned.items()
+            )
+            + ": the label fit learned nothing about it, so that component's velocities stay "
+            "differential with its own systemic velocity in the orbit fit"
+        )
+        ctx.zero_points["refused"] = [
+            f"{n}: the label fit learned nothing about the frame offset" for n in unlearned
+        ]
+        ctx.zero_points["adopted"] = len(unlearned) < len(templates)
     pinned = []
     for t in templates:
-        offset = float(match.labels[t.name]["v_kms"])
+        if t.name in unlearned:
+            pinned.append(t)
+            continue
+        offset = offsets[t.name]
         pinned.append(
             replace(
                 t,
@@ -1868,15 +2965,124 @@ def _templates(ctx: _Context, fit: Fit, match) -> list:
         )
     ctx.log(
         "template zero points from the label fit: "
-        + ", ".join(f"{t.name} {t.v_zero_kms:+.2f} km/s" for t in pinned)
+        + ", ".join(
+            f"{t.name} {t.v_zero_kms:+.2f} km/s" if t.v_zero_kms is not None else f"{t.name} none"
+            for t in pinned
+        )
     )
     return pinned
 
 
+_SMOOTHNESS_MOVED = 10.0
+"""Factor by which a fitted smoothness precision must have left its start before the
+correlation stops holding the light at the declared fractions."""
+
+_EXCHANGE_LIGHT_RATIO = 3.0
+"""Largest ratio of two light fractions at which the correlation's two peaks are still
+treated as equivalent solutions that the orbit may exchange."""
+
+
+def _template_light(ctx: _Context, fit: Fit, lights: list):
+    """The declared fractions, or free amplitudes when ML-II moved the smoothness far.
+
+    The disentangling recovers each component as ``(w / l0) t`` at the declared fraction
+    ``l0``, so ``l0`` is the amplitude consistent with the template only while the posterior
+    mean is not shrunk. When ML-II raises a component's smoothness precision by an order of
+    magnitude or more the recovered lines are shallower than the truth (on a pair whose
+    primary's ``tau`` went from 800 to 36,000 and secondary's from 400 to 2000, the
+    secondary lost a quarter of its depth and the table then lost it, at -89 percent,
+    under the declared fraction; a free amplitude brought it back to -25), and the
+    consistent amplitude is larger than the fraction. The
+    correlation then fits the amplitudes freely (``light="global"``): the table's light
+    column is that scale, not a light fraction, and the flag says so.
+    """
+    moved = {}
+    for star in fit.dis.stars:
+        tau0 = float(_smoothness_of(star).tau0)
+        tau = float(fit.hyper[star.name]["tau"])
+        if tau / tau0 > _SMOOTHNESS_MOVED or tau0 / tau > _SMOOTHNESS_MOVED:
+            moved[star.name] = (tau0, tau)
+    if not moved:
+        return lights
+    ctx.flag(
+        "the correlation fitted the template amplitudes freely rather than holding the "
+        "declared light fractions: the smoothness precision moved from its start by more "
+        f"than a factor {_SMOOTHNESS_MOVED:g} ("
+        + ", ".join(f"{n} {t0:g} -> {t:.3g}" for n, (t0, t) in moved.items())
+        + "), so the disentangled components are shrunk and the declared fractions are not "
+        "their scale; the table's light column is that scale, not a light fraction"
+    )
+    return "global"
+
+
+def _exchange_allowed(ctx: _Context, lights: list) -> bool:
+    """Whether the orbit may exchange the two components between epochs.
+
+    The exchange assumes two alike spectra at alike light fractions, where the
+    correlation's two peaks are equivalent solutions. Under held amplitudes at fractions
+    a factor of several apart they are not: an exchanged row carries the other component's
+    amplitude, and a swap decided on a noise draw of the faint component's velocity moves
+    a well-measured primary velocity into the wrong column (a 95/5 pair went from 5 to 56
+    percent off in the primary that way, with nineteen of eighty epochs swapped).
+    """
+    fractions = np.asarray(lights, dtype=float)
+    if fractions.size != 2 or not np.all(np.isfinite(fractions)) or np.any(fractions <= 0):
+        return True
+    ratio = float(fractions.max() / fractions.min())
+    if ratio <= _EXCHANGE_LIGHT_RATIO:
+        return True
+    ctx.flag(
+        f"the exchange of the two components by the orbit was skipped: the light fractions "
+        f"{np.round(fractions, 3).tolist()} differ by a factor {ratio:.1f}, above "
+        f"{_EXCHANGE_LIGHT_RATIO:g}, and under held amplitudes the two correlation peaks "
+        "are not equivalent solutions"
+    )
+    return False
+
+
+def _measure_epoch_velocities(ctx: _Context, fit: Fit, templates: list, lights):
+    """Correlate the epochs against the disentangled templates, dropping zero points if need be.
+
+    The default search window of a template is its own zero point away from the fitted
+    velocities, and zero points that disagree by more than those velocities span leave no
+    window that holds every component (the label fit of a broad-lined pair put them 95 km/s
+    apart, on velocities spanning 60). The zero points are then dropped rather than the
+    star: the velocities stay differential, as when the label fit disowns them
+    (:func:`_disowned_zero_points`), and the orbit fit carries one systemic velocity per
+    component. A failure with no zero point to drop is a real one and is re-raised.
+
+    Returns the table and the templates it was measured against, which are the ones the
+    report and the figures must show.
+    """
+    try:
+        return fit.measure_velocities(templates=templates, light=lights), templates
+    except ValueError as exc:
+        if not any(t.v_zero_kms is not None for t in templates):
+            raise
+        ctx.flag(
+            "template zero points dropped, so the velocities stay differential (one gamma "
+            f"per component in the orbit fit): {exc}"
+        )
+        previous = ctx.zero_points or {}
+        ctx.zero_points = {
+            **previous,
+            "adopted": False,
+            "refused": [*previous.get("refused", []), str(exc)],
+        }
+        templates = [
+            replace(t, v_zero_kms=None, meta={**t.meta, "zero_point": "dropped"}) for t in templates
+        ]
+        return fit.measure_velocities(templates=templates, light=lights), templates
+
+
 def _orbit(ctx: _Context, fit: Fit, table):
-    from albireo.rvorbit import find_period, fit_rv_orbit
+    from albireo.rvorbit import fit_rv_orbit
 
     settings = ctx.settings
+    failure = _table_failure(table)
+    if failure is not None:
+        ctx.flag(f"orbit from the table skipped: the table failed ({failure})")
+        return None, None
     n_par = 2 + (0 if settings.circular else 2) + 2 * table.n_components
     if int(table.good.sum()) * table.n_components <= n_par:
         ctx.flag(
@@ -1892,14 +3098,14 @@ def _orbit(ctx: _Context, fit: Fit, table):
             source = "the disentangling"
             orbit = fit_rv_orbit(table, period=period, circular=settings.circular)
         else:
-            search = find_period(table)
+            candidates, searches = _period_candidates(table, swap_invariant=True)
+            search = searches["single"]
             source = (
                 f"a periodogram (peak {search['period']:.4f} d, aliases "
-                f"{[round(p, 4) for p in search['aliases'][:3]]}; the orbit fit decided)"
+                f"{[round(p, 4) for p in search['aliases'][:3]]}; {len(candidates)} candidates "
+                "from the one- and two-harmonic searches, the orbit fit decided)"
             )
-            orbit = _orbit_over_candidates(
-                ctx, table, [search["period"], *search["aliases"]], circular=settings.circular
-            )
+            orbit, _, _ = _orbit_over_candidates(ctx, table, candidates, circular=settings.circular)
     except (ValueError, RuntimeError, np.linalg.LinAlgError) as exc:
         ctx.flag(f"orbit from the table failed: {type(exc).__name__}: {exc}")
         return None, None
@@ -1965,9 +3171,84 @@ def _assess_fit(ctx: _Context, fit: Fit) -> None:
                 "conjunction scan: the best two phases are within 1 nat; the orbit may be "
                 "the component-swapped mirror"
             )
+    amplitude_scan = fit.k_scan
+    if amplitude_scan is not None and amplitude_scan.gain > 0.0:
+        moved = []
+        for star, start, best in zip(
+            fit.dis.stars, amplitude_scan.start, amplitude_scan.best, strict=True
+        ):
+            if start > 0.0 and best > 0.0 and max(best / start, start / best) > 1.5:
+                moved.append(f"K_{star.name} from {start:.1f} to {best:.1f} km/s")
+        if moved:
+            ctx.flag(
+                "the semi-amplitude scan moved "
+                + ", ".join(moved)
+                + f" ({amplitude_scan.gain:+.0f} nats): the starting value sat in another "
+                "basin of the likelihood, which L-BFGS alone would not have left"
+            )
+
+
+def _refuse_diverged(ctx: _Context, fit: Fit) -> None:
+    """Stop the star when the disentangling diverged, before anything is measured from it.
+
+    The residual z-score rms is the one number that separates a fit from a failure of the
+    optimizer: it is near 1 wherever the noise model holds, near 2 to 3 at a wrong period
+    on the blind route, and 45 in the one divergence of the D62 benchmark, where the
+    component spectra correlated with the injected ones at 0.07 and 0.02 and the
+    semi-amplitudes were held by their priors alone. Everything downstream (labels,
+    templates, epoch velocities) is measured against those spectra, so every product after
+    it is arithmetic on a failure, written in the form of a measurement. The ceiling is
+    ``z_rms_max``.
+    """
+    z = float(fit.z_rms)
+    if not z > float(ctx.settings.z_rms_max):
+        return
+    message = (
+        f"the disentangling diverged: residual z-score rms {z:.1f}, above the z_rms_max "
+        f"ceiling of {float(ctx.settings.z_rms_max):g} (a healthy fit sits near 1). The fit "
+        "is not usable, so the label and velocity stages were not run: velocities measured "
+        "against these components would carry no measurement. Check the noise model first "
+        "(the declared uncertainties, and noise_correlation where the spectra were "
+        "resampled onto a common grid), then the priors (the period, the semi-amplitudes "
+        "and the conjunction), which is where a fit of this kind is usually started wrong."
+    )
+    ctx.flag(message)
+    raise RuntimeError(message)
+
+
+def _table_failure(table) -> str | None:
+    """Why the velocity table as a whole carries no measurement, or ``None``.
+
+    A median R-squared below zero says the templates fit the epochs worse than no template
+    at all, and no usable epoch says nothing was measured at all. Either way the rows are
+    arithmetic on a failed correlation rather than velocities.
+    """
+    reasons = []
+    median = _finite_median(table.r_squared)
+    if median < 0.0:
+        reasons.append(
+            f"median R-squared {median:.2f} (the templates fit the epochs worse than no "
+            "template at all)"
+        )
+    if not int(table.good.sum()):
+        reasons.append(f"no usable epoch of {table.n_epochs}")
+    return "; ".join(reasons) or None
+
+
+def _finite_median(values) -> float:
+    """Median of the finite entries, ``nan`` when there are none (as in a failed column)."""
+    array = np.asarray(values, dtype=float).reshape(-1)
+    finite = array[np.isfinite(array)]
+    return float(np.median(finite)) if finite.size else float("nan")
 
 
 def _assess_table(ctx: _Context, table) -> None:
+    failure = _table_failure(table)
+    if failure is not None:
+        ctx.flag(
+            f"the velocity table failed: {failure}. It is written marked FAILED, and no "
+            "orbit is fitted to it; the rows are not measurements"
+        )
     n_bad = int((~table.good).sum())
     if n_bad:
         ctx.flag(
@@ -2013,6 +3294,13 @@ def _assess_orbit(ctx: _Context, fit: Fit, orbit) -> None:
 # -- describing ------------------------------------------------------------------
 
 
+def _applied_widths(spec: LSF, dataset: Dataset, key: str):
+    if spec.is_per_epoch:
+        widths = spec.widths(dataset, key).tolist() if key in dataset.instruments else []
+        return widths[0] if len(widths) == 1 else widths
+    return np.asarray(spec.sigma_kms).tolist()
+
+
 def _describe_dataset(dataset: Dataset, lsf) -> dict[str, Any]:
     n_pixels = sum(e.n_pixels for e in dataset)
     n_good = sum(int(e.good.sum()) for e in dataset)
@@ -2021,7 +3309,10 @@ def _describe_dataset(dataset: Dataset, lsf) -> dict[str, Any]:
         "frame": dataset.frame,
         "medium": dataset[0].medium,
         "instruments": list(dataset.instruments),
-        "lsf_sigma_kms": {k: np.asarray(v.sigma_kms).tolist() for k, v in lsf.items()},
+        # The widths as applied: a per-epoch declaration is reported as the distinct
+        # widths the epochs declared (one number when they agree), never as the sentinel.
+        "lsf_sigma_kms": {k: _applied_widths(v, dataset, k) for k, v in lsf.items()},
+        "lsf_per_epoch": [k for k, v in lsf.items() if v.is_per_epoch],
         "bjd": dataset.bjd.tolist(),
         "wavelength_angstrom": [
             float(min(e.wave[0] for e in dataset)),
@@ -2055,7 +3346,32 @@ def _describe_declaration(dis: Disentangler) -> dict[str, Any]:
             if not isinstance(dis.orbit.k, Spec)
             else _describe_spec(dis.orbit.k),
         }
+    out["noise_model"] = _describe_noise(dis)
     return out
+
+
+def _describe_noise(dis: Disentangler) -> dict[str, Any]:
+    declared = dis.noise_correlation
+    if declared is None:
+        return {"kind": "diagonal"}
+    if isinstance(declared, Spec):
+        return {"kind": "ar1", "correlation": "fitted", "prior": _describe_spec(declared)}
+    values = dis.noise_correlation_per_epoch()
+    by_instrument: dict[str, float] = {}
+    for epoch, phi in zip(dis.dataset, values, strict=True):
+        by_instrument.setdefault(epoch.instrument, float(phi))
+    return {"kind": "ar1", "correlation": by_instrument}
+
+
+def _noise_words(dis: Disentangler) -> str:
+    described = _describe_noise(dis)
+    if described["kind"] == "diagonal":
+        return "diagonal"
+    if described["correlation"] == "fitted":
+        return "AR(1), correlation fitted"
+    return "AR(1), lag-one " + ", ".join(
+        f"{k} {v:.2f}" for k, v in described["correlation"].items()
+    )
 
 
 def _describe_fit(fit: Fit) -> dict[str, Any]:
@@ -2073,6 +3389,31 @@ def _describe_fit(fit: Fit) -> dict[str, Any]:
             "t_conj": float(fit.phase_scan.best),
             "contrast_nats": float(fit.phase_scan.contrast),
         }
+    if fit.k_scan is not None:
+        names = [s.name for s in fit.dis.stars]
+        out["k_scan"] = {
+            "n_trials": int(fit.k_scan.n_trials),
+            "best": {n: float(k) for n, k in zip(names, fit.k_scan.best, strict=True)},
+            "start": {n: float(k) for n, k in zip(names, fit.k_scan.start, strict=True)},
+            "gain_nats": float(fit.k_scan.gain),
+            "contrast_nats": float(fit.k_scan.contrast),
+            "used": bool(fit.k_scan.gain > 0.0),
+            "hold_losses_nats": {
+                names[i]: float(v) for i, v in fit.k_scan.hold_losses.items() if i < len(names)
+            },
+            "notes": list(fit.k_scan.notes),
+            "prior_scales": {k: float(v) for k, v in fit.k_scan.prior_scales.items()},
+        }
+    noise = fit.noise_correlation()
+    if noise is not None:
+        out["noise_correlation"] = noise
+    # The per-epoch velocities of the joint fit: the Keplerian at the epochs, without a
+    # systemic velocity, which the disentangling does not carry (the table's are absolute
+    # when the label fit pinned the zero points).
+    velocities = np.asarray(fit.velocities())
+    out["velocities"] = {
+        n: velocities[i].tolist() for i, n in enumerate(s.name for s in fit.dis.stars)
+    }
     if fit.mode == "keplerian":
         params = fit.orbit()
         out.update(
@@ -2119,7 +3460,10 @@ def _describe_match(match) -> dict[str, Any]:
 
 
 def _describe_table(table) -> dict[str, Any]:
+    failure = _table_failure(table)
     return {
+        "status": "ok" if failure is None else "failed",
+        "failure": failure,
         "names": list(table.names),
         "bjd": table.bjd.tolist(),
         "instrument": list(table.instrument),
@@ -2134,7 +3478,9 @@ def _describe_table(table) -> dict[str, Any]:
         "absolute": {n: bool(table.absolute[i]) for i, n in enumerate(table.names)},
         "absolute_all": bool(all(table.absolute)),
         "reduced_chi2_median": float(np.nanmedian(table.reduced_chi2)),
+        "r_squared_median": _finite_median(table.r_squared),
         "wilson_slope": None if table.wilson() is None else float(table.wilson()[0]),
+        "noise_correlation": table.settings.get("noise_correlation"),
     }
 
 
@@ -2182,11 +3528,162 @@ def _describe_posterior(posterior) -> dict[str, Any]:
     return out
 
 
+def _wrap_period(diff: float, period: float) -> float:
+    """``diff`` reduced to ``(-period/2, period/2]``: a conjunction is defined modulo P."""
+    return float((diff + 0.5 * period) % period - 0.5 * period)
+
+
+def _wrap_angle(diff: float) -> float:
+    """``diff`` in radians reduced to ``(-pi, pi]``."""
+    return float((diff + math.pi) % (2.0 * math.pi) - math.pi)
+
+
+def _pull(diff: float, err: float | None) -> float | None:
+    if err is None or not np.isfinite(err) or err <= 0.0:
+        return None
+    return float(diff / err)
+
+
+def _truth_spectra(truth: Mapping[str, Any], fit: Fit) -> np.ndarray | None:
+    """The injected stellar deviation spectra interpolated onto the fit's grid."""
+    if "components" not in truth or "grid" not in truth:
+        return None
+    grid, source = fit.dis.grid, truth["grid"]
+    rows = [
+        np.interp(grid.wave, np.asarray(source.wave), np.asarray(c), left=0.0, right=0.0)
+        for c in truth["components"]
+    ]
+    return np.stack(rows)
+
+
+def _compare_spectra(fit: Fit, truth_spectra: np.ndarray, windows) -> dict[str, Any]:
+    """Fidelity of the disentangled components against the injected ones.
+
+    Restricted to the pixels the data cover (the grid carries margins the data never
+    constrain) and, per component, to what the star contributes: the root-mean-square
+    difference, the correlation, the standardized difference against the reported band
+    (``pull_rms``, near 1 when the band is calibrated), and the equivalent-width ratio in
+    each window.
+    """
+    grid = fit.dis.grid
+    wave = grid.wave
+    data_lo = min(float(e.wave[0]) for e in fit.dis.dataset)
+    data_hi = max(float(e.wave[-1]) for e in fit.dis.dataset)
+    covered = (wave >= data_lo) & (wave <= data_hi)
+    names = [s.name for s in fit.dis.stars]
+    rows = [fit.dis.component_names.index(n) for n in names]
+    d_hat, std = fit.spectra()[rows], fit.std()[rows]
+    d_true = truth_spectra[: len(names)]
+    step = np.gradient(wave)
+    if not windows:
+        windows = {"band": [(data_lo, data_hi)]}
+    out: dict[str, Any] = {}
+    for i, name in enumerate(names):
+        diff = d_hat[i] - d_true[i]
+        sel = covered
+        entry: dict[str, Any] = {
+            "rms": float(np.sqrt(np.mean(diff[sel] ** 2))),
+            "rms_truth": float(np.sqrt(np.mean(d_true[i][sel] ** 2))),
+            "corr": float(np.corrcoef(d_hat[i][sel], d_true[i][sel])[0, 1])
+            if np.std(d_true[i][sel]) > 0 and np.std(d_hat[i][sel]) > 0
+            else float("nan"),
+            "pull_rms": float(np.sqrt(np.mean((diff[sel] / np.maximum(std[i][sel], 1e-12)) ** 2))),
+            "depth_ratio": float(np.min(d_hat[i][sel]) / np.min(d_true[i][sel]))
+            if np.min(d_true[i][sel]) < 0
+            else float("nan"),
+        }
+        ew: dict[str, Any] = {}
+        for wname, ranges in windows.items():
+            mask = np.zeros(wave.size, dtype=bool)
+            for lo, hi in ranges:
+                mask |= (wave >= float(lo)) & (wave <= float(hi))
+            mask &= covered
+            if not mask.any():
+                continue
+            ew_true = float(np.sum(-d_true[i][mask] * step[mask]))
+            ew_hat = float(np.sum(-d_hat[i][mask] * step[mask]))
+            ew[wname] = {
+                "ew_true_angstrom": ew_true,
+                "ew_fit_angstrom": ew_hat,
+                "ratio": float(ew_hat / ew_true) if ew_true != 0.0 else float("nan"),
+                "rms": float(np.sqrt(np.mean(diff[mask] ** 2))),
+            }
+        entry["windows"] = ew
+        out[name] = entry
+    return out
+
+
+def _exchange_rms(v_fit, v_true, good, absolute) -> tuple[float, float]:
+    """The rms velocity error of a two-component fit as named and with the pair exchanged."""
+    v_fit = np.asarray(v_fit, dtype=float)
+    v_true = np.asarray(v_true, dtype=float)
+    good = np.asarray(good, dtype=bool)
+
+    def rms(order) -> float:
+        total = 0.0
+        for i in range(2):
+            diff = v_fit[i] - v_true[order[i]]
+            if not absolute[i]:
+                diff = diff - np.mean(diff[good])
+            total += float(np.mean(diff[good] ** 2))
+        return math.sqrt(total / 2.0)
+
+    return rms((0, 1)), rms((1, 0))
+
+
+def _exchanged_truth(truth: Mapping[str, Any], names: Sequence[str]) -> dict[str, Any]:
+    """The truth block with its two components in the other order."""
+    out = dict(truth)
+    for key in ("k", "light_fractions"):
+        if key in out:
+            out[key] = list(np.asarray(out[key]).reshape(-1)[::-1])
+    for key in ("velocities", "components"):
+        if key in out:
+            out[key] = np.asarray(out[key])[::-1]
+    if isinstance(out.get("labels"), Mapping) and all(n in out["labels"] for n in names):
+        out["labels"] = {names[0]: out["labels"][names[1]], names[1]: out["labels"][names[0]]}
+    return out
+
+
 def _compare_truth(ctx: _Context, fit: Fit, table, orbit, match) -> tuple[str, dict[str, Any]]:
     truth = dict(ctx.star.truth or {})
     names = [s.name for s in fit.dis.stars]
     lines = ["Against the injected truth:"]
-    out: dict[str, Any] = {"note": "differences (result minus injected), except velocity_rms"}
+    out: dict[str, Any] = {
+        "note": "differences (result minus injected) and pulls (difference over the quoted "
+        "error), except the rms entries",
+        "components_exchanged": False,
+    }
+    # A pair alike enough that the mass-order convention had nothing to work on can come
+    # out in the other order; the recovery is then judged against the truth in that order,
+    # and the exchange is flagged, since it is a limit of the convention and not of the fit.
+    v_true = np.asarray(truth["velocities"], dtype=float) if "velocities" in truth else None
+    if len(names) == 2 and v_true is not None and v_true.shape[0] == 2:
+        as_named = exchanged = None
+        if v_true.shape == table.velocity.shape:
+            good = table.good & np.all(np.isfinite(table.velocity), axis=0)
+            if int(good.sum()) >= 3:
+                as_named, exchanged = _exchange_rms(table.velocity, v_true, good, table.absolute)
+        if as_named is None and fit.mode == "keplerian":
+            v_fit = np.asarray(fit.velocities())
+            if v_fit.shape == v_true.shape:
+                as_named, exchanged = _exchange_rms(
+                    v_fit, v_true, np.ones(v_true.shape[1], dtype=bool), (False, False)
+                )
+        if as_named is not None and exchanged * 3.0 < as_named:
+            truth = _exchanged_truth(truth, names)
+            out["components_exchanged"] = True
+            ctx.flag(
+                f"components recovered in the other order: {names[0]} moves like the injected "
+                f"{names[1]} (velocity rms {as_named:.1f} km/s as named, {exchanged:.1f} "
+                "exchanged); the truth is compared in that order, the pair being too alike "
+                "for the mass-order convention to fix"
+            )
+            lines.append(
+                f"  the components came out in the other order ({names[0]} is the injected "
+                f"{names[1]}); compared in that order"
+            )
+    period_true = float(truth["period"]) if "period" in truth else None
     if "k" in truth:
         k_true = np.asarray(truth["k"], dtype=float)
         if fit.mode == "keplerian":
@@ -2201,6 +3698,9 @@ def _compare_truth(ctx: _Context, fit: Fit, table, orbit, match) -> tuple[str, d
             )
         if orbit is not None:
             out["k_table"] = {n: float(orbit.k[i] - k_true[i]) for i, n in enumerate(names)}
+            out["k_table_pull"] = {
+                n: _pull(orbit.k[i] - k_true[i], orbit.errors["k"][i]) for i, n in enumerate(names)
+            }
             lines.append(
                 "  K from the velocity table: "
                 + ", ".join(
@@ -2209,43 +3709,124 @@ def _compare_truth(ctx: _Context, fit: Fit, table, orbit, match) -> tuple[str, d
                     for i, n in enumerate(names)
                 )
             )
-    if "period" in truth and orbit is not None:
-        out["period"] = float(orbit.period - float(truth["period"]))
-        lines.append(
-            f"  period from the table {orbit.period:.5f} d (truth {float(truth['period']):g}, "
-            f"{out['period']:+.5f})"
-        )
-    if "gamma" in truth and orbit is not None:
-        gamma_true = float(truth["gamma"])
-        out["gamma"] = {n: float(orbit.gamma[i] - gamma_true) for i, n in enumerate(names)}
-        note = "" if all(table.absolute) else "   (differential: not comparable)"
-        lines.append(
-            "  systemic velocity: "
-            + ", ".join(f"{n} {orbit.gamma[i]:+.3f}" for i, n in enumerate(names))
-            + f" (truth {gamma_true:+g}){note}"
-        )
+    if fit.mode == "keplerian":
+        params = fit.orbit()
+        elements: dict[str, Any] = {}
+        if period_true is not None:
+            elements["period"] = float(params["period"]) - period_true
+        if "ecc" in truth:
+            elements["ecc"] = float(params["ecc"]) - float(truth["ecc"])
+        if "omega" in truth and "ecc" in truth and float(truth["ecc"]) > 0.0:
+            elements["omega_deg"] = math.degrees(
+                _wrap_angle(float(params["omega"]) - float(truth["omega"]))
+            )
+        if "t_conj" in truth:
+            p = period_true if period_true is not None else float(params["period"])
+            elements["t_conj"] = _wrap_period(float(params["t_conj"]) - float(truth["t_conj"]), p)
+        if elements:
+            out["elements_disentangling"] = elements
+            lines.append(
+                "  elements from the disentangling (result minus truth): "
+                + ", ".join(f"{k} {v:+.5g}" for k, v in elements.items())
+            )
+    if orbit is not None:
+        e = orbit.errors
+        elements = {}
+        pulls = {}
+        if period_true is not None:
+            elements["period"] = float(orbit.period - period_true)
+            pulls["period"] = _pull(elements["period"], e.get("period"))
+            out["period"] = elements["period"]
+            lines.append(
+                f"  period from the table {orbit.period:.5f} d (truth {period_true:g}, "
+                f"{elements['period']:+.5f})"
+            )
+        if "ecc" in truth:
+            elements["ecc"] = float(orbit.ecc - float(truth["ecc"]))
+            pulls["ecc"] = _pull(elements["ecc"], e.get("ecc"))
+        if "omega" in truth and "ecc" in truth and float(truth["ecc"]) > 0.0:
+            d_omega = _wrap_angle(float(orbit.omega) - float(truth["omega"]))
+            elements["omega_deg"] = math.degrees(d_omega)
+            pulls["omega_deg"] = _pull(d_omega, e.get("omega"))
+        if "t_conj" in truth:
+            p = period_true if period_true is not None else float(orbit.period)
+            elements["t_conj"] = _wrap_period(float(orbit.t_conj) - float(truth["t_conj"]), p)
+            pulls["t_conj"] = _pull(elements["t_conj"], e.get("t_conj"))
+        if elements:
+            out["elements_table"] = elements
+            out["elements_table_pull"] = pulls
+            lines.append(
+                "  elements from the table (result minus truth): "
+                + ", ".join(f"{k} {v:+.5g}" for k, v in elements.items())
+            )
+        if "gamma" in truth:
+            gamma_true = float(truth["gamma"])
+            out["gamma"] = {n: float(orbit.gamma[i] - gamma_true) for i, n in enumerate(names)}
+            out["gamma_pull"] = {
+                n: _pull(orbit.gamma[i] - gamma_true, e["gamma"][i]) if table.absolute[i] else None
+                for i, n in enumerate(names)
+            }
+            note = "" if all(table.absolute) else "   (differential: not comparable)"
+            lines.append(
+                "  systemic velocity: "
+                + ", ".join(f"{n} {orbit.gamma[i]:+.3f}" for i, n in enumerate(names))
+                + f" (truth {gamma_true:+g}){note}"
+            )
     if "velocities" in truth:
         v_true = np.asarray(truth["velocities"], dtype=float)
         if v_true.shape == table.velocity.shape:
-            rows = {}
+            # The injected velocity of every epoch, in the order the components were
+            # compared in, so that a reader of result.json can draw the table against it.
+            out["epoch_velocities_true"] = {n: v_true[i].tolist() for i, n in enumerate(names)}
+            rows, pulls, counts = {}, {}, {}
             for i, n in enumerate(names):
+                good = table.good & np.isfinite(table.velocity[i]) & np.isfinite(table.sigma[i])
                 diff = table.velocity[i] - v_true[i]
                 if not table.absolute[i]:
-                    diff = diff - np.nanmean(diff)
-                rows[n] = float(np.sqrt(np.nanmean(diff**2)))
+                    diff = diff - np.nanmean(diff[good]) if good.any() else diff
+                rows[n] = float(np.sqrt(np.mean(diff[good] ** 2))) if good.any() else float("nan")
+                pulls[n] = (
+                    float(np.sqrt(np.mean((diff[good] / table.sigma[i][good]) ** 2)))
+                    if good.any()
+                    else float("nan")
+                )
+                counts[n] = int(good.sum())
             out["velocity_rms"] = rows
+            out["velocity_pull_rms"] = pulls
+            out["velocity_n_used"] = counts
             lines.append(
                 "  epoch velocities rms error: "
-                + ", ".join(f"{n} {r:.3f} km/s" for n, r in rows.items())
+                + ", ".join(f"{n} {r:.3f} km/s (pull rms {pulls[n]:.2f})" for n, r in rows.items())
                 + ("" if all(table.absolute) else " (after removing each zero point)")
             )
+            if fit.mode == "keplerian":
+                v_fit = np.asarray(fit.velocities())
+                if v_fit.shape == v_true.shape:
+                    kep = {}
+                    for i, n in enumerate(names):
+                        diff = v_fit[i] - v_true[i]
+                        diff = diff - np.mean(diff)  # the joint fit carries no systemic velocity
+                        kep[n] = float(np.sqrt(np.mean(diff**2)))
+                    out["velocity_rms_keplerian"] = kep
+                    lines.append(
+                        "  Keplerian velocities of the disentangling, rms error after removing "
+                        "the mean: " + ", ".join(f"{n} {r:.3f} km/s" for n, r in kep.items())
+                    )
     if "labels" in truth and match is not None:
         rows = {}
+        errors = match.errors("laplace")
         for n, labels in truth["labels"].items():
             if n not in match.labels:
                 continue
             got = match.labels[n]
             rows[n] = {k: float(got[k] - v) for k, v in labels.items() if k in got}
+            rows[n].update(
+                {
+                    f"{k}_pull": _pull(got[k] - v, errors.get(n, {}).get(k))
+                    for k, v in labels.items()
+                    if k in got
+                }
+            )
             lines.append(
                 f"  labels {n}: "
                 + ", ".join(
@@ -2255,6 +3836,41 @@ def _compare_truth(ctx: _Context, fit: Fit, table, orbit, match) -> tuple[str, d
                 )
             )
         out["labels"] = rows
+    if "light_fractions" in truth:
+        ell_true = np.asarray(truth["light_fractions"], dtype=float).reshape(-1)
+        declared = {s.name: float(s.light) for s in fit.dis.stars}
+        out["light_declared"] = {n: declared[n] - ell_true[i] for i, n in enumerate(names)}
+        lines.append(
+            "  light fractions used by the fit (minus truth): "
+            + ", ".join(
+                f"{n} {declared[n]:.3f} ({declared[n] - ell_true[i]:+.3f})"
+                for i, n in enumerate(names)
+            )
+        )
+        if match is not None:
+            fitted = dict(match.flux_ratio)
+            out["light_label_fit"] = {
+                n: float(fitted[n] - ell_true[i]) for i, n in enumerate(names) if n in fitted
+            }
+            lines.append(
+                "  light fractions measured by the label fit (minus truth): "
+                + ", ".join(
+                    f"{n} {fitted[n]:.3f} ({fitted[n] - ell_true[i]:+.3f})"
+                    for i, n in enumerate(names)
+                    if n in fitted
+                )
+            )
+    truth_spectra = _truth_spectra(truth, fit)
+    if truth_spectra is not None:
+        out["spectra"] = _compare_spectra(fit, truth_spectra, truth.get("windows"))
+        lines.append(
+            "  component spectra (rms of fit minus truth over the covered band, correlation, "
+            "pull rms against the band): "
+            + ", ".join(
+                f"{n} {v['rms']:.4f} / {v['corr']:.3f} / {v['pull_rms']:.2f}"
+                for n, v in out["spectra"].items()
+            )
+        )
     return "\n".join(lines), out
 
 
@@ -2270,7 +3886,9 @@ def _write_products(ctx: _Context, fit: Fit, table, orbit, match, posterior) -> 
 
     directory, files = ctx.directory, ctx.files
     header = f"star: {ctx.star.name}"
-    files["velocities"] = os.fspath(table.write(directory / "velocities.rv", header=header))
+    files["velocities"] = os.fspath(
+        table.write(directory / "velocities.rv", header=_velocity_header(ctx, table))
+    )
     files["velocities_csv"] = os.fspath(_write_velocity_csv(directory / "velocities.csv", table))
     spectra, std = fit.spectra(), fit.std()
     for i, name in enumerate(fit.dis.component_names):
@@ -2312,6 +3930,70 @@ def _write_products(ctx: _Context, fit: Fit, table, orbit, match, posterior) -> 
         files["posterior"] = os.fspath(directory / "posterior.npz")
 
 
+def _velocity_header(ctx: _Context, table) -> str:
+    """The header of ``velocities.rv``: the star, marked ``FAILED`` where the table is.
+
+    A reader of the file sees the refusal on the line under the format line, before any
+    row, which is the only place a reader who takes the columns and not the flags will
+    look.
+    """
+    header = f"star: {ctx.star.name}"
+    failure = _table_failure(table)
+    return header if failure is None else f"FAILED: {failure}\n{header}"
+
+
+def _write_template_table(ctx: _Context, table, purpose: str, *, unexchanged=None) -> None:
+    """Write the library-template velocity table a stage measured, as a product of its own.
+
+    The bootstrap, the light measurement and the semi-amplitude start each measure the
+    epochs against library templates at the declared starting labels before anything is
+    disentangled. That table decides the period on the search route and seeds the
+    semi-amplitudes on the others, so it is written as soon as it exists
+    (``template_velocities.rv`` and ``.csv``), whether or not the stages after it succeed.
+
+    On the search route the delivered table is the winning orbit's: the bootstrap re-assigns
+    the components at the epochs where the correlation exchanged two alike spectra
+    (:func:`_orbit_over_candidates`), so some rows carry an assignment the correlation did
+    not make. The header says so, and ``unexchanged``, the table the period search itself
+    ran on, is written beside it as ``template_velocities_unexchanged.rv`` whenever an epoch
+    was re-assigned. Without that file the period search cannot be reproduced from the
+    written products.
+    """
+    directory = ctx.directory
+    directory.mkdir(parents=True, exist_ok=True)
+    header = (
+        f"star: {ctx.star.name}\n"
+        f"purpose: {purpose}; velocities against library templates at the declared "
+        "starting labels, before the disentangling"
+    )
+    swapped = int(table.settings.get("reassigned_by_orbit", 0))
+    if swapped:
+        header += (
+            "\ncomponent assignment: the winning orbit's, not the correlation's; "
+            f"{swapped} of {table.n_epochs} epochs re-assigned"
+        )
+    ctx.files["template_velocities"] = os.fspath(
+        table.write(directory / "template_velocities.rv", header=header)
+    )
+    ctx.files["template_velocities_csv"] = os.fspath(
+        _write_velocity_csv(directory / "template_velocities.csv", table)
+    )
+    if swapped and unexchanged is not None:
+        # The period search ran on the table before the re-assignment, so that table is
+        # what reproduces the periodogram, and it is kept beside the delivered one.
+        ctx.files["template_velocities_unexchanged"] = os.fspath(
+            unexchanged.write(
+                directory / "template_velocities_unexchanged.rv",
+                header=(
+                    f"star: {ctx.star.name}\n"
+                    f"purpose: {purpose}; velocities against library templates at the declared "
+                    "starting labels, before the disentangling\n"
+                    "as measured, before the exchange: the table the period search ran on"
+                ),
+            )
+        )
+
+
 def _write_velocity_csv(path: Path, table) -> Path:
     columns = table.to_dict()
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -2351,6 +4033,8 @@ def _write_plots(ctx: _Context, fit: Fit, table, orbit, templates, posterior) ->
     def save(name: str, make) -> None:
         try:
             fig = make()
+            if fig is None:  # nothing to draw (an unmeasured table, for instance)
+                return
             path = directory / f"{name}.png"
             fig.savefig(path, dpi=130, bbox_inches="tight")
             plt.close(fig)
@@ -2411,7 +4095,10 @@ def _write_plots(ctx: _Context, fit: Fit, table, orbit, templates, posterior) ->
 
         separation = np.abs(table.velocity[0] - table.velocity[1])
         j = int(np.nanargmin(np.where(np.isfinite(separation), separation, np.inf)))
-        span = float(np.nanmax(np.abs(table.velocity))) + 40.0
+        finite = np.abs(table.velocity)[np.isfinite(table.velocity)]
+        if finite.size == 0:
+            return None
+        span = float(np.max(finite)) + 40.0
         lsf_sigma = {k: v.sigma_kms for k, v in fit.dis.lsf.items() if isinstance(v, LSF)}
         for k, v in fit.dis.lsf.items():
             if not isinstance(v, LSF):

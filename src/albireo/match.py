@@ -956,6 +956,17 @@ def match_labels(
             "macro_kms": {name: declared[name].macro_kms for name in names},
             "offset_order": offset_order,
             "dilution": dilution_kind,
+            **(
+                {
+                    "library_filled_nodes": {
+                        name: _filled_words(projected[i])
+                        for i, name in enumerate(names)
+                        if projected[i].meta.get("filled_nodes")
+                    }
+                }
+                if any(p.meta.get("filled_nodes") for p in projected)
+                else {}
+            ),
             "vmicro": {
                 name: projected[i].meta.get("vmicro", "unrecorded") for i, name in enumerate(names)
             },
@@ -1547,6 +1558,17 @@ class LabelMatch:
                 "    (a wavelength-independent dilution: weaker than a joint radius-ratio fit)"
             )
         return "\n".join(lines)
+
+
+def _filled_words(library) -> str:
+    """The library's filled nodes in one phrase, for the assumptions block."""
+    filled = library.meta.get("filled_nodes") or []
+    listed = "; ".join(
+        ", ".join(f"{k} {f[k]:g}" for k in library.label_names if k in f)
+        + f" (along {f.get('axis', '?')})"
+        for f in filled
+    )
+    return f"{len(filled)} node(s) filled by interpolation, not published: {listed}"
 
 
 def refit_draws(match: LabelMatch, draws, *, max_steps: int = 60, seed: int = 0) -> LabelMatch:

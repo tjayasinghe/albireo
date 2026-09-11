@@ -28,7 +28,7 @@ from __future__ import annotations
 import math
 import warnings
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import jax
@@ -37,7 +37,7 @@ import numpy as np
 import numpyro.distributions as dist
 
 from albireo.data import Dataset
-from albireo.forward import data_residual_zscores
+from albireo.forward import PER_EPOCH, data_residual_zscores, declared_lsf_widths
 from albireo.grids import C_KMS, LogGrid
 from albireo.inference import (
     MarginalOrbitModel,
@@ -185,7 +185,15 @@ class Between(Spec):
 
     def start(self):
         if self.start_at is not None:
-            return _as_array(self.start_at)
+            start = _as_array(self.start_at)
+            lo, hi = _as_array(self.lo), _as_array(self.hi)
+            if not bool(np.all((start > lo) & (start < hi))):
+                raise ValueError(
+                    f"start_at must lie strictly inside (lo, hi); got {self.start_at} for "
+                    f"bounds ({self.lo}, {self.hi}). A start on a bound has no valid initial "
+                    "parameters, and numpyro says only that."
+                )
+            return start
         return 0.5 * (_as_array(self.lo) + _as_array(self.hi))
 
     def upper(self) -> float:
@@ -319,6 +327,8 @@ class LSF:
     sigma_kms
         Gaussian sigma in km/s. A sequence gives one width per entry of
         ``anchors_angstrom``, which is how a wavelength-dependent LSF is declared.
+        :data:`albireo.PER_EPOCH` (see :meth:`per_epoch`) reads the width from each
+        epoch's own file instead.
     anchors_angstrom
         Wavelengths in angstrom at which ``sigma_kms`` is specified. The width is
         interpolated between them.
@@ -373,10 +383,66 @@ class LSF:
         sigma = C_KMS / (float(resolving_power) * 2.0 * math.sqrt(2.0 * math.log(2.0)))
         return cls(sigma_kms=sigma, **kwargs)
 
+    @classmethod
+    def per_epoch(cls) -> LSF:
+        """Take the width from each epoch's own file rather than from one number.
+
+        The reader records a file's resolving power on the epoch
+        (:attr:`albireo.EpochData.lsf_sigma_kms`), and this declaration models every
+        epoch at that width, so exposures at two resolving powers filed under one
+        instrument name (HARPS's high-accuracy and high-efficiency modes, for instance)
+        each get their own kernel. Every epoch of the instrument must carry a width; the
+        declaration is refused, naming the epochs, otherwise. The string
+        ``"per-epoch"`` is accepted in its place, which is how a TOML configuration
+        writes it.
+
+        Returns
+        -------
+        LSF
+        """
+        return cls(sigma_kms=PER_EPOCH)
+
+    @property
+    def is_per_epoch(self) -> bool:
+        """Whether this declaration defers to the epochs' own widths."""
+        return isinstance(self.sigma_kms, str) and self.sigma_kms == PER_EPOCH
+
     @property
     def max_sigma_kms(self) -> float:
-        """Widest declared sigma in km/s, which sets the model-grid margin."""
+        """Widest declared sigma in km/s, which sets the model-grid margin.
+
+        Raises
+        ------
+        ValueError
+            For a per-epoch declaration, whose widths live on the dataset; use
+            :meth:`Disentangler._widest_lsf`, which resolves them.
+        """
+        if self.is_per_epoch:
+            raise ValueError(
+                "a per-epoch LSF has no width of its own; its widths are the epochs' "
+                "(albireo.forward.declared_lsf_widths)"
+            )
         return float(np.max(np.atleast_1d(np.asarray(self.sigma_kms, dtype=float))))
+
+    def widths(self, dataset, key: str) -> np.ndarray:
+        """Every width this declaration puts on ``dataset``'s epochs of instrument ``key``.
+
+        Parameters
+        ----------
+        dataset
+            The epochs the declaration applies to.
+        key
+            The instrument key it is declared under.
+
+        Returns
+        -------
+        numpy.ndarray
+            The declared widths in km/s: the anchors' widths, one scalar, or the
+            distinct per-epoch widths.
+        """
+        if self.is_per_epoch:
+            return np.array(list(declared_lsf_widths(dataset, key)), dtype=float)
+        return np.atleast_1d(np.asarray(self.sigma_kms, dtype=float))
 
 
 def _coerce_lsf(value, key: str) -> LSF:
@@ -384,7 +450,12 @@ def _coerce_lsf(value, key: str) -> LSF:
         return value
     if isinstance(value, int | float):
         return LSF(sigma_kms=float(value))
-    raise TypeError(f"lsf[{key!r}] must be an LSF or a sigma in km/s; got {type(value).__name__}")
+    if isinstance(value, str) and value == PER_EPOCH:
+        return LSF.per_epoch()
+    raise TypeError(
+        f"lsf[{key!r}] must be an LSF, a sigma in km/s, or {PER_EPOCH!r}; "
+        f"got {type(value).__name__}"
+    )
 
 
 # -- the components -----------------------------------------------------------
@@ -505,8 +576,10 @@ class Orbit:
         parameterization is singular at ``e = 0``, where the gradient is NaN and numpyro
         reports only "Cannot find valid initial parameters".
     omega
-        Argument of periastron in radians. Required only when ``ecc`` is ``Fixed`` and
-        nonzero.
+        Argument of periastron in radians. Required when ``ecc`` is ``Fixed`` and
+        nonzero. With a free eccentricity, a value given here (and a ``start_at`` on the
+        eccentricity's range) is where the fit starts, as a velocity table's orbit
+        supplies it; the default start is ``e = 0.05`` at 0.5 rad.
     outer
         Outer orbit of a hierarchical triple. Its ``k`` must have two entries, for the
         inner pair and the tertiary.
@@ -659,6 +732,67 @@ def _place_hyperparameters(dis, priors: dict, init: dict) -> None:
         init["log_nebular_amp"] = jnp.zeros(n_epochs)
 
 
+def _range_bounds(spec) -> tuple[float, float] | None:
+    """The ``(lo, hi)`` of a semi-amplitude declared as a range, or ``None``.
+
+    A range is a :class:`Between`, either one per star or one component of a vector
+    :class:`Between` (``k=Between([10, 10], [90, 90])``), which :func:`_k_specs` hands out
+    as a :class:`_ScalarView`.
+    """
+    index = 0
+    if isinstance(spec, _ScalarView):
+        index, spec = spec.index, spec.spec
+    if not isinstance(spec, Between):
+        return None
+    lo = np.atleast_1d(np.asarray(spec.lo, dtype=float))
+    hi = np.atleast_1d(np.asarray(spec.hi, dtype=float))
+    return float(lo[min(index, lo.size - 1)]), float(hi[min(index, hi.size - 1)])
+
+
+def _check_noise_correlation(dis) -> None:
+    """Refuse a noise correlation that misses an instrument or is not a correlation."""
+    declared = dis.noise_correlation
+    if declared is None:
+        return
+    if isinstance(declared, Spec):
+        if isinstance(declared, Scanned | Sampled):
+            raise TypeError("noise_correlation takes Fixed, Known or Between, not a scan")
+        values = [float(v) for v in np.atleast_1d(np.asarray(declared.start(), dtype=float))]
+        if len(values) != 1:
+            raise ValueError("a fitted noise_correlation is one value shared by every epoch")
+    elif isinstance(declared, Mapping):
+        missing = sorted(set(dis.dataset.instruments) - set(declared))
+        if missing:
+            raise ValueError(
+                f"noise_correlation has no entry for instrument(s) {missing}; give one per "
+                "instrument of the dataset (0 for independent pixels)"
+            )
+        values = [float(v) for v in declared.values()]
+    else:
+        values = [float(declared)]
+    if any(not (np.isfinite(v) and -1.0 < v < 1.0) for v in values):
+        raise ValueError(
+            f"noise_correlation must lie in (-1, 1); got {declared}. It is the lag-one "
+            "correlation of each epoch's noise along its pixel index, not a variance."
+        )
+
+
+def _place_noise_correlation(dis, priors: dict, init: dict, fixed: dict) -> None:
+    """Place the ``ar1_phi`` site: fixed per epoch from a declaration, or one sampled value."""
+    declared = dis.noise_correlation
+    if declared is None:
+        return
+    if isinstance(declared, Spec):
+        distribution = declared.distribution()
+        if distribution is None:
+            fixed["ar1_phi"] = declared.start()
+        else:
+            priors["ar1_phi"] = distribution
+            init["ar1_phi"] = declared.start()
+        return
+    fixed["ar1_phi"] = jnp.asarray(dis.noise_correlation_per_epoch())
+
+
 def _check_velocities(dis, stars) -> np.ndarray:
     """Validate a ``velocities=`` declaration, refusing a table that cannot warm-start."""
     v = np.atleast_2d(np.asarray(dis.velocities, dtype=float))
@@ -684,7 +818,7 @@ def _check_velocities(dis, stars) -> np.ndarray:
             "(cross-correlation lags, or line splitting read off the two most separated "
             "epochs) rather than a placeholder."
         )
-    widest = max(_coerce_lsf(value, key).max_sigma_kms for key, value in dis.lsf.items())
+    widest = dis._widest_lsf()
     if separation < widest:
         warnings.warn(
             f"the declared velocities separate the components by at most "
@@ -804,6 +938,16 @@ class Disentangler:
     block_size
         Solver block size, passed through to
         :class:`~albireo.inference.MarginalOrbitModel`.
+    noise_correlation
+        Lag-one correlation of each epoch's noise along its pixel index, the signature of
+        a pipeline that resampled the spectra onto a common step (Gaia's RVS grids carry
+        0.27 and 0.81; :mod:`albireo.gaia` measures it). ``None`` (default) is the
+        diagonal noise model. A number, or ``{instrument: number}`` covering every
+        instrument, declares the correlation and the noise model becomes AR(1) along the
+        pixel index (:func:`albireo.forward.with_ar1`, ``docs/math.md`` §1.4a) with those
+        values held; a :class:`Between` or :class:`Known` fits one shared value instead.
+        The declared value is an assumption and is listed as one. It also reaches
+        :meth:`Fit.measure_velocities`, whose errors carry it.
 
     Raises
     ------
@@ -812,8 +956,9 @@ class Disentangler:
         is non-positive or the fractions do not sum to 1, if neither or both of ``orbit``
         and ``velocities`` are given, if more than one :class:`Telluric` or
         :class:`Nebular` component is declared, if an instrument in the dataset has no
-        LSF, or if a :class:`Telluric` or :class:`Nebular` component is declared for a
-        dataset whose wavelength medium is undeclared.
+        LSF, if a :class:`Telluric` or :class:`Nebular` component is declared for a
+        dataset whose wavelength medium is undeclared, or if a noise correlation misses
+        an instrument or lies outside ``(-1, 1)``.
     NotImplementedError
         If ``orbit.outer`` is set. Hierarchical triples are supported by
         :class:`~albireo.inference.MarginalOrbitModel` but not by this interface.
@@ -850,6 +995,7 @@ class Disentangler:
     velocity_budget_kms: float | None = None
     ecc_max: float = 0.95
     block_size: int | None = None
+    noise_correlation: Any = None
 
     # init=False so that dataclasses.replace() cannot carry a stale grid, budget or model
     # into a new declaration: replace() copies declared fields, and a cache is not one.
@@ -911,6 +1057,10 @@ class Disentangler:
                 f"{sorted(self.dataset.instruments)}; pass one entry per instrument, e.g. "
                 "lsf={'FEROS': ab.LSF.from_resolution(48_000)}."
             )
+        for key in self.dataset.instruments:
+            if _coerce_lsf(self.lsf[key], key).is_per_epoch:
+                declared_lsf_widths(self.dataset, key)  # refuses, naming undeclared epochs
+        _check_noise_correlation(self)
         # A telluric or nebular component is keyed to absolute line positions, so an
         # undeclared wavelength medium is worth a nearly constant 83 km/s.
         needs_medium = any(isinstance(c, Telluric | Nebular) for c in self.components)
@@ -1026,8 +1176,56 @@ class Disentangler:
             self.velocity_budget_kms,
         )
 
+    def _lsf_widths(self) -> dict[str, np.ndarray]:
+        """Every LSF width in play, per instrument of the dataset, resolved."""
+        return {
+            key: _coerce_lsf(self.lsf[key], key).widths(self.dataset, key)
+            for key in self.dataset.instruments
+        }
+
     def _widest_lsf(self) -> float:
-        return max(_coerce_lsf(v, k).max_sigma_kms for k, v in self.lsf.items())
+        return max(float(np.max(w)) for w in self._lsf_widths().values())
+
+    def _narrowest_lsf(self) -> float:
+        return min(float(np.min(w)) for w in self._lsf_widths().values())
+
+    def _lsf_lines(self) -> list[str]:
+        """One line per instrument for :meth:`explain`, saying where its width came from."""
+        lines = []
+        for key in self.dataset.instruments:
+            spec = _coerce_lsf(self.lsf[key], key)
+            if spec.is_per_epoch:
+                counts = {
+                    sigma: len(idx) for sigma, idx in declared_lsf_widths(self.dataset, key).items()
+                }
+                detail = ", ".join(f"{s:.3f} km/s x{n}" for s, n in counts.items())
+                lines.append(f"  LSF        {key}: per epoch, from the files ({detail})")
+            elif spec.anchors_angstrom is not None:
+                lines.append(
+                    f"  LSF        {key}: {len(spec.anchors_angstrom)} anchors, "
+                    f"{float(np.min(spec.widths(self.dataset, key))):.3f}-"
+                    f"{spec.max_sigma_kms:.3f} km/s"
+                )
+            else:
+                lines.append(f"  LSF        {key}: {spec.max_sigma_kms:.3f} km/s, declared")
+        return lines
+
+    def _noise_line(self) -> str:
+        """One line for :meth:`explain`: the noise model and where its correlation came from."""
+        declared = self.noise_correlation
+        if declared is None:
+            return "  noise      diagonal: independent pixels"
+        if isinstance(declared, Spec):
+            return (
+                "  noise      AR(1) along the pixel index, one lag-one correlation fitted "
+                "(site ar1_phi)"
+            )
+        values = self.noise_correlation_per_epoch()
+        by_instrument = {}
+        for epoch, phi in zip(self.dataset, values, strict=True):
+            by_instrument.setdefault(epoch.instrument, float(phi))
+        listed = ", ".join(f"{k} {v:.3f}" for k, v in by_instrument.items())
+        return f"  noise      AR(1) along the pixel index, lag-one correlation {listed} (declared)"
 
     def _native_dv_kms(self) -> float:
         """The finest native pixel size across the dataset, in km/s.
@@ -1114,7 +1312,21 @@ class Disentangler:
             prior=self.smoothness_prior,
             ecc_max=self.effective_ecc_max,
             block_size=self.block_size,
+            ar1=self.noise_correlation is not None,
         )
+
+    def noise_correlation_per_epoch(self) -> np.ndarray | None:
+        """The declared lag-one noise correlation of every epoch, ``(n_epochs,)``.
+
+        ``None`` when no correlation is declared, or when it is a fitted site rather than
+        a declared value.
+        """
+        declared = self.noise_correlation
+        if declared is None or isinstance(declared, Spec):
+            return None
+        if isinstance(declared, Mapping):
+            return np.array([float(declared[epoch.instrument]) for epoch in self.dataset])
+        return np.full(self.dataset.n_epochs, float(declared))
 
     def _make_specs(self):
         """``(priors, init, fixed)``, built together so their key sets cannot diverge."""
@@ -1141,6 +1353,7 @@ class Disentangler:
             )
             init["velocity"] = jnp.asarray(self.velocities)
             _place_hyperparameters(self, priors, init)
+            _place_noise_correlation(self, priors, init, fixed)
             return priors, init, fixed
 
         place("period", _coerce_spec(self.orbit.period, "orbit.period"))
@@ -1190,6 +1403,7 @@ class Disentangler:
                 place(name, spec)
 
         _place_hyperparameters(self, priors, init)
+        _place_noise_correlation(self, priors, init, fixed)
         return priors, init, fixed
 
     # -- inspection -----------------------------------------------------------
@@ -1232,6 +1446,8 @@ class Disentangler:
                 f"dv={grid.dv_kms:.3f} km/s{derived}",
                 f"  margin     {self.velocity_budget.total:.1f} km/s of shift + "
                 f"{self._widest_lsf():.2f} km/s of LSF sigma",
+                *self._lsf_lines(),
+                self._noise_line(),
                 f"  operators  {len(self.model.problem.groups)} group(s), "
                 f"half-bandwidth {self.model.half_bandwidth}",
                 "  (the bandwidth follows the budget, and the solve cost follows the "
@@ -1302,6 +1518,18 @@ class Disentangler:
                 "      unidentified: a placement convention for the window profile, not a "
                 "measurement."
             )
+        if self.noise_correlation is not None and not isinstance(self.noise_correlation, Spec):
+            values = self.noise_correlation_per_epoch()
+            by_instrument: dict[str, float] = {}
+            for epoch, phi in zip(self.dataset, values, strict=True):
+                by_instrument.setdefault(epoch.instrument, float(phi))
+            listed = "  ".join(f"{k}={v:.3f}" for k, v in by_instrument.items())
+            rows.append(
+                f"  noise correlation  {listed}\n"
+                "      the lag-one correlation of each epoch's noise along its pixels, "
+                "declared from the\n      resampling that produced the spectra rather than "
+                "measured here."
+            )
         starts = "  ".join(
             f"{name}={_smoothness_of(c).tau0:g}"
             for name, c in zip(self.component_names, self.ordered_components, strict=True)
@@ -1314,11 +1542,22 @@ class Disentangler:
 
     # -- running it -----------------------------------------------------------
 
-    def fit(self, *, max_steps: int = 300, tol: float | None = None, progress=None) -> Fit:
-        """Locate the orbit and fit it: phase scan, then MAP with empirical Bayes.
+    def fit(
+        self,
+        *,
+        max_steps: int = 300,
+        tol: float | None = None,
+        progress=None,
+        k_scan: bool | str = "auto",
+    ) -> Fit:
+        """Locate the orbit and fit it: phase scan, semi-amplitude scan, then MAP with ML-II.
 
         Runs, in order, a conjunction-phase scan over one period (unless ``t_conj`` was
-        declared), then :func:`albireo.run_map` over the orbital sites and the smoothness
+        declared), a coarse scan over every semi-amplitude declared as a range (see
+        ``k_scan``), a profile of each star's prior amplitude at the orbit located with the
+        scan repeated where that moved a start by a factor of two or more, the phase scan
+        again at the chosen semi-amplitudes, and then
+        :func:`albireo.run_map` over the orbital sites and the smoothness
         hyperparameters. With the spectra already marginalized out, optimizing the
         hyperparameters is the ML-II step. The fitted hyperparameters are returned on
         :attr:`Fit.hyper`, keyed by component name, and :meth:`Fit.sample` holds them
@@ -1341,6 +1580,22 @@ class Disentangler:
         progress
             ``callback(step, potential, grad_norm, params)``. Without one the fit produces
             no output, and a fit to real data can run for hours.
+        k_scan
+            ``"auto"`` (default) scans the marginal likelihood over a geometric grid of
+            every semi-amplitude declared as a :class:`Between` range before optimizing,
+            holding the others at their starting values, and starts L-BFGS from the best
+            trial when it beats the declared start; ``False`` skips the scan. The
+            marginal likelihood is multimodal in the semi-amplitudes as it is in phase
+            (a start at half the true value settles at half, and a start far above it in
+            the static-component minimum), and L-BFGS does not cross between the basins.
+            The grid is crossed with a grid of conjunction phases when the conjunction
+            is being scanned, since the two are coupled, and refined around the best trial
+            twice at half the spacing; among trials within a few nats of the best the one
+            honouring the declared order (the first star moving least) is taken. The
+            scans run on a copy of the declaration with the model grid at twice the pixel
+            (:meth:`_scan_declaration`), which is what makes the joint search affordable;
+            the fit itself runs on the full grid. The scan is retained on
+            :attr:`Fit.k_scan`.
 
         Returns
         -------
@@ -1354,17 +1609,92 @@ class Disentangler:
             If the period prior is wide enough to constitute a period search, which a
             conjunction-phase scan is not.
         """
+        if k_scan not in (False, True, "auto"):
+            raise ValueError(f"k_scan must be 'auto', True or False; got {k_scan!r}")
         priors, init = dict(self.priors), dict(self.init)
         scan = None
+        amplitude_scan = None
         # A free-velocity declaration has no orbit and therefore no phase to locate, so the
         # scan and the period warning are skipped.
         if self.orbit is not None:
             self._warn_if_the_period_prior_is_a_search()
+            # With a semi-amplitude to scan, every scan runs on a coarser copy of this
+            # declaration: the basin is the question, and the coarse grid answers it at a
+            # fraction of the cost. L-BFGS then runs on the full model.
+            ranged = bool(k_scan) and self._has_ranged_k()
+            scanner = self._scan_declaration() if ranged else self
             if self.orbit.t_conj == "scan":
-                scan = self._scan_phase(init)
+                scan = scanner._scan_phase(init)
                 init["t_conj"] = scan.best
+            if ranged:
+                amplitude_scan = scanner._scan_semi_amplitudes(init)
+                if amplitude_scan is not None and amplitude_scan.gain > 0.0:
+                    init["k"] = jnp.asarray(amplitude_scan.best)
+                    if self.orbit.t_conj == "scan":
+                        init["t_conj"] = amplitude_scan.best_t_conj
+                # The prior amplitude each component's spectrum is allowed, profiled at
+                # the orbit located so far: where the data want a factor of two or more
+                # from the declared start, the hyperparameter starts are moved and the
+                # scan is repeated, because a scan at the wrong amplitude prefers a
+                # static companion (see _profile_prior_amplitudes).
+                if amplitude_scan is not None:
+                    profile = scanner._profile_prior_amplitudes(init)
+                    adapted = {
+                        j: c for j, c in profile.items() if abs(math.log(c)) >= math.log(2.0)
+                    }
+                    if adapted:
+                        names = [c.name for c in self.ordered_components]
+                        log_tau = np.array(init["log_tau"], dtype=float)
+                        log_eta = np.array(init["log_eta"], dtype=float)
+                        for j, c in adapted.items():
+                            row = names.index(self.stars[j].name)
+                            log_tau[row] -= 2.0 * math.log(c)
+                            log_eta[row] -= 2.0 * math.log(c)
+                        init["log_tau"] = jnp.asarray(log_tau)
+                        init["log_eta"] = jnp.asarray(log_eta)
+                        first_best = ", ".join(
+                            f"{s.name} {k:.1f}"
+                            for s, k in zip(self.stars, amplitude_scan.best, strict=True)
+                        )
+                        words = "; ".join(
+                            f"{self.stars[j].name} by {1.0 / c**2:.3g} (light-equivalent "
+                            f"{c * self.stars[j].light:.3f} against the declared "
+                            f"{self.stars[j].light:.3f})"
+                            for j, c in adapted.items()
+                        )
+                        second = scanner._scan_semi_amplitudes(init)
+                        if second is not None:
+                            amplitude_scan = replace(
+                                second,
+                                prior_scales={
+                                    self.stars[j].name: float(1.0 / c**2)
+                                    for j, c in adapted.items()
+                                },
+                                notes=(
+                                    f"prior amplitude precision adapted, {words}; the first "
+                                    f"scan had ended at {first_best} km/s and was repeated",
+                                    *second.notes,
+                                ),
+                            )
+                            if second.gain > 0.0:
+                                init["k"] = jnp.asarray(second.best)
+                                if self.orbit.t_conj == "scan":
+                                    init["t_conj"] = second.best_t_conj
+                if amplitude_scan is not None and amplitude_scan.gain > 0.0:
+                    if self.orbit.t_conj == "scan":
+                        # The joint scan located the phase coarsely; the fine phase scan
+                        # at the chosen semi-amplitudes settles it.
+                        scan = scanner._scan_phase(init)
+                        init["t_conj"] = scan.best
+            if scan is not None:
+                # One period wide, centred on the conjunction the fit starts from rather than
+                # on the phase scan's best: the semi-amplitude scan may have moved the start
+                # half a period on, at semi-amplitudes the phase scan did not have, without
+                # the fine phase scan running after it, and a start on the window's edge has
+                # an infinite unconstrained coordinate (D63).
+                centre = float(np.asarray(init["t_conj"], dtype=float))
                 priors["t_conj"] = dist.Uniform(
-                    scan.best - 0.5 * scan.period, scan.best + 0.5 * scan.period
+                    centre - 0.5 * scan.period, centre + 0.5 * scan.period
                 )
         if tol is None:
             # The potential's scale grows with the number of good pixels, so a fixed
@@ -1388,6 +1718,7 @@ class Disentangler:
             phase_scan=scan,
             mode="keplerian" if self.orbit is not None else "velocity",
             priors_used=priors,
+            k_scan=amplitude_scan,
         )
 
     def _warn_if_the_period_prior_is_a_search(self) -> None:
@@ -1417,23 +1748,356 @@ class Disentangler:
                 stacklevel=3,
             )
 
+    def _profile_prior_amplitudes(
+        self, init, *, ratio: float = 2.0, span: float = 16.0
+    ) -> dict[int, float]:
+        """Profile the marginal likelihood over each star's light-equivalent amplitude.
+
+        The observed spectrum depends on a component only through the product of its
+        light fraction and its deviation spectrum, and the deviation carries a Gaussian
+        prior of precision ``tau C + eta I``, so the marginal likelihood is exactly
+        invariant under scaling the light by ``c`` and both hyperparameters by ``c``
+        squared (D63: to 5e-10 nats). A profile over the light at fixed hyperparameters
+        is therefore a profile over the prior amplitude the data want for that component,
+        not a measurement of its flux fraction (on four benchmark systems it sat at 0.3 to
+        0.7 of the injected fraction). It is nonetheless what a scan needs: a companion
+        declared at six times its light, with the hyperparameters at their starts, made
+        the coarse scan prefer a static secondary by 43 nats, and the profile rejected the
+        declared amplitude by 150 nats at that very orbit.
+
+        For each star in turn the light in ``theta`` is scaled by ``c`` over a geometric
+        grid from ``1/span`` to ``span`` at ``ratio`` between neighbours (the scaled
+        fraction kept below 0.98), the other stars and every other site where ``init``
+        puts them, and the ``c`` with the highest marginal log-likelihood is returned.
+        Nine evaluations per star through the compiled marginal.
+        """
+        theta = {k: jnp.asarray(v) for k, v in init.items()}
+        theta.update({k: jnp.asarray(v) for k, v in self.fixed.items()})
+        lights = np.array([s.light for s in self.stars], dtype=float)
+        n = max(3, math.ceil(2.0 * math.log(span) / math.log(ratio)) + 1)
+        grid = np.geomspace(1.0 / span, span, n)
+        grid = np.unique(np.concatenate([grid, [1.0]]))
+        out: dict[int, float] = {}
+        for j in range(self.n_stellar):
+            trials = grid[grid * lights[j] <= 0.98]
+            values = []
+            for c in trials:
+                scaled = lights.copy()
+                scaled[j] = c * lights[j]
+                values.append(
+                    float(self.model.log_likelihood({**theta, "light": jnp.asarray(scaled)}))
+                )
+            values = np.asarray(values)
+            if not np.isfinite(values).any():
+                out[j] = 1.0
+                continue
+            out[j] = float(trials[int(np.argmax(np.where(np.isfinite(values), values, -np.inf)))])
+        return out
+
     def _scan_phase(self, init) -> PhaseScan:
-        """Locate conjunction on a 41-point grid over one period, before optimizing.
+        """Locate conjunction on a 42-point grid over one period, before optimizing.
+
+        The trials are ``min(bjd) + linspace(0, P, 42, endpoint=False)``, one period long
+        and equally spaced. The count is even so that the grid holds the antipode of every
+        trial it samples: trial ``i`` and trial ``i + 21`` are half a period apart. For a
+        near-equal pair the marginal likelihood in phase is near-mirror-symmetric under a
+        shift of half a period, so the scan can only choose between the two mirrors if both
+        are on the grid. An odd count leaves every antipode midway between two trials, and
+        on one benchmark star the unsampled antipode was better by 672 nats (D63).
 
         The marginal likelihood is sharply multimodal in phase, and L-BFGS does not cross
         between the troughs.
         """
         declared = init.get("period", self.fixed.get("period"))
         period = float(np.max(np.atleast_1d(np.asarray(declared))))
-        trials = float(np.min(self.dataset.bjd)) + np.linspace(0.0, period, 41, endpoint=False)
+        trials = float(np.min(self.dataset.bjd)) + np.linspace(0.0, period, 42, endpoint=False)
         theta = {k: jnp.asarray(v) for k, v in init.items()}
         theta.update({k: jnp.asarray(v) for k, v in self.fixed.items()})
+        # One evaluation per trial through the already-compiled marginal rather than a
+        # batched sweep: a 42-wide sweep is one more large XLA compile per model shape,
+        # and on Windows a long session of compiles has ended in a heap corruption inside
+        # the compiler (D62); the loop compiles nothing new.
         values = []
         for t in trials:
             theta["t_conj"] = jnp.asarray(float(t))
             values.append(float(self.model.log_likelihood(theta)))
         best = float(trials[int(np.argmax(values))])
         return PhaseScan(period=period, trials=trials, values=np.asarray(values), best=best)
+
+    def _scan_declaration(self) -> Disentangler:
+        """This declaration on a model grid twice as coarse, for the scans that precede a fit.
+
+        A scan asks which basin holds the maximum, not where within it. The grid at twice
+        the pixel halves the pixel count and the solver bandwidth, and a marginal solve
+        costs a quarter to an eighth of the full model's, which is what makes a joint scan
+        over the semi-amplitudes and the phase affordable.
+        """
+        return replace(self, dv_kms=2.0 * float(self.grid.dv_kms))
+
+    def _has_ranged_k(self) -> bool:
+        if self.orbit is None:
+            return False
+        return any(_range_bounds(s) is not None for s in _k_specs(self.orbit, self.n_stellar))
+
+    def _scan_semi_amplitudes(
+        self,
+        init,
+        *,
+        ratio: float = 1.25,
+        n_phases: int = 8,
+        levels: int = 2,
+        max_trials: int = 1024,
+        tie_nats: float = 5.0,
+        hold_nats: float = 25.0,
+        indifferent_nats: float = 5.0,
+    ) -> SemiAmplitudeScan | None:
+        """Scan the marginal likelihood over the ranged semi-amplitudes, and the phase.
+
+        The axes are scanned one at a time rather than as a product. The first ranged
+        component (declared first, so the brighter or heavier star) crosses a geometric
+        grid over its range (2 percent inside either bound, ``ratio`` between neighbours,
+        coarsened until the level fits ``max_trials``) with ``n_phases`` conjunctions over
+        one period, or with the single conjunction ``init`` carries when it was declared,
+        the other components held at their starting values; each further ranged
+        component then crosses its own grid at the semi-amplitudes and conjunction located
+        so far. Each of ``levels`` refinements halves the spacings around the best trial,
+        three values per axis, jointly over the ranged components and the phase. A final
+        pass takes each component once more over its whole grid at the refined best, and
+        two more refinements follow if that moved anything. Among the trials within
+        ``tie_nats`` of the best, the one honouring the declared order (semi-amplitudes
+        non-decreasing) is taken, and with two ranged components the exchange-symmetric
+        twin of the best (the semi-amplitudes swapped, the conjunction half a period on)
+        is tried for the same reason. ``None`` when no semi-amplitude is a range.
+
+        The sequence follows from a measurement (D63). A companion of a few percent of the
+        light commands some 25 nats over its whole range and prefers its true
+        semi-amplitude only while the primary's is within about 10 percent of the truth,
+        whereas the primary's own peak falls by 50 nats within 20 percent: on a product
+        grid at ratio 2 no trial holds the primary close enough for the companion's
+        evidence to point the right way, and a local refinement cannot carry the companion
+        out of the basin it was placed in. The phase is scanned with the first component
+        because the two are coupled: a phase located at a semi-amplitude a factor of three
+        off can sit a quarter of a period from the truth.
+
+        Two guards keep a scan on a coarse model of the wrong shape (a free eccentricity
+        starts near circular, the grid is twice the pixel) from doing harm. A best trial
+        with every ranged semi-amplitude at the floor of its grid is the static-component
+        minimum, which a wrong phase or eccentricity makes preferable to any moving pair;
+        it is not a start, and the declared start is kept. And the start moves only when
+        the best trial beats it by more than ``hold_nats`` jointly, because the moves are
+        joint: the same companion's move, tested one component at a time, decomposed into
+        two holds of 15 nats each and was refused. A component whose own move is worth
+        less than ``indifferent_nats``, with the others at the scan's best, returns to its
+        start, the data being indifferent and a template table the better guess. The hold
+        losses are recorded either way.
+        """
+        specs = _k_specs(self._require_orbit(), self.n_stellar)
+        ranges = {i: _range_bounds(s) for i, s in enumerate(specs)}
+        ranged = [i for i, r in ranges.items() if r is not None]
+        if not ranged:
+            return None
+        start = np.atleast_1d(np.asarray(init["k"], dtype=float))
+        bounds: dict[int, tuple[float, float]] = {}
+        for i in ranged:
+            lo, hi = ranges[i]
+            inner = (lo + 0.02 * (hi - lo), hi - 0.02 * (hi - lo))
+            bounds[i] = (max(inner[0], 1e-3 * hi), inner[1])
+        declared = init.get("period", self.fixed.get("period"))
+        period = float(np.max(np.atleast_1d(np.asarray(declared))))
+        t_conj = float(np.asarray(init.get("t_conj", self.fixed.get("t_conj")), dtype=float))
+        scanning_phase = self.orbit.t_conj == "scan"
+        theta = {k: jnp.asarray(v) for k, v in init.items()}
+        theta.update({k: jnp.asarray(v) for k, v in self.fixed.items()})
+        theta["t_conj"] = jnp.asarray(t_conj)
+        history: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
+
+        def evaluate(k_trials, t_trials):
+            # Batches of sixteen keep the compiled sweep small; the trials are hundreds.
+            sweep = {"k": jnp.asarray(k_trials), "t_conj": jnp.asarray(t_trials)}
+            values = self.model.log_likelihood_sweep(theta, sweep, batch_size=16)
+            return np.asarray(values, dtype=float)
+
+        def value_at(k, t):
+            at = {**theta, "k": jnp.asarray(k), "t_conj": jnp.asarray(float(t))}
+            return float(self.model.log_likelihood(at))
+
+        def ordered(k_trials):
+            # Components are declared in order of decreasing mass, so the first moves
+            # least; a trial honours that order when its semi-amplitudes do not decrease.
+            return np.all(np.diff(k_trials, axis=1) >= 0.0, axis=1)
+
+        def choose(k_trials, values):
+            # Among the trials the data cannot tell apart, the one honouring the order.
+            finite = np.isfinite(values)
+            top = float(np.max(values[finite]))
+            near = finite & (values >= top - tie_nats)
+            candidates = np.flatnonzero(near & ordered(k_trials))
+            if candidates.size == 0:
+                candidates = np.flatnonzero(near)
+            return int(candidates[np.argmax(values[candidates])])
+
+        def trials(k_grid, phases):
+            k_all = np.repeat(k_grid, len(phases), axis=0)
+            t_all = np.tile(np.asarray(phases, dtype=float), k_grid.shape[0])
+            return k_all, t_all
+
+        def axis_of(i, r):
+            lo, hi = bounds[i]
+            return np.geomspace(lo, hi, max(3, math.ceil(math.log(hi / lo) / math.log(r)) + 1))
+
+        n_first = n_phases if scanning_phase else 1
+        while True:
+            axes = {i: axis_of(i, ratio) for i in ranged}
+            n_level = len(axes[ranged[0]]) * n_first + sum(len(axes[i]) for i in ranged[1:])
+            if n_level <= max_trials:
+                break
+            ratio *= 1.2
+
+        def sweep(i, at_k, phases):
+            # One component over its whole grid, the others where they stand.
+            k_grid = np.repeat(at_k[None, :], len(axes[i]), axis=0)
+            k_grid[:, i] = axes[i]
+            k_all, t_all = trials(k_grid, phases)
+            values = evaluate(k_all, t_all)
+            history.append((k_all, t_all, values))
+            return k_all, t_all, values
+
+        def argmax(values):
+            return int(np.argmax(np.where(np.isfinite(values), values, -np.inf)))
+
+        # Level 0: the first ranged component with the phase, then each further one at
+        # what has been located so far.
+        best_k, best_t, best_value = start.copy(), t_conj, -math.inf
+        for n, i in enumerate(ranged):
+            phases = (
+                t_conj + np.arange(n_phases) * period / n_phases
+                if n == 0 and scanning_phase
+                else np.array([best_t])
+            )
+            k_all, t_all, values = sweep(i, best_k, phases)
+            if not np.isfinite(values).any():
+                if n == 0:
+                    return None
+                continue
+            chosen = argmax(values)
+            best_k, best_t = k_all[chosen].copy(), float(t_all[chosen])
+            best_value = float(values[chosen])
+
+        t_step = period / n_phases if scanning_phase else 0.0
+
+        def refine(k_step, t_step):
+            nonlocal best_k, best_t, best_value
+            axes_fine = []
+            for i in ranged:
+                lo, hi = bounds[i]
+                centre = math.log(best_k[i])
+                offsets = centre + k_step * np.array([-1.0, 0.0, 1.0])
+                axes_fine.append(np.exp(np.clip(offsets, math.log(lo), math.log(hi))))
+            mesh = np.meshgrid(*axes_fine, indexing="ij")
+            k_grid = np.repeat(best_k[None, :], mesh[0].size, axis=0)
+            k_grid[:, ranged] = np.stack([m.ravel() for m in mesh], axis=1)
+            phases = (
+                best_t + t_step * np.array([-1.0, 0.0, 1.0])
+                if scanning_phase
+                else np.array([best_t])
+            )
+            k_all, t_all = trials(k_grid, phases)
+            values = evaluate(k_all, t_all)
+            history.append((k_all, t_all, values))
+            if np.isfinite(values).any():
+                chosen = choose(k_all, values)
+                if float(values[chosen]) >= best_value:
+                    best_k, best_t = k_all[chosen].copy(), float(t_all[chosen])
+                    best_value = float(values[chosen])
+
+        k_step = math.log(ratio)
+        for _ in range(levels):
+            k_step /= 2.0
+            t_step /= 2.0
+            refine(k_step, t_step)
+
+        # The full-axis pass: a component placed in the wrong basin at level 0, while
+        # another was still far from its value, gets its whole grid once more at the
+        # refined best; a move is followed by two refinements of its own.
+        moved = False
+        for i in ranged:
+            k_all, _, values = sweep(i, best_k, np.array([best_t]))
+            if np.isfinite(values).any():
+                chosen = argmax(values)
+                if float(values[chosen]) > best_value:
+                    best_k, best_value = k_all[chosen].copy(), float(values[chosen])
+                    moved = True
+        if moved:
+            refine(math.log(ratio) / 2.0, t_step)
+            refine(math.log(ratio) / 4.0, t_step)
+
+        if len(ranged) == 2 and scanning_phase:
+            # The exchange-symmetric twin of the best: the two semi-amplitudes swapped and
+            # the conjunction half a period on fit alike components equally well, and the
+            # tie goes to the declared order.
+            a, b = ranged
+            swapped = best_k.copy()
+            swapped[a], swapped[b] = best_k[b], best_k[a]
+            t_swapped = best_t + 0.5 * period
+            value = value_at(swapped, t_swapped)
+            history.append((swapped[None, :], np.array([t_swapped]), np.array([value])))
+            if (
+                np.isfinite(value)
+                and value >= best_value - tie_nats
+                and bool(ordered(swapped[None, :])[0])
+                and not bool(ordered(best_k[None, :])[0])
+            ):
+                best_k, best_t, best_value = swapped, t_swapped, float(value)
+
+        start_value = float(self.model.log_likelihood({**theta, "k": jnp.asarray(start)}))
+        notes: list[str] = []
+        hold_losses: dict[int, float] = {}
+        floor = np.array([bounds[i][0] for i in ranged])
+        if np.all(np.isclose(best_k[ranged], floor)):
+            notes.append(
+                "every ranged semi-amplitude of the best trial sits at the floor of its grid, "
+                "the static-component minimum; the declared start is kept"
+            )
+            best_k, best_t, best_value = start.copy(), t_conj, start_value
+        elif best_value - start_value < hold_nats:
+            notes.append(
+                f"the best trial beats the start by {best_value - start_value:.1f} nats, "
+                f"below {hold_nats:g}; the declared start is kept"
+            )
+            best_k, best_t, best_value = start.copy(), t_conj, start_value
+        else:
+            # The move is taken jointly; a component the data are indifferent to, with the
+            # others at the scan's best, goes back to its start.
+            held_theta = {**theta, "t_conj": jnp.asarray(best_t)}
+            for i in ranged:
+                if np.isclose(best_k[i], start[i]) or not (
+                    bounds[i][0] <= start[i] <= bounds[i][1]
+                ):
+                    continue
+                held = best_k.copy()
+                held[i] = start[i]
+                value = float(self.model.log_likelihood({**held_theta, "k": jnp.asarray(held)}))
+                hold_losses[i] = best_value - value
+                if hold_losses[i] < indifferent_nats:
+                    best_k = held
+                    best_value = value
+                    notes.append(
+                        f"component {i} kept at its start of {start[i]:.1f} km/s: holding it "
+                        f"there costs {hold_losses[i]:.1f} nats, below {indifferent_nats:g}"
+                    )
+        return SemiAmplitudeScan(
+            k=np.concatenate([h[0] for h in history]),
+            t_conj=np.concatenate([h[1] for h in history]),
+            values=np.concatenate([h[2] for h in history]),
+            best=best_k,
+            best_t_conj=best_t,
+            best_value=best_value,
+            start=start.copy(),
+            start_value=start_value,
+            dv_kms=float(self.grid.dv_kms),
+            hold_losses={int(i): float(v) for i, v in hold_losses.items()},
+            notes=tuple(notes),
+        )
 
     # -- the SB1 workflow -----------------------------------------------------
 
@@ -1640,6 +2304,122 @@ class PhaseScan:
 
 
 @dataclass(frozen=True)
+class SemiAmplitudeScan:
+    """The coarse semi-amplitude scan run before optimizing, retained for inspection.
+
+    Attributes
+    ----------
+    k
+        Trial semi-amplitudes, ``(n_trials, n_stellar)`` km/s: each component declared as
+        a range over its geometric grid in turn, the others where they stood, then the
+        joint refinements, the full-axis pass and the exchange check, in that order.
+    t_conj
+        The conjunction each trial was evaluated at, ``(n_trials,)``.
+    values
+        Marginal log-likelihood at each trial, in nats.
+    best, best_t_conj, best_value
+        The chosen trial: semi-amplitudes ``(n_stellar,)`` in km/s, its conjunction, and
+        its log-likelihood.
+    start, start_value
+        The semi-amplitudes the declaration started from, and the log-likelihood there at
+        the located conjunction.
+    dv_kms
+        The model-grid pixel of the declaration the scan ran on, which is coarser than
+        the fit's.
+    hold_losses
+        Per ranged component (by index), the nats lost by holding it at its start with the
+        others at the scan's best: the evidence each component's own move rests on, once
+        the joint move has been taken.
+    prior_scales
+        Per star (by name), the factor applied to the starting precision of its smoothness
+        prior (``tau`` and ``eta``) before the scan was repeated, when the profile over the
+        light-equivalent amplitude asked for a factor of two or more; empty otherwise.
+    notes
+        What the guards did: a best trial at the static minimum refused, a joint gain too
+        small to move the start, a component the data are indifferent to kept at its start;
+        and, first, the prior amplitude adaptation when the scan was repeated.
+    """
+
+    k: np.ndarray
+    t_conj: np.ndarray
+    values: np.ndarray
+    best: np.ndarray
+    best_t_conj: float
+    best_value: float
+    start: np.ndarray
+    start_value: float
+    dv_kms: float | None = None
+    hold_losses: dict = field(default_factory=dict)
+    notes: tuple = ()
+    prior_scales: dict = field(default_factory=dict)
+
+    @property
+    def n_trials(self) -> int:
+        """How many trials were evaluated."""
+        return int(self.values.size)
+
+    @property
+    def gain(self) -> float:
+        """Nats gained over the declared start; the fit keeps the start unless this is positive."""
+        return float(self.best_value - self.start_value)
+
+    @property
+    def contrast(self) -> float:
+        """Marginal log-likelihood difference in nats between the best and worst trial."""
+        finite = self.values[np.isfinite(self.values)]
+        return float(np.max(finite) - np.min(finite))
+
+
+def _default_v_range(fitted: np.ndarray, templates, margin: float = 40.0):
+    """One correlation search window per template, all covering the same velocities.
+
+    :func:`albireo.todcor` searches the shift of each template's own rest frame and
+    reports it composed with that template's ``v_zero_kms``, so a single ``(lo, hi)``
+    pair searches a different interval of *reported* velocity for every component whose
+    zero point differs. The windows are therefore offset by each template's zero point
+    relative to the median of them, which leaves one common interval of reported
+    velocity: the span of the fitted velocities widened by ``margin`` at each end, moved
+    to the median zero point. Templates whose zero point is unknown are placed at zero,
+    which is the frame the fitted velocities are already in.
+
+    The zero points come from a label match, which measures each component's frame
+    separately (``docs/math.md`` §9); when two of them disagree by more than the fitted
+    velocities span, no interval of reported velocity holds every component's own
+    velocities, and searching one anyway measures nothing. That is refused here rather
+    than reported as a table of velocities pinned to the edge of the search.
+    """
+    fitted = np.asarray(fitted, dtype=np.float64)
+    zeros = np.array([0.0 if t.v_zero_kms is None else float(t.v_zero_kms) for t in templates])
+    offsets = zeros - float(np.median(zeros))
+    lo, hi = float(fitted.min()) - margin, float(fitted.max()) + margin
+    paired = fitted.ndim == 2 and fitted.shape[0] == len(templates)
+    ranges = []
+    for i, template in enumerate(templates):
+        own = fitted[i] if paired else fitted
+        low, high = lo - offsets[i], hi - offsets[i]
+        short = max(low - float(own.min()), float(own.max()) - high)
+        if short > 0.0:
+            declared = ", ".join(
+                f"{t.name}={z:+.3f}" for t, z in zip(templates, zeros, strict=True)
+            )
+            raise ValueError(
+                f"component {template.name!r}: the default search window "
+                f"({low:+.3f}, {high:+.3f}) km/s misses its own fitted velocities "
+                f"({float(own.min()):+.3f} to {float(own.max()):+.3f} km/s) by "
+                f"{short:.3f} km/s. The windows are one common interval of reported "
+                f"velocity, offset by each template's zero point ({declared} km/s), and "
+                "these zero points disagree by more than the fitted velocities span, so "
+                "no such interval holds every component. Pass v_range=[(lo, hi), ...], "
+                "one pair per template in that template's own frame, if the zero points "
+                "are right; if they are not (a label fit pinned at the edge of its "
+                "frame-offset scan is the usual cause), drop them with "
+                "Template(..., v_zero_kms=None) and read the velocities as differential."
+            )
+        ranges.append((low, high))
+    return ranges
+
+
+@dataclass(frozen=True)
 class Fit:
     """A MAP fit, its ML-II hyperparameters, and the quantities derived from them.
 
@@ -1665,6 +2445,10 @@ class Fit:
         The priors the fit was run under. Retained because they are not recoverable from
         the declaration once the Keplerian has been replaced by a free velocity table,
         and a Laplace covariance is meaningful only against the model it came from.
+    k_scan
+        The :class:`SemiAmplitudeScan` run before optimization, or ``None`` when no
+        semi-amplitude was a range, the scan was switched off, or the fit is in
+        ``"velocity"`` mode.
     """
 
     dis: Disentangler
@@ -1673,6 +2457,7 @@ class Fit:
     phase_scan: PhaseScan | None = None
     mode: str = "keplerian"
     priors_used: dict = field(default_factory=dict, repr=False)
+    k_scan: SemiAmplitudeScan | None = None
 
     @property
     def params(self) -> dict:
@@ -1787,6 +2572,22 @@ class Fit:
         )
         return np.asarray(relative_velocity_errors(covariance, self.result.unconstrained))
 
+    def noise_correlation(self) -> dict[str, float] | None:
+        """The lag-one noise correlation per instrument, as declared or as fitted.
+
+        ``None`` under the diagonal noise model. A fitted correlation is the MAP value of
+        the ``ar1_phi`` site, shared by every instrument.
+        """
+        declared = self.dis.noise_correlation
+        if declared is None:
+            return None
+        instruments = list(self.dis.dataset.instruments)
+        if isinstance(declared, Spec):
+            return dict.fromkeys(instruments, float(np.asarray(self.theta["ar1_phi"])))
+        if isinstance(declared, Mapping):
+            return {name: float(declared[name]) for name in instruments}
+        return dict.fromkeys(instruments, float(declared))
+
     def marginal(self):
         """The conditional solve at the MAP: spectra, precision, and log-likelihood."""
         return self.dis.model.marginal(self.theta)
@@ -1851,6 +2652,22 @@ class Fit:
                 f"  conjunction scan: t_conj = {self.phase_scan.best:.5f}, "
                 f"{self.phase_scan.contrast:.3g} nats between the best and worst phase"
             )
+        if self.k_scan is not None:
+            names = [s.name for s in self.dis.stars]
+            chosen = ", ".join(f"{n} {k:.1f}" for n, k in zip(names, self.k_scan.best, strict=True))
+            started = ", ".join(f"{k:.1f}" for k in self.k_scan.start)
+            outcome = (
+                f"started from it, {self.k_scan.gain:+.3g} nats over the declared start ({started})"
+                if self.k_scan.gain > 0.0
+                else f"the declared start ({started}) was better by {-self.k_scan.gain:.3g} "
+                "nats and was kept"
+            )
+            lines.append(
+                f"  semi-amplitude scan: best of {self.k_scan.n_trials} trials at {chosen} km/s; "
+                + outcome
+            )
+            for note in self.k_scan.notes:
+                lines.append(f"    {note}")
         lines.append("")
         if self.mode == "keplerian":
             params = self.orbit()
@@ -1965,8 +2782,11 @@ class Fit:
         fixed = self._fixed_hyper()
         priors = {k: v for k, v in self.dis.priors.items() if k not in fixed}
         if self.phase_scan is not None:
-            best, period = self.phase_scan.best, self.phase_scan.period
-            priors["t_conj"] = dist.Uniform(best - 0.5 * period, best + 0.5 * period)
+            # One period wide, centred on the fitted conjunction (the MAP may sit half a
+            # period from the phase scan's best when the semi-amplitude scan moved it).
+            centre = float(np.asarray(self.result.params["t_conj"], dtype=float))
+            period = self.phase_scan.period
+            priors["t_conj"] = dist.Uniform(centre - 0.5 * period, centre + 0.5 * period)
         nuts_model = self.dis.model.model(priors, fixed=fixed)
 
         start = {k: v for k, v in self.result.params.items() if k in priors}
@@ -2217,10 +3037,7 @@ class Fit:
         from albireo.todcor import Template
 
         grid = self.dis.grid
-        narrowest = min(
-            float(np.min(np.atleast_1d(np.asarray(_coerce_lsf(v, k).sigma_kms, dtype=float))))
-            for k, v in self.dis.lsf.items()
-        )
+        narrowest = self.dis._narrowest_lsf()
         factor = max(1, math.ceil(pixels_per_sigma * grid.dv_kms / narrowest))
         fine = LogGrid(
             x0=grid.x0,
@@ -2269,14 +3086,27 @@ class Fit:
             Defaults to the declared fractions when the templates are this fit's own, and
             to ``"global"`` otherwise.
         v_range
-            Search range in km/s. Defaults to the span of the fitted velocities widened by
-            40 km/s at each end.
+            Search range in km/s, one ``(lo, hi)`` pair or one per template. It defaults
+            to the span of the fitted velocities widened by 40 km/s at each end, offset
+            per template by that template's zero point relative to the median of them, so
+            that every component searches the same interval of *reported* velocity: the
+            range is in each template's own frame, and a template carrying a zero point
+            reports its velocities composed with it. Templates whose zero points disagree
+            by more than the fitted velocities span admit no such interval, and that is
+            raised rather than searched.
+
         **kwargs
             Passed to :func:`albireo.todcor`.
 
         Returns
         -------
         albireo.todcor.VelocityTable
+
+        Raises
+        ------
+        ValueError
+            If ``v_range`` is left to the default and the templates' zero points put the
+            implied window off one component's own fitted velocities.
 
         References
         ----------
@@ -2289,9 +3119,9 @@ class Fit:
             templates = self.templates()
         if light is None:
             light = [s.light for s in self.dis.stars] if own else "global"
+        kwargs.setdefault("noise_correlation", self.noise_correlation())
         if v_range is None:
-            fitted = np.asarray(self.velocities())
-            v_range = (float(fitted.min()) - 40.0, float(fitted.max()) + 40.0)
+            v_range = _default_v_range(np.asarray(self.velocities()), templates)
         lsf_sigma, anchors = {}, {}
         for key, value in self.dis.lsf.items():
             spec = _coerce_lsf(value, key)
@@ -2576,11 +3406,18 @@ def _ecc_sites(orbit: Orbit, ecc_max: float, suffix: str = "") -> list[tuple[str
         # The declared bound is enforced by the model's disk factor instead, which is what
         # effective_ecc_max provides: without it, ecc=Between(0, 0.08) admits e = 0.16.
         limit = math.sqrt(hi)
-        # Started at e = 0.05, omega = 0.5 rad: small, but not the singular origin.
-        start = math.sqrt(0.05)
+        # Started at e = 0.05, omega = 0.5 rad unless the declaration says where: small,
+        # but not the singular origin. A start from a velocity table's orbit spares the
+        # scans a circular model of an eccentric orbit.
+        e_start = 0.05 if ecc.start_at is None else float(np.asarray(ecc.start_at, dtype=float))
+        e_start = min(max(e_start, 0.01), 0.95 * hi) if hi > 0.0 else 0.0
+        omega = 0.5
+        if orbit.omega is not None:
+            omega = float(np.asarray(_coerce_spec(orbit.omega, "orbit.omega").start(), dtype=float))
+        start = math.sqrt(e_start)
         return [
-            (f"secosw{suffix}", Between(-limit, limit, start * math.cos(0.5))),
-            (f"sesinw{suffix}", Between(-limit, limit, start * math.sin(0.5))),
+            (f"secosw{suffix}", Between(-limit, limit, start * math.cos(omega))),
+            (f"sesinw{suffix}", Between(-limit, limit, start * math.sin(omega))),
         ]
     raise TypeError(f"orbit.ecc must be Fixed or Between; got {type(ecc).__name__}")
 

@@ -14,6 +14,8 @@ the air/vacuum measurement is exercised on spectra built with a known convention
 import dataclasses
 import gzip
 import io
+import urllib.error
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -554,10 +556,150 @@ def offline_registry(monkeypatch, tmp_path):
     return entry, calls
 
 
+@pytest.fixture
+def gapped_registry(monkeypatch, tmp_path):
+    """A BOSZ-shaped library with one interior node unpublished (the archive answers 404)."""
+    monkeypatch.setenv("ALBIREO_DATA_DIR", str(tmp_path))
+    wave = np.linspace(4000.0, 7000.0, 400)
+    entry = dataclasses.replace(
+        lib_mod._LIBRARIES["bosz2024-fgk-r20000"],
+        name="gapped-grid",
+        axes={"teff": [5000.0, 5250.0], "logg": [4.0, 4.5], "mh": [0.0, 0.25, 0.5]},
+        download_mb=1.0,
+    )
+    monkeypatch.setitem(lib_mod._LIBRARIES, "gapped-grid", entry)
+    fixed = entry.fixed
+    gap = lib_mod._bosz_url(
+        5000.0,
+        4.0,
+        0.25,
+        alpha=fixed["alpha"],
+        carbon=fixed["carbon"],
+        vmicro=fixed["vmicro"],
+        resolution=int(fixed["resolution"]),
+    )
+    corner = lib_mod._bosz_url(
+        5250.0,
+        4.5,
+        0.5,
+        alpha=fixed["alpha"],
+        carbon=fixed["carbon"],
+        vmicro=fixed["vmicro"],
+        resolution=int(fixed["resolution"]),
+    )
+    calls: list[str] = []
+
+    def fake_download(url, destination, attempts=4):
+        calls.append(url)
+        if url in (gap, corner):
+            raise urllib.error.HTTPError(url, 404, "not found", {}, None)
+        if url.endswith(".txt"):
+            destination.write_text("\n".join(f"{w:.7e}" for w in wave))
+        else:
+            destination.write_bytes(_fake_bosz_shard(wave.size, seed=len(calls)))
+
+    monkeypatch.setattr(lib_mod, "_download_with_retries", fake_download)
+    return entry, calls
+
+
+def test_a_bracketed_gap_is_filled_and_an_unbracketed_one_dropped(gapped_registry):
+    """The interior gap keeps the box a box; the corner, with no neighbours across it, goes."""
+    library = ab.fetch_library("gapped-grid", progress=False)
+    # Twelve nodes requested, two unpublished: the interior one filled, the corner dropped.
+    assert library.n_nodes == 11
+    assert library.meta["n_missing"] == 2
+    assert library.meta["n_filled"] == 1 and library.meta["n_dropped"] == 1
+    (filled,) = library.meta["filled_nodes"]
+    assert (filled["teff"], filled["logg"], filled["mh"]) == (5000.0, 4.0, 0.25)
+    assert filled["axis"] == "mh" and filled["weight"] == pytest.approx(0.5)
+    assert filled["between"] == [[5000.0, 4.0, 0.0], [5000.0, 4.0, 0.5]]
+    assert "filled_note" in library.meta and "missing_note" in library.meta
+    assert "filled" in library.summary() and "1 node(s) by interpolation" in library.summary()
+
+    def row(teff, logg, mh):
+        hits = np.flatnonzero(
+            (library.nodes[:, 0] == teff)
+            & (library.nodes[:, 1] == logg)
+            & (library.nodes[:, 2] == mh)
+        )
+        assert hits.size == 1
+        return int(hits[0])
+
+    filled_row = row(5000.0, 4.0, 0.25)
+    lo, hi = row(5000.0, 4.0, 0.0), row(5000.0, 4.0, 0.5)
+    np.testing.assert_allclose(
+        library.normalized[filled_row], 0.5 * (library.normalized[lo] + library.normalized[hi])
+    )
+    np.testing.assert_allclose(
+        library.log_continuum[filled_row],
+        0.5 * (library.log_continuum[lo] + library.log_continuum[hi]),
+    )
+    # The dropped corner leaves the box irregular here; on the real grid, whose only gap is
+    # interior, the fill is what restores the cubic.
+    assert library.axes() is None
+    cached = ab.fetch_library("gapped-grid", progress=False)
+    assert cached.meta["filled_nodes"] == library.meta["filled_nodes"]
+
+
+def test_bracketing_prefers_metallicity_then_gravity_then_temperature():
+    nodes = [
+        (5000.0, 4.0, 0.0),
+        (5000.0, 4.0, 0.5),
+        (5000.0, 3.5, 0.25),
+        (5000.0, 4.5, 0.25),
+        (4750.0, 4.0, 0.25),
+        (5250.0, 4.0, 0.25),
+        (5000.0, 4.0, 0.25),  # the gap, index 6
+    ]
+    names = ("teff", "logg", "mh")
+    present = {lib_mod._node_key(n): i for i, n in enumerate(nodes) if i != 6}
+    assert lib_mod._bracketing_neighbours(nodes, 6, present, names) == (0, 1, 0.5, "mh")
+    without_mh = {k: v for k, v in present.items() if v not in (0, 1)}
+    assert lib_mod._bracketing_neighbours(nodes, 6, without_mh, names) == (2, 3, 0.5, "logg")
+    only_teff = {k: v for k, v in present.items() if v in (4, 5)}
+    assert lib_mod._bracketing_neighbours(nodes, 6, only_teff, names) == (4, 5, 0.5, "teff")
+    assert lib_mod._bracketing_neighbours(nodes, 6, {}, names) is None
+    # An edge node has no bracket along an axis it bounds.
+    edge = [*nodes, (5000.0, 4.0, -0.5)]
+    assert lib_mod._bracketing_neighbours(edge, 7, present, names) is None
+
+
 def test_the_registry_lists_what_it_can_build():
     names = ab.library_names()
     assert "bosz2024-fgk-r20000" in names
+    assert {"bosz2024-hot-r20000", "bosz2024-hot-rvs"} <= set(names)
     assert names == sorted(names)
+
+
+@pytest.mark.parametrize("name", ["bosz2024-hot-rvs", "bosz2024-hot-r20000"])
+def test_the_hot_box_is_registered_as_the_archive_publishes_it(name):
+    """Both hot entries: same 364 nodes, same shards, two bands.
+
+    The numbers are the archive's, measured on its index on 2026-09-10, so this is where a
+    silently re-pinned box would be caught.
+    """
+    entry = lib_mod._LIBRARIES[name]
+    assert isinstance(entry, lib_mod._Library)
+    assert entry.name == name
+    assert entry.source == "bosz2024" and entry.medium == "air"
+    assert entry.axes is lib_mod._BOSZ_HOT_AXES
+    assert entry.fixed is lib_mod._BOSZ_FIXED
+    assert set(entry.axes) == set(entry.label_names)
+
+    info = ab.library_info(name)
+    assert info["n_nodes"] == 364
+    assert (info["axes"]["teff"][0], info["axes"]["teff"][-1]) == (7000.0, 10000.0)
+    assert info["axes"]["logg"] == [3.5, 4.0, 4.5, 5.0]
+    assert info["axes"]["mh"] == [-1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5]
+    # Every node is published, so nothing is filled and nothing is dropped: the box stays a
+    # box and the cubic applies with no caveat about an interpolated node.
+    assert info["known_gaps"] == []
+    assert info["download_mb"] == 532.0
+    assert info["wave_range"] == ((8350.0, 8850.0) if name.endswith("rvs") else (4000.0, 7000.0))
+    assert any("MARCS/ATLAS9 boundary" in c for c in info["caveats"])
+    assert any("Paschen" in c for c in info["caveats"])
+    # Only the RVS entry meets a vacuum-scale instrument.
+    assert any("vacuum" in c for c in info["caveats"]) is name.endswith("rvs")
 
 
 @pytest.mark.parametrize("name", ab.library_names())
@@ -596,12 +738,88 @@ def test_bosz_urls_match_the_archive():
         (4000.0, 3.0, "ms"),  # MARCS spherical below log g 3.5
         (4000.0, 3.5, "mp"),  # plane-parallel at and above it
         (7000.0, 4.5, "mp"),
+        (7750.0, 4.0, "mp"),  # inside the 7500-8000 overlap, where both families exist
         (8000.0, 4.0, "mp"),  # MARCS wins the 7500-8000 overlap, so one family throughout
+        (8250.0, 4.0, "ap"),  # the first ATLAS9 node of the hot box
         (9000.0, 4.0, "ap"),  # ATLAS9 above it
     ],
 )
 def test_the_atmosphere_code_follows_the_archive(teff, logg, code):
     assert lib_mod._bosz_atmosphere(teff, logg) == code
+
+
+def test_the_hot_box_crosses_the_atmosphere_seam_where_its_caveat_says():
+    """One crossing, between 8000 and 8250 K, and the caveat quotes the same two numbers.
+
+    The hot box is the first registered library to span both model-atmosphere families, so
+    where the change of code falls is part of what the entry promises rather than an
+    implementation detail. It is stated in prose in the caveats and computed here.
+    """
+    axis = lib_mod._BOSZ_HOT_AXES["teff"]
+    families = [lib_mod._bosz_atmosphere(teff, 4.0) for teff in axis]
+    assert families == ["mp"] * 5 + ["ap"] * 8
+    first_atlas = families.index("ap")
+    assert (axis[first_atlas - 1], axis[first_atlas]) == (8000.0, 8250.0)
+    seam = next(c for c in lib_mod._BOSZ_HOT_CAVEATS if "MARCS/ATLAS9 boundary" in c)
+    assert "between 8000 and 8250 K" in seam
+
+
+def test_every_registered_bosz_box_has_uniformly_spaced_axes():
+    """Catmull-Rom assumes equal spacing, so a registered box must supply it.
+
+    ``_axis_weights`` uses the spline in its uniform-parameter form: the tangent at a node
+    is estimated from the two neighbours as if they were equally spaced. Across a change of
+    step that estimate is wrong, and the interpolant loses linear reproduction there. BOSZ's
+    own temperature axis changes step twice, 100 K below 4000 K and 500 K above 12,000 K, so
+    a registered box is in part a choice of a range over which it does not, and this asserts
+    that choice rather than trusting it.
+    """
+    boxes = [entry for entry in lib_mod._LIBRARIES.values() if entry.source == "bosz2024"]
+    assert len(boxes) >= 4
+    for entry in boxes:
+        for label, values in entry.axes.items():
+            steps = np.diff(np.asarray(values, dtype=float))
+            assert steps.size >= 1, f"{entry.name}: the {label} axis has a single node"
+            np.testing.assert_allclose(
+                steps,
+                steps[0],
+                rtol=0.0,
+                atol=1e-9,
+                err_msg=f"{entry.name}: the {label} axis is not uniformly spaced",
+            )
+
+
+HOT_SHARDS = Path(__file__).resolve().parent / "data" / "bosz2024_hot_shards.txt"
+
+
+def test_every_node_the_hot_box_requests_is_published():
+    """The 364 names the box would fetch, against the archive index harvested 2026-09-10.
+
+    The fixture is the harvested listing rather than a regeneration of the axes: it holds
+    every published metallicity over the box's temperature and gravity range, fourteen
+    against the box's seven, including the hole at (7750 K, log g +4.0, [M/H] -1.25) that
+    the box's own [M/H] axis avoids. A change to the axes, to the atmosphere dispatch or to
+    the file-name convention therefore appears here as a name the archive does not carry,
+    rather than as a 404 partway through a 532 MB build.
+    """
+    lines = HOT_SHARDS.read_text(encoding="utf-8").splitlines()
+    published = {line for line in lines if line and not line.startswith("#")}
+    assert len(published) == 895
+
+    axes = lib_mod._BOSZ_HOT_AXES
+    requested = {
+        lib_mod._bosz_filename(teff, logg, mh, **lib_mod._BOSZ_FIXED)
+        for teff in axes["teff"]
+        for logg in axes["logg"]
+        for mh in axes["mh"]
+    }
+    assert len(requested) == 364
+    assert requested <= published, sorted(requested - published)[:5]
+
+    # The listing is a harvest and not a product of the axes: this pair is the proof.
+    stem = "bosz2024_mp_t7750_g+4.0_m{}_a+0.00_c+0.00_v2_r20000_resam.txt.gz"
+    assert stem.format("-1.25") not in published
+    assert stem.format("-1.00") in published
 
 
 def test_a_build_downloads_once_and_is_cached(offline_registry):

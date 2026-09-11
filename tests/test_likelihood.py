@@ -11,9 +11,17 @@ import jax.numpy as jnp
 import numpy as np
 
 import albireo as ab
+import albireo.likelihood as likelihood
+from albireo.assembly import band_block_tridiagonal, prior_logdet
 from albireo.data import Dataset, EpochData
-from albireo.forward import apply_model, build_problem, data_residual_zscores
-from albireo.likelihood import draw_spectra, marginal_loglikelihood, spectra_std
+from albireo.forward import (
+    apply_model,
+    build_problem,
+    data_residual_zscores,
+    rhs,
+    weighted_data_terms,
+)
+from albireo.likelihood import _pack, draw_spectra, marginal_loglikelihood, spectra_std
 from albireo.priors import SmoothnessPrior
 from albireo.simulate import InstrumentSpec, OrbitParams, simulate_dataset
 from albireo.simulate import synthetic_deviation_spectrum as synth
@@ -166,6 +174,105 @@ def test_masked_pixel_values_do_not_affect_anything():
     res2 = marginal_loglikelihood(problem2, prior)
     np.testing.assert_allclose(float(res2.log_likelihood), float(res.log_likelihood), rtol=1e-12)
     np.testing.assert_allclose(np.asarray(res2.d_hat), np.asarray(res.d_hat), rtol=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# The chi-square sign guard
+# ---------------------------------------------------------------------------
+
+
+def unguarded_marginal(problem, prior):
+    """The marginal log-likelihood as it was written before the sign guard.
+
+    The same operations on the same inputs in the same order, run eagerly as
+    :func:`marginal_loglikelihood` runs them here, so a healthy value and its gradient
+    are bit-identical to the guarded ones unless the guard has changed the arithmetic.
+    """
+    n_comp, n_pix = problem.n_components, problem.grid.n
+    b_nat = max(problem.natural_half_bandwidth, prior.half_bandwidth)
+    bt = band_block_tridiagonal(problem, prior, b_nat, None)
+    ld_prior = prior_logdet(prior, n_pix)
+    b_vec = _pack(rhs(problem), n_comp, n_pix)
+    b_pad = jnp.pad(b_vec, (0, bt.num_blocks * bt.block_size - n_comp * n_pix))
+    ld, quad, _ = likelihood._solve_stage(bt, b_pad)
+    zwz, logw, n_good = weighted_data_terms(problem)
+    return (
+        -0.5 * (zwz - quad)
+        - 0.5 * ld
+        + 0.5 * ld_prior
+        + 0.5 * logw
+        - 0.5 * n_good * jnp.log(2.0 * jnp.pi)
+    )
+
+
+def _loglike_at_log_tau(problem, prior, log_tau, fun=marginal_loglikelihood):
+    p = SmoothnessPrior(tau=jnp.exp(jnp.asarray(log_tau)), eta=jnp.asarray(prior.eta))
+    out = fun(problem, p)
+    return out if fun is unguarded_marginal else out.log_likelihood
+
+
+def test_sign_guard_leaves_a_healthy_evaluation_and_its_gradient_untouched():
+    _, _, problem, prior = small_problem()
+    log_tau = jnp.log(jnp.asarray(prior.tau))
+
+    guarded = float(_loglike_at_log_tau(problem, prior, log_tau))
+    plain = float(_loglike_at_log_tau(problem, prior, log_tau, fun=unguarded_marginal))
+    assert guarded == plain, f"guard changed the value: {guarded!r} vs {plain!r}"
+
+    g_guarded = jax.grad(lambda x: _loglike_at_log_tau(problem, prior, x))(log_tau)
+    g_plain = jax.grad(lambda x: _loglike_at_log_tau(problem, prior, x, fun=unguarded_marginal))(
+        log_tau
+    )
+    np.testing.assert_array_equal(np.asarray(g_guarded), np.asarray(g_plain))
+    assert np.all(np.isfinite(np.asarray(g_guarded)))
+
+
+def test_negative_chi_square_is_rejected_with_a_finite_gradient(monkeypatch):
+    """``zwz - quad`` is ``z^T (W^-1 + A Lambda_p^-1 A^T)^-1 z``, positive definite.
+
+    A negative value is therefore a destroyed evaluation rather than a fit, and it is
+    destroyed in the direction that flatters it: the diverging ML-II run that motivated
+    the guard accepted a trial whose quadratic form exceeded ``zwz`` by 417,000, which
+    the unguarded expression reported as 216,000 nats of improvement. Here the same
+    corruption is imposed on an otherwise healthy problem by inflating ``quad``, so
+    every intermediate stays finite and the gradient at the rejected point can be
+    checked: the line search must get a number back, not a nan.
+    """
+    _, _, problem, prior = small_problem()
+    log_tau = jnp.log(jnp.asarray(prior.tau))
+    zwz = float(weighted_data_terms(problem)[0])
+    real = likelihood._solve_stage
+
+    def inflated(bt, b_pad):
+        ld, quad, d_pad = real(bt, b_pad)
+        return ld, quad + (zwz + 1.0), d_pad  # chi-square = -1 by construction
+
+    assert np.isfinite(float(_loglike_at_log_tau(problem, prior, log_tau)))
+    monkeypatch.setattr(likelihood, "_solve_stage", inflated)
+    assert float(_loglike_at_log_tau(problem, prior, log_tau)) == -np.inf
+    grad = np.asarray(jax.grad(lambda x: _loglike_at_log_tau(problem, prior, x))(log_tau))
+    assert np.all(np.isfinite(grad)), grad
+    np.testing.assert_array_equal(grad, np.zeros_like(grad))
+
+
+def test_absurd_tau_is_rejected_rather_than_reported_as_an_improvement():
+    """Beyond a stiffness ratio of about 1e13 the assembled arithmetic is dead.
+
+    ``tau/eta`` here is ``exp(log_tau) / 1e-3``, so every entry of the sweep is past
+    :data:`albireo.inference._LOG_TAU_ETA_MAX`, the bound the model applies to keep the
+    optimizer out of this region. What the guard has to deliver is that no evaluation in
+    it looks better than the healthy one: a value of ``-inf``, or at worst a finite
+    number no larger.
+    """
+    _, _, problem, prior = small_problem()
+    healthy = float(_loglike_at_log_tau(problem, prior, jnp.log(jnp.asarray(prior.tau))))
+    values = [
+        float(_loglike_at_log_tau(problem, prior, jnp.full(2, lt)))
+        for lt in (40.0, 50.0, 60.0, 80.0, 100.0, 120.0)
+    ]
+    assert not any(np.isnan(v) for v in values), values
+    assert all(v <= healthy for v in values), values
+    assert any(v == -np.inf for v in values), values
 
 
 # ---------------------------------------------------------------------------

@@ -25,8 +25,9 @@ exclude template mismatch, line-profile variability and any third body, so the s
 table about a Keplerian is generally larger than they imply.
 
 Minimum masses and projected semi-axes follow Hilditch (2001), eqs. 3.17 and 3.18, with the
-IAU 2015 nominal constants. :func:`find_period` is a Lomb-Scargle periodogram (Lomb 1976;
-Scargle 1982; VanderPlas 2018).
+IAU 2015 nominal constants. :func:`find_period` is the floating-mean, weighted generalized
+Lomb-Scargle periodogram of Zechmeister and Kürster (2009) (Lomb 1976; Scargle 1982;
+VanderPlas 2018).
 
 References
 ----------
@@ -34,6 +35,7 @@ Hilditch, R. W. 2001, An Introduction to Close Binary Stars (Cambridge Universit
 Lomb, N. R. 1976, Ap&SS, 39, 447
 Scargle, J. D. 1982, ApJ, 263, 835
 VanderPlas, J. T. 2018, ApJS, 236, 16
+Zechmeister, M. & Kürster, M. 2009, A&A, 496, 577
 """
 
 from __future__ import annotations
@@ -48,7 +50,7 @@ import numpy as np
 from albireo.grids import C_KMS
 from albireo.kepler import radial_velocity, t_peri_from_t_conj
 
-__all__ = ["RVOrbit", "find_period", "fit_rv_orbit"]
+__all__ = ["RVOrbit", "find_period", "fit_rv_orbit", "reassign_by_orbit"]
 
 # Minimum masses and projected semi-axes in solar units from km/s and days
 # (Hilditch 2001, eqs. 3.17 and 3.18, with the IAU 2015 nominal constants).
@@ -70,21 +72,182 @@ def _table_arrays(table, components):
     return list(components), v, s, absolute
 
 
+def _gls_power(t, y, w, freqs) -> np.ndarray:
+    """Floating-mean weighted periodogram of Zechmeister and Kürster (2009), normalized.
+
+    With ``W = w / sum(w)``, ``Y = sum(W y)``, ``YY = sum(W (y - Y)^2)`` and, at each
+    angular frequency, ``C = sum(W cos)``, ``S = sum(W sin)``, ``YC = sum(W y cos) - Y C``,
+    ``YS = sum(W y sin) - Y S``, ``CC = sum(W cos^2) - C^2``, ``SS = sum(W sin^2) - S^2``
+    and ``CS = sum(W cos sin) - C S``, the power is
+
+    ``p = (SS YC^2 + CC YS^2 - 2 CS YC YS) / (YY (CC SS - CS^2))``,
+
+    the fraction of the weighted variance the sinusoid plus a free constant removes. The
+    weights enter through ``W`` alone; the data are never rescaled. A constant series, or
+    a frequency at which the design is singular, gives zero.
+    """
+    t = np.asarray(t, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    weight = np.asarray(w, dtype=np.float64)
+    weight = weight / float(weight.sum())
+    y_bar = float(weight @ y)
+    yy = float(weight @ (y - y_bar) ** 2)
+    weighted_y = weight * y
+    freqs = np.asarray(freqs, dtype=np.float64)
+    power = np.empty(freqs.size, dtype=np.float64)
+    chunk = max(1, int(2_000_000 // max(t.size, 1)))
+    for start in range(0, freqs.size, chunk):
+        block = freqs[start : start + chunk]
+        angle = (2.0 * np.pi * block)[:, None] * t[None, :]
+        cos, sin = np.cos(angle), np.sin(angle)
+        c, s = cos @ weight, sin @ weight
+        yc = cos @ weighted_y - y_bar * c
+        ys = sin @ weighted_y - y_bar * s
+        cc = (cos * cos) @ weight - c * c
+        ss = (sin * sin) @ weight - s * s
+        cs = (cos * sin) @ weight - c * s
+        with np.errstate(divide="ignore", invalid="ignore"):
+            block_power = (ss * yc**2 + cc * ys**2 - 2.0 * cs * yc * ys) / (
+                yy * (cc * ss - cs * cs)
+            )
+        power[start : start + chunk] = np.nan_to_num(block_power, nan=0.0, posinf=0.0, neginf=0.0)
+    return np.clip(power, 0.0, 1.0)
+
+
+def _harmonic_power(t, y, w, freqs, n_harmonics: int) -> np.ndarray:
+    """``1 - chi2 / chi2_null`` for a floating mean plus ``n_harmonics`` harmonics.
+
+    The model ``c + sum_h (a_h cos(h w t) + b_h sin(h w t))`` is fitted by weighted least
+    squares at every frequency, as a batched solve of the ``(1 + 2 n_harmonics)`` square
+    normal equations over the grid, in chunks. ``chi2_null`` is the weighted variance
+    about the weighted mean, so the power is on the same scale as :func:`_gls_power` and
+    equals it for one harmonic.
+    """
+    t = np.asarray(t, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    weight = np.asarray(w, dtype=np.float64)
+    freqs = np.asarray(freqs, dtype=np.float64)
+    n_par = 1 + 2 * int(n_harmonics)
+    total = float(weight.sum())
+    y_bar = float(weight @ y) / total
+    chi2_null = float(weight @ (y - y_bar) ** 2)
+    power = np.zeros(freqs.size, dtype=np.float64)
+    if not chi2_null > 0.0:
+        return power
+    diagonal = np.arange(n_par)
+    chunk = max(1, int(1_000_000 // (max(t.size, 1) * n_par)))
+    for start in range(0, freqs.size, chunk):
+        block = freqs[start : start + chunk]
+        design = np.empty((block.size, t.size, n_par), dtype=np.float64)
+        design[:, :, 0] = 1.0
+        for h in range(1, int(n_harmonics) + 1):
+            angle = (2.0 * np.pi * h * block)[:, None] * t[None, :]
+            design[:, :, 2 * h - 1] = np.cos(angle)
+            design[:, :, 2 * h] = np.sin(angle)
+        weighted = design * weight[None, :, None]
+        normal = np.einsum("fnp,fnq->fpq", weighted, design)
+        rhs = np.einsum("fnp,n->fp", weighted, y)
+        # The design is singular where the harmonics degenerate (the long-period corner of
+        # the grid, and any frequency the epochs alias exactly); ridge it rather than fail.
+        normal[:, diagonal, diagonal] *= 1.0 + 1e-10
+        normal[:, diagonal, diagonal] += 1e-12 * total
+        try:
+            coefficients = np.linalg.solve(normal, rhs[:, :, None])[:, :, 0]
+        except np.linalg.LinAlgError:
+            coefficients = np.einsum("fpq,fq->fp", np.linalg.pinv(normal), rhs)
+        model = np.einsum("fnp,fp->fn", design, coefficients)
+        chi2 = np.einsum("n,fn->f", weight, (y[None, :] - model) ** 2)
+        power[start : start + chunk] = 1.0 - chi2 / chi2_null
+    return np.clip(np.nan_to_num(power, nan=0.0, posinf=0.0, neginf=0.0), 0.0, 1.0)
+
+
+def _distinct_peaks(freqs, power, n_peaks: int, tol: float = 0.02) -> list[float]:
+    """The ``n_peaks`` highest grid periods that differ from each other by more than ``tol``.
+
+    Only the local maxima of the power array are walked. An accepted peak is the highest
+    point of its own exclusion window and so a local maximum, wherever the grid resolves
+    that window: the step in period is ``dP/P = P / (N_os T)``, below ``tol`` up to about
+    ``P = 0.2 T`` at ten samples per ``1/T``, and the list is then the one an exhaustive
+    loop over every grid point returns, at a few thousand comparisons instead of a few
+    hundred thousand. At longer periods the two lists differ, and in the direction that
+    helps: two adjacent grid points on the flank of one broad peak are already more than
+    ``tol`` apart in period, and the exhaustive loop reports both as separate candidates.
+    """
+    power = np.asarray(power)
+    interior = np.flatnonzero((power[1:-1] > power[:-2]) & (power[1:-1] >= power[2:])) + 1
+    candidates = np.concatenate(([0], interior, [power.size - 1]))
+    peaks: list[float] = []
+    for k in candidates[np.argsort(power[candidates])[::-1]]:
+        period = float(1.0 / freqs[k])
+        if all(abs(period / other - 1.0) > tol for other in peaks):
+            peaks.append(period)
+            if len(peaks) >= n_peaks:
+                break
+    return peaks
+
+
 def find_period(
     table,
     *,
     period_range: tuple[float, float] | None = None,
-    n_frequencies: int = 20_000,
+    n_frequencies: int | None = None,
     components=None,
+    swap_invariant: bool = False,
+    n_peaks: int = 20,
+    n_harmonics: int = 1,
 ) -> dict:
-    """Lomb-Scargle search for the orbital period of a velocity table.
+    """Generalized Lomb-Scargle search for the orbital period of a velocity table.
 
     For two or more components the periodogram is computed on the difference of the first
     two components' velocities, which is free of both systemic velocities and both
     template zero points and has amplitude ``K_1 + K_2``. A single component is searched
-    as it is. In either case the weighted mean is removed, the series is scaled by the
-    square root of its weights, and the normalized periodogram of
-    ``scipy.signal.lombscargle`` is evaluated on a grid uniform in frequency.
+    as it is. The statistic is the floating-mean, weighted generalized periodogram of
+    Zechmeister and Kürster (2009): a constant is fitted alongside the sinusoid at every
+    frequency, and the returned power is the fraction of the weighted variance the pair
+    removes. The weights ``1 / sigma^2`` enter the fit, not the data.
+
+    The floating mean is what makes the search usable on clumped sampling. A classical
+    periodogram fits ``a cos(wt) + b sin(wt)`` with the offset held at zero, which is
+    harmless when the epochs are spread evenly enough that the sampling window has no mean
+    at the frequencies of interest. A survey cadence is not like that: on the D62
+    benchmark's Gaia-like tables, 10 to 25 epochs falling into about eleven visibility
+    windows separated by hundreds of days, the constant the classical model cannot fit is
+    absorbed into the sinusoid, and the spurious power buries the true period. Over those
+    tables the true period is the highest peak of the classical periodogram in 5 of 13
+    systems and of this one in 9 of 13.
+
+    The frequency grid is uniform in frequency, so the step in period is
+    ``dP/P = P / (N_os T)`` with ``T`` the span of the epochs and ``N_os = 10`` samples per
+    ``1/T``. That is 0.1% at a hundredth of the baseline and 4.7% at 0.47 of it, so a peak
+    reported near a third of the baseline is good to a few per cent only, and it is the
+    Keplerian fit started from it, not the grid, that pins the period down. Refining the
+    grid was measured and changes no outcome for the single-sinusoid search.
+
+    With ``n_harmonics = 2`` the model is ``c + a1 cos(wt) + b1 sin(wt) + a2 cos(2wt) +
+    b2 sin(2wt)``, fitted by weighted least squares at every frequency, and the power is
+    ``1 - chi2 / chi2_null`` on the same scale. An eccentric orbit's velocity curve is not
+    a sinusoid, and the second harmonic ranks its period higher: over the same benchmark it
+    moved two systems at e = 0.41 and 0.47 from rank 10 to ranks 2 and 1, and one at
+    e = 0.67 from beyond the six hundredth peak to rank 1. It is worse on circular orbits,
+    where the extra freedom is spent on noise, so it belongs beside the one-harmonic search
+    as a second source of candidates rather than in place of it.
+
+    With ``swap_invariant`` the series is the magnitude of the difference instead. Two
+    alike components at similar light fractions can be exchanged between epochs by the
+    correlation that measured them (:func:`reassign_by_orbit`), which flips the sign of
+    the difference at random epochs and destroys its periodogram; the magnitude is the
+    same under the exchange. Its dominant peak sits at half the period for a circular
+    orbit, so the caller should try both each peak and its double, and then re-assign the
+    epochs by the orbit fitted at each candidate.
+
+    A periodogram peak is a starting point, not a period. The Keplerian fitted at a
+    candidate uses the shape of the curve and every velocity at once, and on the same
+    benchmark it separated the truth from the best alias by hundreds in chi-square wherever
+    the truth was reachable at all; the search should therefore propose many candidates and
+    the fit decide among them. There is a floor to this. A table of ten or eleven epochs
+    whose true Keplerian already leaves a reduced chi-square above about five cannot be
+    searched by any statistic on that table: an alias then fits better than the truth, and
+    the honest output is a failure rather than a period.
 
     Parameters
     ----------
@@ -94,38 +257,64 @@ def find_period(
         ``(shortest, longest)`` period in days. Default: twice the shortest epoch gap to
         twice the baseline.
     n_frequencies
-        Size of the frequency grid, uniform in frequency.
+        Size of the frequency grid, uniform in frequency. Default: enough to resolve the
+        baseline ten times over, ``max(20000, 10 T (f_max - f_min))`` with ``T`` the
+        span of the epochs, so that a multi-year survey cadence (Gaia's, for instance)
+        is not searched on a grid coarser than its own peak width.
     components
         Which components to use (names). Default: all, in table order.
+    swap_invariant
+        Search the magnitude of the relative velocity, which the exchange of two alike
+        components leaves unchanged. Two or more components only.
+    n_peaks
+        How many distinct peaks to report: the best and ``n_peaks - 1`` aliases.
+    n_harmonics
+        Harmonics in the model. One is the generalized periodogram in closed form; two is
+        the eccentric-orbit search described above. ``1 + 2 n_harmonics`` parameters need
+        that many usable epochs and then some.
 
     Returns
     -------
     dict
         ``period`` (best, days), ``periods`` and ``power`` (the periodogram), and
-        ``aliases``, the five next-best peaks whose periods differ from each other and
-        from the best by more than 2%. The periodogram of a sparsely sampled table is
-        rarely unambiguous, and the aliases should be inspected.
+        ``aliases``, the ``n_peaks - 1`` next-best peaks whose periods differ from each
+        other and from the best by more than 2%. The periodogram of a sparsely sampled
+        table is rarely unambiguous, and the aliases should be inspected.
 
     References
     ----------
     Lomb, N. R. 1976, Ap&SS, 39, 447
     Scargle, J. D. 1982, ApJ, 263, 835
     VanderPlas, J. T. 2018, ApJS, 236, 16
+    Zechmeister, M. & Kürster, M. 2009, A&A, 496, 577
     """
-    from scipy.signal import lombscargle
-
     _, v, s, _ = _table_arrays(table, components)
     good = np.all(np.isfinite(v), axis=0) & np.all(np.isfinite(s), axis=0) & table.good
     if int(good.sum()) < 4:
         raise ValueError(f"only {int(good.sum())} usable epochs; a period search needs at least 4")
+    n_peaks = int(n_peaks)
+    n_harmonics = int(n_harmonics)
+    if n_peaks < 1:
+        raise ValueError("n_peaks must be at least 1")
+    if n_harmonics < 1:
+        raise ValueError("n_harmonics must be at least 1")
+    n_par = 1 + 2 * n_harmonics
+    if int(good.sum()) <= n_par:
+        raise ValueError(
+            f"{int(good.sum())} usable epochs cannot support the {n_par} parameters of a "
+            f"search with {n_harmonics} harmonic(s)"
+        )
     t = np.asarray(table.bjd, dtype=np.float64)[good]
     if v.shape[0] >= 2:
         y = v[0, good] - v[1, good]
+        if swap_invariant:
+            y = np.abs(y)
         w = 1.0 / (s[0, good] ** 2 + s[1, good] ** 2)
     else:
+        if swap_invariant:
+            raise ValueError("swap_invariant needs at least two components")
         y = v[0, good]
         w = 1.0 / s[0, good] ** 2
-    y = y - np.sum(w * y) / np.sum(w)
     if period_range is None:
         gaps = np.diff(np.sort(t))
         shortest = 2.0 * float(np.min(gaps[gaps > 0]))
@@ -134,16 +323,15 @@ def find_period(
     lo, hi = period_range
     if not (0.0 < lo < hi):
         raise ValueError(f"period_range must satisfy 0 < shortest < longest; got {period_range}")
+    if n_frequencies is None:
+        baseline = float(t.max() - t.min())
+        n_frequencies = max(20_000, int(np.ceil(10.0 * baseline * (1.0 / lo - 1.0 / hi))))
     freqs = np.linspace(1.0 / hi, 1.0 / lo, int(n_frequencies))
-    power = lombscargle(t, y * np.sqrt(w), 2.0 * np.pi * freqs, normalize=True)
-    order = np.argsort(power)[::-1]
-    peaks: list[float] = []
-    for k in order:
-        p = 1.0 / freqs[k]
-        if all(abs(p / q - 1.0) > 0.02 for q in peaks):
-            peaks.append(float(p))
-        if len(peaks) >= 6:
-            break
+    if n_harmonics == 1:
+        power = _gls_power(t, y, w, freqs)
+    else:
+        power = _harmonic_power(t, y, w, freqs, n_harmonics)
+    peaks = _distinct_peaks(freqs, power, n_peaks)
     return {
         "period": peaks[0],
         "periods": 1.0 / freqs,
@@ -544,6 +732,83 @@ def fit_rv_orbit(
         covariance=cov,
         parameter_names=tuple(par_names),
     )
+
+
+def reassign_by_orbit(table, predicted, *, threshold: float = 3.0):
+    """Swap the two components at epochs where the swap fits the orbit far better.
+
+    Two similar spectra at similar light fractions give a correlation surface that is
+    nearly symmetric under the exchange of the two shifts, and a per-epoch measurement
+    then lands in one of the two equivalent minima at random. Nothing in a single epoch
+    can decide which star is which; the orbit can, and a disentangling supplies one. The
+    decision is made on the relative velocity ``v_1 - v_2``, which is free of a shared
+    zero point, after removing the constant offset between the table and the prediction
+    (each component of a differential table carries its own zero point).
+
+    Parameters
+    ----------
+    table
+        A two-component :class:`~albireo.todcor.VelocityTable`.
+    predicted
+        Predicted velocities, ``(2, n_epochs)`` km/s, from the disentangling's orbit
+        (:meth:`albireo.Fit.velocities`). Their zero point need not match the table's.
+    threshold
+        A swap is made where it reduces the residual of the relative velocity by more
+        than ``threshold`` times its error.
+
+    Returns
+    -------
+    (VelocityTable, numpy.ndarray)
+        The table with the swapped epochs exchanged (velocities, errors, covariances,
+        light fractions and detection statistics alike), and the boolean mask of the
+        epochs that were swapped. A table with other than two components is returned
+        unchanged with an all-false mask.
+    """
+    from dataclasses import replace
+
+    pred = np.asarray(predicted, dtype=np.float64)
+    if table.n_components != 2 or pred.shape != (2, table.n_epochs):
+        return table, np.zeros(table.n_epochs, dtype=bool)
+    v = np.asarray(table.velocity, dtype=np.float64)
+    s = np.asarray(table.sigma, dtype=np.float64)
+    good = table.good & np.all(np.isfinite(v), axis=0) & np.all(np.isfinite(s), axis=0)
+    if int(good.sum()) < 3:
+        return table, np.zeros(table.n_epochs, dtype=bool)
+    r_pred = pred[0] - pred[1]
+    sigma_r = np.sqrt(s[0] ** 2 + s[1] ** 2)
+    swap = np.zeros(table.n_epochs, dtype=bool)
+    for _ in range(3):
+        r_obs = np.where(swap, v[1] - v[0], v[0] - v[1])
+        offset = float(np.median((r_obs - r_pred)[good]))
+        keep_res = np.abs((v[0] - v[1]) - r_pred - offset) / sigma_r
+        swap_res = np.abs((v[1] - v[0]) - r_pred - offset) / sigma_r
+        new = good & (keep_res - swap_res > threshold)
+        if np.array_equal(new, swap):
+            break
+        swap = new
+    if not swap.any():
+        return table, swap
+
+    def exchange(array):
+        array = np.asarray(array)
+        out = np.array(array)
+        out[0] = np.where(swap, array[1], array[0])
+        out[1] = np.where(swap, array[0], array[1])
+        return out
+
+    covariance = np.array(table.covariance)
+    covariance[swap] = covariance[swap][:, ::-1, :][:, :, ::-1]
+    return replace(
+        table,
+        velocity=exchange(table.velocity),
+        sigma=exchange(table.sigma),
+        sigma_ivar=exchange(table.sigma_ivar),
+        covariance=covariance,
+        light=exchange(table.light),
+        delta_chi2=exchange(table.delta_chi2),
+        at_edge=exchange(table.at_edge),
+        settings={**dict(table.settings), "reassigned_by_orbit": int(swap.sum())},
+    ), swap
 
 
 def relativistic_add(v_kms, u_kms):

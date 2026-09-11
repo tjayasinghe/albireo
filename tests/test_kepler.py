@@ -93,6 +93,22 @@ def test_sb2_components_are_in_antiphase():
     )
 
 
+@pytest.mark.parametrize("ecc", [0.0, 0.15, 0.6, 0.9])
+@pytest.mark.parametrize("omega", [0.0, 0.7, 2.5, -1.2, 3.1])
+def test_t_conj_and_t_peri_are_inverses(ecc, omega):
+    from albireo.kepler import t_conj_from_t_peri, t_peri_from_t_conj
+
+    period = 6.31
+    t_peri = 2457001.234
+    t_conj = float(t_conj_from_t_peri(t_peri, period=period, ecc=ecc, omega=omega))
+    assert t_peri <= t_conj < t_peri + period
+    back = float(t_peri_from_t_conj(t_conj, period=period, ecc=ecc, omega=omega))
+    assert abs((back - t_peri + 0.5 * period) % period - 0.5 * period) < 1e-9
+    # And the velocity there is the systemic one: nu + omega = pi/2 puts cos(nu + omega) = 0.
+    v = float(radial_velocity(t_conj, period=period, t_peri=t_peri, ecc=ecc, omega=omega, k=50.0))
+    assert abs(v - 50.0 * ecc * np.cos(omega)) < 1e-6
+
+
 def test_t_conj_convention():
     period, ecc, omega = 10.0, 0.55, 1.1
     t_conj = 4.2

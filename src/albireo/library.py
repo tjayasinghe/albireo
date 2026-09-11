@@ -34,7 +34,7 @@ References
 Bohlin, R. C., Mészáros, Sz., Fleming, S. W., et al. 2017, AJ, 153, 234
 Husser, T.-O., Wende-von Berg, S., Dreizler, S., et al. 2013, A&A, 553, A6
 Mészáros, Sz. & Allende Prieto, C. 2013, MNRAS, 430, 3285
-Mészáros, Sz., Bohlin, R., Allende Prieto, C., et al. 2024, A&A, 688, A171
+Mészáros, Sz., Bohlin, R., Allende Prieto, C., et al. 2024, A&A, 688, A197
 Palacios, A., Gebran, M., Josselin, E., et al. 2010, A&A, 516, A13
 """
 
@@ -291,6 +291,14 @@ class SpectralLibrary:
             n_unique = np.unique(self.nodes[:, self.label_names.index(name)]).size
             lines.append(f"  {name:<12} {lo:g} to {hi:g}  ({n_unique} values)")
         lines.append(f"  geometry     {'complete box' if self.axes() else 'irregular coverage'}")
+        filled = self.meta.get("filled_nodes") or []
+        if filled:
+            listed = "; ".join(
+                ", ".join(f"{k} {f[k]:g}" for k in self.label_names if k in f)
+                + f" (along {f.get('axis', '?')})"
+                for f in filled
+            )
+            lines.append(f"  filled       {len(filled)} node(s) by interpolation: {listed}")
         for key in ("grid", "version", "retrieved", "vmicro", "citation"):
             if key in self.meta:
                 lines.append(f"  {key:<12} {self.meta[key]}")
@@ -692,7 +700,7 @@ def line_core_medium(
     References
     ----------
     Bohlin, R. C., Mészáros, Sz., Fleming, S. W., et al. 2017, AJ, 153, 234
-    Mészáros, Sz., Bohlin, R., Allende Prieto, C., et al. 2024, A&A, 688, A171
+    Mészáros, Sz., Bohlin, R., Allende Prieto, C., et al. 2024, A&A, 688, A197
     """
     wave = np.asarray(wave, dtype=np.float64)
     flux = np.asarray(flux, dtype=np.float64)
@@ -787,6 +795,18 @@ _BOSZ_FGK_AXES: dict[str, Any] = {
 }
 _BOSZ_FIXED: dict[str, Any] = {"alpha": 0.0, "carbon": 0.0, "vmicro": 2, "resolution": 20000}
 
+# The hot box is one uniform 250 K axis from the ceiling of the FGK box to 10,000 K, so the
+# Catmull-Rom weights, which assume equal node spacing, stay valid across the whole range.
+# Verified against the archive listing on 2026-09-10: every one of these 364 nodes is
+# published at a+0.00, c+0.00, v2, r20000, with no hole to fill and none to drop.
+# log g starts at 3.5 so that the MARCS half is plane-parallel throughout, the same geometry
+# ATLAS9 uses, which removes the spherical-to-plane-parallel step of the FGK box from this one.
+_BOSZ_HOT_AXES: dict[str, Any] = {
+    "teff": [float(t) for t in range(7000, 10001, 250)],
+    "logg": [3.5, 4.0, 4.5, 5.0],
+    "mh": [-1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5],
+}
+
 _BOSZ_CAVEATS = (
     "MARCS switches geometry inside the log g axis: spherical below log g 3.5, "
     "plane-parallel at and above it. That is the upstream's own arrangement, confirmed "
@@ -799,13 +819,59 @@ _BOSZ_CAVEATS = (
 
 # Confirmed against the archive listing on 2026-08-27: this one model is absent while every
 # carbon-varied version of it is present, so it is a gap in the published calculation rather
-# than a naming error here. The grid is therefore not a complete box, which is why the
-# shipped FGK library interpolates barycentrically rather than with the cubic.
-_BOSZ_GAPS = ("Teff 5750 K, log g 3.0, [M/H] -0.75 is not published (a+0.00, c+0.00, v2).",)
+# than a naming error here. Since D62 the node is filled by linear interpolation along [M/H]
+# between its published neighbours at -1.0 and -0.5, so that the grid is a complete box and
+# the cubic interpolant applies; the library's metadata names it.
+_BOSZ_GAPS = (
+    "Teff 5750 K, log g 3.0, [M/H] -0.75 is not published (a+0.00, c+0.00, v2); filled by "
+    "linear interpolation along [M/H] between its neighbours at -1.0 and -0.5.",
+)
 
 _BOSZ_RECOMPUTE_NOTE = (
     "BOSZ 2024 was recomputed on 2025-09-25 to correct the hydrogen lines and the OH+ band "
     "strength. Anything cached before that date is the earlier calculation."
+)
+
+# Both RVS entries state this, and they must state the same thing: the band is the one place
+# where the library's air scale meets a vacuum-scale instrument.
+_BOSZ_RVS_MEDIUM_CAVEAT = (
+    "Gaia publishes RVS spectra on the vacuum scale and this library is air. Convert with "
+    "SpectralLibrary.in_medium('vacuum') before comparing the two."
+)
+
+_BOSZ_HOT_CAVEATS = (
+    "The box crosses the MARCS/ATLAS9 boundary between 8000 and 8250 K. Below it the "
+    "spectra come from MARCS atmospheres on the Grevesse et al. (2007) solar scale; above "
+    "it from ATLAS-APOGEE ATLAS9 on the Asplund et al. (2005) scale. Meszaros et al. "
+    "(2024, Sect. 3.4) measure the two families as differing by about half a percent in "
+    "flux between 350 and 1000 nm at 8000 K, and offer no recommendation on interpolating "
+    "across the seam. A cubic stencil spanning 7750 to 8500 K mixes the two codes into one "
+    "tangent, so a temperature within one grid step of 8125 K rests on that assumption.",
+    "The atmospheres either side of the seam were built at different microturbulence: "
+    "1 km/s for MARCS plane-parallel, 2 km/s for ATLAS9, while the synthesis on both is "
+    "fixed here at 2 km/s. The inconsistency between structure and synthesis is therefore "
+    "present below 8000 K and absent above it.",
+    "Everything is LTE. The paper stops the grid at 16,000 K for want of NLTE in ATLAS9 "
+    "and gives no estimate of the LTE error below it, so for the A stars in this box the "
+    "size of that error is unquantified rather than small.",
+    "Above about 8000 K the Ca II triplet weakens and the Paschen series carries the band. "
+    "Five Paschen members lie in 8460-8700 Angstrom, and P15 at 8545 A and P13 at 8665 A "
+    "sit within 3.3 A of Ca II 8542 and 8662. A velocity measured from this band above "
+    "8000 K is a hydrogen-line velocity with a calcium blend, not a metal-line velocity.",
+    "Meszaros et al. (2024, Sect. 4.1) report BOSZ 2017 to 2024 flux changes of 10 to 15 "
+    "percent near the Paschen jump at 850 to 900 nm above 10,000 K. The normalized flux is "
+    "far less affected than the continuum, but log_continuum in this band is "
+    "version-sensitive at the top of the box, and it is log_continuum that sets the "
+    "light ratio.",
+    # Measured on the archive index on 2026-09-10: the 364 shards of this box carry
+    # Last-Modified 2025-04-03 to 2025-05-25, while their directories were rewritten
+    # 2025-09-24 to 2025-10-03.
+    "The archive's shards for this box carry Last-Modified dates of April and May 2025, "
+    "before the 2025-09-25 recomputation named in the upstream note, so whether the "
+    "hydrogen-line correction reached them is not established. That correction replaced an "
+    "eight-level hydrogen atom, which carries no transition from n >= 9, and n >= 9 is the "
+    "crowded end of the Paschen series inside this band. Check a build on the high Paschen "
+    "members before trusting the band above 8000 K.",
 )
 
 _LIBRARIES: dict[str, _Library] = {
@@ -813,43 +879,86 @@ _LIBRARIES: dict[str, _Library] = {
         name="bosz2024-fgk-r20000",
         description="BOSZ 2024 (MARCS) FGK optical, R = 20,000, 4000-7000 Angstrom",
         source="bosz2024",
-        version="1",
+        version="2",
         wave_range=(4000.0, 7000.0),
         medium="air",
         label_names=("teff", "logg", "mh"),
         axes=_BOSZ_FGK_AXES,
         fixed=_BOSZ_FIXED,
         licence="CC BY 4.0",
-        citation="Meszaros et al. 2024, A&A 688, A171 (arXiv:2407.10872)",
+        citation="Meszaros et al. 2024, A&A 688, A197 (arXiv:2407.10872)",
         doi="10.17909/T95G68",
         upstream_note=_BOSZ_RECOMPUTE_NOTE,
         caveats=_BOSZ_CAVEATS,
         known_gaps=_BOSZ_GAPS,
-        download_mb=645.0,
-        cache_mb=95.0,
+        # Measured on the built files on 2026-09-10, not estimated.
+        download_mb=621.0,
+        cache_mb=51.0,
     ),
     "bosz2024-fgk-rvs": _Library(
         name="bosz2024-fgk-rvs",
         description="BOSZ 2024 (MARCS) FGK in the Gaia RVS band, R = 20,000, 8350-8850 Angstrom",
         source="bosz2024",
-        version="1",
+        version="2",
         wave_range=(8350.0, 8850.0),
         medium="air",
         label_names=("teff", "logg", "mh"),
         axes=_BOSZ_FGK_AXES,
         fixed=_BOSZ_FIXED,
         licence="CC BY 4.0",
-        citation="Meszaros et al. 2024, A&A 688, A171 (arXiv:2407.10872)",
+        citation="Meszaros et al. 2024, A&A 688, A197 (arXiv:2407.10872)",
         doi="10.17909/T95G68",
         upstream_note=_BOSZ_RECOMPUTE_NOTE,
-        caveats=(
-            *_BOSZ_CAVEATS,
-            "Gaia publishes RVS spectra on the vacuum scale and this library is air. "
-            "Convert with SpectralLibrary.in_medium('vacuum') before comparing the two.",
-        ),
+        caveats=(*_BOSZ_CAVEATS, _BOSZ_RVS_MEDIUM_CAVEAT),
         known_gaps=_BOSZ_GAPS,
-        download_mb=645.0,
-        cache_mb=16.0,
+        # Measured on the built files on 2026-09-10, not estimated.
+        download_mb=621.0,
+        cache_mb=5.1,
+    ),
+    "bosz2024-hot-r20000": _Library(
+        name="bosz2024-hot-r20000",
+        description=(
+            "BOSZ 2024 (MARCS + ATLAS9) A and early-F optical, R = 20,000, 4000-7000 Angstrom"
+        ),
+        source="bosz2024",
+        version="1",
+        wave_range=(4000.0, 7000.0),
+        medium="air",
+        label_names=("teff", "logg", "mh"),
+        axes=_BOSZ_HOT_AXES,
+        fixed=_BOSZ_FIXED,
+        licence="CC BY 4.0",
+        citation="Meszaros et al. 2024, A&A 688, A197 (arXiv:2407.10872)",
+        doi="10.17909/T95G68",
+        upstream_note=_BOSZ_RECOMPUTE_NOTE,
+        caveats=_BOSZ_HOT_CAVEATS,
+        known_gaps=(),
+        download_mb=532.0,
+        cache_mb=41.0,
+    ),
+    "bosz2024-hot-rvs": _Library(
+        name="bosz2024-hot-rvs",
+        description=(
+            "BOSZ 2024 (MARCS + ATLAS9) A and early-F in the Gaia RVS band, "
+            "R = 20,000, 8350-8850 Angstrom"
+        ),
+        source="bosz2024",
+        version="1",
+        wave_range=(8350.0, 8850.0),
+        medium="air",
+        label_names=("teff", "logg", "mh"),
+        axes=_BOSZ_HOT_AXES,
+        fixed=_BOSZ_FIXED,
+        licence="CC BY 4.0",
+        citation="Meszaros et al. 2024, A&A 688, A197 (arXiv:2407.10872)",
+        doi="10.17909/T95G68",
+        upstream_note=_BOSZ_RECOMPUTE_NOTE,
+        caveats=(*_BOSZ_HOT_CAVEATS, _BOSZ_RVS_MEDIUM_CAVEAT),
+        known_gaps=(),
+        # The two hot entries share their raw shards, so building the second after the
+        # first costs no download.
+        download_mb=532.0,
+        cache_mb=4.0,
     ),
     "pollux-ob-smc24": _Library(
         name="pollux-ob-smc24",
@@ -1102,6 +1211,40 @@ def _fetch_shard(url: str, destination: Path) -> Path:
     return destination
 
 
+def _node_key(node) -> tuple[float, ...]:
+    return tuple(round(float(v), 6) for v in node)
+
+
+def _bracketing_neighbours(nodes, index: int, index_of, label_names):
+    """Two published neighbours of ``nodes[index]`` along one axis, and the linear weight.
+
+    The axes are tried metallicity first, then gravity, then temperature: over one grid
+    step a spectrum varies least, and most nearly linearly, along [M/H]. Returns
+    ``(j_lo, j_hi, weight, axis)`` with the filled spectrum
+    ``(1 - weight) * spectrum[j_lo] + weight * spectrum[j_hi]``, or ``None`` when no axis
+    has a published node on both sides (a corner of the box, or two gaps in a row).
+    """
+    node = np.asarray(nodes[index], dtype=float)
+    names = list(label_names)
+    order = [n for n in ("mh", "logg", "teff") if n in names] + [
+        n for n in names if n not in ("mh", "logg", "teff")
+    ]
+    for name in order:
+        axis = names.index(name)
+        values = np.unique([n[axis] for n in nodes])
+        position = int(np.searchsorted(values, node[axis]))
+        if position <= 0 or position >= values.size - 1:
+            continue
+        lo, hi = node.copy(), node.copy()
+        lo[axis], hi[axis] = values[position - 1], values[position + 1]
+        j_lo, j_hi = index_of.get(_node_key(lo)), index_of.get(_node_key(hi))
+        if j_lo is None or j_hi is None:
+            continue
+        weight = float((node[axis] - lo[axis]) / (hi[axis] - lo[axis]))
+        return j_lo, j_hi, weight, name
+    return None
+
+
 def _read_bosz_shard(path: Path, keep: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Return (normalized, log_continuum) over the kept pixels of one BOSZ file."""
     with gzip.open(path, "rt") as handle:
@@ -1139,7 +1282,7 @@ def ingest_bosz(
 
     References
     ----------
-    Mészáros, Sz., Bohlin, R., Allende Prieto, C., et al. 2024, A&A, 688, A171
+    Mészáros, Sz., Bohlin, R., Allende Prieto, C., et al. 2024, A&A, 688, A197
     """
     lib = _lookup_library(name)
     if lib.source != "bosz2024":
@@ -1190,9 +1333,13 @@ def ingest_bosz(
 
     # A published grid is not always the box its axes imply: BOSZ is missing exactly one
     # model in this box, (5750 K, log g 3.0, [M/H] -0.75), while every carbon-varied version
-    # of it is present, so it is a gap in the calculation rather than a naming error. The
-    # node is dropped, named, and recorded in the metadata rather than raising or being
-    # substituted by a neighbour.
+    # of it is present, so it is a gap in the calculation rather than a naming error. One
+    # gap costs the whole grid its box structure and with it the cubic interpolant: the
+    # fallback is piecewise linear over a triangulation, whose kinks stop a label fit 20 to
+    # 150 K from a perfect spectrum of the same grid (D62). A missing node that two
+    # published neighbours bracket along one axis is therefore filled by linear
+    # interpolation between them, named, and recorded in the metadata; one that cannot be
+    # bracketed is dropped and recorded, as before.
     missing: list[int] = []
     done = 0
     with ThreadPoolExecutor(max_workers=max(1, int(jobs))) as pool:
@@ -1209,21 +1356,56 @@ def ingest_bosz(
             if progress and (done % 25 == 0 or done == len(targets)):
                 print(f"  {done}/{len(targets)} shards")
 
+    plan: dict[int, tuple[int, int, float, str]] = {}
+    dropped: list[int] = []
     if missing:
-        absent = sorted(missing)
-        kept = [i for i in range(len(nodes)) if i not in set(absent)]
+        absent = set(missing)
+        index_of = {_node_key(nodes[i]): i for i in range(len(nodes)) if i not in absent}
+        for i in sorted(absent):
+            bracket = _bracketing_neighbours(nodes, i, index_of, lib.label_names)
+            if bracket is None:
+                dropped.append(i)
+            else:
+                plan[i] = bracket
         if progress:
-            print(f"  {len(absent)} node(s) are not published and were dropped:")
-            for i in absent[:5]:
+            for i, (_, _, _, axis) in plan.items():
                 teff, logg, mh = nodes[i]
-                print(f"    Teff {teff:.0f}, log g {logg:.1f}, [M/H] {mh:+.2f}")
-        nodes = [nodes[i] for i in kept]
-        targets = [targets[i] for i in kept]
+                print(
+                    f"  Teff {teff:.0f}, log g {logg:.1f}, [M/H] {mh:+.2f} is not published; "
+                    f"filled by linear interpolation along {axis}"
+                )
+            if dropped:
+                print(f"  {len(dropped)} node(s) are not published, unbracketed, and dropped:")
+                for i in dropped[:5]:
+                    teff, logg, mh = nodes[i]
+                    print(f"    Teff {teff:.0f}, log g {logg:.1f}, [M/H] {mh:+.2f}")
+    kept = [i for i in range(len(nodes)) if i not in set(dropped)]
+    row_of = {i: r for r, i in enumerate(kept)}
 
-    normalized = np.empty((len(nodes), wave.size), dtype=np.float64)
+    normalized = np.empty((len(kept), wave.size), dtype=np.float64)
     log_continuum = np.empty_like(normalized)
-    for i, (_, path) in enumerate(targets):
-        normalized[i], log_continuum[i] = _read_bosz_shard(path, keep)
+    for i in kept:
+        if i in plan:
+            continue
+        normalized[row_of[i]], log_continuum[row_of[i]] = _read_bosz_shard(targets[i][1], keep)
+    filled: list[dict[str, Any]] = []
+    for i, (j_lo, j_hi, weight, axis) in plan.items():
+        r, lo, hi = row_of[i], row_of[j_lo], row_of[j_hi]
+        normalized[r] = (1.0 - weight) * normalized[lo] + weight * normalized[hi]
+        log_continuum[r] = (1.0 - weight) * log_continuum[lo] + weight * log_continuum[hi]
+        filled.append(
+            {
+                **dict(zip(lib.label_names, (float(v) for v in nodes[i]), strict=True)),
+                "axis": axis,
+                "between": [
+                    [float(v) for v in nodes[j_lo]],
+                    [float(v) for v in nodes[j_hi]],
+                ],
+                "weight": float(weight),
+            }
+        )
+    nodes = [nodes[i] for i in kept]
+    targets = [targets[i] for i in kept]
 
     meta = {
         "grid": name,
@@ -1243,13 +1425,25 @@ def ingest_bosz(
         "caveats": list(lib.caveats),
         "n_requested": len(lib.axes["teff"]) * len(lib.axes["logg"]) * len(lib.axes["mh"]),
         "n_missing": len(missing),
+        "n_filled": len(filled),
+        "n_dropped": len(dropped),
+        "filled_nodes": filled,
         "shard_sha256": {Path(p).name: _sha256(p) for _, p in targets[:1]},
     }
-    if missing:
+    if filled:
+        meta["filled_note"] = (
+            "One or more nodes the axes imply are not published upstream and were filled by "
+            "linear interpolation between their two published neighbours along one axis "
+            "(meta['filled_nodes']), so that the grid is a complete box and the cubic "
+            "interpolant applies. A fit within one grid step of a filled node rests partly "
+            "on that interpolation. See library_info()['known_gaps']."
+        )
+    if dropped:
         meta["missing_note"] = (
-            "One or more nodes the axes imply are not published upstream and were dropped, "
-            "so the grid is not a complete box and interpolation falls back from the cubic "
-            "to barycentric over a triangulation. See library_info()['known_gaps']."
+            "One or more nodes the axes imply are not published upstream, have no published "
+            "neighbours on both sides along any axis, and were dropped, so the grid is not a "
+            "complete box and interpolation falls back from the cubic to barycentric over a "
+            "triangulation. See library_info()['known_gaps']."
         )
 
     library = SpectralLibrary(

@@ -50,6 +50,7 @@ from albireo.operators import shift_spectrum_adjoint as shift_adjoint
 from albireo.simulate import chebyshev_response
 
 __all__ = [
+    "PER_EPOCH",
     "EpochGroup",
     "Problem",
     "apply_model",
@@ -58,6 +59,7 @@ __all__ = [
     "ar1_band_weights",
     "build_problem",
     "data_residual_zscores",
+    "declared_lsf_widths",
     "normal_matvec",
     "rhs",
     "weighted_data_terms",
@@ -71,14 +73,110 @@ __all__ = [
 ]
 
 
+PER_EPOCH = "per-epoch"
+"""Declare, in ``lsf_sigma_v``, that an instrument's width is read from each epoch.
+
+``lsf_sigma_v={"HARPS": PER_EPOCH}`` takes the Gaussian width from every HARPS epoch's
+own :attr:`~albireo.data.EpochData.lsf_sigma_kms`, which the reader fills from the
+file's resolving power. Epochs that declare different widths then get different kernels
+under the one instrument key: HARPS observes at R = 115,000 and, in its high-efficiency
+mode, at R = 80,000, and both are filed under ``INSTRUME = 'HARPS'``. A per-epoch width
+is a scalar, so it cannot be combined with ``lsf_anchors_angstrom`` for that instrument,
+and it cannot be inferred through the ``lsf_sigma`` site: it is what the file declared.
+"""
+
+
+def _is_per_epoch(value) -> bool:
+    return isinstance(value, str) and value == PER_EPOCH
+
+
+def declared_lsf_widths(dataset: Dataset, instrument: str) -> dict[float, list[int]]:
+    """The distinct LSF widths the epochs of ``instrument`` declare, with their epochs.
+
+    Parameters
+    ----------
+    dataset
+        The epochs.
+    instrument
+        An instrument key of ``dataset``.
+
+    Returns
+    -------
+    dict
+        Maps each declared width in km/s to the (ascending) indices of the epochs that
+        declare it.
+
+    Raises
+    ------
+    ValueError
+        If any epoch of that instrument declares no width; the message names them. A
+        width declared :data:`PER_EPOCH` has to exist on every epoch it is to be read
+        from, and the reader fills it only when the file carries a resolving power.
+    """
+    widths: dict[float, list[int]] = {}
+    missing = []
+    for j, epoch in enumerate(dataset):
+        if epoch.instrument != instrument:
+            continue
+        if epoch.lsf_sigma_kms is None:
+            missing.append(j)
+        else:
+            widths.setdefault(float(epoch.lsf_sigma_kms), []).append(j)
+    if missing:
+        shown = missing if len(missing) <= 8 else [*missing[:8], "..."]
+        raise ValueError(
+            f"instrument {instrument!r}: the LSF width is declared per epoch, but "
+            f"{len(missing)} epoch(s) declare none (indices {shown}). The reader fills "
+            "EpochData.lsf_sigma_kms from the file's resolving power (SPEC_RES); set it on "
+            "those epochs, or give this instrument one width in km/s instead."
+        )
+    return dict(sorted(widths.items()))
+
+
+def _warn_if_widths_pooled(dataset: Dataset, lsf_sigma_v: Mapping) -> None:
+    """Warn when one instrument key pools epochs that declare different LSF widths.
+
+    The model applies the width supplied for the key to every epoch under it, so the
+    epochs whose files say otherwise are modelled at the wrong resolution. On AI Phe the
+    six HARPS EGGS exposures (R = 80,000) under the HAM width (R = 115,000) were found
+    this way, after the fact; the warning is what would have found them at build time.
+    """
+    for instrument in dataset.instruments:
+        if instrument not in lsf_sigma_v or _is_per_epoch(lsf_sigma_v[instrument]):
+            continue
+        widths: dict[float, list[int]] = {}
+        for j, epoch in enumerate(dataset):
+            if epoch.instrument == instrument and epoch.lsf_sigma_kms is not None:
+                widths.setdefault(float(epoch.lsf_sigma_kms), []).append(j)
+        if len(widths) < 2:
+            continue
+        listing = "; ".join(
+            f"{sigma:.3f} km/s for epochs {idx if len(idx) <= 8 else [*idx[:8], '...']}"
+            for sigma, idx in sorted(widths.items())
+        )
+        supplied = np.atleast_1d(np.asarray(lsf_sigma_v[instrument], dtype=np.float64))
+        warnings.warn(
+            f"instrument {instrument!r}: its epochs declare {len(widths)} different LSF "
+            f"widths ({listing}), and all of them are modelled with the supplied "
+            f"{np.array2string(supplied, precision=3)} km/s. A resolving power is a "
+            "property of the exposure, not of the instrument name (HARPS HAM and EGGS "
+            "modes both say INSTRUME = 'HARPS'). Pass lsf_sigma_v={"
+            f"{instrument!r}: PER_EPOCH}} to model each epoch at its declared width, or "
+            "give the modes distinct instrument keys.",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+
+
 @jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True)
 class EpochGroup:
     """All epochs sharing one instrument and one native grid (one rebin operator, one LSF).
 
     One instrument can own several groups when its exposures do not share a wavelength
-    array (:func:`_epoch_groups`); ``instrument`` is then the same string in each, since
-    it is the key into the LSF and response tables.
+    array (:func:`_epoch_groups`), or, for an instrument declared :data:`PER_EPOCH`,
+    when they declare different LSF widths; ``instrument`` is then the same string in
+    each, since it is the key into the LSF and response tables.
 
     Registered as a pytree so a whole :class:`Problem` can be passed as a ``jax.jit``
     argument: its arrays then enter the graph as runtime parameters rather than embedded
@@ -399,7 +497,7 @@ def _warn_if_data_extends_past_grid(instrument, dataset, idx, covered) -> None:
     )
 
 
-def _epoch_groups(dataset: Dataset) -> list[tuple[str, list[int]]]:
+def _epoch_groups(dataset: Dataset, per_epoch: Sequence[str] = ()) -> list[tuple[str, list[int]]]:
     """Partition epoch indices into ``(instrument, indices)`` sharing one native grid.
 
     A group is the unit that shares static operators, so it must be one instrument and
@@ -420,11 +518,22 @@ def _epoch_groups(dataset: Dataset) -> list[tuple[str, list[int]]]:
 
     Grids are matched by content hash, so the partition costs one pass over the data
     rather than a comparison against every group seen so far.
+
+    For an instrument named in ``per_epoch`` the declared LSF width joins the key, so
+    epochs at different resolving powers get different kernels under the one instrument
+    key; for every other instrument the width is the instrument's and the declared value
+    is not consulted here.
     """
+    per_epoch = frozenset(per_epoch)
     order: list[tuple[str, list[int]]] = []
-    seen: dict[tuple[str, bytes], int] = {}
+    seen: dict[tuple[str, float | None, bytes], int] = {}
     for j, epoch in enumerate(dataset):
-        key = (epoch.instrument, hashlib.blake2b(epoch.wave.tobytes(), digest_size=16).digest())
+        width = epoch.lsf_sigma_kms if epoch.instrument in per_epoch else None
+        key = (
+            epoch.instrument,
+            width,
+            hashlib.blake2b(epoch.wave.tobytes(), digest_size=16).digest(),
+        )
         slot = seen.get(key)
         if slot is None or not np.array_equal(dataset[order[slot][1][0]].wave, epoch.wave):
             seen[key] = len(order)  # a hash collision (never observed) just makes a group
@@ -434,8 +543,8 @@ def _epoch_groups(dataset: Dataset) -> list[tuple[str, list[int]]]:
     return order
 
 
-def _lsf_bank(instrument, lsf_sigma_v, lsf_anchors_angstrom, lsf_h3, grid):
-    """Realized LSF profile bank for one instrument (build time, NumPy).
+def _lsf_bank(instrument, sigma_v, lsf_anchors_angstrom, lsf_h3, grid):
+    """Realized LSF profile bank for one group (build time, NumPy).
 
     Returns ``(bank, anchor_wave)``: a ``(1, 2r+1)`` stationary kernel and ``()``
     without anchors, else the ``(grid.n, 2r+1)`` per-model-pixel profiles from
@@ -445,7 +554,7 @@ def _lsf_bank(instrument, lsf_sigma_v, lsf_anchors_angstrom, lsf_h3, grid):
     :func:`albireo.operators.gaussian_kernel`), so every later :func:`with_lsf` swap
     bounded by the build widths stays untruncated; ``h3`` does not change the support.
     """
-    sig = np.atleast_1d(np.asarray(lsf_sigma_v[instrument], dtype=np.float64))
+    sig = np.atleast_1d(np.asarray(sigma_v, dtype=np.float64))
     if sig.ndim != 1 or np.any(sig <= 0):
         raise ValueError(f"instrument {instrument!r}: LSF widths must be positive scalars")
     anchors = None if lsf_anchors_angstrom is None else lsf_anchors_angstrom.get(instrument)
@@ -519,7 +628,12 @@ def build_problem(
         with matching ``lsf_anchors_angstrom``, one width per anchor for a
         wavelength-dependent LSF (a scalar then broadcasts to every anchor). The
         largest width fixes the kernel radius, so build-time widths are the upper
-        bounds a later :func:`with_lsf` swap must respect.
+        bounds a later :func:`with_lsf` swap must respect. The value
+        :data:`PER_EPOCH` reads the width from each epoch's own
+        :attr:`~albireo.data.EpochData.lsf_sigma_kms` instead, which every epoch of that
+        instrument must then declare; epochs at different widths get different kernels.
+        An instrument given one width whose epochs declare several is reported as a
+        warning naming the epochs, because the supplied width is applied to all of them.
     lsf_anchors_angstrom
         Optional per-instrument anchor wavelengths (strictly increasing, >= 2). When
         given, the instrument's LSF varies across the grid: per-anchor Gaussian
@@ -633,10 +747,24 @@ def build_problem(
     if len(response_coeffs) != n_ep:
         raise ValueError("response_coeffs must have one entry per epoch")
 
+    per_epoch = {name for name, value in lsf_sigma_v.items() if _is_per_epoch(value)}
+    for name in sorted(per_epoch & set(dataset.instruments)):
+        declared_lsf_widths(dataset, name)  # raises, naming the epochs without a width
+        if lsf_anchors_angstrom is not None and lsf_anchors_angstrom.get(name):
+            raise ValueError(
+                f"instrument {name!r}: a PER_EPOCH width is one scalar per epoch, so it "
+                "cannot carry lsf_anchors_angstrom. Declare the anchored widths "
+                "explicitly for this instrument."
+            )
+    _warn_if_widths_pooled(dataset, lsf_sigma_v)
+
     groups = []
-    for instrument, idx in _epoch_groups(dataset):
+    for instrument, idx in _epoch_groups(dataset, per_epoch):
         if instrument not in lsf_sigma_v:
             raise ValueError(f"no LSF width supplied for instrument {instrument!r}")
+        sigma_v = (
+            dataset[idx[0]].lsf_sigma_kms if instrument in per_epoch else lsf_sigma_v[instrument]
+        )
         wave_native = dataset[idx[0]].wave
         rebin = rebin_operator(x_in=grid.wave, x_out=wave_native)
         if np.asarray(rebin.rows).size == 0:
@@ -660,7 +788,7 @@ def build_problem(
         _warn_if_row_support_is_an_artifact(instrument, wave_native, per_row, row_support)
         _warn_if_data_extends_past_grid(instrument, dataset, idx, covered)
 
-        kernel, anchor_wave = _lsf_bank(instrument, lsf_sigma_v, lsf_anchors_angstrom, lsf_h3, grid)
+        kernel, anchor_wave = _lsf_bank(instrument, sigma_v, lsf_anchors_angstrom, lsf_h3, grid)
         base = np.asarray(rebin(jnp.ones(grid.n)))  # R 1 (= coverage)
 
         z_rows, w_rows, r_rows, gap_rows = [], [], [], []
@@ -1286,6 +1414,12 @@ def with_lsf(problem: Problem, lsf_sigma_v: Mapping, lsf_h3: Mapping | None = No
     for g in problem.groups:
         if g.instrument not in lsf_sigma_v:
             raise ValueError(f"no LSF width supplied for instrument {g.instrument!r}")
+        if _is_per_epoch(lsf_sigma_v[g.instrument]):
+            raise ValueError(
+                f"instrument {g.instrument!r}: a PER_EPOCH width is what each file "
+                "declared and is not a parameter; with_lsf takes numbers. Build the "
+                "problem with explicit widths if the width is to be inferred."
+            )
         sigma_px = jnp.atleast_1d(jnp.asarray(lsf_sigma_v[g.instrument])) / problem.grid.dv_kms
         radius = (g.kernel.shape[-1] - 1) // 2
         if not g.lsf_anchor_wave:

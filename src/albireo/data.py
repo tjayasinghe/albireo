@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 
 import numpy as np
 
@@ -104,6 +104,18 @@ class EpochData:
     medium : {"air", "vacuum"} or None, optional
         Which wavelength scale ``wave`` is on. Default ``None``, meaning undeclared, which
         is accepted but is not equivalent to ``"air"``: nothing may assume a value for it.
+    lsf_sigma_kms : float or None, optional
+        Gaussian line-spread width this exposure was taken at, in km/s, as its file
+        declared it (the reader converts a header resolving power; see
+        :attr:`albireo.io.RawSpectrum.lsf_sigma_kms`). Default ``None``, undeclared.
+
+        This is a property of the exposure, not of the instrument name: HARPS observes at
+        R = 115,000 in its high-accuracy mode and at R = 80,000 in its high-efficiency
+        mode under the same ``INSTRUME``, and FEROS, UVES and X-shooter settings differ
+        between programmes on one target. It enters the model only where the instrument's
+        width is declared as :data:`albireo.forward.PER_EPOCH`; a width given per
+        instrument is used as given, and pooling epochs that declare different widths
+        under one such key is reported as a warning naming them.
 
         Air and vacuum wavelengths differ by a nearly constant 83 km/s across the optical
         (0.87 Angstrom at 3000 A, 2.74 A at 10000 A), the same order as the semi-amplitudes
@@ -151,6 +163,7 @@ class EpochData:
     instrument: str = "default"
     mask: np.ndarray | None = None
     medium: str | None = None
+    lsf_sigma_kms: float | None = None
 
     def __post_init__(self) -> None:
         wave = _as_float64_1d(self.wave, "wave")
@@ -207,6 +220,13 @@ class EpochData:
             raise ValueError(
                 f"medium must be one of {_MEDIA} or None (undeclared), got {self.medium!r}"
             )
+        lsf_sigma = self.lsf_sigma_kms
+        if lsf_sigma is not None:
+            lsf_sigma = _as_finite_float(lsf_sigma, "lsf_sigma_kms")
+            if not lsf_sigma > 0.0:
+                raise ValueError(
+                    f"lsf_sigma_kms must be positive (or None, undeclared); got {lsf_sigma}"
+                )
 
         mask: np.ndarray | None = None
         if self.mask is not None:
@@ -228,6 +248,7 @@ class EpochData:
         object.__setattr__(self, "v_bary", v_bary)
         object.__setattr__(self, "instrument", str(self.instrument))
         object.__setattr__(self, "mask", mask)
+        object.__setattr__(self, "lsf_sigma_kms", lsf_sigma)
 
     @property
     def n_pixels(self) -> int:
@@ -408,6 +429,20 @@ class Dataset:
         """
         return tuple(sorted({epoch.instrument for epoch in self.epochs}))
 
+    @property
+    def lsf_sigma_kms(self) -> np.ndarray:
+        """The line-spread width each epoch declares, in km/s; ``nan`` where undeclared.
+
+        Returns
+        -------
+        numpy.ndarray
+            Shape ``(n_epochs,)``, dtype ``float64``, in supplied order.
+        """
+        return np.array(
+            [np.nan if e.lsf_sigma_kms is None else e.lsf_sigma_kms for e in self.epochs],
+            dtype=np.float64,
+        )
+
     def summary(self) -> str:
         """Human-readable multi-line summary of the dataset.
 
@@ -439,10 +474,33 @@ class Dataset:
             n_sub = sum(epoch.n_pixels for epoch in subset)
             lines.append(
                 f"    {name:<{width}}  {_plural(len(subset), 'epoch')}, "
-                f"{wave_min:.2f}-{wave_max:.2f} A, {n_sub} px"
+                f"{wave_min:.2f}-{wave_max:.2f} A, {n_sub} px" + _lsf_note(subset)
             )
         lines.append(f"  good pixels: {n_good} / {n_pixels} ({100.0 * n_good / n_pixels:.1f}%)")
         return "\n".join(lines)
+
+
+def _lsf_note(epochs: Sequence[EpochData]) -> str:
+    """The declared LSF widths of a group of epochs, for :meth:`Dataset.summary`.
+
+    Distinct widths are listed with their epoch counts, so that two instrument modes
+    filed under one key (HARPS HAM and EGGS, for instance) are visible at a glance.
+    """
+    declared = [e.lsf_sigma_kms for e in epochs if e.lsf_sigma_kms is not None]
+    if not declared:
+        return ""
+    counts: dict[float, int] = {}
+    for sigma in declared:
+        counts[sigma] = counts.get(sigma, 0) + 1
+    parts = [
+        f"{sigma:.3f} km/s" + (f" x{n}" if len(counts) > 1 else "")
+        for sigma, n in sorted(counts.items())
+    ]
+    undeclared = len(epochs) - len(declared)
+    note = ", LSF sigma " + ", ".join(parts)
+    if undeclared:
+        note += f" ({undeclared} undeclared)"
+    return note
 
 
 def _plural(count: int, noun: str) -> str:

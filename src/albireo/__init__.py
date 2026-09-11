@@ -28,6 +28,7 @@ from albireo.archive import (
     resolve_bloem,
     spectra_query,
 )
+from albireo.benchmark import BenchmarkConfig, BenchmarkRun, Tier, run_benchmark, write_report
 from albireo.calibrate import DetectionLimit, detection_limit
 from albireo.data import Dataset, EpochData
 from albireo.examples import clear_example_cache, example_info, example_names, load_example
@@ -49,6 +50,7 @@ from albireo.facade import (
 )
 from albireo.forecast import SensitivityForecast, plan_epochs, sensitivity_forecast
 from albireo.forward import (
+    PER_EPOCH,
     Problem,
     build_problem,
     data_residual_zscores,
@@ -61,6 +63,16 @@ from albireo.forward import (
     with_response,
     with_shifts,
     with_velocities,
+)
+from albireo.gaia import (
+    RVS_DR3_MEAN,
+    RVS_DR4_EPOCH,
+    RVSProduct,
+    RVSTruth,
+    predict_grvs,
+    rvs_snr_per_pixel,
+    rvs_transit_times,
+    simulate_rvs_dataset,
 )
 from albireo.grids import C_KMS, LogGrid, air_to_vacuum, log_doppler_shift, vacuum_to_air
 from albireo.handoff import export_draws, write_gssp, write_ispec
@@ -78,7 +90,13 @@ from albireo.inference import (
     run_map,
     run_nuts,
 )
-from albireo.kepler import radial_velocity, solve_kepler, t_peri_from_t_conj, true_anomaly
+from albireo.kepler import (
+    radial_velocity,
+    solve_kepler,
+    t_conj_from_t_peri,
+    t_peri_from_t_conj,
+    true_anomaly,
+)
 from albireo.library import (
     BoxInterpolator,
     SimplexInterpolator,
@@ -143,6 +161,16 @@ from albireo.pipeline import (
     run_pipeline,
     run_star,
     write_config_template,
+)
+from albireo.population import (
+    BinarySystem,
+    MainSequence,
+    draw_population,
+    from_debcat,
+    from_gaia_sb2,
+    query_gaia_sb2,
+    read_population,
+    write_population,
 )
 from albireo.preprocess import (
     TELLURIC_BANDS,
@@ -235,10 +263,16 @@ __all__ = [
     "C_KMS",
     "LSF",
     "NEBULAR_LINES",
+    "PER_EPOCH",
+    "RVS_DR3_MEAN",
+    "RVS_DR4_EPOCH",
     "TELLURIC_BANDS",
     "Analysis",
     "ArchiveRecord",
+    "BenchmarkConfig",
+    "BenchmarkRun",
     "Between",
+    "BinarySystem",
     "BloemTarget",
     "BoxInterpolator",
     "ComponentConfig",
@@ -256,6 +290,7 @@ __all__ = [
     "LabelMatch",
     "LogGrid",
     "MAPResult",
+    "MainSequence",
     "MarginalOrbitModel",
     "MarginalResult",
     "Nebular",
@@ -266,6 +301,8 @@ __all__ = [
     "Posterior",
     "Problem",
     "RVOrbit",
+    "RVSProduct",
+    "RVSTruth",
     "RadiusRatio",
     "RawSpectrum",
     "RebinOperator",
@@ -284,6 +321,7 @@ __all__ = [
     "StarResult",
     "Telluric",
     "Template",
+    "Tier",
     "TodcorBatch",
     "TodcorSurface",
     "VelocityTable",
@@ -304,6 +342,7 @@ __all__ = [
     "der_snr_sigma",
     "detection_limit",
     "download",
+    "draw_population",
     "draw_spectra",
     "estimate_ivar",
     "example_info",
@@ -313,6 +352,8 @@ __all__ = [
     "find_period",
     "fit_continuum",
     "fit_rv_orbit",
+    "from_debcat",
+    "from_gaia_sb2",
     "gauss_hermite_kernel_traced",
     "gaussian_kernel",
     "gaussian_kernel_traced",
@@ -359,9 +400,12 @@ __all__ = [
     "plot_todcor_surface",
     "plot_velocity_table",
     "posterior_spectra",
+    "predict_grvs",
     "query",
+    "query_gaia_sb2",
     "radial_velocity",
     "read_dataset",
+    "read_population",
     "read_spectrum",
     "rebin_operator",
     "refit_draws",
@@ -372,10 +416,13 @@ __all__ = [
     "rotational_kernel",
     "rotational_kernel_traced",
     "rotational_radius_for",
+    "run_benchmark",
     "run_map",
     "run_nuts",
     "run_pipeline",
     "run_star",
+    "rvs_snr_per_pixel",
+    "rvs_transit_times",
     "save_fit",
     "save_library",
     "select_region",
@@ -384,12 +431,14 @@ __all__ = [
     "shift_spectrum",
     "shift_spectrum_adjoint",
     "simulate_dataset",
+    "simulate_rvs_dataset",
     "solve_kepler",
     "spectra_query",
     "spectra_std",
     "synthetic_deviation_spectrum",
     "synthetic_nebular_spectrum",
     "synthetic_telluric_spectrum",
+    "t_conj_from_t_peri",
     "t_peri_from_t_conj",
     "to_epoch",
     "to_inference_data",
@@ -412,5 +461,7 @@ __all__ = [
     "write_config_template",
     "write_gssp",
     "write_ispec",
+    "write_population",
+    "write_report",
     "write_spectra",
 ]

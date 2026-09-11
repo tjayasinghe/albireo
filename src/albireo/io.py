@@ -1261,6 +1261,10 @@ def to_epoch(
         v_bary=raw.v_bary,
         instrument=raw.instrument,
         medium=None if raw.wave_medium == "unknown" else raw.wave_medium,
+        # The header's resolving power travels with the epoch. It is not applied here:
+        # the model takes the width the caller declares per instrument, or per epoch
+        # when the instrument is declared PER_EPOCH (albireo.forward.build_problem).
+        lsf_sigma_kms=raw.lsf_sigma_kms,
     )
     if region is not None:
         epoch = select_region(epoch, float(region[0]), float(region[1]))

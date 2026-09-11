@@ -70,6 +70,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from albireo.data import Dataset, EpochData
+from albireo.forward import _is_per_epoch
 from albireo.grids import C_KMS, LogGrid, log_doppler_shift
 from albireo.operators import (
     convolve_spectrum,
@@ -558,7 +559,14 @@ def _chi2_from_terms(b, gram, pwa, pwp, pwz, zwz, amps=None, free_scale=False):
             mat[n_tmpl:, :n_tmpl] = pwa.T
             mat[n_tmpl:, n_tmpl:] = pwp
             rhs[n_tmpl:] = pwz
-        sol = np.linalg.solve(mat, rhs)
+        try:
+            sol = np.linalg.solve(mat, rhs)
+        except np.linalg.LinAlgError:
+            # Two templates that coincide at this shift (the same spectrum for both
+            # components, as Gaia's own screening correlates, or twins) make the Gram
+            # matrix singular. The chi-square of the best fit in the column span is still
+            # defined; the minimum-norm amplitudes are one of the equivalent solutions.
+            sol = np.linalg.lstsq(mat, rhs, rcond=None)[0]
         return float(zwz - rhs @ sol), sol[:n_tmpl], sol[n_tmpl:]
     amps = np.asarray(amps, dtype=np.float64)
     chi2 = zwz - 2.0 * amps @ b + amps @ gram @ amps
@@ -697,6 +705,79 @@ def _hessian(terms: _Terms, pos: np.ndarray, amps, mode: str, h: float = 0.2):
     return 0.5 * (hess + hess.T)
 
 
+@jax.jit
+def _epoch_columns(t_stack, rows, cols, vals, w, deltas):
+    """The projected templates at a few integer shifts, ``(n_tmpl, n_out, n_shift)``.
+
+    The same gather as :func:`_epoch_terms` builds its inner products from, returned as
+    pixel vectors: what the Jacobian of the model at the solution is made of.
+    """
+    n_out = w.shape[0]
+    n_grid = t_stack.shape[1]
+
+    def columns(t, d):
+        idx = cols[:, None] - d[None, :]
+        ok = (idx >= 0) & (idx < n_grid)
+        contrib = vals[:, None] * jnp.where(ok, t[jnp.clip(idx, 0, n_grid - 1)], 0.0)
+        return jax.ops.segment_sum(contrib, rows, num_segments=n_out)
+
+    return jax.vmap(columns)(t_stack, deltas)
+
+
+def _ar1_apply(x: np.ndarray, phi: float) -> np.ndarray:
+    """``R x`` for the AR(1) correlation ``R_pq = phi^|p - q|`` over the pixel index.
+
+    Two first-order recursions, forward and backward, each a filter with one pole; their
+    sum counts the diagonal twice. Rows with no weight contribute nothing to ``x`` and
+    are carried across, which is the correlation of a subset of a Markov chain.
+    """
+    from scipy.signal import lfilter
+
+    forward = lfilter([1.0], [1.0, -phi], x, axis=0)
+    backward = lfilter([1.0], [1.0, -phi], x[::-1], axis=0)[::-1]
+    return forward + backward - x
+
+
+def _correlated_covariance(stack, work: _EpochWork, fine, pos, amps, amp_mode: str, phi: float):
+    """The shift covariance in pixels squared under AR(1) noise, by the sandwich.
+
+    The model at the solution is linear in the shifts within their cells (a template at
+    a fractional shift is the linear interpolation of its two integer neighbours, the
+    identity :meth:`_Terms.at` rests on), in the amplitudes and in the nuisance, so its
+    Jacobian ``J`` is assembled from the projected templates at the two integer shifts
+    bracketing each position. With ``W = diag(w)`` and ``R`` the AR(1) correlation of the
+    standardized noise, ``Cov = (J^T W J)^-1 J^T W^1/2 R W^1/2 J (J^T W J)^-1``; at
+    ``phi = 0`` this is the white-noise curvature error, and the shift block is returned.
+    """
+    n_tmpl = fine.shape[0]
+    hi = fine.shape[1] - 1
+    cell = np.clip(np.floor(np.asarray(pos, dtype=np.float64)).astype(int), 0, hi - 1)
+    frac = np.asarray(pos, dtype=np.float64) - cell
+    deltas = np.stack([fine[i, cell[i] : cell[i] + 2] for i in range(n_tmpl)]).astype(np.int32)
+    columns = np.asarray(
+        _epoch_columns(stack, work.rows, work.cols, work.vals, work.w, jnp.asarray(deltas))
+    )
+    model = (1.0 - frac)[:, None] * columns[:, :, 0] + frac[:, None] * columns[:, :, 1]
+    slope = columns[:, :, 1] - columns[:, :, 0]
+    amps = np.asarray(amps, dtype=np.float64)
+    jacobian = [amps[i] * slope[i] for i in range(n_tmpl)]
+    if amp_mode == "free":
+        jacobian += [model[i] for i in range(n_tmpl)]
+    elif amp_mode == "scale":
+        jacobian.append(amps @ model)
+    basis = np.asarray(work.basis)
+    jacobian += [basis[:, k] for k in range(basis.shape[1])]
+    whitened = np.sqrt(np.asarray(work.w))[:, None] * np.stack(jacobian, axis=1)
+    curvature = whitened.T @ whitened
+    try:
+        cov = np.linalg.inv(curvature)
+    except np.linalg.LinAlgError:
+        return np.full((n_tmpl, n_tmpl), np.nan)
+    middle = whitened.T @ _ar1_apply(whitened, phi)
+    sandwich = cov @ middle @ cov
+    return sandwich[:n_tmpl, :n_tmpl]
+
+
 # ---------------------------------------------------------------------------
 # Instrument preparation
 # ---------------------------------------------------------------------------
@@ -718,14 +799,36 @@ def _effective_sigma(instrument: str, sigma_inst, template: Template) -> np.ndar
     return np.sqrt(np.clip(excess, 0.0, None))
 
 
+def _lsf_key(epoch, lsf_sigma_v):
+    """The key under which an epoch's convolved templates are cached.
+
+    One per instrument, except for an instrument declared
+    :data:`albireo.forward.PER_EPOCH`, where the epoch's own width joins the key so that
+    epochs at different resolving powers are correlated against templates at theirs.
+    """
+    if lsf_sigma_v is not None and _is_per_epoch(lsf_sigma_v.get(epoch.instrument)):
+        if epoch.lsf_sigma_kms is None:
+            raise ValueError(
+                f"instrument {epoch.instrument!r} is declared PER_EPOCH but an epoch at "
+                f"BJD {epoch.bjd:.5f} declares no LSF width (EpochData.lsf_sigma_kms)"
+            )
+        return (epoch.instrument, float(epoch.lsf_sigma_kms))
+    return (epoch.instrument, None)
+
+
 def _convolved_templates(
     templates: Sequence[Template],
     grid: LogGrid,
     instrument: str,
     lsf_sigma_v,
     lsf_anchors_angstrom,
+    epoch_sigma_kms: float | None = None,
 ) -> tuple[np.ndarray, float]:
-    """Templates convolved with one instrument's LSF, and the narrowest sigma in pixels."""
+    """Templates convolved with one instrument's LSF, and the narrowest sigma in pixels.
+
+    ``epoch_sigma_kms`` supplies the width for an instrument declared
+    :data:`albireo.forward.PER_EPOCH`; it is ignored otherwise.
+    """
     if lsf_sigma_v is None:
         stack = np.stack([t.deviation for t in templates])
         return stack, 0.0
@@ -735,11 +838,19 @@ def _convolved_templates(
             f"{sorted(lsf_sigma_v)}. Pass lsf_sigma_v=None only if the templates are "
             "already at the instruments' resolution."
         )
+    sigma_inst = lsf_sigma_v[instrument]
+    if _is_per_epoch(sigma_inst):
+        if epoch_sigma_kms is None:
+            raise ValueError(
+                f"instrument {instrument!r} is declared PER_EPOCH: the epoch's own width "
+                "is needed to convolve the templates"
+            )
+        sigma_inst = float(epoch_sigma_kms)
     anchors = None if lsf_anchors_angstrom is None else lsf_anchors_angstrom.get(instrument)
     rows = []
     narrowest = np.inf
     for t in templates:
-        sigma = _effective_sigma(instrument, lsf_sigma_v[instrument], t)
+        sigma = _effective_sigma(instrument, sigma_inst, t)
         if anchors is None:
             if sigma.size != 1:
                 raise ValueError(
@@ -873,6 +984,18 @@ def _compose(v_kms, v_zero_kms: float | None, relativistic: bool):
 # ---------------------------------------------------------------------------
 
 
+def _finite_reduce(func, values) -> float:
+    """``func`` over the finite entries of ``values``; ``nan`` when there are none.
+
+    An epoch at the search edge carries no velocity and no uncertainty, so a column of a
+    small table can be entirely NaN; the NumPy ``nan*`` reductions warn and return NaN
+    there, and a summary line is not the place for a warning.
+    """
+    values = np.asarray(values, dtype=np.float64).reshape(-1)
+    finite = values[np.isfinite(values)]
+    return float(func(finite)) if finite.size else float("nan")
+
+
 @dataclass(frozen=True)
 class VelocityTable:
     """Per-epoch velocities of every component, with the diagnostics that qualify them.
@@ -891,13 +1014,16 @@ class VelocityTable:
     bjd, instrument
         Per epoch.
     velocity
-        ``(n_comp, n_epochs)`` km/s.
+        ``(n_comp, n_epochs)`` km/s, ``nan`` where nothing was measured: an epoch with too
+        few weighted pixels, and any component flagged ``at_edge``, whose chi-square was
+        still falling at the end of the interval the search was allowed to cover.
     sigma
         ``(n_comp, n_epochs)`` km/s, the quoted uncertainty: the curvature of the
         chi-square surface at its minimum, rescaled by the reduced chi-square so that the
         noise level is estimated from the residuals rather than taken from ``ivar``; this
         is the estimator of Zucker (2003) (``docs/math.md`` §10.4). ``sigma_ivar`` is the
-        same curvature with the declared weights trusted.
+        same curvature with the declared weights trusted. Both are ``nan`` wherever
+        ``velocity`` is.
     covariance
         ``(n_epochs, n_comp, n_comp)`` in km/s², on the ``sigma`` scale. Its off-diagonal
         is the blending diagnostic: velocities that are highly correlated were measured
@@ -919,8 +1045,12 @@ class VelocityTable:
         Per epoch: the velocities lie on a ridge (a covariance correlation above 0.9, or a
         curvature that is not positive definite).
     at_edge
-        ``(n_comp, n_epochs)``: the minimum lay at the edge of the search range, and
-        ``v_range`` should be widened.
+        ``(n_comp, n_epochs)``: the chi-square of that component was still falling at the
+        edge of what the search covered, either on the coarse grid over ``v_range`` or on
+        the refinement window that walks within it, so the minimum is not bracketed and
+        nothing is measured. ``velocity`` and ``sigma`` are ``nan`` for such a component,
+        every diagnostic below is that of the last point evaluated, and ``v_range`` should
+        be widened (or, when it is already wide, the templates are the wrong ones).
     refined
         Per epoch: the sub-pixel refinement succeeded (otherwise the integer-grid minimum
         is reported, with its curvature).
@@ -1003,7 +1133,7 @@ class VelocityTable:
         """
         if self.n_components < 2:
             return None
-        ok = self.good
+        ok = self.good  # excludes the epochs left NaN at the search edge
         if int(ok.sum()) < 3:
             return None
         slope, intercept = np.polyfit(self.velocity[0, ok], self.velocity[1, ok], 1)
@@ -1069,26 +1199,28 @@ class VelocityTable:
             zero = "absolute" if self.absolute[i] else "differential (template zero point unknown)"
             ok = np.isfinite(self.velocity[i])
             span = (
-                f"{np.nanmin(self.velocity[i]):+.3f} to {np.nanmax(self.velocity[i]):+.3f} km/s"
+                f"{_finite_reduce(np.min, self.velocity[i]):+.3f} to "
+                f"{_finite_reduce(np.max, self.velocity[i]):+.3f} km/s"
                 if ok.any()
                 else "no finite velocities"
             )
-            med = float(np.nanmedian(self.sigma[i])) if ok.any() else float("nan")
             lines.append(
-                f"  {name}: {span}, median sigma {med:.4f} km/s, light "
-                f"{np.nanmedian(self.light[i]):.3f} ({self.light_mode}); {zero}"
+                f"  {name}: {span}, median sigma "
+                f"{_finite_reduce(np.median, self.sigma[i]):.4f} km/s, light "
+                f"{_finite_reduce(np.median, self.light[i]):.3f} ({self.light_mode}); {zero}"
             )
         lines.append(
-            f"  reduced chi-square: median {np.nanmedian(self.reduced_chi2):.3f} "
-            f"(range {np.nanmin(self.reduced_chi2):.3f}-{np.nanmax(self.reduced_chi2):.3f}); "
-            f"R^2 median {np.nanmedian(self.r_squared):.3f}"
+            f"  reduced chi-square: median {_finite_reduce(np.median, self.reduced_chi2):.3f} "
+            f"(range {_finite_reduce(np.min, self.reduced_chi2):.3f}-"
+            f"{_finite_reduce(np.max, self.reduced_chi2):.3f}); "
+            f"R^2 median {_finite_reduce(np.median, self.r_squared):.3f}"
         )
         n_blend = int(self.blended.sum())
         n_edge = int(np.any(self.at_edge, axis=0).sum())
         n_unrefined = int((~self.refined).sum())
         if n_blend or n_edge or n_unrefined:
             lines.append(
-                f"  flags: {n_blend} blended, {n_edge} at the search edge, "
+                f"  flags: {n_blend} blended, {n_edge} at the search edge, not measured, "
                 f"{n_unrefined} not refined below a pixel"
             )
         weak = [
@@ -1202,6 +1334,7 @@ def todcor(
     coarse_step: int | None = None,
     errors: str = "profiled",
     scale: str = "fixed",
+    noise_correlation: float | Mapping[str, float] | None = None,
     progress: bool = False,
 ) -> VelocityTable:
     """Measure every component's velocity in every epoch by N-dimensional correlation.
@@ -1226,8 +1359,15 @@ def todcor(
         ``coarse_step`` increased.
     v_range
         Barycentric velocity range to search, km/s: one ``(lo, hi)`` for all components or
-        one per template. The template grid must extend beyond the data by this much
-        (:meth:`LogGrid.covering`); otherwise a warning reports the shortfall.
+        one per template. It is the velocity of each template's own frame, before that
+        template's ``v_zero_kms`` is composed into the reported velocity, so templates
+        whose zero points differ need one pair each if they are to search the same
+        interval of reported velocity (:meth:`albireo.Fit.measure_velocities` builds
+        them that way). The search does not leave the range: a component whose chi-square
+        is still falling where it ends is flagged ``at_edge`` and its velocity is ``nan``,
+        since its minimum was never bracketed. The template grid must extend beyond the
+        data by this much (:meth:`LogGrid.covering`); otherwise a warning reports the
+        shortfall.
     light
         Treatment of the templates' amplitudes, i.e. their light fractions.
         ``"global"`` (default) fits them freely in every epoch, takes the weighted median
@@ -1269,6 +1409,15 @@ def todcor(
         scale-invariant). ``"free"`` is appropriate when the normalization is uncertain;
         the fitted scale is then the sum of the reported ``light`` row, and its departure
         from one is a normalization diagnostic. Ignored when ``light="free"``.
+    noise_correlation
+        Lag-one correlation of each epoch's noise along its pixel index, one value or one
+        per instrument, as a pipeline that resampled the spectra onto a common step leaves
+        it (Gaia's RVS grids carry 0.27 and 0.81; :mod:`albireo.gaia` measures it). The
+        estimator is unchanged, since the weighted least squares stays the right thing to
+        minimize, but its error is not: with the noise AR(1) along the pixel index the
+        covariance is the sandwich of ``docs/math.md`` §10.4, which grows with the
+        correlation, and the diagonal curvature error is optimistic by that factor.
+        ``None`` (default) takes the noise as white.
     progress
         Print one line per epoch.
 
@@ -1280,7 +1429,8 @@ def todcor(
     -----
     The estimator is the weighted least-squares fit, which Zucker (2003) showed to be the
     maximum-likelihood estimator, and its per-epoch error is the curvature of the
-    chi-square surface (``docs/math.md`` §10.4). Two systematics lie outside that error:
+    chi-square surface (``docs/math.md`` §10.4), or the sandwich through that curvature
+    when a noise correlation is declared. Two systematics lie outside that error:
     template mismatch, which mostly moves each component by a constant (the zero point),
     and the pixel-locking ripple of the linear shift operator, of order
     ``0.1 / sigma_px^2`` pixels (measured: 0.006 px at five pixels per LSF sigma, 0.03 px
@@ -1313,6 +1463,7 @@ def todcor(
         raise ValueError(f"scale must be 'fixed' or 'free'; got {scale!r}")
     if nuisance_order is not None and nuisance_order < 0:
         raise ValueError("nuisance_order must be None or >= 0")
+    phi_of = _resolve_correlation(noise_correlation, dataset)
 
     if mode == "global":
         first = _run(
@@ -1328,6 +1479,7 @@ def todcor(
             coarse_step,
             errors,
             scale,
+            phi_of,
             progress,
         )
         per_instrument = _global_light(first)
@@ -1344,6 +1496,7 @@ def todcor(
             coarse_step,
             errors,
             scale,
+            phi_of,
             progress,
         )
         settings = dict(table.settings)
@@ -1363,8 +1516,33 @@ def todcor(
         coarse_step,
         errors,
         scale,
+        phi_of,
         progress,
     )
+
+
+def _resolve_correlation(noise_correlation, dataset: Dataset) -> dict[str, float]:
+    """One lag-one correlation per instrument of the dataset, zero where none is declared."""
+    instruments = list(dict.fromkeys(epoch.instrument for epoch in dataset))
+    if noise_correlation is None:
+        return dict.fromkeys(instruments, 0.0)
+    if isinstance(noise_correlation, Mapping):
+        unknown = sorted(set(noise_correlation) - set(instruments))
+        if unknown:
+            raise ValueError(
+                f"noise_correlation names instrument(s) {unknown} that the dataset does not "
+                f"have; it has {instruments}"
+            )
+        out = {name: float(noise_correlation.get(name, 0.0)) for name in instruments}
+    else:
+        out = dict.fromkeys(instruments, float(noise_correlation))
+    for name, phi in out.items():
+        if not (np.isfinite(phi) and -1.0 < phi < 1.0):
+            raise ValueError(
+                f"noise_correlation for {name!r} must lie in (-1, 1); got {phi}. It is the "
+                "lag-one correlation of the pixel noise, not a variance."
+            )
+    return out
 
 
 def _run(
@@ -1380,6 +1558,7 @@ def _run(
     coarse_step,
     errors,
     scale,
+    phi_of,
     progress,
 ) -> VelocityTable:
     n_tmpl = len(templates)
@@ -1389,14 +1568,16 @@ def _run(
     # How the amplitudes enter the chi-square: held, scaled together, or all solved.
     amp_mode = "free" if mode == "free" else ("scale" if scale == "free" else "fixed")
 
-    # Templates convolved once per instrument; the narrowest sigma sets the coarse step.
-    convolved: dict[str, np.ndarray] = {}
+    # Templates convolved once per instrument (per declared width, for a PER_EPOCH
+    # instrument); the narrowest sigma sets the coarse step.
+    convolved: dict[tuple, np.ndarray] = {}
     narrowest_px = np.inf
-    for inst in dataset.instruments:
+    epoch_keys = [_lsf_key(epoch, lsf_sigma_v) for epoch in dataset]
+    for key in dict.fromkeys(epoch_keys):
         stack, sigma_px = _convolved_templates(
-            templates, grid, inst, lsf_sigma_v, lsf_anchors_angstrom
+            templates, grid, key[0], lsf_sigma_v, lsf_anchors_angstrom, epoch_sigma_kms=key[1]
         )
-        convolved[inst] = stack
+        convolved[key] = stack
         narrowest_px = min(narrowest_px, sigma_px)
     if not np.isfinite(narrowest_px):
         narrowest_px = 0.0
@@ -1411,7 +1592,7 @@ def _run(
             "build the template grid at least three pixels per LSF sigma for sub-pixel accuracy",
             stacklevel=3,
         )
-    stacks = {inst: jnp.asarray(stack) for inst, stack in convolved.items()}
+    stacks = {key: jnp.asarray(stack) for key, stack in convolved.items()}
 
     # Shift ranges in log-wavelength pixels (barycentric); composed per epoch below.
     xi_lo = np.asarray(log_doppler_shift(ranges[:, 0], relativistic=relativistic)) / grid.dx
@@ -1464,7 +1645,7 @@ def _run(
             [starts[i] + coarse_step * np.arange(n_coarse) for i in range(n_tmpl)]
         ).astype(np.int32)
         out = _epoch_terms(
-            stacks[epoch.instrument],
+            stacks[epoch_keys[j]],
             work.rows,
             work.cols,
             work.vals,
@@ -1494,14 +1675,21 @@ def _run(
             at_edge[i, j] = coarse_idx[i] == 0 or coarse_idx[i] >= valid_count[i] - 1
         centre = deltas[np.arange(n_tmpl), coarse_idx]
 
-        # Fine pass: full resolution around the coarse minimum, moved if the minimum is on its edge.
-        fine_start = centre - radius
+        # Fine pass: full resolution around the coarse minimum, advanced if the minimum is
+        # on the window's edge. The window is kept inside the shift range the coarse pass
+        # searched, so that no reported velocity lies outside the requested v_range, and
+        # `evaluated_start` records the window the terms actually came from: the advance
+        # below happens after the evaluation, so the two part company at the last attempt.
+        window_lo = starts
+        window_hi = np.maximum(starts, ends - (n_fine_raw - 1))
+        fine_start = np.clip(centre - radius, window_lo, window_hi)
         for _attempt in range(4):
-            fine = np.stack([fine_start[i] + np.arange(n_fine) for i in range(n_tmpl)]).astype(
+            evaluated_start = fine_start
+            fine = np.stack([evaluated_start[i] + np.arange(n_fine) for i in range(n_tmpl)]).astype(
                 np.int32
             )
             out = _epoch_terms(
-                stacks[epoch.instrument],
+                stacks[epoch_keys[j]],
                 work.rows,
                 work.cols,
                 work.vals,
@@ -1519,14 +1707,24 @@ def _run(
                     _chi2_grid_fixed(*out, jnp.asarray(amps), free_scale=amp_mode == "scale")
                 )
             fine_surface = fine_surface[(slice(0, n_fine_raw),) * n_tmpl]
-            fine_idx = np.array(np.unravel_index(int(np.argmin(fine_surface)), fine_surface.shape))
+            fine_idx = np.array(
+                np.unravel_index(
+                    int(np.argmin(np.where(np.isfinite(fine_surface), fine_surface, np.inf))),
+                    fine_surface.shape,
+                )
+            )
             interior = np.all(fine_idx > 0) & np.all(fine_idx < n_fine_raw - 1)
             if interior:
                 break
-            fine_start = fine_start + (fine_idx - radius)
+            fine_start = np.clip(evaluated_start + (fine_idx - radius), window_lo, window_hi)
+            if np.array_equal(fine_start, evaluated_start):
+                break  # the window is already against the end of the requested range
+        # A minimum still on the window's edge is not a measurement: the surface is falling
+        # where the search may not follow it. Flag it as the coarse pass flags its own edge.
+        at_edge[:, j] |= (fine_idx <= 0) | (fine_idx >= n_fine_raw - 1)
         chi2_min, pos, fitted_amps, ok = _refine(terms, fine_idx, amps, amp_mode)
         refined[j] = bool(ok)
-        shift = fine_start + pos
+        shift = evaluated_start + pos
         v_bary_frame, total = _velocity_from_shift(grid, shift, frame, work.bary_pix)
 
         # Curvature, covariance, and the scale.
@@ -1539,6 +1737,15 @@ def _run(
         except np.linalg.LinAlgError:
             cov_pix = np.full((n_tmpl, n_tmpl), np.nan)
             pd = False
+        phi = phi_of.get(epoch.instrument, 0.0)
+        if pd and phi != 0.0:
+            # The curvature is the white-noise covariance. With the noise correlated
+            # along the pixel index the estimator's covariance is the sandwich through
+            # it, evaluated from the model's Jacobian at the solution (math.md 10.4).
+            cov_pix = _correlated_covariance(
+                stacks[epoch_keys[j]], work, fine, pos, fitted_amps, amp_mode, phi
+            )
+            pd = bool(np.all(np.isfinite(cov_pix)))
         cov_v = jac[:, None] * cov_pix * jac[None, :]
         dof = max(work.n_good - n_par, 1)
         scale = chi2_min / dof if errors == "profiled" else 1.0
@@ -1553,6 +1760,12 @@ def _run(
             blended[j] = bool(off.size and np.any(np.abs(off) > 0.9))
         else:
             blended[j] = True
+        # Nothing was measured for a component whose minimum sat on an edge, so its
+        # velocity and uncertainty stay NaN; the diagnostics of the point evaluated are
+        # kept, since they are what says the epoch is at the edge rather than at a peak.
+        unmeasured = at_edge[:, j]
+        sigma[unmeasured, j] = np.nan
+        sigma_ivar[unmeasured, j] = np.nan
 
         # Detection statistics with the amplitudes free, at the solution.
         b_at, gram_at, pwa_at = terms.at(pos)
@@ -1573,7 +1786,8 @@ def _run(
             delta_chi2[i, j] = max(chi2_without - chi2_all, 0.0)
 
         for i, t in enumerate(templates):
-            velocity[i, j] = _compose(v_bary_frame[i], t.v_zero_kms, relativistic)
+            if not unmeasured[i]:
+                velocity[i, j] = _compose(v_bary_frame[i], t.v_zero_kms, relativistic)
         light[:, j] = fitted_amps
         chi2[j] = chi2_min
         chi2_null[j] = terms.null_chi2()
@@ -1612,6 +1826,7 @@ def _run(
             "nuisance_order": nuisance_order,
             "errors": errors,
             "scale": scale,
+            "noise_correlation": dict(phi_of),
             "n_parameters": int(n_par),
             "lsf_sigma_v": None if lsf_sigma_v is None else {k: v for k, v in lsf_sigma_v.items()},
             "template_sigma_kms": [t.sigma_kms for t in templates],
@@ -1651,7 +1866,9 @@ class TodcorSurface:
     @property
     def peak(self) -> tuple[float, float]:
         """The velocities at the maximum of ``r_squared``, at integer-shift resolution."""
-        i, k = np.unravel_index(int(np.argmin(self.chi2)), self.chi2.shape)
+        i, k = np.unravel_index(
+            int(np.argmin(np.where(np.isfinite(self.chi2), self.chi2, np.inf))), self.chi2.shape
+        )
         return float(self.v1[i]), float(self.v2[k])
 
 
@@ -1686,7 +1903,12 @@ def todcor_surface(
         raise ValueError("todcor_surface takes light='free' or fixed fractions")
     epoch = dataset[epoch_index]
     stack, _ = _convolved_templates(
-        templates, grid, epoch.instrument, lsf_sigma_v, lsf_anchors_angstrom
+        templates,
+        grid,
+        epoch.instrument,
+        lsf_sigma_v,
+        lsf_anchors_angstrom,
+        epoch_sigma_kms=_lsf_key(epoch, lsf_sigma_v)[1],
     )
     work = _prepare_epoch(epoch_index, epoch, grid, nuisance_order)
     bary = work.bary_pix if dataset.frame == "topocentric" else 0.0
@@ -1760,7 +1982,8 @@ class TodcorBatch:
         for star, table in self.tables.items():
             good = int(table.good.sum())
             meds = ", ".join(
-                f"{n} {np.nanmedian(table.sigma[i]):.3f}" for i, n in enumerate(table.names)
+                f"{n} {_finite_reduce(np.median, table.sigma[i]):.3f}"
+                for i, n in enumerate(table.names)
             )
             lines.append(
                 f"  {star}: {good}/{table.n_epochs} usable epochs, median sigma [km/s] {meds}"
@@ -1819,7 +2042,8 @@ def todcor_batch(
         if progress:
             table = tables[star]
             meds = " ".join(
-                f"{n} {np.nanmedian(table.sigma[i]):.3f}" for i, n in enumerate(table.names)
+                f"{n} {_finite_reduce(np.median, table.sigma[i]):.3f}"
+                for i, n in enumerate(table.names)
             )
             print(
                 f"{star}: {int(table.good.sum())}/{table.n_epochs} usable epochs, "

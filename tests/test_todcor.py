@@ -1,6 +1,6 @@
 """Tests for the TODCOR mode: per-epoch velocities by N-dimensional correlation.
 
-Three kinds of claim are pinned here.
+Four kinds of claim are pinned here.
 
 1. **The estimator is Zucker & Mazeh's.** On a uniform grid with uniform weights the
    weighted-least-squares surface albireo evaluates *is* the two-dimensional correlation
@@ -12,6 +12,10 @@ Three kinds of claim are pinned here.
    in both frames, with mixed instruments, one to three components.
 3. **The diagnostics fire when they should**: blending, the search edge, the unidentified
    zero point of a disentangled template, the continuum offset the nuisance absorbs.
+4. **The search window bounds what is reported.** No shift outside it is evaluated, a
+   component whose minimum the window never brackets comes back NaN rather than pinned to
+   the edge, and the shift reported is one the chi-square was evaluated at, checked
+   against a brute-force scan of every integer shift.
 
 Everything is offline and generated in-test.
 """
@@ -251,6 +255,77 @@ def test_profiled_errors_are_the_ivar_errors_times_the_reduced_chi_square(sb2):
     np.testing.assert_array_equal(profiled.velocity, trusted.velocity)
 
 
+def _correlated_sb2(phi: float, n_epochs: int = 40, seed: int = 9):
+    """An SB2 whose pixel noise is AR(1) with the given lag-one correlation."""
+    rng = np.random.default_rng(seed)
+    bjd = np.sort(rng.uniform(0.0, 40.0, size=n_epochs))
+    c1, c2 = components()
+    inst = {
+        "a": ab.InstrumentSpec(wave=np.arange(5008.0, 5052.0, 0.05), sigma_v_lsf=5.0, snr=150.0)
+    }
+    orbit = ab.OrbitParams(period=6.31, t_peri=2.0, ecc=0.15, omega=0.7, k=(30.0, 55.0), gamma=12.0)
+    dataset, truth = ab.simulate_dataset(
+        GRID,
+        [c1, c2],
+        bjd=bjd,
+        instruments=inst,
+        light_fractions=LIGHT,
+        orbit=orbit,
+        seed=seed,
+        frame="barycentric",
+        ar1_phi=phi,
+    )
+    templates = [Template("A", GRID, c1, v_zero_kms=0.0), Template("B", GRID, c2, v_zero_kms=0.0)]
+    return dataset, truth, templates
+
+
+def test_a_vanishing_noise_correlation_reproduces_the_curvature_errors(sb2):
+    """The sandwich at phi -> 0 is the white-noise covariance the stencil measures."""
+    dataset, _, templates = sb2
+    white = todcor(dataset, templates, light=LIGHT, errors="ivar", **COMMON)
+    tiny = todcor(dataset, templates, light=LIGHT, errors="ivar", noise_correlation=1e-9, **COMMON)
+    np.testing.assert_array_equal(tiny.velocity, white.velocity)
+    # The stencil differentiates the exact profiled chi-square; the Jacobian sandwich is
+    # its Gauss-Newton form. They agree to the residual's share of the curvature.
+    np.testing.assert_allclose(tiny.sigma, white.sigma, rtol=0.02)
+    assert tiny.settings["noise_correlation"] == {"a": 1e-9}
+    assert white.settings["noise_correlation"] == {"a": 0.0}
+
+
+def test_correlated_noise_widens_the_errors_and_calibrates_the_pulls():
+    """AR(1) noise in the pixels leaves the estimator alone and inflates its error.
+
+    Declared, the correlation brings the pull rms back to one; ignored, the diagonal
+    curvature error is optimistic by the factor the sandwich measures.
+    """
+    phi = 0.6
+    dataset, truth, templates = _correlated_sb2(phi)
+    ignored = todcor(dataset, templates, light=LIGHT, errors="ivar", **COMMON)
+    declared = todcor(
+        dataset, templates, light=LIGHT, errors="ivar", noise_correlation={"a": phi}, **COMMON
+    )
+    np.testing.assert_array_equal(declared.velocity, ignored.velocity)
+    good = ignored.good & declared.good
+    assert good.sum() >= 30
+    ratio = declared.sigma[:, good] / ignored.sigma[:, good]
+    assert np.all(ratio > 1.15) and np.all(ratio < 2.5)
+    diff = declared.velocity[:, good] - np.asarray(truth.velocities)[:, good]
+    pull_declared = np.sqrt(np.mean((diff / declared.sigma[:, good]) ** 2))
+    pull_ignored = np.sqrt(np.mean((diff / ignored.sigma[:, good]) ** 2))
+    assert 0.75 < pull_declared < 1.3, pull_declared
+    assert pull_ignored > 1.2 * pull_declared, (pull_ignored, pull_declared)
+    # The blending and detection diagnostics are unchanged by the noise model.
+    np.testing.assert_array_equal(declared.delta_chi2, ignored.delta_chi2)
+
+
+def test_the_noise_correlation_is_checked(sb2):
+    dataset, _, templates = sb2
+    with pytest.raises(ValueError, match="does not have"):
+        todcor(dataset, templates, light=LIGHT, noise_correlation={"b": 0.3}, **COMMON)
+    with pytest.raises(ValueError, match=r"lie in \(-1, 1\)"):
+        todcor(dataset, templates, light=LIGHT, noise_correlation=1.0, **COMMON)
+
+
 def test_both_frames_recover_the_same_barycentric_velocities():
     topo, truth_t, templates = simulate(frame="topocentric")
     bary, truth_b, _ = simulate(frame="barycentric")
@@ -445,6 +520,35 @@ def test_a_minimum_at_the_search_edge_is_flagged(sb2):
     assert "at the search edge" in table.summary()
 
 
+def test_a_search_window_may_be_declared_per_template(sb2, fixed_table):
+    """One ``(lo, hi)`` per template, each in that template's own frame.
+
+    Two components at different zero points cover different intervals of reported
+    velocity, so the search window is per template rather than shared; the façade builds
+    them that way, and a window narrowed around each component's own velocities has to
+    give the answer the shared one gave.
+    """
+    dataset, truth, templates = sb2
+    repeated = todcor(
+        dataset,
+        templates,
+        v_range=[(-150.0, 150.0), (-150.0, 150.0)],
+        light=LIGHT,
+        lsf_sigma_v={"a": 5.0},
+    )
+    np.testing.assert_array_equal(repeated.velocity, fixed_table.velocity)
+    assert repeated.settings["v_range"] == [[-150.0, 150.0], [-150.0, 150.0]]
+    per_component = [
+        (float(v.min()) - 20.0, float(v.max()) + 20.0) for v in np.asarray(truth.velocities)
+    ]
+    assert per_component[0] != per_component[1]
+    narrow = todcor(dataset, templates, v_range=per_component, light=LIGHT, lsf_sigma_v={"a": 5.0})
+    assert not narrow.at_edge.any()
+    np.testing.assert_allclose(narrow.velocity, fixed_table.velocity, rtol=0, atol=1e-6)
+    with pytest.raises(ValueError, match="per template"):
+        todcor(dataset, templates, v_range=[(-150.0, 150.0)], light=LIGHT, lsf_sigma_v={"a": 5.0})
+
+
 def test_surface_peak_matches_the_table(sb2, fixed_table):
     dataset, _, templates = sb2
     surface = todcor_surface(dataset, 2, templates, light=LIGHT, step=2, **COMMON)
@@ -485,6 +589,124 @@ def test_write_to_dict_and_summary(sb2, fixed_table, tmp_path):
     np.testing.assert_array_equal(comp["velocity"], fixed_table.velocity[1])
     with pytest.raises(KeyError):
         fixed_table.component("C")
+
+
+# ---------------------------------------------------------------------------
+# 4. the search window, and what is not measured at its edge
+#
+# These epochs are built on the model grid itself, so the rebin is the identity and the
+# weights uniform, and they are correlated against a single unbroadened template with no
+# nuisance term: the chi-square albireo minimizes is then exactly the sum `_brute_chi2`
+# evaluates, and the shift it reports can be checked against a scan of every integer
+# shift in the range. The copies are placed by hand, so that the surface has the minima
+# the test wants rather than the ones a simulated orbit happens to produce.
+# ---------------------------------------------------------------------------
+
+NARROW = ab.synthetic_deviation_spectrum(GRID, seed=31, sigma_v_range=(1.6, 2.2), margin=0.12)
+EDGE_MARGIN = 100  # template pixels kept free at each end, so no shift runs off the grid
+EDGE_NOISE = 0.004
+ONE_TEMPLATE = {"light": [1.0], "lsf_sigma_v": None, "nuisance_order": None}
+
+
+def _copies_epochs(per_epoch, seed):
+    """One epoch per entry, each a superposition of shifted copies of ``NARROW``."""
+    keep = slice(EDGE_MARGIN, GRID.n - EDGE_MARGIN)
+    rng = np.random.default_rng(seed)
+    epochs = []
+    for j, copies in enumerate(per_epoch):
+        flux = 1.0 + sum(amp * _shifted(NARROW, shift) for shift, amp in copies)
+        noisy = flux[keep] + rng.normal(0.0, EDGE_NOISE, GRID.n - 2 * EDGE_MARGIN)
+        epochs.append(
+            EpochData(
+                wave=GRID.wave[keep],
+                flux=noisy,
+                ivar=np.full(noisy.size, EDGE_NOISE**-2),
+                bjd=float(j),
+            )
+        )
+    return Dataset(epochs, frame="barycentric")
+
+
+def _brute_chi2(dataset, j, shifts):
+    """The chi-square of one unit-amplitude template at each integer shift, by hand."""
+    keep = slice(EDGE_MARGIN, GRID.n - EDGE_MARGIN)
+    z = dataset[j].flux - 1.0
+    w = dataset[j].ivar
+    return np.array([np.sum(w * (z - _shifted(NARROW, int(d))[keep]) ** 2) for d in shifts])
+
+
+def _pixels(velocity):
+    return float(np.asarray(GRID.velocity_to_pixels(velocity)))
+
+
+def test_a_shift_beyond_the_requested_range_is_not_measured(tmp_path):
+    """Nothing is measured where the chi-square is still falling as the range ends.
+
+    The last point evaluated is not the minimum of anything, and writing it out would put
+    a number in the table that reads as a measurement. The component is flagged and left
+    NaN instead, with the diagnostics of that point kept, since they are what says the
+    epoch sat at the edge rather than at a peak.
+    """
+    lo_pix = int(np.ceil(_pixels(-90.0)))
+    top = float(GRID.pixels_to_velocity(20))
+    dataset = _copies_epochs([[(23, 1.0)], [(-10, 1.0)]], seed=2)
+    inside = np.arange(lo_pix, 21)
+    assert inside[int(np.argmin(_brute_chi2(dataset, 0, inside)))] == 20  # no interior minimum
+    assert inside[int(np.argmin(_brute_chi2(dataset, 1, inside)))] == -10
+
+    table = todcor(
+        dataset,
+        [Template("A", GRID, NARROW, v_zero_kms=0.0)],
+        v_range=(-90.0, top),
+        coarse_step=1,
+        **ONE_TEMPLATE,
+    )
+    np.testing.assert_array_equal(table.at_edge[0], [True, False])
+    assert np.isnan(table.velocity[0, 0])
+    assert np.isnan(table.sigma[0, 0]) and np.isnan(table.sigma_ivar[0, 0])
+    assert not table.refined[0] and not table.good[0]
+    # The epoch whose minimum the range does contain is measured, and the flagged epoch
+    # keeps every diagnostic of the point that was evaluated.
+    assert table.good[1] and abs(_pixels(table.velocity[0, 1]) + 10.0) < 0.05
+    assert np.all(np.isfinite(table.chi2)) and np.all(np.isfinite(table.chi2_null))
+    assert np.all(np.isfinite(table.light)) and np.all(np.isfinite(table.delta_chi2))
+    assert np.all(np.isfinite(table.r_squared))
+    assert "1 at the search edge, not measured" in table.summary()
+    row = table.write(tmp_path / "edge.rv").read_text(encoding="utf-8").splitlines()[-2]
+    assert row.split()[2:4] == ["nan", "nan"]  # v_A and sigma_A of the flagged epoch
+
+
+def test_an_advancing_fine_window_reports_a_shift_it_evaluated():
+    """The refinement window walks when its minimum lies on its edge.
+
+    The velocity and the diagnostics beside it must describe the same point, so the shift
+    reported has to come from the window the chi-square was last evaluated in. Here the
+    coarse pass lands on the weaker of two copies and the deeper one lies exactly one
+    window away, so the window has to move before anything is refined.
+    """
+    step = 6
+    radius = step + 2
+    lo_pix = int(np.ceil(_pixels(-90.0)))
+    node = lo_pix + step * 6
+    dataset = _copies_epochs([[(node, 1.0), (node + radius, 1.05)]], seed=1)
+
+    shifts = np.arange(lo_pix, int(np.floor(_pixels(90.0))) + 1)
+    curve = _brute_chi2(dataset, 0, shifts)
+    best = int(shifts[int(np.argmin(curve))])
+    nodes = shifts[(shifts - lo_pix) % step == 0]
+    coarse_best = int(nodes[int(np.argmin(_brute_chi2(dataset, 0, nodes)))])
+    assert coarse_best == node and best == node + radius
+    assert abs(best - coarse_best) >= radius  # the first window ends on the minimum
+
+    table = todcor(
+        dataset,
+        [Template("A", GRID, NARROW, v_zero_kms=0.0)],
+        v_range=(-90.0, 90.0),
+        coarse_step=step,
+        **ONE_TEMPLATE,
+    )
+    assert table.refined[0] and table.good[0] and not table.at_edge[0, 0]
+    assert abs(_pixels(table.velocity[0, 0]) - best) <= 1.0
 
 
 # ---------------------------------------------------------------------------

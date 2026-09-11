@@ -17,7 +17,10 @@ them are the realism extensions of ``docs/math.md`` §7.5.
 
 - ``log_tau``, ``log_eta``: log spectral-prior hyperparameters [dimensionless], one per
   model component, including the telluric and nebular components when enabled; both
-  sites or neither.
+  sites or neither, with ``log_tau - log_eta <= 30`` for every component. Past that
+  stiffness ratio the prior determinant's pivot underflows and the posterior precision's
+  Cholesky solve loses every digit, so the marginal likelihood is arithmetic noise; the
+  model rejects it (see ``_LOG_TAU_ETA_MAX``).
 - ``period_out`` [d], ``t_conj_out`` [d], ``secosw_out``, ``sesinw_out``
   [dimensionless], ``k_out`` [km/s]: a hierarchical outer orbit (SB3), all five
   together. The inner components' center of mass moves with semi-amplitude ``k_out[0]``
@@ -37,6 +40,8 @@ them are the realism extensions of ``docs/math.md`` §7.5.
   built with ``lsf_anchors_angstrom`` (wavelength-dependent LSF) and one entry per
   un-anchored instrument, concatenated in instrument order. The construction-time
   ``lsf_sigma_v`` values are per-entry upper bounds, since they fix the kernel radii.
+  An instrument declared :data:`albireo.forward.PER_EPOCH` takes its widths from the
+  epochs and cannot carry this site: the width is what each file declared.
 - ``lsf_h3``: Gauss-Hermite LSF skewness [dimensionless], one entry per LSF
   anchor of each anchored instrument, concatenated in instrument order, ``|h3| <= 0.2``.
   Un-anchored instruments have no entry: a stationary asymmetric LSF is absorbed by the
@@ -123,7 +128,9 @@ from numpyro.infer.util import initialize_model
 
 from albireo.data import Dataset
 from albireo.forward import (
+    _is_per_epoch,
     build_problem,
+    declared_lsf_widths,
     with_ar1,
     with_jitter,
     with_light_fractions,
@@ -161,6 +168,18 @@ _SWEEP_BATCH_BYTES = 1 << 30
 # Gauss-Hermite skewness bound: beyond about 0.2 the truncated series dips measurably
 # negative in the tail, and real instrument profiles lie well below it (D38).
 _H3_MAX = 0.2
+# Largest log(tau) - log(eta) the spectral prior's arithmetic survives. The prior
+# determinant is a pentadiagonal Cholesky recursion whose pivot is a difference of
+# like-sized quantities: below eta/tau of about 1e-13 it rounds to zero and is floored
+# (albireo.assembly.prior_logdet), and the posterior precision built on the same tau has
+# pivots far above the data term, so its forward substitution loses every digit and the
+# marginal likelihood becomes arithmetic noise. exp(30) = 1.1e13 is that ratio. ML-II
+# walks there on its own: the interior optimum in log_tau is broad and nothing bounds
+# log_eta from below, so a line search can accept a trial hundreds of nats "better"
+# whose chi-square is negative. The default declarations start at log(300) - log(5) = 4.1
+# (albireo.facade.Smoothness), about six sigma of the Normal(log tau0, 3) hyperpriors
+# inside this bound.
+_LOG_TAU_ETA_MAX = 30.0
 _OUTER_SITES = ("period_out", "t_conj_out", "secosw_out", "sesinw_out", "k_out")
 _THETA_SITES = (
     "period",
@@ -625,10 +644,17 @@ class MarginalOrbitModel:
         sizes, maxima = [], []
         for name in self.instruments:
             n_a = max(len(anchors.get(name, ())), 1)
-            sig = np.atleast_1d(np.asarray(lsf_sigma_v[name], dtype=np.float64))
+            if _is_per_epoch(lsf_sigma_v[name]):
+                # The widest declared width fixes this instrument's kernel radius.
+                sig = np.array([max(declared_lsf_widths(dataset, name))])
+            else:
+                sig = np.atleast_1d(np.asarray(lsf_sigma_v[name], dtype=np.float64))
             maxima.append(np.full(n_a, sig[0]) if sig.size == 1 else sig)
             sizes.append(n_a)
         self._lsf_sizes = tuple(sizes)
+        self._lsf_per_epoch = tuple(
+            name for name in self.instruments if _is_per_epoch(lsf_sigma_v[name])
+        )
         self._lsf_anchored = tuple(len(anchors.get(name, ())) > 0 for name in self.instruments)
         self._lsf_sigma_max = jnp.asarray(np.concatenate(maxima))
         # The problem is passed as a jit argument (Problem is a registered pytree), so
@@ -700,6 +726,13 @@ class MarginalOrbitModel:
                 ell = ell.T
             problem = with_light_fractions(problem, ell)
         if "lsf_sigma" in theta or "lsf_h3" in theta:
+            if self._lsf_per_epoch:
+                raise ValueError(
+                    f"theta carries an LSF site, but instrument(s) {self._lsf_per_epoch} "
+                    "were declared PER_EPOCH: their widths are what each file declared, "
+                    "not parameters. Build the model with explicit widths for them if "
+                    "the width is to be inferred."
+                )
             if "lsf_sigma" in theta:
                 sig = jnp.atleast_1d(jnp.asarray(theta["lsf_sigma"]))
                 if sig.shape != self._lsf_sigma_max.shape:
@@ -927,8 +960,10 @@ class MarginalOrbitModel:
             and ``omega`` (and ``ecc_out``, ``omega_out``, ``velocity_rel`` and
             ``nebular_amp`` when the corresponding sites are present) as deterministic
             sites, and adds ``-inf`` factors for the eccentricity disk, the LSF width and
-            skewness bounds, the AR(1) stationarity bound and the bandwidth guard
-            (``docs/math.md`` §7.1). The model takes the base
+            skewness bounds, the AR(1) stationarity bound, the smoothness bound
+            (``log_tau - log_eta`` at most 30, beyond which the prior determinant's pivot
+            is floored and the marginal likelihood is arithmetic noise) and the bandwidth
+            guard (``docs/math.md`` §7.1). The model takes the base
             :class:`~albireo.forward.Problem` as an optional argument and advertises it
             through a ``model_args`` attribute; the runners pass it through numpyro as a
             traced jit argument, the same contract as :meth:`marginal`. Captured
@@ -1016,6 +1051,16 @@ class MarginalOrbitModel:
                 # with_ar1 clips at +-0.999 so the likelihood stays finite (and
                 # rejectable, through this factor) outside the stationary region.
                 numpyro.factor("ar1_bound", jnp.where(jnp.all(jnp.abs(phi) < 1.0), 0.0, -jnp.inf))
+            if "log_tau" in theta and "log_eta" in theta:
+                ratio = jnp.atleast_1d(theta["log_tau"]) - jnp.atleast_1d(theta["log_eta"])
+                # Past this stiffness ratio the prior determinant's pivot is floored and
+                # the posterior precision's Cholesky solve loses every digit, so the
+                # marginal is arithmetic noise rather than a likelihood (see
+                # _LOG_TAU_ETA_MAX); rejected, as the LSF and AR(1) bounds are.
+                numpyro.factor(
+                    "smoothness_bound",
+                    jnp.where(jnp.all(ratio <= _LOG_TAU_ETA_MAX), 0.0, -jnp.inf),
+                )
             if "log_nebular_amp" in theta:
                 # Record the amplitudes the model applied: the site itself is identified
                 # only up to an additive constant (nebular_amplitudes centers it), so the

@@ -6,7 +6,7 @@ offline and free of a JAX dependency. Unlike the showcase, this notebook cannot 
 re-executed without two downloads that are too large to ship:
 
     python scripts/download_aiphe.py          # 36 HARPS spectra, ~194 MB
-    python -c "import albireo; albireo.fetch_library('bosz2024-fgk-r20000')"   # ~645 MB
+    python -c "import albireo; albireo.fetch_library('bosz2024-fgk-r20000')"   # ~621 MB
 
 The same download size excludes ``examples/03_hr6819_real_data.py`` and ``06_bloem.py``
 from the examples job in CI. Committing the executed outputs lets a reader see the result
@@ -63,7 +63,7 @@ can be compared with a value measured photometrically from the eclipses, which t
 spectroscopic fit is never given.
 
 This notebook cannot be re-run without the data. It requires 36 HARPS spectra (~194 MB,
-`scripts/download_aiphe.py`) and the BOSZ library (~645 MB on first use). The committed
+`scripts/download_aiphe.py`) and the BOSZ library (~621 MB on first use). The committed
 outputs are the record.""",
     ),
     (

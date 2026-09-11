@@ -21,6 +21,9 @@ those sites at all, and a free eccentricity never starts at the origin.
 `l_i * d_i`, so the value is an assumption the data cannot contradict.
 """
 
+import importlib
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -117,7 +120,7 @@ def test_a_budget_override_may_not_shrink_below_what_the_priors_reach(dataset):
 def test_a_period_prior_wide_enough_to_be_a_search_warns(dataset):
     """The scan resolves phase at one period — the prior's midpoint — not a period."""
     with pytest.warns(RuntimeWarning, match="not a period search"):
-        _dis(dataset, orbit=_orbit(period=ab.Between(2.0, 12.0))).fit(max_steps=1)
+        _dis(dataset, orbit=_orbit(period=ab.Between(2.0, 12.0))).fit(max_steps=1, k_scan=False)
 
 
 def test_a_normal_period_prior_does_not_warn(dataset):
@@ -191,6 +194,35 @@ def test_a_free_eccentricity_never_starts_at_the_origin(dataset):
         "starting at secosw = sesinw = 0 gives a NaN gradient, which numpyro reports only "
         "as 'Cannot find valid initial parameters'"
     )
+
+
+def test_a_free_eccentricity_may_start_where_a_table_put_it():
+    """A start_at on the range and an omega give the start; the default is 0.05 at 0.5 rad."""
+    sites = dict(_ecc_sites(ab.Orbit(period=6.0, k=ab.Between(10.0, 90.0)), 0.95))
+    e0 = float(sites["secosw"].start()) ** 2 + float(sites["sesinw"].start()) ** 2
+    assert e0 == pytest.approx(0.05)
+    started = dict(
+        _ecc_sites(
+            ab.Orbit(
+                period=6.0,
+                k=ab.Between(10.0, 90.0),
+                ecc=ab.Between(0.0, 0.9, start_at=0.6),
+                omega=1.2,
+            ),
+            0.9,
+        )
+    )
+    e1 = float(started["secosw"].start()) ** 2 + float(started["sesinw"].start()) ** 2
+    w1 = np.arctan2(float(started["sesinw"].start()), float(started["secosw"].start()))
+    assert e1 == pytest.approx(0.6) and w1 == pytest.approx(1.2)
+    # A start on the bound is pulled inside it, and one at the origin off it.
+    edge = dict(
+        _ecc_sites(
+            ab.Orbit(period=6.0, k=ab.Between(10.0, 90.0), ecc=ab.Between(0.0, 0.5, start_at=0.5)),
+            0.9,
+        )
+    )
+    assert float(edge["secosw"].start()) ** 2 + float(edge["sesinw"].start()) ** 2 < 0.5
 
 
 def test_a_fixed_nonzero_eccentricity_needs_omega():
@@ -332,7 +364,7 @@ def test_a_fixed_period_still_gets_its_conjunction_scanned(dataset):
     """The period lives in `fixed`, not `init`, and the scan has to look in both."""
     dis = _dis(dataset, orbit=_orbit(period=ab.Fixed(6.0)))
     assert "period" in dis.fixed
-    fit = dis.fit(max_steps=1)
+    fit = dis.fit(max_steps=1, k_scan=False)  # the joint scan is the slow test's
     assert fit.phase_scan is not None
 
 
@@ -461,7 +493,133 @@ def test_a_scan_finds_the_companion_it_was_pointed_at(dataset, truth):
     assert abs(peak - truth["k"][1]) <= 10.0, f"scan peaked at K2 = {peak}, truth {truth['k'][1]}"
 
 
-# -- the closed loop ----------------------------------------------------------
+# -- the noise model -----------------------------------------------------------
+
+
+def test_a_declared_noise_correlation_builds_the_correlated_model(dataset):
+    """A lag-one correlation per instrument is held as a fixed per-epoch site."""
+    dis = _dis(dataset, noise_correlation={"DEMO": 0.3})
+    assert dis.model.ar1 is True
+    assert np.asarray(dis.fixed["ar1_phi"]).shape == (dataset.n_epochs,)
+    assert np.all(np.asarray(dis.fixed["ar1_phi"]) == 0.3)
+    assert "AR(1)" in dis.explain() and "noise correlation" in dis.assumptions()
+    assert "ar1_phi" not in dis.priors
+    fitted = _dis(dataset, noise_correlation=ab.Between(-0.9, 0.9))
+    assert fitted.model.ar1 is True
+    assert "ar1_phi" in fitted.priors and "ar1_phi" not in fitted.fixed
+    assert "fitted" in fitted.explain()
+    plain = _dis(dataset)
+    assert plain.model.ar1 is False and "ar1_phi" not in plain.fixed
+    assert "diagonal" in plain.explain()
+
+
+def test_a_noise_correlation_is_checked_before_anything_is_built(dataset):
+    with pytest.raises(ValueError, match="no entry for instrument"):
+        _dis(dataset, noise_correlation={"OTHER": 0.3})
+    with pytest.raises(ValueError, match=r"lie in \(-1, 1\)"):
+        _dis(dataset, noise_correlation=1.0)
+    with pytest.raises(ValueError, match="one value shared"):
+        _dis(dataset, noise_correlation=ab.Fixed([0.1, 0.2]))
+    with pytest.raises(TypeError, match="not a scan"):
+        _dis(dataset, noise_correlation=ab.Scanned(np.array([0.1, 0.2])))
+
+
+def test_a_zero_noise_correlation_is_the_diagonal_model(dataset):
+    """with_ar1 at phi = 0 is the diagonal model to floating-point ordering."""
+    plain = _dis(dataset)
+    zero = _dis(dataset, noise_correlation=0.0)
+    theta = {**plain.init, **plain.fixed}
+    theta_zero = {**zero.init, **zero.fixed}
+    assert "ar1_phi" in theta_zero
+    ll_plain = float(plain.model.log_likelihood(theta))
+    ll_zero = float(zero.model.log_likelihood(theta_zero))
+    assert np.isclose(ll_zero, ll_plain, rtol=1e-8, atol=1e-6), (ll_zero, ll_plain)
+
+
+# -- the conjunction-phase scan ---------------------------------------------------
+
+
+def test_the_conjunction_grid_contains_the_antipode_of_every_trial(dataset):
+    """For a near-equal pair the phase likelihood is near-mirror-symmetric under a shift
+    of half a period, so the scan can only choose between the two mirrors when both are
+    on its grid. An odd trial count leaves every antipode midway between two trials, and
+    on one benchmark star the antipode it could not reach was better by 672 nats (D63).
+    """
+    scanner = _dis(dataset)._scan_declaration()
+    scan = scanner._scan_phase(dict(scanner.init))
+    trials, period = scan.trials, scan.period
+    assert len(trials) % 2 == 0, "an odd count cannot hold its own antipodes"
+
+    offsets = trials - trials[0]
+    antipodes = np.mod(offsets + 0.5 * period, period)
+    gap = np.abs(antipodes[:, None] - offsets[None, :]).min(axis=1)
+    tol = 64.0 * float(np.spacing(float(np.max(np.abs(trials)))))
+    assert gap.max() < tol, (gap.max(), tol)
+    # The tolerance has to be far below the grid step, or the assertion has no teeth.
+    assert tol < 1e-6 * period / len(trials)
+
+
+# -- the semi-amplitude scan -----------------------------------------------------
+
+
+def test_the_scan_record_reads_its_own_numbers():
+    from albireo.facade import SemiAmplitudeScan
+
+    scan = SemiAmplitudeScan(
+        k=np.array([[10.0, 20.0], [20.0, 10.0], [30.0, 60.0]]),
+        t_conj=np.array([1.0, 1.0, 1.0]),
+        values=np.array([-5.0, -4.0, 3.0]),
+        best=np.array([30.0, 60.0]),
+        best_t_conj=1.0,
+        best_value=3.0,
+        start=np.array([10.0, 20.0]),
+        start_value=-5.0,
+    )
+    assert scan.n_trials == 3 and scan.gain == 8.0 and scan.contrast == 8.0
+    assert scan.hold_losses == {} and scan.notes == ()
+
+
+def test_the_scan_is_skipped_when_no_semi_amplitude_is_a_range(dataset):
+    dis = _dis(dataset, orbit=_orbit(k=[ab.Known(30.0, 3.0), ab.Known(55.0, 3.0)]))
+    assert not dis._has_ranged_k() and dis._scan_semi_amplitudes(dict(dis.init)) is None
+    assert _dis(dataset)._has_ranged_k()  # the vector Between([10, 10], [90, 90]) is a range
+    from albireo.facade import _k_specs, _range_bounds
+
+    vector = _k_specs(_orbit(k=ab.Between([10.0, 5.0], [90.0, 70.0])), 2)
+    assert [_range_bounds(s) for s in vector] == [(10.0, 90.0), (5.0, 70.0)]
+    assert _range_bounds(ab.Known(30.0, 3.0)) is None
+    with pytest.raises(ValueError, match="k_scan must be"):
+        _dis(dataset).fit(max_steps=1, k_scan="always")
+
+
+@pytest.mark.slow
+def test_the_semi_amplitude_scan_finds_the_basin_the_start_missed(dataset, truth):
+    """Started at a fifth of the truth, the scan lands within a grid step of it."""
+    starts = [ab.Between(5.0, 120.0, start_at=6.0), ab.Between(5.0, 120.0, start_at=11.0)]
+    dis = _dis(dataset, orbit=_orbit(k=starts))
+    scanner = dis._scan_declaration()
+    assert scanner.grid.dv_kms == pytest.approx(2.0 * dis.grid.dv_kms)
+    init = dict(dis.init)
+    phase = scanner._scan_phase(init)
+    init["t_conj"] = phase.best
+    scan = scanner._scan_semi_amplitudes(init)
+    assert scan is not None and scan.gain > 0.0 and scan.dv_kms == scanner.grid.dv_kms
+    for best, k_true in zip(scan.best, truth["k"], strict=True):
+        assert max(best / k_true, k_true / best) < 1.3, (scan.best, truth["k"])
+    fit = dis.fit(max_steps=150)
+    assert fit.k_scan is not None and fit.k_scan.gain > 0.0
+    assert "semi-amplitude scan" in fit.summary()
+    for name, k_true in zip(("primary", "secondary"), truth["k"], strict=True):
+        assert np.isclose(fit.star(name)["k"], k_true, atol=0.5), name
+
+    # -- the closed loop ----------------------------------------------------------
+    # The conjunction window handed to L-BFGS is one period wide and centred on the start
+    # the fit carried, so the fitted conjunction lies strictly inside it (a start on the
+    # window's edge has an infinite unconstrained coordinate; D63).
+    window = fit.priors_used["t_conj"]
+    t_fit = float(fit.orbit()["t_conj"])
+    assert float(window.low) < t_fit < float(window.high)
+    assert abs(float(window.high) - float(window.low) - fit.phase_scan.period) < 1e-9
 
 
 @pytest.mark.slow
@@ -637,3 +795,87 @@ def test_measured_velocities_warm_start_the_table_as_well_as_a_keplerian(dataset
     assert fit.velocity_errors().shape == got.shape
     with pytest.raises(ValueError, match="no orbital elements"):
         fit.orbit()
+
+
+# -- the correlation search window --------------------------------------------
+#
+# `measure_velocities` hands `todcor` a search window derived from the fitted velocities.
+# `todcor` searches each template's own rest frame and reports the shift composed with
+# that template's zero point, so one shared window searches a different interval of
+# reported velocity for every component whose zero point differs. What the window rule
+# has to do is tested here without running either the optimizer or the correlation: the
+# rule needs only the fitted velocities and the templates' zero points.
+
+
+def _velocity_mode_fit(dataset, velocities):
+    """A `Fit` in velocity mode whose parameters are the declared table."""
+    dis = _dis(dataset, orbit=None, velocities=velocities)
+    result = SimpleNamespace(params={"velocity": np.asarray(velocities)})
+    return ab.Fit(dis=dis, result=result, hyper={}, mode="velocity")
+
+
+def _flat_templates(dis, zero_points):
+    """One template per star at the given zero points; the deviation is never looked at."""
+    from albireo.todcor import Template
+
+    return [
+        Template(star.name, dis.grid, np.zeros(dis.grid.n), v_zero_kms=zero)
+        for star, zero in zip(dis.stars, zero_points, strict=True)
+    ]
+
+
+@pytest.fixture
+def captured_todcor(monkeypatch):
+    """Capture what `measure_velocities` passes to `todcor` instead of correlating."""
+    # `albireo.todcor` names the function on the package, so the module is fetched by name.
+    todcor_module = importlib.import_module("albireo.todcor")
+    seen = {}
+
+    def spy(dataset, templates, **kwargs):
+        seen.clear()
+        seen.update(kwargs)
+        seen["templates"] = templates
+        return "table"
+
+    monkeypatch.setattr(todcor_module, "todcor", spy)
+    return seen
+
+
+def test_the_search_window_follows_each_template_zero_point(dataset, truth, captured_todcor):
+    """Windows offset by the zero points cover one common interval of reported velocity."""
+    fit = _velocity_mode_fit(dataset, _measured(truth))
+    assert fit.measure_velocities(templates=_flat_templates(fit.dis, (10.0, -50.0))) == "table"
+    ranges = np.asarray(captured_todcor["v_range"], dtype=float)
+    assert ranges.shape == (2, 2)
+    np.testing.assert_allclose(ranges[1] - ranges[0], 60.0)  # the zero points, 60 km/s apart
+
+    fitted = np.asarray(fit.velocities())
+    common = np.array([fitted.min() - 40.0, fitted.max() + 40.0])
+    np.testing.assert_allclose(ranges[0], common - 30.0)  # zero point above the median
+    np.testing.assert_allclose(ranges[1], common + 30.0)
+    # Templates with no zero point at all are all in the fit's own frame: one window.
+    fit.measure_velocities(templates=_flat_templates(fit.dis, (None, None)))
+    np.testing.assert_allclose(np.asarray(captured_todcor["v_range"]), [common, common])
+
+
+def test_zero_points_that_move_a_window_off_its_own_velocities_are_refused(
+    dataset, truth, captured_todcor
+):
+    """The failure that produced a table of velocities pinned to the edge of the search.
+
+    A label fit whose frame-offset scan stopped at its bound reports a zero point that
+    disagrees with the other component's by more than the fitted velocities span. No
+    interval of reported velocity then holds both components, and searching one anyway
+    measures nothing while returning a full table.
+    """
+    fit = _velocity_mode_fit(dataset, _measured(truth))
+    templates = _flat_templates(fit.dis, (-150.0, 25.0))
+    with pytest.raises(ValueError, match="component 'primary'") as raised:
+        fit.measure_velocities(templates=templates)
+    message = str(raised.value)
+    assert "zero points disagree" in message
+    assert "v_range=" in message and "v_zero_kms=None" in message
+    assert not captured_todcor  # nothing was searched
+    # A declared window is obeyed as it always was, whatever the zero points say.
+    fit.measure_velocities(templates=templates, v_range=(-300.0, 300.0))
+    assert captured_todcor["v_range"] == (-300.0, 300.0)

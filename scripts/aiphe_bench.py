@@ -31,8 +31,13 @@ at 4000 A and 0.510 at 6500 A. The light ratio is far better constrained here th
 non-eclipsing system, but quoting the TESS-band value at 5200 A would be a 10 per cent error
 in the quantity every recovered line depth scales by.
 
-Data: 36 HARPS spectra (ESO programme archive, R = 115,000, 3782-6913 A), SNR 41-129,
-covering all ten phase bins. Fetched with :mod:`albireo.archive`.
+Data: 36 HARPS spectra (ESO programme archive, 3782-6913 A), SNR 41-129, covering all
+ten phase bins. Fetched with :mod:`albireo.archive`. Thirty are high-accuracy-mode
+exposures at R = 115,000 and six are high-efficiency (EGGS) exposures at R = 80,000; all
+36 say ``INSTRUME = 'HARPS'``. Until 2026-09-03 every epoch was modelled at the first
+width, because the line-spread function was keyed by instrument name; the width now comes
+from each file's own ``SPEC_RES`` (``lsf_sigma_v={"HARPS": ab.PER_EPOCH}``), and
+``scripts/aiphe_offset_tests.py`` measures what the pooling cost.
 
 Run:  python scripts/aiphe_bench.py --data DIR [--fd3 PATH] [--fit]
 """
@@ -74,8 +79,12 @@ WINDOW = (5150.0, 5250.0)
 # pixels (the runs are far longer than its threshold of 8), but clearing the gap is cheaper
 # than masking it. The record in docs/benchmarks.md was taken with a start of 5340 A.
 WINDOW_2 = (5341.0, 5440.0)
-DV_KMS = 0.8  # native HARPS sampling is 0.577 km/s; the LSF sigma is 1.107
-LSF_SIGMA_V = 299792.458 / 115000.0 / 2.3548  # R = 115,000
+DV_KMS = 0.8  # native HARPS sampling is 0.577 km/s; the narrowest LSF sigma is 1.107
+LSF_SIGMA_V = 299792.458 / 115000.0 / 2.3548  # R = 115,000, the high-accuracy mode
+LSF_SIGMA_EGGS = 299792.458 / 80000.0 / 2.3548  # R = 80,000, the six EGGS-mode epochs
+# Each epoch is modelled at the width its own header declares (D59); the widest sets the
+# grid margin.
+LSF = {"HARPS": ab.PER_EPOCH}
 TAU, ETA = 300.0, 5.0
 
 
@@ -156,7 +165,7 @@ def main() -> None:
     ds = load(Path(args.data))
     print(f"\n{ds.summary()}")
 
-    grid = ab.LogGrid.covering(ds, dv_kms=DV_KMS, v_margin_kms=140.0, lsf_sigma_kms=LSF_SIGMA_V)
+    grid = ab.LogGrid.covering(ds, dv_kms=DV_KMS, v_margin_kms=140.0, lsf_sigma_kms=LSF_SIGMA_EGGS)
     vel = published_velocities(np.asarray(ds.bjd))
     print(f"model grid: {grid.n} pixels")
     print(
@@ -171,7 +180,7 @@ def main() -> None:
         ds,
         velocities=vel,
         light_fractions=ell,
-        lsf_sigma_v={name: LSF_SIGMA_V for name in ds.instruments},
+        lsf_sigma_v=LSF,
     )
     prior = SmoothnessPrior(jnp.full(2, TAU), jnp.full(2, ETA))
     t0 = time.perf_counter()
@@ -224,7 +233,7 @@ def main() -> None:
             grid,
             ds,
             light_fractions=ell,
-            lsf_sigma_v={name: LSF_SIGMA_V for name in ds.instruments},
+            lsf_sigma_v=LSF,
             v_rel_max_kms=140.0,
         )
         omega = np.radians(OMEGA_PUB_DEG)

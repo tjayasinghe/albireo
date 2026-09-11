@@ -26,6 +26,8 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -111,11 +113,20 @@ def _star(dataset, truth, grid, name="toy", **kwargs):
         "truth": {
             "k": list(ORBIT.k),
             "period": ORBIT.period,
+            "ecc": ORBIT.ecc,
+            "omega": ORBIT.omega,
+            "t_conj": float(
+                ab.t_conj_from_t_peri(
+                    ORBIT.t_peri, period=ORBIT.period, ecc=ORBIT.ecc, omega=ORBIT.omega
+                )
+            ),
             "gamma": GAMMA,
+            "light_fractions": list(LIGHT),
             "velocities": np.asarray(truth.velocities),
             "components": np.asarray(truth.components),
             "grid": grid,
             "labels": TRUE_LABELS,
+            "windows": {"blue": [(5150.0, 5185.0)], "red": [(5185.0, 5220.0)]},
         },
         "overrides": {"k_max": 90.0},
     }
@@ -163,6 +174,73 @@ def test_unknown_settings_are_refused_by_name(toy):
         _star(dataset, truth, grid, overrides={"kmax": 90.0})
     with pytest.raises(ValueError, match="unknown \\[analysis\\] key"):
         config_from_dict({"analysis": {"steps": 3}, "stars": []})
+
+
+def test_known_elements_are_declared_and_described(toy):
+    dataset, truth, grid = toy
+    star = _star(
+        dataset,
+        truth,
+        grid,
+        t_conj={"value": 2457001.0, "sigma": 0.02},
+        ecc=0.15,
+        omega=0.7,
+    )
+    described = PipelineConfig(stars=[star]).to_dict()["stars"][0]
+    assert described["t_conj"] == {"value": 2457001.0, "sigma": 0.02}
+    assert described["ecc"] == {"fixed": 0.15}
+    assert described["omega"] == {"fixed": 0.7}
+    scan = _star(dataset, truth, grid)
+    assert PipelineConfig(stars=[scan]).to_dict()["stars"][0]["t_conj"] == "scan"
+    with pytest.raises(ValueError, match="needs omega"):
+        _star(dataset, truth, grid, ecc=0.2)
+    with pytest.raises(ValueError, match="Gaussian"):
+        _star(dataset, truth, grid, ecc={"value": 0.2, "sigma": 0.05})
+    with pytest.raises(ValueError, match="must start at 0"):
+        _star(dataset, truth, grid, ecc=(0.1, 0.4))
+    # A TOML round trip carries the new keys.
+    data = {
+        "stars": [
+            {
+                "name": "x",
+                "spectra": "a/*.fits",
+                "period": [1.0, 2.0],
+                "t_conj": {"value": 1.5, "sigma": 0.1},
+                "ecc": [0.0, 0.3],
+                "components": [{"name": "A", "light": 0.5}, {"name": "B", "light": 0.5}],
+            }
+        ]
+    }
+    config = config_from_dict(data)
+    assert config.stars[0].ecc == [0.0, 0.3]
+    assert config.stars[0].t_conj == {"value": 1.5, "sigma": 0.1}
+
+
+def test_measured_light_needs_a_library(toy):
+    dataset, truth, grid = toy
+    measured = [ComponentConfig("A", "measure"), ComponentConfig("B", "measure")]
+    declared = _star(dataset, truth, grid, components=measured)
+    assert declared.measures_light and not declared.searching
+    with pytest.raises(ValueError, match="light = 'measure'"):
+        PipelineConfig(stars=[declared])
+    with pytest.raises(ValueError, match="every component or to none"):
+        _star(
+            dataset,
+            truth,
+            grid,
+            period="search",
+            components=[ComponentConfig("A", "measure"), ComponentConfig("B", 0.4)],
+        )
+    with pytest.raises(ValueError, match="light must be a fraction"):
+        ComponentConfig("A", "guess")
+    star = _star(dataset, truth, grid, period="search", components=measured)
+    assert star.measures_light
+    assert (
+        PipelineConfig(stars=[star], library="bosz2024-fgk-r20000").to_dict()["stars"][0][
+            "components"
+        ][0]["light"]
+        == "measure"
+    )
 
 
 def test_a_period_search_needs_a_library(toy):
@@ -276,6 +354,62 @@ def test_the_report_is_json_and_carries_the_survey_columns(quick_run):
     assert set(report["orbit"]["k"]) == {"A", "B"}
     assert report["labels"]["components"]["A"]["teff_err"] > 0.0
     assert "total" in report["seconds"] and report["seconds"]["disentangle"] > 0.0
+
+
+def test_the_truth_block_carries_elements_pulls_and_spectra(quick_run):
+    truth = quick_run.report["truth"]
+    for key in (
+        "k_disentangling",
+        "k_table",
+        "k_table_pull",
+        "elements_disentangling",
+        "elements_table",
+        "elements_table_pull",
+        "gamma",
+        "gamma_pull",
+        "velocity_rms",
+        "velocity_pull_rms",
+        "velocity_rms_keplerian",
+        "labels",
+        "light_declared",
+        "light_label_fit",
+        "spectra",
+    ):
+        assert key in truth, key
+    assert set(truth["elements_table"]) == {"period", "ecc", "omega_deg", "t_conj"}
+    # The conjunction is compared modulo the period, so the difference is a fraction of it.
+    assert abs(truth["elements_table"]["t_conj"]) < 0.5 * ORBIT.period
+    assert abs(truth["elements_table"]["omega_deg"]) <= 180.0
+    for name in ("A", "B"):
+        spectra = truth["spectra"][name]
+        # A fast-mode fit (40 steps) is not converged; what is pinned is that the block
+        # exists and reads sensibly, not the recovery, which the slow closed loops pin.
+        assert 0.0 < spectra["rms"] < spectra["rms_truth"], spectra
+        assert spectra["corr"] > 0.7, spectra
+        assert spectra["pull_rms"] > 0.0
+        assert set(spectra["windows"]) == {"blue", "red"}
+        for window in spectra["windows"].values():
+            assert window["ew_true_angstrom"] > 0.0 and np.isfinite(window["ratio"])
+        assert truth["light_declared"][name] == pytest.approx(0.0)
+        assert truth["labels"][name]["teff_pull"] is not None
+    assert 0 < truth["velocity_n_used"]["A"] <= quick_run.report["dataset"]["n_epochs"]
+
+
+def test_the_report_carries_every_epoch_velocity(quick_run):
+    """The measured table, the disentangling's Keplerian and the injected velocities, per epoch."""
+    report = quick_run.report
+    n = report["dataset"]["n_epochs"]
+    table = report["velocities"]
+    assert table["names"] == ["A", "B"] and len(table["bjd"]) == n
+    assert all(len(table["velocity"][c]) == n and len(table["sigma"][c]) == n for c in ("A", "B"))
+    assert table["noise_correlation"] == {"TOY": 0.0}
+    keplerian = report["disentangling"]["velocities"]
+    assert set(keplerian) == {"A", "B"} and len(keplerian["A"]) == n
+    injected = report["truth"]["epoch_velocities_true"]
+    assert set(injected) == {"A", "B"} and len(injected["B"]) == n
+    assert report["declaration"]["noise_model"] == {"kind": "diagonal"}
+    assert report["disentangling"].get("k_scan") is not None  # the period is a range: K scanned
+    assert report["disentangling"]["k_scan"]["n_trials"] > 0
 
 
 def test_the_velocity_tables_agree_with_each_other(quick_run):
@@ -432,17 +566,552 @@ def test_a_period_search_bootstraps_from_library_templates(library, tmp_path):
         library=library,
         mh=(-0.9, 0.4),
         analysis=Analysis(
-            max_steps=120, label_steps=200, v_zero_range=40.0, plots=False, v_range=150.0
+            max_steps=120,
+            label_steps=200,
+            v_zero_range=40.0,
+            plots=False,
+            v_range=150.0,
+            # Two candidates exercise the decision by the disentangling at a fraction
+            # of the default's wall on this toy.
+            period_decision_candidates=2,
         ),
     )
     result = run_star(star, config, progress=False)
     bootstrap = result.report["bootstrap"]
     assert abs(bootstrap["period"] - ORBIT.period) < 0.02 * ORBIT.period, bootstrap
+    # The template table the bootstrap measured is a product of its own, written before
+    # the disentangling, so the period decision can be examined from disk.
+    template_table = Path(result.report["files"]["template_velocities"])
+    assert template_table.name == "template_velocities.rv" and template_table.exists()
+    assert "purpose: bootstrap" in template_table.read_text(encoding="utf-8")
+    bjd = np.loadtxt(template_table, comments="#", usecols=(0,), ndmin=1)
+    assert bjd.size == dataset.n_epochs
+    assert Path(result.report["files"]["template_velocities_csv"]).exists()
+    # The bootstrap also carries the table the period search itself ran on, which the
+    # winning orbit's re-assignment would otherwise leave nowhere on disk.
+    assert result.live["bootstrap"]["table_unexchanged"].n_epochs == dataset.n_epochs
     orbit = result.report["orbit"]
     # The bootstrap warm-starts a Keplerian disentangling, so the final table's orbit
     # starts from the disentangling's period, as on any other Keplerian run.
     assert orbit["period_source"] == "the disentangling"
     assert result.report["disentangling"]["mode"] == "keplerian"
+    for name, k_true in zip(("A", "B"), ORBIT.k, strict=True):
+        assert abs(orbit["k"][name] - k_true) < 0.05 * k_true, (name, orbit["k"])
+
+
+def test_the_noise_correlation_setting_is_checked_and_declared(toy):
+    """A number, a table per instrument or "fit"; anything else is refused by name."""
+    from albireo.facade import Between as _Between
+    from albireo.pipeline import _noise_declaration, _noise_values
+
+    dataset, truth, grid = toy
+    assert Analysis().noise_correlation is None
+    with pytest.raises(ValueError, match="noise_correlation must be a number"):
+        Analysis(noise_correlation="later")
+    with pytest.raises(ValueError, match=r"lie in \(-1, 1\)"):
+        Analysis(noise_correlation={"TOY": 1.0})
+    assert _noise_declaration(Analysis(), dataset) is None
+    assert _noise_declaration(Analysis(noise_correlation=0.3), dataset) == 0.3
+    per = _noise_declaration(Analysis(noise_correlation={"OTHER": 0.5}), dataset)
+    assert per == {"TOY": 0.0}, "an instrument left out of the table is independent"
+    fitted = _noise_declaration(Analysis(noise_correlation="fit"), dataset)
+    assert isinstance(fitted, _Between) and float(np.asarray(fitted.start())) == 0.0
+    assert _noise_values(Analysis(noise_correlation="fit"), dataset) is None
+    assert _noise_values(Analysis(noise_correlation=0.3), dataset) == {"TOY": 0.3}
+    star = _star(dataset, truth, grid, overrides={"noise_correlation": {"TOY": 0.27}})
+    assert star.overrides["noise_correlation"] == {"TOY": 0.27}
+
+
+def test_a_free_eccentricity_starts_from_the_table_orbit_when_it_is_usable():
+    from albireo.facade import Between as _Between
+    from albireo.pipeline import _declared_orbit, _ecc_omega_specs, _element_starts
+
+    star = StarConfig(
+        name="starts",
+        spectra=["a.fits", "b.fits"],
+        period=6.31,
+        components=[ComponentConfig("A", 0.6), ComponentConfig("B", 0.4)],
+    )
+    settings = Analysis(k_min=2.0, k_max=250.0, ecc_max=0.9)
+
+    class _Orbit:
+        def __init__(self, ecc, omega, error=0.02):
+            self.ecc, self.omega = ecc, omega
+            self.errors = {"ecc": error}
+
+    class _Ctx:
+        def __init__(self):
+            self.lines = []
+
+        def log(self, text):
+            self.lines.append(text)
+
+    ctx = _Ctx()
+    assert _element_starts(ctx, None, star, settings) is None
+    assert _element_starts(ctx, _Orbit(0.005, 1.0), star, settings) is None  # as good as default
+    assert _element_starts(ctx, _Orbit(0.95, 1.0), star, settings) is None  # outside the prior
+    assert _element_starts(ctx, _Orbit(float("nan"), 1.0), star, settings) is None
+    assert _element_starts(ctx, _Orbit(0.4, 1.2), star, settings) == (0.4, 1.2)
+    assert "started from the template table" in ctx.lines[-1]
+    # An eccentricity the table has not detected is not a start: 0.2 +- 0.15 stays default.
+    assert _element_starts(ctx, _Orbit(0.2, 1.2, error=0.15), star, settings) is None
+    assert "not detected at three sigma" in ctx.lines[-1]
+    assert _element_starts(ctx, _Orbit(0.2, 1.2, error=float("nan")), star, settings) is None
+    ecc, omega = _ecc_omega_specs(star, settings, (0.4, 1.2))
+    assert isinstance(ecc, _Between) and float(np.asarray(ecc.start())) == 0.4
+    assert float(np.asarray(omega.start())) == 1.2
+    ecc, omega = _ecc_omega_specs(star, settings, None)
+    assert isinstance(ecc, _Between) and ecc.start_at is None and omega is None
+    # A declared eccentricity is never overridden by the table.
+    held = replace(star, ecc=0.1, omega=0.3)
+    ecc, omega = _ecc_omega_specs(held, settings, (0.4, 1.2))
+    assert float(np.asarray(ecc.value)) == 0.1 and float(np.asarray(omega.value)) == 0.3
+    assert _element_starts(ctx, _Orbit(0.4, 1.2), held, settings) is None
+    circular = Analysis(circular=True)
+    assert _element_starts(ctx, _Orbit(0.4, 1.2), star, circular) is None
+    orbit = _declared_orbit(star, settings, starts=[23.0, 34.0], elements=(0.4, 1.2))
+    assert float(np.asarray(orbit.ecc.start())) == 0.4
+
+
+def test_an_exchanged_pair_is_recognised_and_the_truth_reordered():
+    """Velocities that match the truth in the other order are judged in that order."""
+    from albireo.pipeline import _exchange_rms, _exchanged_truth
+
+    phase = np.linspace(0.0, 1.0, 12, endpoint=False)
+    v_true = np.stack([30.0 * np.sin(2 * np.pi * phase), -55.0 * np.sin(2 * np.pi * phase)])
+    good = np.ones(12, dtype=bool)
+    named, exchanged = _exchange_rms(v_true + 0.1, v_true, good, (True, True))
+    assert named == pytest.approx(0.1) and exchanged > 10.0 * named
+    named, exchanged = _exchange_rms(v_true[::-1], v_true, good, (True, True))
+    assert exchanged == pytest.approx(0.0, abs=1e-12) and named > 30.0
+    # A differential table is compared after removing each zero point.
+    named, _ = _exchange_rms(v_true + np.array([[7.0], [-3.0]]), v_true, good, (False, False))
+    assert named == pytest.approx(0.0, abs=1e-12)
+    truth = {
+        "k": [30.0, 55.0],
+        "light_fractions": [0.6, 0.4],
+        "velocities": v_true,
+        "components": np.array([[1.0, 0.9], [1.0, 0.8]]),
+        "labels": {"A": {"teff": 6000.0}, "B": {"teff": 5000.0}},
+        "period": 6.31,
+    }
+    swapped = _exchanged_truth(truth, ["A", "B"])
+    assert swapped["k"] == [55.0, 30.0] and swapped["light_fractions"] == [0.4, 0.6]
+    np.testing.assert_array_equal(swapped["velocities"], v_true[::-1])
+    np.testing.assert_array_equal(swapped["components"][0], [1.0, 0.8])
+    assert swapped["labels"] == {"A": {"teff": 5000.0}, "B": {"teff": 6000.0}}
+    assert swapped["period"] == 6.31 and truth["k"] == [30.0, 55.0]
+
+
+def test_semi_amplitude_starts_follow_the_table_and_fill_in_the_rest():
+    """Measured starts are taken as they are; a missing one follows its nearest neighbour."""
+    from albireo.facade import Between
+    from albireo.pipeline import _k_prior
+
+    star = StarConfig(
+        name="starts",
+        spectra=["a.fits", "b.fits"],
+        period=6.31,
+        components=[ComponentConfig("A", 0.6), ComponentConfig("B", 0.4)],
+    )
+    settings = Analysis(k_min=2.0, k_max=250.0)
+
+    def starts(seeds=None):
+        return [float(np.asarray(s.start())) for s in _k_prior(star, settings, starts=seeds)]
+
+    spread = starts()
+    assert spread == pytest.approx([2.0 + 248.0 / 3.0, 2.0 + 2.0 * 248.0 / 3.0])
+    assert starts([None, None]) == pytest.approx(spread)
+    assert starts([23.0, None]) == pytest.approx([23.0, 34.5])  # the lighter star moves more
+    assert starts([900.0, 30.0]) == pytest.approx([20.0, 30.0])  # the heavier one, less
+    assert starts([None, 240.0]) == pytest.approx([160.0, 240.0])
+    # Every start stays strictly inside the range: 2% in from either bound.
+    assert starts([249.0, None]) == pytest.approx([245.04, 245.04])
+    assert starts([2.0, None]) == pytest.approx([6.96, 6.96])
+    for spec in _k_prior(star, settings, starts=[900.0, 30.0]):
+        assert isinstance(spec, Between) and (spec.lo, spec.hi) == (2.0, 250.0)
+    with pytest.raises(ValueError, match="starts for 2 components"):
+        _k_prior(star, settings, starts=[1.0])
+    with pytest.raises(ValueError, match="strictly inside"):
+        Between(2.0, 250.0, start_at=250.0).start()
+
+
+def test_the_candidate_periods_are_the_union_of_three_searches(monkeypatch):
+    """One list from the sinusoid, one from the second harmonic, one swap-invariant doubled."""
+    import albireo.rvorbit as rvorbit_module
+    from albireo.pipeline import _period_candidates
+
+    calls = []
+
+    def stub(table, *, swap_invariant=False, n_harmonics=1, **kwargs):
+        first = bool(kwargs.get("components"))
+        calls.append((swap_invariant, n_harmonics, first))
+        if first:
+            assert kwargs["components"] == ["A"]
+            return {"period": 15.0, "aliases": [30.0, 10.0]}
+        if swap_invariant:
+            return {"period": 3.0, "aliases": [4.0, 5.0, 6.0, 7.0]}
+        if n_harmonics == 2:
+            return {"period": 11.0, "aliases": [10.05, 13.0]}
+        return {"period": 10.0, "aliases": [20.0, 6.0]}
+
+    monkeypatch.setattr(rvorbit_module, "find_period", stub)
+
+    class _Table:
+        n_components = 2
+        names = ("A", "B")
+
+    candidates, searches = _period_candidates(_Table(), swap_invariant=True)
+    assert calls == [(False, 1, False), (False, 2, False), (False, 1, True), (True, 1, False)]
+    # The four sources in order (the sinusoid, its two-harmonic form, the first component
+    # alone, the swap-invariant peaks each followed by their double), with everything
+    # within 2% of an earlier candidate dropped: 10.05 duplicates 10.0, the first
+    # component's 10.0 is already there, and the invariant branch's 6.0, 10.0 and 6.0 (the
+    # double of 3.0 and 5.0, and the peak itself) are all already there.
+    assert candidates == [10.0, 20.0, 6.0, 11.0, 13.0, 15.0, 30.0, 3.0, 4.0, 8.0, 5.0, 12.0]
+    assert searches["single"]["period"] == 10.0
+    assert searches["harmonic"]["period"] == 11.0
+    assert searches["first"]["period"] == 15.0
+    assert searches["invariant"]["period"] == 3.0
+    # Without the swap-invariant branch, and with a table too short for five parameters.
+    calls.clear()
+    plain, searches = _period_candidates(_Table(), swap_invariant=False)
+    assert calls == [(False, 1, False), (False, 2, False), (False, 1, True)]
+    assert searches["invariant"] is None
+    assert plain == [10.0, 20.0, 6.0, 11.0, 13.0, 15.0, 30.0]
+
+    def short(table, *, swap_invariant=False, n_harmonics=1, **kwargs):
+        if n_harmonics == 2:
+            raise ValueError("6 usable epochs cannot support the 5 parameters")
+        return stub(table, swap_invariant=swap_invariant, n_harmonics=n_harmonics, **kwargs)
+
+    monkeypatch.setattr(rvorbit_module, "find_period", short)
+    candidates, searches = _period_candidates(_Table(), swap_invariant=False)
+    assert candidates == [10.0, 20.0, 6.0, 15.0, 30.0] and searches["harmonic"] is None
+
+
+def test_an_orbit_outside_the_declared_ranges_cannot_win(monkeypatch):
+    """A lower chi-square at an absurd semi-amplitude or eccentricity is set aside.
+
+    A companion the templates could not follow leaves velocities that a wrong period fits
+    with a semi-amplitude of thousands of km/s at a lower chi-square than the truth; the
+    declared ranges say such an orbit is not a solution, so the decision skips it.
+    """
+    import types
+
+    import albireo.rvorbit as rvorbit_module
+    from albireo.pipeline import _orbit_over_candidates
+
+    fits = {
+        0.34: dict(chi2=10.0, k=[1537.0, 0.0], ecc=0.94),
+        0.58: dict(chi2=40.0, k=[103.0, 190.0], ecc=0.01),
+        1.20: dict(chi2=90.0, k=[80.0, 20.0], ecc=0.95),
+    }
+
+    def fake_fit(table, *, period, circular):
+        spec = fits[min(fits, key=lambda p: abs(p - period))]
+        return types.SimpleNamespace(
+            period=period, chi2=spec["chi2"], k=np.array(spec["k"]), ecc=spec["ecc"]
+        )
+
+    monkeypatch.setattr(rvorbit_module, "fit_rv_orbit", fake_fit)
+    flags: list[str] = []
+    ctx = types.SimpleNamespace(
+        settings=Analysis(k_min=2.0, k_max=250.0, ecc_max=0.9), flag=flags.append
+    )
+    table = types.SimpleNamespace(n_components=1, bjd=np.arange(3.0))
+    best, _, record = _orbit_over_candidates(ctx, table, [0.34, 0.58, 1.20], circular=False)
+    assert best.period == 0.58 and record["n_candidates"] == 3
+    assert any("lies outside the declared ranges" in f and "1537" in f for f in flags)
+    # With nothing inside the ranges the lowest chi-square stands, and says so.
+    flags.clear()
+    best, _, _ = _orbit_over_candidates(ctx, table, [0.34, 1.20], circular=False)
+    assert best.period == 0.34
+    assert any("no candidate orbit lies inside the declared ranges" in f for f in flags)
+
+
+def test_the_orbit_loop_merges_fits_and_names_every_ambiguity(monkeypatch):
+    """Deduplication is on the fitted period; every rival within delta chi2 25 is flagged."""
+    import albireo.rvorbit as rvorbit_module
+    from albireo.pipeline import _orbit_over_candidates
+
+    class _Fit:
+        def __init__(self, period, chi2):
+            self.period, self.chi2 = period, chi2
+            self.k, self.ecc = np.array([40.0, 50.0]), 0.1  # inside the default ranges
+
+        def predict(self, t):
+            return np.zeros((2, np.size(t)))
+
+    # starting period -> the period it converges to, and its chi-square
+    outcome = {6.0: (6.31, 100.0), 6.4: (6.30, 90.0), 12.6: (12.62, 110.0), 3.1: (3.15, 400.0)}
+
+    def stub_fit(table, *, period, circular=False, **kwargs):
+        return _Fit(*outcome[round(float(period), 4)])
+
+    monkeypatch.setattr(rvorbit_module, "fit_rv_orbit", stub_fit)
+    monkeypatch.setattr(
+        rvorbit_module,
+        "reassign_by_orbit",
+        lambda table, predicted: (table, np.zeros(table.bjd.size, dtype=bool)),
+    )
+
+    class _Table:
+        n_components = 2
+        bjd = np.arange(10.0)
+
+    class _Ctx:
+        def __init__(self):
+            self.flags = []
+            self.settings = Analysis()
+
+        def flag(self, text):
+            self.flags.append(text)
+
+    ctx = _Ctx()
+    # 6.0 is repeated and 6.05 is within 2% of it, so neither is fitted twice.
+    best, _, decision = _orbit_over_candidates(
+        ctx, _Table(), [6.0, 6.4, 6.05, 12.6, 6.0, 3.1], circular=False
+    )
+    assert decision["n_candidates"] == 4
+    assert best.period == 6.30 and best.chi2 == 90.0
+    # 6.31 converged to the winner's period and is not an ambiguity; 12.62 is, at +20;
+    # 3.15 is 310 away and is not named.
+    assert decision["ambiguous"] == [{"period": 12.62, "delta_chi2": 20.0}]
+    assert len(ctx.flags) == 1 and "12.6200 d at +20.0" in ctx.flags[0]
+    assert "6.31" not in ctx.flags[0] and "3.15" not in ctx.flags[0]
+    # The ranking the period decision takes the top few of: the distinct orbits in
+    # chi-square order, the winner first, each with the table it was fitted to. 6.31 is
+    # the same period as the winner and was merged into it, as it is for the ambiguity.
+    assert [round(o.period, 2) for o, _ in decision["ranked"]] == [6.30, 12.62, 3.15]
+
+
+def test_the_disentangling_decides_among_the_best_candidate_periods(toy, tmp_path, monkeypatch):
+    """The table ranks the candidates by chi-square; the disentangling chooses among the best.
+
+    The velocity table cannot separate a period from its aliases when the table is poor.
+    Two blind systems of the D62 Gaia population make the case: on fifteen epochs an
+    eccentric Keplerian at 0.2485 d with semi-amplitudes of 233 and 239 km/s at e = 0.73
+    fitted better than the true 6.104 d, and on twelve epochs the same happened at 1.129 d
+    at e = 0.72 against a true 5.356 d. Both lie inside the declared ranges, so the range
+    filter does not reach them. The three candidate orbits here stand for that case: the
+    chi-square prefers the first, the marginal likelihood of the disentangling prefers the
+    second, and the second is the one the fit is started from.
+    """
+    from types import SimpleNamespace
+
+    import albireo.pipeline as pipeline_module
+    from albireo.pipeline import _bootstrap, _jsonable
+
+    dataset, truth, grid = toy
+    star = _star(dataset, truth, grid, name="decide", period="search")
+
+    def orbit_at(period, chi2, k):
+        return SimpleNamespace(
+            period=period,
+            chi2=chi2,
+            k=np.asarray(k, dtype=float),
+            ecc=0.12,
+            omega=0.7,
+            t_conj=2455000.5,
+            names=("A", "B"),
+            errors={"k": np.array([1.2, 1.6]), "ecc": 0.01},
+            summary=lambda: f"  orbit at P {period:.5f} d",
+        )
+
+    table = SimpleNamespace(
+        settings={},
+        n_epochs=12,
+        good=np.ones(12, dtype=bool),
+        summary=lambda: "  table summary",
+    )
+    templates = [SimpleNamespace(meta={"source": "stub"}) for _ in range(2)]
+    # The chi-square order: the absurd alias first, the truth second. The truth's secondary
+    # is one the templates could not follow, so its semi-amplitude is degenerate and the
+    # declaration falls back to the range, which is where the scan's best becomes a start.
+    ranked = [
+        (orbit_at(0.24847, 8.0, (233.0, 239.0)), table),
+        (orbit_at(6.10400, 31.0, (40.0, 300.0)), table),
+        (orbit_at(1.12943, 45.0, (182.0, 185.0)), table),
+    ]
+    # period -> (best marginal over phase at the start, the semi-amplitude scan's best
+    # value, and the semi-amplitudes it found). The first and third scans end below their
+    # start and are refused, so those candidates are worth their phase scan's maximum.
+    scanned = {
+        0.24847: (-1000.0, -1010.0, [231.0, 237.0]),
+        6.10400: (-850.0, -840.0, [38.0, 61.0]),
+        1.12943: (-980.0, -990.0, [180.0, 186.0]),
+    }
+
+    class _Phase:
+        def __init__(self, best, values):
+            self.best, self.values = best, np.asarray(values, dtype=float)
+
+    class _Amp:
+        def __init__(self, best, best_t_conj, best_value, start_value):
+            self.best = np.asarray(best, dtype=float)
+            self.best_t_conj, self.best_value, self.start_value = (
+                best_t_conj,
+                best_value,
+                start_value,
+            )
+            self.n_trials, self.notes = 317, ()
+
+        @property
+        def gain(self):
+            return self.best_value - self.start_value
+
+    class _FakeDis:
+        """Only what the comparison touches: a coarse copy, a phase scan, a K scan."""
+
+        def __init__(self, spec):
+            centre = 0.5 * (float(spec.period.lo) + float(spec.period.hi))
+            self.period = min(scanned, key=lambda p: abs(p - centre))
+            self.init = {"k": np.array([10.0, 20.0]), "t_conj": 2455000.0}
+            self.fixed = {}
+
+        def _scan_declaration(self):
+            return self
+
+        def _scan_phase(self, init):
+            return _Phase(2455000.25, [scanned[self.period][0] - 30.0, scanned[self.period][0]])
+
+        def _has_ranged_k(self):
+            return True
+
+        def _scan_semi_amplitudes(self, init):
+            start, best, k_best = scanned[self.period]
+            return _Amp(k_best, 2455000.3, best, start)
+
+    declared = []
+
+    def fake_declare(ctx_, dataset_, lsf_, spec, velocities):
+        assert velocities is None
+        # The comparison scans the conjunction, which is as uncertain as the period it
+        # came from, and declares every semi-amplitude on the settings' own bounds, so
+        # that every candidate is measured on one velocity budget and one model grid.
+        assert spec.t_conj == "scan"
+        declared.append([(float(s.lo), float(s.hi)) for s in spec.k])
+        return _FakeDis(spec)
+
+    searches = {
+        "single": {"period": 0.18652, "aliases": [0.2657, 0.1765, 0.1991, 0.4084]},
+        "harmonic": {"period": 0.22311, "aliases": [0.3]},
+        "invariant": None,
+        "first": None,
+    }
+    monkeypatch.setattr(pipeline_module, "_library_table", lambda *a, **k: (table, templates))
+    monkeypatch.setattr(pipeline_module, "_period_candidates", lambda t, **k: ([1.0], searches))
+    monkeypatch.setattr(
+        pipeline_module,
+        "_orbit_over_candidates",
+        lambda ctx_, t, periods, **k: (
+            ranked[0][0],
+            ranked[0][1],
+            {"n_candidates": 7, "ambiguous": [], "ranked": ranked},
+        ),
+    )
+    monkeypatch.setattr(pipeline_module, "_declare", fake_declare)
+
+    ctx = _context(star, tmp_path / "decide", Analysis(), library="stub")
+    spec, block = _bootstrap(ctx, dataset, {"TOY": 5.5}, None)
+
+    # The period the fit is started from is the disentangling's choice, not the table's.
+    assert 0.5 * (spec.period.lo + spec.period.hi) == pytest.approx(6.10400)
+    assert spec.period.lo == pytest.approx(0.97 * 6.10400)
+    decision = block["report"]["decision"]
+    assert decision["by"] == "disentangling"
+    assert decision["chosen_period"] == pytest.approx(6.10400)
+    assert decision["table_period"] == pytest.approx(0.24847)
+    assert decision["margin_nats"] == pytest.approx(140.0)  # over the runner-up, 1.129 d
+    assert decision["over_table_nats"] == pytest.approx(160.0)
+    assert [c["value_nats"] for c in decision["candidates"]] == pytest.approx(
+        [-1000.0, -840.0, -980.0]
+    )
+    assert [c["chosen"] for c in decision["candidates"]] == [False, True, False]
+    assert [c["scan_moved"] for c in decision["candidates"]] == [False, True, False]
+    assert decision["candidates"][1]["k"] == pytest.approx([38.0, 61.0])
+    assert decision["candidates"][0]["k"] == pytest.approx([10.0, 20.0])  # the refused scan
+    assert all(c["n_trials"] == 319 for c in decision["candidates"])  # 317 K trials, 2 phases
+    assert all(c["seconds"] >= 0.0 for c in decision["candidates"])
+    assert [c["table_chi2"] for c in decision["candidates"]] == [8.0, 31.0, 45.0]
+    # Three candidates were declared, on identical semi-amplitude bounds, and nothing that
+    # holds a compiled model survived into the report.
+    assert len(declared) == 3 and declared[0] == declared[1] == declared[2]
+    json.dumps(_jsonable(block["report"]))
+    # The disagreement with the table is flagged, with both periods and the margin.
+    flag = next(f for f in ctx.flags if "the table preferred" in f)
+    assert "P 0.24847 d at chi2 8.0" in flag and "P 6.10400 d by 160 nats" in flag
+    assert "coarse grid" in block["text"] and "6.10400 d, 140 nats" in block["text"]
+    # The chosen candidate's scan moved, so its semi-amplitudes start the disentangling
+    # where the range is searched (this orbit's secondary is outside the declared range).
+    assert [float(s.start_at) for s in spec.k] == pytest.approx([38.0, 61.0])
+
+    # With the setting at zero the table's choice stands and no model is ever built.
+    declared.clear()
+    plain = _context(
+        star, tmp_path / "table", Analysis(period_decision_candidates=0), library="stub"
+    )
+    spec, block = _bootstrap(plain, dataset, {"TOY": 5.5}, None)
+    assert declared == []
+    assert 0.5 * (spec.period.lo + spec.period.hi) == pytest.approx(0.24847)
+    decision = block["report"]["decision"]
+    assert decision["by"] == "table" and decision["candidates"] == []
+    assert decision["chosen_period"] == pytest.approx(0.24847)
+    assert decision["margin_nats"] is None and "disabled" in decision["reason"]
+    assert not any("the disentangling prefers" in f for f in plain.flags)
+    with pytest.raises(ValueError, match="period_decision_candidates must be a non-negative"):
+        Analysis(period_decision_candidates=-1)
+
+
+def test_a_degenerate_bootstrap_falls_back_to_the_declared_range(library, tmp_path, monkeypatch):
+    """A bootstrap semi-amplitude outside the range must not pin the disentangling to it.
+
+    The first guard clipped such a value into the range and declared it known, which held
+    a faint secondary's K at the floor; the range search is what the known-period route
+    does, and it recovers the orbit from the bootstrap's period alone.
+    """
+    import dataclasses
+
+    import albireo.pipeline as pipeline_module
+
+    dataset, truth, grid = _simulate(library, n_epochs=10, snr=150.0)
+    star = _star(dataset, truth, grid, period="search")
+    real = pipeline_module._orbit_over_candidates
+
+    def degenerate(ctx, table, periods, *, circular):
+        orbit, table, decision = real(ctx, table, periods, circular=circular)
+        # The decision by the disentangling takes its candidates from the ranked list, so
+        # every candidate is made degenerate too, whichever it chooses.
+        broken = dataclasses.replace(orbit, k=np.array([0.0, 5000.0]))
+        decision = {
+            **decision,
+            "ranked": [
+                (dataclasses.replace(o, k=np.array([0.0, 5000.0])), t)
+                for o, t in decision.get("ranked", [])
+            ],
+        }
+        return broken, table, decision
+
+    monkeypatch.setattr(pipeline_module, "_orbit_over_candidates", degenerate)
+    config = PipelineConfig(
+        stars=[star],
+        output=tmp_path,
+        library=library,
+        mh=(-0.9, 0.4),
+        analysis=Analysis(
+            max_steps=120,
+            label_steps=200,
+            v_zero_range=40.0,
+            plots=False,
+            v_range=150.0,
+            period_decision_candidates=2,
+        ),
+    )
+    result = run_star(star, config, progress=False)
+    flags = result.report["flags"]
+    assert any("searches the range instead" in f for f in flags), flags
+    orbit = result.report["orbit"]
     for name, k_true in zip(("A", "B"), ORBIT.k, strict=True):
         assert abs(orbit["k"][name] - k_true) < 0.05 * k_true, (name, orbit["k"])
 
@@ -458,3 +1127,655 @@ def test_the_demo_runs_end_to_end(tmp_path):
     toy = run.results["toy_library_sb2"].report
     assert toy["velocities"]["absolute_all"] is True
     assert abs(toy["orbit"]["gamma"]["A"] - 12.0) < 1.5
+
+
+def test_a_semi_amplitude_start_no_medium_allows_is_skipped_and_not_a_failure(
+    toy, library, tmp_path
+):
+    """A stage nobody asked for must be skipped, not raise, when the medium is missing.
+
+    A ranged semi-amplitude with a library at hand buys a head start: a velocity table
+    from library templates at the declared period, whose orbit seeds the starting values.
+    Rendering a template needs the wavelength medium, which the files need not declare.
+    Nobody asked for that table, so its unavailability is not a reason to fail the star:
+    the skip is recorded as a flag and the declared range's evenly spaced starts are used,
+    which is where they start when no library is declared at all. The refusal stays a
+    refusal on the routes the user did ask for (``period = "search"``, ``light =
+    "measure"``). This is what the packaged demo's first star hit.
+    """
+    dataset, truth, grid = toy
+    undeclared = ab.Dataset(tuple(replace(e, medium=None) for e in dataset), frame=dataset.frame)
+    star = _star(
+        undeclared, truth, grid, name="no_medium", labels=False, overrides={"max_steps": 2}
+    )
+    assert all(c.k is None for c in star.components), "the branch needs a ranged semi-amplitude"
+    config = PipelineConfig(
+        stars=[star], output=tmp_path, library=library, analysis=Analysis(fast=True, plots=False)
+    )
+    result = run_star(star, config, progress=False)
+    assert result.ok, result.error
+    assert any("semi-amplitude starts skipped" in f for f in result.flags), result.flags
+    assert "k-start" not in result.seconds, "the stage was skipped, not run"
+
+
+# ---------------------------------------------------------------------------
+# 4. the guards: a stage that failed must not be read as a measurement
+# ---------------------------------------------------------------------------
+#
+# One archived star of the D62 benchmark wrote fifteen rows of plausible velocities out of
+# a diverged disentangling, a label fit that beat neither of its nulls, and a correlation
+# that reported a position it never evaluated
+# (internal/research/2026-09-09-gaia-rvs-benchmark/d63_edge_pinned_table.md). Each guard
+# below refuses one of the steps by which that file was written. Three of them refuse a
+# table a healthy fit can still write: a component held at a light fraction the shrunken
+# spectrum no longer has, an exchange of two components the correlation's peaks cannot
+# support, and a frame offset the label fit never learned.
+
+
+def _context(star, directory, settings=None, library=None):
+    """A ``_Context`` for the stage helpers, logging into ``directory``."""
+    from albireo.pipeline import _Context, _Log
+
+    directory.mkdir(parents=True, exist_ok=True)
+    config = PipelineConfig(stars=[star], output=directory, library=library)
+    return _Context(
+        star=star,
+        config=config,
+        settings=settings or Analysis(),
+        directory=directory,
+        log=_Log(star.name, directory / "log.txt", progress=False),
+    )
+
+
+class _StubFit:
+    """Enough of a ``Fit`` for ``_templates``: templates, mode, budget, narrowest LSF.
+
+    ``lights`` and ``taus`` add what the velocity stage reads besides: the declared
+    components as real :class:`albireo.Star` objects, so that the smoothness starting
+    point is the library's own default rather than a number this file chose, and the
+    hyperparameters ML-II came back with. Given a ``table``, ``measure_velocities``
+    returns it and the stub also answers the reporting and assessment helpers that
+    ``_run_stages`` calls around the stage.
+    """
+
+    def __init__(
+        self,
+        names,
+        *,
+        mode="keplerian",
+        budget=300.0,
+        narrowest=5.0,
+        lights=None,
+        taus=None,
+        table=None,
+    ):
+        from types import SimpleNamespace
+
+        from albireo.todcor import Template
+
+        grid = ab.LogGrid.from_wavelength_range(5150.0, 5160.0, dv_kms=5.0)
+        self._templates = [
+            Template(name=n, grid=grid, deviation=np.zeros(grid.n), meta={"source": "stub"})
+            for n in names
+        ]
+        self.mode = mode
+        self._table = table
+        lights = [1.0 / len(names)] * len(names) if lights is None else list(lights)
+        taus = [300.0] * len(names) if taus is None else list(taus)
+        stars = [ab.Star(name=n, light=float(f)) for n, f in zip(names, lights, strict=True)]
+        self.hyper = {n: {"tau": float(t), "eta": 5.0} for n, t in zip(names, taus, strict=True)}
+        self.z_rms = 1.0
+        self.phase_scan = None
+        self.k_scan = None
+        self.result = SimpleNamespace(
+            potential=-1.0e4, grad_norm=1.0e-4, num_steps=12, converged=True
+        )
+        self.dis = SimpleNamespace(
+            velocity_budget=SimpleNamespace(total=budget),
+            _narrowest_lsf=lambda: narrowest,
+            stars=stars,
+            ordered_components=stars,
+            component_names=tuple(names),
+            n_stellar=len(stars),
+            grid=grid,
+            model=SimpleNamespace(half_bandwidth=3),
+            noise_correlation=None,
+            orbit=None,
+            explain=lambda: "  stub declaration",
+            fit=lambda **kwargs: self,
+        )
+
+    def templates(self):
+        return list(self._templates)
+
+    def summary(self):
+        return "  stub fit"
+
+    def noise_correlation(self):
+        return None
+
+    def velocities(self):
+        """The Keplerian at the epochs: here the measured table itself, which is a fit."""
+        if self._table is None:
+            return np.zeros((len(self._templates), 1))
+        return np.asarray(self._table.velocity, dtype=float)
+
+    def orbit(self):
+        return {"period": 6.31, "t_conj": 2455000.5, "ecc": 0.15, "omega": 0.7}
+
+    def star(self, name):
+        return {"k": 30.0 if name == self.dis.component_names[0] else 55.0}
+
+    def measure_velocities(self, *, templates, light):
+        self.measured = (list(templates), light)
+        return self._table
+
+
+class _StubMatch:
+    """Enough of a label match: the fitted frame offsets, the two nulls, the posterior widths.
+
+    ``widths`` are the ``posterior_over_prior`` ratios, one per site. Left out, the
+    attribute is absent, as it is on a match written by an older release.
+    """
+
+    def __init__(self, offsets, *, chi2=1.0e6, nearest=2.0e6, continuum=3.0e6, widths=None):
+        self.labels = {n: {"teff": 5000.0, "v_kms": v} for n, v in offsets.items()}
+        self.chi2 = chi2
+        self.chi2_nearest_node = nearest
+        self.chi2_continuum = continuum
+        if widths is not None:
+            self.posterior_over_prior = dict(widths)
+
+
+def _velocity_table(*, n_epochs=6, chi2=1000.0, chi2_null=2000.0, blended=False):
+    """A hand-built ``VelocityTable``; ``chi2 > chi2_null`` makes its R-squared negative."""
+    from albireo.todcor import VelocityTable
+
+    ones = np.ones(n_epochs)
+    phase = np.linspace(0.0, 1.0, n_epochs, endpoint=False)
+    return VelocityTable(
+        names=("A", "B"),
+        bjd=2455000.0 + np.arange(n_epochs, dtype=float),
+        instrument=("TOY",) * n_epochs,
+        velocity=np.vstack([30.0 * np.sin(2 * np.pi * phase), -55.0 * np.sin(2 * np.pi * phase)]),
+        sigma=np.vstack([ones, ones]),
+        sigma_ivar=np.vstack([ones, ones]),
+        covariance=np.tile(np.eye(2), (n_epochs, 1, 1)),
+        light=np.vstack([0.62 * ones, 0.38 * ones]),
+        light_mode="fixed",
+        chi2=chi2 * ones,
+        chi2_null=chi2_null * ones,
+        n_pixels=1000.0 * ones,
+        delta_chi2=np.vstack([400.0 * ones, 400.0 * ones]),
+        blended=np.full(n_epochs, blended),
+        at_edge=np.zeros((2, n_epochs), dtype=bool),
+        refined=np.ones(n_epochs, dtype=bool),
+        absolute=(False, False),
+        frame="barycentric",
+        settings={"n_parameters": 3},
+    )
+
+
+def test_a_zero_point_the_label_fit_disowned_is_refused(toy, tmp_path):
+    """Three ways for the label fit to report a frame offset it did not measure."""
+    from albireo.pipeline import _templates
+
+    dataset, truth, grid = toy
+    star = _star(dataset, truth, grid, name="zeros")
+    settings = Analysis(v_zero_range=150.0)  # trial step max(2 x 5, 5, 2 x 150 / 120) = 10 km/s
+
+    cases = []
+
+    def run(match, **kwargs):
+        ctx = _context(star, tmp_path / f"case{len(cases)}", settings)
+        cases.append(ctx)
+        return ctx, _templates(ctx, _StubFit(("A", "B"), **kwargs), match)
+
+    # A fit that beat both nulls, with both offsets far from the scan's bounds, is adopted.
+    ctx, templates = run(_StubMatch({"A": 12.4, "B": 11.6}))
+    assert [t.v_zero_kms for t in templates] == [12.4, 11.6]
+    assert ctx.zero_points["adopted"] is True and not ctx.zero_points["refused"]
+    assert ctx.zero_points["v_zero_kms"] == {"A": 12.4, "B": 11.6}
+    assert not ctx.flags
+
+    # (i) the fit beats neither null: chi2 above both, as in the archived star.
+    ctx, templates = run(_StubMatch({"A": 12.4, "B": 11.6}, chi2=1.15e7, nearest=7.0e6))
+    assert [t.v_zero_kms for t in templates] == [None, None]
+    assert ctx.zero_points["adopted"] is False
+    assert any("beats neither null" in f for f in ctx.flags), ctx.flags
+
+    # (ii) an offset pinned on the bound of its own scan (the archived star: 3e-4 km/s from
+    # -150 over a +-150 km/s scan).
+    ctx, templates = run(_StubMatch({"A": -149.9997, "B": 11.6}))
+    assert [t.v_zero_kms for t in templates] == [None, None]
+    reason = " ".join(ctx.zero_points["refused"])
+    assert "'A'" in reason and "-149.9997" in reason and "bound of its scan" in reason
+
+    # (iii) two zero points that no single systemic velocity can hold, on a Keplerian fit.
+    ctx, templates = run(_StubMatch({"A": -60.0, "B": 60.0}), budget=100.0)
+    assert [t.v_zero_kms for t in templates] == [None, None]
+    assert any("velocity budget" in f for f in ctx.flags), ctx.flags
+    # The same pair on a free-velocity fit is not a contradiction: there is no shared gamma.
+    ctx, templates = run(_StubMatch({"A": -60.0, "B": 60.0}), budget=100.0, mode="velocity")
+    assert [t.v_zero_kms for t in templates] == [-60.0, 60.0]
+
+    # Every refusal is in the log as well as in the flags.
+    text = (cases[1].directory / "log.txt").read_text(encoding="utf-8")
+    assert "flag: template zero points refused" in text
+
+
+def test_a_frame_offset_the_label_fit_never_learned_is_refused_for_that_component(toy, tmp_path):
+    """A posterior as wide as its prior: that component alone keeps its unidentified zero point.
+
+    The three refusals above are properties of the fit as a whole. This one is per
+    component: the label fit of a third benchmark run kept 11 percent of the secondary's
+    equivalent width, its ``v`` site came back as wide as the prior it started from, the
+    offset it reported sat 46 km/s from the systemic velocity, and every velocity of that
+    component carried it. The other component's offset was measured and is still applied.
+    """
+    from albireo.pipeline import _templates
+
+    dataset, truth, grid = toy
+    star = _star(dataset, truth, grid, name="unlearned")
+    settings = Analysis(v_zero_range=150.0)
+
+    # B learned nothing (0.93 of its prior), A did (0.20): B stays differential, A is pinned.
+    ctx = _context(star, tmp_path / "one", settings)
+    offsets = {"A": 12.4, "B": -46.0}
+    templates = _templates(
+        ctx, _StubFit(("A", "B")), _StubMatch(offsets, widths={"v_A": 0.2, "v_B": 0.93})
+    )
+    assert [t.v_zero_kms for t in templates] == [12.4, None]
+    assert templates[0].meta["zero_point"] == "label match"
+    assert "zero_point" not in templates[1].meta
+    (flag,) = ctx.flags
+    assert flag.startswith("zero point refused for B (frame offset posterior 0.93 of the prior)")
+    assert "that component's velocities stay differential" in flag
+    assert ctx.zero_points["refused"] == ["B: the label fit learned nothing about the frame offset"]
+    # One component pinned is still an adopted zero point, and B's offset is recorded,
+    # unapplied, beside the reason it was refused.
+    assert ctx.zero_points["adopted"] is True
+    assert ctx.zero_points["v_zero_kms"] == offsets
+    log = (ctx.directory / "log.txt").read_text(encoding="utf-8")
+    assert "template zero points from the label fit: A +12.40 km/s, B none" in log
+
+    # Neither component learned anything: nothing is pinned and nothing is adopted.
+    ctx = _context(star, tmp_path / "both", settings)
+    templates = _templates(
+        ctx, _StubFit(("A", "B")), _StubMatch(offsets, widths={"v_A": 0.95, "v_B": 0.93})
+    )
+    assert [t.v_zero_kms for t in templates] == [None, None]
+    assert ctx.zero_points["adopted"] is False
+    assert len(ctx.zero_points["refused"]) == 2
+    assert "A (frame offset posterior 0.95 of the prior)" in ctx.flags[0]
+
+    # A match that reports no widths at all pins both, as before the test existed.
+    ctx = _context(star, tmp_path / "silent", settings)
+    templates = _templates(ctx, _StubFit(("A", "B")), _StubMatch(offsets))
+    assert [t.v_zero_kms for t in templates] == [12.4, -46.0]
+    assert ctx.zero_points["adopted"] is True and not ctx.zero_points["refused"]
+    assert not ctx.flags
+
+
+def test_zero_points_no_search_window_can_hold_are_dropped_and_the_epochs_measured(toy, tmp_path):
+    """Two zero points 95 km/s apart on velocities spanning 60: the zero points go, not the star.
+
+    The default search window of a template is its own zero point away from the fitted
+    velocities, so zero points that disagree by more than those velocities span leave no
+    window that holds every component, and the correlation refuses rather than report a
+    table pinned to the edge of its search. The velocities then stay differential, as when
+    the label fit disowns its own offsets, and the orbit fit carries one systemic velocity
+    per component.
+    """
+    from albireo.pipeline import _measure_epoch_velocities
+
+    dataset, truth, grid = toy
+    star = _star(dataset, truth, grid, name="dropped")
+    ctx = _context(star, tmp_path / "dropped")
+    ctx.zero_points = {
+        "source": "label match",
+        "adopted": True,
+        "v_zero_kms": {"A": -60.0, "B": 35.0},
+        "refused": [],
+    }
+    bare = _StubFit(("A", "B")).templates()
+    pinned = [replace(t, v_zero_kms=z) for t, z in zip(bare, (-60.0, 35.0), strict=True)]
+
+    class _Fit:
+        """A fit whose correlation refuses a window while any template carries a zero point."""
+
+        def __init__(self):
+            self.calls = []
+
+        def measure_velocities(self, *, templates, light):
+            self.calls.append([t.v_zero_kms for t in templates])
+            if any(t.v_zero_kms is not None for t in templates):
+                raise ValueError(
+                    "component 'B': the default search window (-95.000, +25.000) km/s "
+                    "misses its own fitted velocities"
+                )
+            return _velocity_table()
+
+    fit = _Fit()
+    table, used = _measure_epoch_velocities(ctx, fit, pinned, [0.62, 0.38])
+    assert fit.calls == [[-60.0, 35.0], [None, None]]  # refused, then measured again
+    assert [t.v_zero_kms for t in used] == [None, None]
+    assert all(t.meta["zero_point"] == "dropped" for t in used)
+    assert table.n_epochs == 6 and not all(table.absolute)
+    assert ctx.zero_points["adopted"] is False
+    assert ctx.zero_points["v_zero_kms"] == {"A": -60.0, "B": 35.0}  # what was dropped is kept
+    assert "search window" in " ".join(ctx.zero_points["refused"])
+    assert any(f.startswith("template zero points dropped") for f in ctx.flags), ctx.flags
+    assert "one gamma per component" in ctx.flags[0]
+
+    # A failure with no zero point to drop is a real one, and is raised as it stands.
+    class _Fails:
+        def measure_velocities(self, *, templates, light):
+            raise ValueError("the correlation found no usable epoch")
+
+    other = _context(star, tmp_path / "raised")
+    with pytest.raises(ValueError, match="no usable epoch"):
+        _measure_epoch_velocities(other, _Fails(), bare, [0.62, 0.38])
+    assert not other.flags and other.zero_points is None
+
+
+def test_the_declared_fractions_are_held_only_while_the_smoothness_stayed_near_its_start(
+    toy, tmp_path
+):
+    """A smoothness ML-II moved an order of magnitude: the amplitudes are fitted, not held.
+
+    The disentangling recovers a component at the declared light fraction only while its
+    posterior mean is not shrunk, and a smoothness precision far from its start says it
+    is. A secondary of a third benchmark run lost a quarter of its line depth that way and
+    the table then lost it under the declared fraction, at -89 percent against the
+    injected semi-amplitude, where a freely fitted amplitude left -25.
+    """
+    from albireo.facade import _smoothness_of
+    from albireo.pipeline import _template_light
+
+    dataset, truth, grid = toy
+    star = _star(dataset, truth, grid, name="smooth")
+    declared = list(LIGHT)
+
+    # tau 400 against the 300 the stellar default starts at: the fractions stand.
+    ctx = _context(star, tmp_path / "held")
+    held = _StubFit(("A", "B"), lights=LIGHT, taus=(400.0, 400.0))
+    assert [float(_smoothness_of(s).tau0) for s in held.dis.stars] == [300.0, 300.0]
+    assert _template_light(ctx, held, declared) == declared
+    assert not ctx.flags
+
+    # One component 470 times its start: the correlation fits both amplitudes instead.
+    ctx = _context(star, tmp_path / "moved")
+    moved = _StubFit(("A", "B"), lights=LIGHT, taus=(400.0, 141452.0))
+    assert _template_light(ctx, moved, declared) == "global"
+    (flag,) = ctx.flags
+    assert "B 300 -> 1.41e+05" in flag and "A 300" not in flag  # only B moved
+    assert "moved from its start by more than a factor 10" in flag
+    assert "the table's light column is that scale, not a light fraction" in flag
+
+
+def test_the_orbit_exchanges_the_components_only_where_they_are_alike(toy, tmp_path):
+    """Equal peaks are exchangeable; peaks a factor of several apart are not.
+
+    On a 95/5 pair the exchange swapped 19 of 80 epochs on noise draws of the faint
+    component's velocity, and the primary's semi-amplitude went from 5 to 56 percent off,
+    because an exchanged row carries the other component's amplitude.
+    """
+    from albireo.pipeline import _exchange_allowed
+
+    dataset, truth, grid = toy
+    star = _star(dataset, truth, grid, name="pairs")
+
+    for i, fractions in enumerate(([0.5, 0.5], [0.7, 0.3])):
+        ctx = _context(star, tmp_path / f"alike{i}")
+        assert _exchange_allowed(ctx, fractions) is True
+        assert not ctx.flags
+
+    ctx = _context(star, tmp_path / "apart")
+    assert _exchange_allowed(ctx, [0.95, 0.05]) is False
+    (flag,) = ctx.flags
+    assert "the exchange of the two components by the orbit was skipped" in flag
+    assert "[0.95, 0.05] differ by a factor 19.0, above 3" in flag
+
+    # Nothing to exchange, or nothing to compare: the rule does not apply and does not flag.
+    ctx = _context(star, tmp_path / "single")
+    assert _exchange_allowed(ctx, [1.0]) is True
+    assert _exchange_allowed(ctx, [0.95, float("nan")]) is True
+    assert not ctx.flags
+
+
+def test_the_table_as_measured_is_kept_where_the_orbit_exchanged_an_epoch(
+    toy, tmp_path, monkeypatch
+):
+    """The velocity stage, with the fit and the products stubbed: the exchange, and its record.
+
+    What separates a genuine exchange from a swap made on noise is the table the
+    correlation actually measured, so the stage writes it beside the delivered one
+    whenever an epoch was exchanged.
+    """
+    import albireo.pipeline as pipeline_module
+    import albireo.rvorbit as rvorbit_module
+    from albireo.pipeline import _run_stages
+
+    dataset, truth, grid = toy
+    measured = _velocity_table()
+    swapped_at = 2
+    calls = []
+
+    def swap_one(table, predicted, **kwargs):
+        """Exchange one epoch, as ``reassign_by_orbit`` would where the orbit says so."""
+        calls.append(np.asarray(predicted, dtype=float).shape)
+        velocity = np.asarray(table.velocity, dtype=float).copy()
+        velocity[:, swapped_at] = velocity[::-1, swapped_at]
+        mask = np.zeros(table.n_epochs, dtype=bool)
+        mask[swapped_at] = True
+        return replace(table, velocity=velocity), mask
+
+    def run(lights, name):
+        star = replace(  # no truth block: the stub fit has no spectra to compare
+            _star(
+                dataset,
+                truth,
+                grid,
+                name=name,
+                components=[
+                    ComponentConfig("A", lights[0], teff=(4200.0, 5700.0)),
+                    ComponentConfig("B", lights[1], teff=(4100.0, 5200.0)),
+                ],
+            ),
+            truth=None,
+        )
+        ctx = _context(star, tmp_path / name, Analysis(plots=False))
+        fit = _StubFit(("A", "B"), lights=lights, taus=(400.0, 400.0), table=measured)
+        monkeypatch.setattr(pipeline_module, "_declare", lambda *args, **kwargs: fit.dis)
+        monkeypatch.setattr(pipeline_module, "_write_products", lambda *args, **kwargs: None)
+        monkeypatch.setattr(pipeline_module, "_orbit", lambda *args, **kwargs: (None, None))
+        monkeypatch.setattr(rvorbit_module, "reassign_by_orbit", swap_one)
+        report, _text, live = _run_stages(ctx)
+        return ctx, report, live
+
+    # Alike components: the exchange runs, and the table as measured is kept beside it.
+    ctx, report, live = run([0.5, 0.5], "alike")
+    assert calls == [(2, measured.n_epochs)]
+    assert live["velocities"].velocity[0][swapped_at] == measured.velocity[1][swapped_at]
+    assert any("had their components re-assigned" in f for f in ctx.flags), ctx.flags
+    path = Path(ctx.files["velocities_unexchanged"])
+    assert path.name == "velocities_unexchanged.rv" and path.parent == ctx.directory
+    rows = np.loadtxt(path, comments="#", usecols=(0, 2, 4))
+    np.testing.assert_allclose(rows[:, 1], measured.velocity[0], atol=1e-6)
+    np.testing.assert_allclose(rows[:, 2], measured.velocity[1], atol=1e-6)
+    assert "as measured, before the exchange" in path.read_text(encoding="utf-8")
+    assert report["velocities"]["names"] == ["A", "B"]
+
+    # A 95/5 pair: the exchange never runs, so there is no table to keep beside anything.
+    calls.clear()
+    ctx, _report, live = run([0.95, 0.05], "apart")
+    assert calls == []
+    np.testing.assert_allclose(live["velocities"].velocity, measured.velocity)
+    assert any(
+        "the exchange of the two components by the orbit was skipped" in f for f in ctx.flags
+    )
+    assert "velocities_unexchanged" not in ctx.files
+    assert not (ctx.directory / "velocities_unexchanged.rv").exists()
+
+
+def test_the_bootstrap_table_the_period_search_ran_on_is_kept_beside_the_delivered_one(
+    toy, tmp_path
+):
+    """The bootstrap's template table is written twice where the winning orbit re-assigned.
+
+    ``_orbit_over_candidates`` re-assigns the components at the epochs where a per-epoch
+    correlation exchanged two alike spectra, and refits, so the table it returns beside the
+    winning orbit is not the table the period search ran on. The delivered file stays the
+    winning orbit's and its header says whose assignment it carries; the table as measured
+    is written beside it, because only that one reproduces the periodogram.
+    """
+    from albireo.pipeline import _write_template_table
+
+    dataset, truth, grid = toy
+    star = _star(dataset, truth, grid, name="bootstrapped")
+    measured = _velocity_table()
+    swapped_at = 2
+    velocity = np.asarray(measured.velocity, dtype=float).copy()
+    velocity[:, swapped_at] = velocity[::-1, swapped_at]
+    delivered = replace(
+        measured,
+        velocity=velocity,
+        settings={**dict(measured.settings), "reassigned_by_orbit": 1},
+    )
+
+    ctx = _context(star, tmp_path / "exchanged")
+    _write_template_table(ctx, delivered, "bootstrap", unexchanged=measured)
+    path = Path(ctx.files["template_velocities_unexchanged"])
+    assert path.name == "template_velocities_unexchanged.rv" and path.parent == ctx.directory
+    text = path.read_text(encoding="utf-8")
+    assert "as measured, before the exchange: the table the period search ran on" in text
+    assert "purpose: bootstrap" in text
+
+    # The delivered file holds what it always held, and now says whose assignment it is.
+    delivered_path = Path(ctx.files["template_velocities"])
+    delivered_text = delivered_path.read_text(encoding="utf-8")
+    assert "component assignment: the winning orbit's, not the correlation's" in delivered_text
+    assert "1 of 6 epochs re-assigned" in delivered_text
+    assert Path(ctx.files["template_velocities_csv"]).exists()
+
+    # The two differ at the re-assigned epoch, by the exchange, and nowhere else.
+    rows = np.loadtxt(delivered_path, comments="#", usecols=(0, 2, 4))
+    kept = np.loadtxt(path, comments="#", usecols=(0, 2, 4))
+    np.testing.assert_allclose(rows[:, 0], kept[:, 0])  # the same epochs in the same order
+    np.testing.assert_allclose(rows[swapped_at, 1:], kept[swapped_at, 1:][::-1], atol=1e-6)
+    others = [j for j in range(measured.n_epochs) if j != swapped_at]
+    np.testing.assert_allclose(rows[others, 1:], kept[others, 1:], atol=1e-6)
+    np.testing.assert_allclose(kept[:, 1], measured.velocity[0], atol=1e-6)
+    np.testing.assert_allclose(kept[:, 2], measured.velocity[1], atol=1e-6)
+
+    # No epoch re-assigned: there is nothing to keep, and no line claiming otherwise.
+    ctx = _context(star, tmp_path / "as-measured")
+    _write_template_table(ctx, measured, "bootstrap", unexchanged=measured)
+    assert "template_velocities_unexchanged" not in ctx.files
+    assert not (ctx.directory / "template_velocities_unexchanged.rv").exists()
+    held = Path(ctx.files["template_velocities"]).read_text(encoding="utf-8")
+    assert "component assignment" not in held and "re-assigned" not in held
+
+
+def test_a_failed_velocity_table_is_marked_and_no_orbit_is_fitted(toy, tmp_path):
+    """A median R-squared below zero: the templates fit worse than no template at all."""
+    from albireo.pipeline import _assess_table, _describe_table, _orbit, _velocity_header
+
+    dataset, truth, grid = toy
+    star = _star(dataset, truth, grid, name="failed")
+
+    healthy = _velocity_table(chi2=1000.0, chi2_null=2000.0)
+    described = _describe_table(healthy)
+    assert described["status"] == "ok" and described["failure"] is None
+    assert described["r_squared_median"] == pytest.approx(0.5)
+
+    failed = _velocity_table(chi2=2000.0, chi2_null=1000.0)
+    described = _describe_table(failed)
+    assert described["status"] == "failed"
+    assert "median R-squared -1.00" in described["failure"]
+
+    ctx = _context(star, tmp_path / "failed")
+    _assess_table(ctx, failed)
+    assert any("the velocity table failed" in f for f in ctx.flags), ctx.flags
+    assert any("velocities are differential" in f for f in ctx.flags), (
+        "the existing guards still run"
+    )
+
+    class _NoFit:
+        mode = "keplerian"
+
+        def orbit(self):
+            raise AssertionError("the orbit stage must not read a failed table")
+
+    assert _orbit(ctx, _NoFit(), failed) == (None, None)
+    assert any("orbit from the table skipped" in f for f in ctx.flags), ctx.flags
+
+    # The written file says so on the line under the format line, before any row.
+    path = failed.write(ctx.directory / "velocities.rv", header=_velocity_header(ctx, failed))
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "# albireo.todcor velocity table"
+    assert lines[1].startswith("# FAILED: median R-squared -1.00")
+    assert lines[2] == "# star: failed"
+    # A usable table carries no such line.
+    ok_path = healthy.write(ctx.directory / "ok.rv", header=_velocity_header(ctx, healthy))
+    assert "FAILED" not in ok_path.read_text(encoding="utf-8")
+
+    # A table with no usable epoch fails on that count instead.
+    empty = _velocity_table(chi2=1000.0, chi2_null=2000.0, blended=True)
+    assert _describe_table(empty)["failure"] == "no usable epoch of 6"
+
+
+def test_an_unmeasured_epoch_in_a_declared_table_is_refused(toy, tmp_path):
+    """`velocities = "file"` with a nan row: the free fit has no site for an unmeasured epoch."""
+    from albireo.pipeline import _read_velocities
+
+    dataset, truth, grid = toy
+    rows = np.column_stack([dataset.bjd, np.asarray(truth.velocities).T])
+    path = tmp_path / "rv.txt"
+    np.savetxt(path, rows, header="bjd v_A v_B")
+    star = _star(dataset, truth, grid, period=None, velocities=str(path), labels=False)
+    np.testing.assert_allclose(_read_velocities(star, dataset), np.asarray(truth.velocities))
+
+    rows[3, 2] = np.nan  # the correlation stage measured nothing for B at that epoch
+    np.savetxt(path, rows, header="bjd v_A v_B")
+    with pytest.raises(ValueError, match=r"component 'B' at epoch 3") as excinfo:
+        _read_velocities(star, dataset)
+    assert "no site for an unmeasured one" in str(excinfo.value)
+    assert f"{dataset.bjd[3]:.5f}" in str(excinfo.value)
+
+
+def test_a_diverged_disentangling_stops_the_star(toy, library, tmp_path, monkeypatch):
+    """The one number that separates a fit from a failure of the optimizer stops the star."""
+    from albireo.facade import Fit
+
+    with pytest.raises(ValueError, match="z_rms_max must be positive"):
+        Analysis(z_rms_max=0.0)
+    assert Analysis().z_rms_max == 10.0
+
+    dataset, truth, grid = toy
+    monkeypatch.setattr(Fit, "z_rms", property(lambda self: 45.0))
+    star = _star(dataset, truth, grid, name="diverged", overrides={"k_max": 90.0, "max_steps": 2})
+    config = PipelineConfig(
+        stars=[star],
+        output=tmp_path,
+        library=library,
+        mh=(-0.9, 0.4),
+        analysis=Analysis(fast=True, plots=False, v_zero_range=40.0, v_range=60.0),
+    )
+    run = run_pipeline(config, progress=False)
+    result = run.results["diverged"]
+    assert result.status == "failed" and "diverged" in run.failures
+    assert "RuntimeError" in result.error
+    for phrase in ("z-score rms 45.0", "z_rms_max ceiling of 10", "were not run", "noise model"):
+        assert phrase in result.error, result.error
+
+    directory = Path(result.directory)
+    assert (directory / "error.txt").is_file()
+    assert not (directory / "velocities.rv").exists(), "the velocity stage did not run"
+    assert not (directory / "labels.txt").exists(), "the label stage did not run"
+    # The table measured before the disentangling stays on disk, as its own product.
+    assert (directory / "template_velocities.rv").is_file()
+    log = (directory / "log.txt").read_text(encoding="utf-8")
+    assert "flag: the disentangling diverged" in log
+    assert "FAILED: RuntimeError" in log
