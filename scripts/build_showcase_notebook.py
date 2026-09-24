@@ -46,12 +46,12 @@ CELLS: list[tuple[str, str]] = [
         """\
 # albireo end to end: a tour of the outputs
 
-This notebook runs the example dataset packaged with albireo, which requires no download
-and no network access, through the `Disentangler` façade and shows the output of each
-stage: the derivations implied by the declaration, the MAP plus ML-II fit summary, the
-disentangled spectra with their uncertainty band, the residual diagnostics, the NUTS
-posterior over the orbit, spectra drawn from the joint posterior, and a sensitivity
-forecast for epochs that have not yet been observed.
+This notebook runs the example dataset packaged with albireo (no download, no network
+access) through the `Disentangler` façade and shows the output of each stage: the
+derivations implied by the declaration, the MAP plus ML-II fit summary, the disentangled
+spectra with their uncertainty band, the residual diagnostics, the NUTS posterior over the
+orbit, spectra drawn from the joint posterior, and a sensitivity forecast for epochs not
+yet observed.
 
 Background and references: [science overview](../science.md).
 
@@ -61,7 +61,7 @@ Install with the plotting extra:
 pip install -e ".[plots]"
 ```
 
-Two limitations are repeated in the package's own summaries:
+Two limitations, also stated in the package's own summaries:
 
 - The continuum light fractions are assumed, not measured. With constant light the data
   constrain only the products `l_i * d_i`, so the fractions are an input the fit cannot
@@ -149,14 +149,12 @@ print(fit.summary())""",
 
 The component spectra are recovered as deviations from a unit continuum, conditional on
 the MAP orbit, with a pointwise uncertainty band. Where the epochs give little leverage
-the band widens toward the prior, which records that the data do not constrain those
-pixels. The model grid is wider than the data by a margin set by the velocity budget and
-the LSF, derived by the façade above, so the band widens in the wings: those pixels are
-prior-only.
+the band widens toward the prior, marking pixels the data do not constrain. The model grid
+extends beyond the data by a margin set by the velocity budget and the LSF (derived by the
+façade above), so the band also widens in the wings, where the pixels are prior-only.
 
-The injected truth lies on the grid the example was generated on, so it is resampled onto
-the model grid for the overlay. Its deviation is zero outside that window, as the
-simulation put it there.""",
+The injected truth, defined on the grid the example was generated on, is resampled onto
+the model grid for the overlay. Its deviation is zero outside that window.""",
     ),
     (
         PY,
@@ -219,7 +217,7 @@ albireo measures no per-epoch radial velocity: the orbit is inferred from the sp
 directly, so the figure shows the posterior curve rather than a fit through RV points.
 The open circles are the injected component velocities at the observed epochs, which the
 draws thread. The ticks along the bottom mark the phase coverage of the epochs, which
-determines how well the orbit is constrained.""",
+sets how well the orbit is constrained.""",
     ),
     (
         PY,
@@ -248,9 +246,8 @@ ax.set_title("posterior orbit draws; no per-epoch RV was ever measured")""",
         """\
 ## The pairwise posterior
 
-The sampled space is low-dimensional because the spectra are integrated out, so the
-corner plot is readable by default. Shown here: period, eccentricity and both
-semi-amplitudes.""",
+The spectra are integrated out, so the sampled space is low-dimensional and the corner
+plot is readable by default. It shows the period, eccentricity and both semi-amplitudes.""",
     ),
     (
         PY,
@@ -283,11 +280,11 @@ fig.set_layout_engine("constrained")""",
 ## Forecast: the effect of six further nights
 
 The posterior covariance of the spectra contains no flux. It depends only on the epochs,
-their phases, weights and the prior, so it can be computed for observations that have not
-been taken. Planned epochs carry a placeholder flux of exactly 1.0, so a planned dataset
-passed to a fit by mistake returns featureless spectra rather than plausible ones. The
-forecast below uses the twelve epochs in hand plus six more spread over one period, with
-the fitted orbit and the ML-II smoothness from the fit.""",
+their phases, weights and the prior, so it can be computed for observations not yet taken.
+Planned epochs carry a placeholder flux of exactly 1.0, so a planned dataset passed to a
+fit by mistake returns featureless spectra rather than plausible ones. The forecast below
+uses the twelve epochs in hand plus six more spread over one period, with the fitted orbit
+and ML-II smoothness.""",
     ),
     (
         PY,
@@ -320,8 +317,7 @@ fig, _ = ab.plot_forecast(fc)""",
         """\
 ## Not shown here
 
-The following are omitted to keep the notebook small; each has a runnable example in the
-repository:
+Omitted to keep the notebook small, each with a runnable example in the repository:
 
 - the SB1 faint-companion scan and its calibrated detection limit
   ([`examples/02_k2_scan.py`](https://github.com/tjayasinghe/albireo/blob/main/examples/02_k2_scan.py),

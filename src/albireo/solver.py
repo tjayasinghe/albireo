@@ -10,9 +10,9 @@ differentiable.
 Assembly by comb probing applies the matrix-free operator to unit combs of stride
 ``2p + 1``. Columns of one comb are separated by more than the bandwidth, so they do not
 alias within the band, and ``2p + 1`` operator applications recover every band entry
-exactly from the tested forward and adjoint operators. Direct band assembly
-(``docs/math.md`` §4.5) has replaced probing on the likelihood path; probing remains
-the reference construction and the validation oracle.
+exactly from the tested forward and adjoint operators. The likelihood path uses direct
+band assembly (``docs/math.md`` §4.5); probing is the reference construction and the
+validation oracle.
 
 The logical dimension ``n`` is padded to ``K * B``. The pad block is the identity (probing
 passes the pad coordinates through), so solves, log-determinants and samples restricted to
@@ -388,11 +388,11 @@ def selected_inverse_cotangent(chol: BlockCholesky, d_blocks, u_blocks, g_logdet
 
     restricted to the block-tridiagonal pattern, where ``Sigma = (L L^T)^{-1}``. This is
     the quantity the reverse rule of :func:`albireo.likelihood._solve_stage` requires
-    (``docs/math.md`` §4.5). Forming it inside the recursion consumes each ``Sigma`` block
-    at the step that produces it, so the selected inverse is never stored. Compared with
-    the unfused route (:func:`selected_inverse_blocks` followed by the outer products)
-    this removes ``2K - 1`` blocks of live storage and the outer-product temporaries,
-    3.1 GB at the design target, with identical arithmetic.
+    (``docs/math.md`` §4.5). Each ``Sigma`` block is consumed at the step that produces
+    it, so the selected inverse is never stored. Compared with the unfused route
+    (:func:`selected_inverse_blocks` followed by the outer products) this removes
+    ``2K - 1`` blocks of live storage and the outer-product temporaries, 3.1 GB at the
+    design target, with identical arithmetic.
 
     The subdiagonal blocks carry a factor 2 because ``BlockTridiagonal.lower[k]`` is the
     sole storage for both ``Lambda[k+1, k]`` and ``Lambda[k, k+1]`` (see

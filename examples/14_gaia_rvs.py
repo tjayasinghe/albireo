@@ -50,6 +50,7 @@ from albireo.gaia import (
     RVS_DR3_MEAN,
     RVS_DR4_EPOCH,
     rvs_components,
+    rvs_delivered_sigma_kms,
     rvs_model_grid,
     simulate_rvs_dataset,
     uniform_phase_times,
@@ -113,13 +114,22 @@ def main(argv: list[str] | None = None) -> int:
         orbit=orbit,
         snr=SNR,
         product=product,
-        library_resolving_power=float(library.meta["resolution"]),
+        library=library,  # the components carry the library's R = 20,000 already
         seed=SEED,
     )
     print(
         f"{dataset.n_epochs} spectra, {dataset[0].n_pixels} pixels each ({product.description});"
         f" delivered {truth.delivery.pixel_ratio:.2f} px per detector px,"
         f" lag-1 noise correlation {np.mean(truth.delivery.lag1):.2f}"
+    )
+    # The width these epochs carry, which is what the analyses below declare: the nominal
+    # R = 11,500, the delivery's interpolation from the detector pixels and the simulation's
+    # own 2 km/s model grid (albireo.gaia.rvs_delivered_sigma_kms). The epochs themselves
+    # state the nominal width, as the archive does.
+    delivered = rvs_delivered_sigma_kms(product, simulation_dv_kms=grid.dv_kms)
+    print(
+        f"declared line-spread sigma {delivered:.2f} km/s "
+        f"(nominal {ab.LSF.from_resolution(11_500).sigma_kms:.2f})"
     )
     idx = int(np.argmax(np.abs(truth.velocities[0] - truth.velocities[1])))
     v1, v2 = truth.velocities[:, idx]
@@ -142,7 +152,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     ]
     one_epoch = ab.Dataset([dataset[idx]], frame="barycentric")
-    lsf = {"RVS": ab.LSF.from_resolution(11_500).sigma_kms}
+    lsf = {"RVS": delivered}
     two_d = ab.todcor(
         one_epoch, templates, v_range=(-V_SEARCH, V_SEARCH), light=list(light), lsf_sigma_v=lsf
     )
@@ -168,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
             k=ab.Between([20.0, 20.0], [160.0, 160.0], start_at=[70.0, 110.0]),
             ecc=ab.Between(0.0, 0.5),
         ),
-        lsf={"RVS": ab.LSF.from_resolution(11_500)},
+        lsf={"RVS": ab.LSF(sigma_kms=delivered)},
         dv_kms=3.0,
         # What the delivery did to the noise, declared like the LSF: AR(1) along the pixel
         # index at the recorded lag-one correlation, which the archive errors do not carry.

@@ -8,11 +8,10 @@ needed, and one star is about 5 MB.
 
 See the [science overview](../science.md) for background and references.
 
-That makes it the best available target for this package, and also the hardest of the worked
-examples, because none of the inputs are supplied: the archive does not use the survey's
-names, the file layout is not the one the other tutorials use, the spectra are not
-normalized, and there is no published orbit. The last of those changes the *analysis*, not
-only the loading.
+This makes BLOeM the best available target for the package and the hardest worked example,
+because none of the inputs are supplied: the archive does not use the survey's names, the
+file layout differs from the other tutorials', the spectra are not normalized, and there is
+no published orbit. The last changes the *analysis*, not only the loading.
 
 The executable starting point is
 [`examples/06_bloem.py`](https://github.com/tjayasinghe/albireo/blob/main/examples/06_bloem.py):
@@ -21,15 +20,14 @@ The executable starting point is
 python examples/06_bloem.py 1-037
 ```
 
-It stops where an analysis begins. Everything after §3 below is what comes next.
+It stops where an analysis begins; §4 onward covers what comes next.
 
 !!! warning "This page gives decisions, not results"
-    The other tutorials quote the answers they obtain, because they run on the simulator
-    where the truth is known. Here it is not: these systems have no published orbital
-    solutions, which is why they are interesting. Every number quoted below is therefore one
-    already measured and recorded elsewhere in this repository: the archive facts,
-    the loader's behaviour, and the closed-loop results from the
-    simulator that justify each choice. Where a step produces a fitted result, the page says
+    The other tutorials run on the simulator, where the truth is known, and quote their
+    answers. These systems have no published orbital solutions, which is why they are
+    interesting. Every number below is one already measured and recorded elsewhere in this
+    repository: the archive facts, the loader's behaviour, and the closed-loop simulator
+    results that justify each choice. Where a step produces a fitted result, the page says
     what to inspect rather than what value to expect.
 
 ## The short version
@@ -87,11 +85,11 @@ raw = ab.read_spectrum("data/bloem-1-037/<one>.fits")
 print(raw.columns, raw.wave_medium, raw.specsys, raw.err_source)
 ```
 
-Two consequences of this collection change what has to be done:
+Two properties of this collection change the procedure:
 
 **The products are not normalized and not flux-calibrated** (`CONTNORM=F`,
-`FLUXCAL='UNCALIBRATED'`). `smooth_angstrom=` is therefore required rather than optional; it
-is what runs `albireo.preprocess`'s continuum fit. The survey team's own normalized, co-added
+`FLUXCAL='UNCALIBRATED'`). `smooth_angstrom=` is therefore required; it runs
+`albireo.preprocess`'s continuum fit. The survey team's own normalized, co-added
 reduction is behind a credential-gated page, so assume it is unavailable.
 
 **The epochs do not share a wavelength grid, and must not be forced onto one.** FEROS shifts
@@ -118,7 +116,7 @@ before widening it.
 
 **The line-spread function.** LR02 delivers R ≈ 6200–6300; take the value from the archive
 rows themselves (`em_res_power`, which `bloem_spectra` returns and the example prints) rather
-than from a paper. Then convert it correctly:
+than from a paper, and convert it:
 
 ```python
 lsf = ab.LSF.from_resolution(6300)     # sigma = c / (R * 2 sqrt(2 ln 2)) = 20.2 km/s
@@ -134,7 +132,7 @@ depth) sets it. For a BLOeM SB2 with no light-curve solution, pick a value, stat
 report how the answer moves across a plausible range. Every summary albireo prints repeats
 the assumption for this reason.
 
-The grid then follows from the rest:
+The grid follows:
 
 ```python
 grid = ab.LogGrid.covering(ds, dv_kms=8.0, v_margin_kms=400.0, lsf_sigma_kms=lsf.sigma_kms)
@@ -145,16 +143,15 @@ albireo's model grid must clear the largest shift any component takes plus the k
 
 ## 4. Velocities before an orbit
 
-This is where a BLOeM SB2 departs from the other tutorials. With no published period there is
-nothing to warm-start a Keplerian from, and albireo does not invent one: the `Disentangler`
-façade scans conjunction *phase* at a single period, and warns if it is given a period prior
-wide enough to constitute a search, because a phase located for the wrong period is worse
-than no phase at all.
+With no published period there is nothing to warm-start a Keplerian from, and albireo does
+not invent one: the `Disentangler` façade scans conjunction *phase* at a single period, and
+warns if given a period prior wide enough to constitute a search, because a phase located
+for the wrong period is worse than no phase at all.
 
-So run the free per-epoch RV table first, the mode
+Run the free per-epoch RV table first (the mode
 [`examples/09_rv_table.py`](https://github.com/tjayasinghe/albireo/blob/main/examples/09_rv_table.py)
-is built around, and take the period from it. Declare the measured velocities instead of an
-orbit:
+is built around) and take the period from it, declaring the measured velocities instead of
+an orbit:
 
 ```python
 dis = ab.Disentangler(
@@ -170,16 +167,16 @@ rv, err = table.velocities(), table.velocity_errors()
 
 `v_measured` is whatever is available: cross-correlation lags, a shift-and-add pipeline's
 output, or the He I 4144/4169 splitting read off the two most separated epochs. It is a
-**starting point, not a constraint**. The per-component zero point is unidentified, so what
-it must be right about is the epoch-to-epoch *pattern*, not the level. A systemic +150 km/s on
-every entry changes neither the answer nor the solver's bandwidth.
+**starting point, not a constraint**. The per-component zero point is unidentified, so it
+must get the epoch-to-epoch *pattern* right, not the level. A systemic +150 km/s on every
+entry changes neither the answer nor the solver's bandwidth.
 
 !!! danger "A cold start does not work, and that is measured"
     `v_measured` may not be a placeholder. With every component at the same velocity at every
     epoch the two stars are indistinguishable, and the fit does not converge slowly: it lands
-    122,000 nats worse than a warm start, measured in the benchmark record. The declaration refuses that outright, and
-    warns if the supplied velocities never separate the components by more than the LSF
-    width. The failure is loud rather than silent, which is what makes the mode usable.
+    122,000 nats worse than a warm start (measured in the benchmark record). The declaration
+    refuses that outright, and warns if the supplied velocities never separate the
+    components by more than the LSF width.
 
 Then run a periodogram on `rv` outside albireo (this package does not ship one), and take the
 period into the `Orbit` declaration of §5.
@@ -218,10 +215,10 @@ kep = dis.fit()
 print(kep.summary())
 ```
 
-`dis.grid` is the grid the façade chose, and it is not necessarily the one §4 built by hand.
-Use `dis.grid` from here on so that the pieces agree.
+`dis.grid` is the grid the façade chose, and it is not necessarily the one §3 built by hand.
+Use `dis.grid` from here on so the pieces agree.
 
-Now use the table already in hand as the model check it exists for:
+The table already in hand is the model check:
 
 ```python
 free = kep.free_velocities()
@@ -231,8 +228,8 @@ resid = free.keplerian_residuals(kep)      # km/s, both zero points cancel exact
 Compare those residuals to the *per-epoch uncertainties* rather than to zero. Structure,
 whether phase-correlated residuals or one epoch far out, is the signature of a period that is
 slightly wrong, an unmodelled third body, or line-profile variability that the Keplerian has
-absorbed into `e`. On the velocity-table fixture a period wrong by 0.5% moved the residuals from 2.9σ to
-49σ, so the check has real power.
+absorbed into `e`. On the velocity-table fixture a period wrong by 0.5% moved the residuals
+from 2.9σ to 49σ.
 
 ## 6. The nebular component, before the Balmer lines
 
@@ -240,11 +237,11 @@ BLOeM's targets sit in H II regions. Their spectra carry nebular emission that d
 with either star and varies from night to night with seeing and slit losses, and this is the
 main reason the survey's own disentangling is hard.
 
-Leaving it in is not neutral, and the cost is not where it might be expected. On a simulated
-SB2 whose Hβ absorption carries a static nebular line
+Leaving it in is not neutral. On a simulated SB2 whose Hβ absorption carries a static nebular
+line
 ([`examples/04_nebular.py`](https://github.com/tjayasinghe/albireo/blob/main/examples/04_nebular.py)),
-ignoring it costs **11.5% of the equivalent width**, which propagates into log *g* and is the
-cost the literature already describes. The effect on the **orbit** is far larger. A static
+ignoring it costs **11.5% of the equivalent width**, which propagates into log *g*; this is
+the cost the literature describes. The effect on the **orbit** is far larger. A static
 line is a component with *K* = 0, so a nebula-blind joint fit hands the emission to whichever
 star can be made to move least:
 
@@ -257,7 +254,7 @@ star can be made to move least:
 The contamination therefore reaches the *masses*, not only the atmospheres. Only K₁ survives
 it, because 70% of the light pins it.
 
-So if the window is widened to Hδ or Hγ, add the component and confine it:
+If the window is widened to Hδ or Hγ, add the component and confine it:
 
 ```python
 dis = ab.Disentangler(
@@ -274,9 +271,8 @@ The component confines itself to the nebular line windows through the prior; at 
 level that is `ab.nebular_windows(wave_range=(grid.wave[0], grid.wave[-1]), v_kms=v_neb)` fed
 to `ab.window_profile`, and the façade assembles it. **The confinement is not cosmetic**: the
 same fit with the nebular component left free across the whole grid lands K₂ at +2.6% instead
-of −0.29%, because the extra freedom is spent absorbing stellar signal at wavelengths where a
-nebula has no lines, which is the failure mode the component exists to prevent, reappearing
-one level up.
+of −0.29%, because the extra freedom absorbs stellar signal at wavelengths where a nebula has
+no lines: the failure mode the component exists to prevent, one level up.
 
 Two conventions come with it, and neither is measured by the data: the amplitude scale (the
 geometric mean is pinned to 1) and `v_kms`, which is a *placement* choice for the line windows
@@ -287,22 +283,20 @@ recession, not zero.
     A nebular line list is a set of *absolute* wavelengths, and air against vacuum is a nearly
     constant 83 km/s, so `Disentangler` raises rather than guessing when the dataset does not
     say which it is. GIRAFFE products declare air in `TUCD1` and `read_dataset` carries it
-    through, so this passes on real BLOeM data. It applies to a `Dataset` assembled by hand,
-    and the fix is `EpochData(..., medium="air")`.
+    through, so this passes on real BLOeM data. The check bites on a `Dataset` assembled by
+    hand; the fix is `EpochData(..., medium="air")`.
 
 ## 7. The product
 
-The disentangled spectra are not the end either, since they go to an atmosphere code, so what
-matters is that the uncertainty leaves with them:
+The disentangled spectra go on to an atmosphere code, and the uncertainty must go with them:
 
 ```python
 kep.write_spectra("bloem-1-037_spectra.fits")   # mean + band + the assumptions, as FITS
 ```
 
 Read the **band**, not the mean. Between the lines, and wherever the epochs give little
-leverage, the recovered spectrum is set by the smoothness prior rather than by the data, and
-the band is what indicates this. `ab.plot_spectra(dis.grid, kep.spectra(), std=kep.std())`
-draws it.
+leverage, the recovered spectrum is set by the smoothness prior rather than by the data, and the band
+shows where. `ab.plot_spectra(dis.grid, kep.spectra(), std=kep.std())` draws it.
 
 Three checks before the result is used:
 
@@ -313,21 +307,20 @@ Three checks before the result is used:
 * The light-fraction sensitivity. Re-run at the ends of the plausible range and quote the
   spread; it is a real systematic, not a rounding error.
 * Whether the available epochs can answer the question at all.
-  `ab.sensitivity_forecast(dis.grid, ds, orbit=kep.theta, ...)` needs no fluxes, so it can be
-  asked of epochs that have been requested as easily as of those in hand
+  `ab.sensitivity_forecast(dis.grid, ds, orbit=kep.theta, ...)` needs no fluxes, so it
+  applies to requested epochs as well as to those in hand
   ([the forecast example](https://github.com/tjayasinghe/albireo/blob/main/examples/08_forecast.py)).
   BLOeM's published multiplicity results use only the first nine epochs; the full ~25 are in
-  the archive, and what the extra ones add is worth knowing before spending a fit on them.
+  the archive, and a forecast shows what the extra ones add before a fit is spent on them.
 
 ## What this page does not claim
 
-No orbit here has been validated against a published solution, because there are none to
-validate against. That is the opportunity, and it is also the reason every number above traces
-to the simulator or to the archive rather than to a BLOeM fit. A system taken through this
-path successfully is a new result.
+No orbit here has been validated against a published solution, because none exists. For the
+same reason every number above traces to the simulator or to the archive rather than to a
+BLOeM fit. A system taken through this path successfully is a new result.
 
-The known limits belong in the same statement. R ≈ 6300 is low for disentangling, and
+Known limits: R ≈ 6300 is low for disentangling, and
 4000–4300 Å is a narrow window; the SB2 classifications are split across five unharmonized
 VizieR catalogues with no single all-929 table; and the light ratio, the one free choice in
-disentangling, is unconstrained for these targets until photometry is published. None of those
-is a reason not to try. All of them belong in the paper.
+disentangling, is unconstrained for these targets until photometry is published. All of them
+belong in the paper.

@@ -7,12 +7,11 @@ simulated example. :func:`example_info` reports the provenance of each entry.
 One example, ``sb2_sim``, ships inside the wheel and requires no network access, no
 astropy and no archive account. Larger examples are fetched on demand from a public
 archive and cached under ``$ALBIREO_DATA_DIR``, or under the platform cache directory
-(:func:`cache_dir`). Each cached file is verified against a recorded SHA-256 digest and is
-moved into place only after the digest matches, so a truncated or altered download is
-rejected rather than read as a spectrum.
+(:func:`cache_dir`). Each download is moved into place only after it matches a recorded
+SHA-256 digest, so a truncated or altered file is rejected rather than read as a spectrum.
 
-The cached files are ``.npz`` and are read with :func:`numpy.load`, so this module has no
-astropy dependency; reading FITS is the job of :mod:`albireo.io`.
+The cached files are ``.npz``, read with :func:`numpy.load`, so this module has no astropy
+dependency; FITS reading is in :mod:`albireo.io`.
 """
 
 from __future__ import annotations
@@ -138,9 +137,9 @@ def load_example(name: str = "sb2_sim", *, with_truth: bool = False, progress: b
     Returns
     -------
     Dataset, or (Dataset, dict)
-        The dataset, and the truth dictionary when ``with_truth`` is set. A
-        :class:`~albireo.data.Dataset` carries no provenance attribute; the provenance of
-        an example is reported by :func:`example_info`.
+        The dataset, and the truth dictionary when ``with_truth`` is set. Provenance is
+        reported by :func:`example_info`; a :class:`~albireo.data.Dataset` carries no
+        provenance attribute.
 
     Raises
     ------

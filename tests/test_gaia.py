@@ -31,6 +31,8 @@ from albireo.gaia import (
     predict_grvs,
     quadrature_sigma_kms,
     random_times,
+    rvs_components,
+    rvs_delivered_sigma_kms,
     rvs_detector_grid,
     rvs_lsf_sigma_kms,
     rvs_model_grid,
@@ -364,6 +366,275 @@ def test_delivery_propagates_the_variance_and_records_the_correlation(product):
     else:
         assert 0.2 < record.lag1[0] < 0.5  # the 0.245 -> 0.25 beat
         assert record.pixel_ratio == pytest.approx(0.98, rel=0.02)
+
+
+@pytest.mark.parametrize("product", [RVS_DR3_MEAN, RVS_DR4_EPOCH])
+def test_the_delivered_width_is_the_second_moment_the_interpolation_adds(product):
+    """``sigma_eff^2 - sigma_R^2`` against the second moment ``deliver`` adds to narrow lines.
+
+    Gaussian lines of 0.35 A sigma are sampled at the detector pixel centres and delivered;
+    the same lines sampled directly on the product grid are the reference, so that the
+    discrete sampling and the window cancel and what is left is the interpolation. The 49
+    lines are 4.25 A apart, 17/49 of the DR4 grid's 12.25 A beat period, so their centres
+    fall at every phase of the beat once. Each line's excess is converted to km/s at its own
+    wavelength. On the DR3 grid every line gains ``Delta^2 / 6`` to within a few percent; on
+    the DR4 grid a line gains from a quarter of that to about one and a half times it with
+    its phase (``Delta^2 / 4`` at ``t = 1/2``), and only the mean is the stationary width.
+    """
+    sigma_line = 0.35
+    centres = 8474.0 + 4.25 * np.arange(49)
+    detector_wave = rvs_detector_grid()
+    flux = 1.0 - sum(0.5 * np.exp(-0.5 * ((detector_wave - c) / sigma_line) ** 2) for c in centres)
+    detector = ab.Dataset(
+        [
+            ab.EpochData(
+                wave=detector_wave,
+                flux=flux,
+                ivar=np.full(detector_wave.size, 1.0e4),
+                bjd=2457000.0,
+                instrument="RVS-detector",
+            )
+        ],
+        frame="barycentric",
+    )
+    delivered, _record = deliver(detector, product)
+    wave = delivered[0].wave
+    exact = 1.0 - sum(0.5 * np.exp(-0.5 * ((wave - c) / sigma_line) ** 2) for c in centres)
+
+    excess = []
+    for c in centres:
+        window = np.abs(wave - c) < 5.0 * sigma_line
+        x = wave[window] - c
+
+        def moment(depth, x=x):
+            return float(np.sum(x**2 * depth) / np.sum(depth))
+
+        added = moment(1.0 - delivered[0].flux[window]) - moment(1.0 - exact[window])
+        excess.append(added * (ab.C_KMS / c) ** 2)
+    excess = np.asarray(excess)
+
+    step_kms = ab.C_KMS * 0.245 / 8580.0
+    predicted = step_kms**2 / 6.0
+    # The declared width also counts the detector pixel's width in place of the delivered
+    # one, which point samples on either grid do not see; it is measured in the next test.
+    pixels = (step_kms**2 - (ab.C_KMS * product.step / 8580.0) ** 2) / 12.0
+    assert rvs_delivered_sigma_kms(product) ** 2 - rvs_lsf_sigma_kms() ** 2 == pytest.approx(
+        predicted + pixels, rel=1e-12
+    )
+    expected = {"dr3-mean": 11.826, "dr4-epoch": 11.598}[product.name]
+    assert rvs_delivered_sigma_kms(product) == pytest.approx(expected, abs=5e-4)
+    assert np.mean(excess) == pytest.approx(predicted, rel=0.01)
+    if product is RVS_DR3_MEAN:
+        assert np.all(np.abs(excess / predicted - 1.0) < 0.05)
+    else:
+        # Between 0.24 and 1.57 of the mean; Delta^2 / 4 at t = 1/2 is 1.5 times the mean.
+        assert excess.min() < 0.3 * predicted and excess.max() > 1.3 * predicted
+        assert excess.max() < 1.65 * predicted
+    # The declared resolving power enters in quadrature, and nothing else does.
+    wider = rvs_delivered_sigma_kms(product, resolving_power=10_000.0)
+    assert wider**2 - rvs_lsf_sigma_kms(10_000.0) ** 2 == pytest.approx(
+        predicted + pixels, rel=1e-12
+    )
+
+
+# The line positions of the two moment tests below: 26 lines 7.9 A (276 km/s) apart, so that
+# a line's +-110 km/s moment window holds no wing of its neighbour.
+_LINE_CENTRES = 8478.0 + 7.9 * np.arange(26)
+_MOMENT_HALF_KMS = 110.0
+
+
+def _excess_moments(u, depths, edges_u, centres_u, sigma):
+    """Central second moment of each line minus that of the continuous line on the same bins."""
+    from scipy.special import ndtr
+
+    out = []
+    for depth, centres in zip(depths, centres_u, strict=True):
+        for centre in centres:
+            window = np.abs(u - centre) < _MOMENT_HALF_KMS
+
+            def moment(w, x=u[window]):
+                mean = np.sum(w * x) / np.sum(w)
+                return np.sum(w * (x - mean) ** 2) / np.sum(w)
+
+            ideal = (
+                ndtr((edges_u[1:] - centre) / sigma) - ndtr((edges_u[:-1] - centre) / sigma)
+            ) / np.diff(edges_u)
+            out.append(moment(depth[window]) - moment(ideal[window]))
+    return np.asarray(out)
+
+
+@pytest.mark.parametrize("product", [RVS_DR3_MEAN, RVS_DR4_EPOCH])
+def test_the_delivered_width_counts_the_detector_pixel_it_was_read_from(product):
+    """Lines integrated over detector pixels, delivered, against lines integrated over the
+    delivered pixels: the excess is ``Delta_det^2 / 6 + (Delta_det^2 - Delta_prod^2) / 12``.
+
+    The second term is the detector pixel's box, which every delivered sample inherits, less
+    the delivered pixel's box, over which an analysis's operator integrates its model:
+    +5.09 km^2/s^2 on the DR3 grid and -0.25 on the DR4 grid.
+    """
+    from albireo.operators import bin_edges_from_centers
+
+    sigma = 11.07
+    detector_wave = rvs_detector_grid()
+    det_u = ab.C_KMS * np.log(bin_edges_from_centers(detector_wave))
+    shifts = 0.0137 * np.arange(8)  # A, eight phases against both grids
+    epochs, centres = [], []
+    for j, shift in enumerate(shifts):
+        u_c = ab.C_KMS * np.log(_LINE_CENTRES + shift)
+        depth = np.zeros(detector_wave.size)
+        for c in u_c:
+            depth += (
+                0.4
+                * (_excess_ndtr(det_u[1:], c, sigma) - _excess_ndtr(det_u[:-1], c, sigma))
+                / np.diff(det_u)
+            )
+        epochs.append(
+            ab.EpochData(
+                wave=detector_wave,
+                flux=1.0 - depth,
+                ivar=np.full(detector_wave.size, 1.0e4),
+                bjd=2457000.0 + j,
+                instrument="RVS-detector",
+            )
+        )
+        centres.append(u_c)
+    delivered, _ = deliver(ab.Dataset(epochs, frame="barycentric"), product)
+    u = ab.C_KMS * np.log(product.wave)
+    edges = ab.C_KMS * np.log(bin_edges_from_centers(product.wave))
+    excess = _excess_moments(
+        u, [1.0 - np.asarray(e.flux) for e in delivered], edges, centres, sigma
+    )
+    det = ab.C_KMS * product.detector_step / 8580.0
+    prod = ab.C_KMS * product.step / 8580.0
+    predicted = det**2 / 6.0 + (det**2 - prod**2) / 12.0
+    assert rvs_delivered_sigma_kms(product) ** 2 - rvs_lsf_sigma_kms() ** 2 == pytest.approx(
+        predicted, rel=1e-12
+    )
+    # 208 lines: 17.312 against 17.303 on the DR3 grid, and 12.06 against 11.96 on the DR4
+    # grid, whose interpolation term varies with the 12.25 A beat phase.
+    tolerance = 0.005 if product is RVS_DR3_MEAN else 0.02
+    assert np.mean(excess) == pytest.approx(predicted, rel=tolerance)
+    if product is RVS_DR3_MEAN:
+        assert np.mean(excess) > det**2 / 6.0 + 4.5  # the pixel term, not the interpolation
+
+
+def _excess_ndtr(x, centre, sigma):
+    from scipy.special import ndtr
+
+    return ndtr((x - centre) / sigma)
+
+
+def _line_library(sigma_line_kms=2.0):
+    """An intrinsic library of narrow Gaussian lines on a 0.005 A grid, the same at every node."""
+    from albireo.library import SpectralLibrary
+
+    wave = np.arange(8350.0, 8850.0, 0.005)
+    u = ab.C_KMS * np.log(wave)
+    flux = np.ones_like(wave)
+    for c in _LINE_CENTRES:
+        flux -= 0.4 * np.exp(-0.5 * ((u - ab.C_KMS * np.log(c)) / sigma_line_kms) ** 2)
+    nodes = np.array([[t, g, m] for t in (5000.0, 5500.0) for g in (4.0, 4.5) for m in (0.0, 0.5)])
+    return SpectralLibrary(
+        label_names=("teff", "logg", "mh"),
+        nodes=nodes,
+        normalized=np.tile(flux, (nodes.shape[0], 1)),
+        log_continuum=np.zeros((nodes.shape[0], wave.size)),
+        wave=wave,
+        medium="vacuum",
+        meta={},
+    )
+
+
+def test_the_simulation_adds_five_twelfths_of_its_model_pixel_squared():
+    """The simulator's own discretisation, measured through the shipped chain (D65).
+
+    Narrow lines rendered by ``rvs_components`` and ``simulate_rvs_dataset`` on the 2 km/s
+    model grid, at 26 positions and 32 epoch velocities, against the continuous line
+    convolved with the applied width and integrated over the detector pixels. Without
+    rotation three steps act (the box average onto the grid, the shift interpolation and the
+    model pixel in the rebin), ``(4/12) dv^2``, less the 0.050 km^2/s^2 by which the Gaussian
+    kernel truncated at four sigma falls short of ``sigma^2``; the rotation kernel's pixel
+    integration adds up to ``dv^2 / 12`` more (0.28 at 11 km/s), and the declaration takes
+    the ``(5/12) dv^2`` of a rotation that the grid resolves.
+    """
+    from albireo.operators import bin_edges_from_centers, gaussian_kernel
+
+    library = _line_library()
+    detector_wave = rvs_detector_grid()
+    u = ab.C_KMS * np.log(detector_wave)
+    edges = ab.C_KMS * np.log(bin_edges_from_centers(detector_wave))
+    n_ep = 32
+    velocities = -40.0 + 80.0 * np.mod(np.arange(n_ep) * 0.6180339887498949 + 0.123, 1.0)
+    results = {}
+    for vsini in (0.0, 11.0):
+        grid = rvs_model_grid(60.0, dv_kms=2.0, vsini_max_kms=max(vsini, 1.0))
+        components = rvs_components(
+            library, [{"teff": 5000.0, "logg": 4.0, "mh": 0.0}], grid, vsini_kms=[vsini]
+        )
+        _, truth = simulate_rvs_dataset(
+            components,
+            grid,
+            bjd=2457000.0 + np.arange(n_ep, dtype=float),
+            light_fractions=np.array([1.0]),
+            velocities=velocities[None, :],
+            snr=1.0e6,
+            library=library,
+        )
+        assert truth.library_resolving_power is None  # an intrinsic library takes it all
+        sigma = float(truth.quadrature_sigma_kms[0])
+        assert sigma == pytest.approx(rvs_lsf_sigma_kms())
+        rotation = 0.225 * vsini**2  # the limb-darkened profile at epsilon 0.6
+        centres = [
+            ab.C_KMS * (np.log(_LINE_CENTRES) + float(ab.log_doppler_shift(v))) for v in velocities
+        ]
+        depths = [1.0 - np.asarray(f) for f in truth.simulation.noiseless_flux]
+        results[vsini] = _excess_moments(
+            u, depths, edges, centres, float(np.sqrt(2.0**2 + sigma**2 + rotation))
+        ).mean()
+        dv = float(grid.dv_kms)
+    kernel = np.asarray(gaussian_kernel(rvs_lsf_sigma_kms() / dv))
+    radius = (kernel.size - 1) // 2
+    deficit = (
+        np.sum(kernel * np.arange(-radius, radius + 1) ** 2) * dv**2 - rvs_lsf_sigma_kms() ** 2
+    )
+    assert -0.06 < deficit < -0.04
+    assert results[0.0] == pytest.approx((4.0 / 12.0) * dv**2 + deficit, rel=0.03)
+    declared = gaia_module.SIMULATION_VARIANCE_FACTOR * dv**2
+    assert declared == pytest.approx(5.0 / 12.0 * 4.0)
+    assert results[11.0] == pytest.approx(declared, rel=0.10)
+    assert 0.0 < results[11.0] - results[0.0] < dv**2 / 12.0
+    simulated = rvs_delivered_sigma_kms(RVS_DR4_EPOCH, simulation_dv_kms=dv)
+    assert simulated**2 - rvs_delivered_sigma_kms(RVS_DR4_EPOCH) ** 2 == pytest.approx(
+        declared, rel=1e-12
+    )
+    assert simulated == pytest.approx(11.670, abs=5e-4)
+    with pytest.raises(ValueError, match="simulation_dv_kms must be positive"):
+        rvs_delivered_sigma_kms(RVS_DR4_EPOCH, simulation_dv_kms=0.0)
+
+
+def test_the_simulator_reads_the_resolving_power_from_the_library():
+    """The components' own broadening comes from the library, not from a BOSZ default (D65)."""
+    grid = rvs_model_grid(150.0, dv_kms=3.0)
+    components = _toy_components(grid)
+    bjd = uniform_phase_times(4.0, 3, start=2457000.0)
+    common = dict(bjd=bjd, light_fractions=NOTEBOOK_LIGHT, orbit=NOTEBOOK_ORBIT, snr=40.0, seed=1)
+    with pytest.raises(ValueError, match="declare the resolving power the components"):
+        simulate_rvs_dataset(components, grid, **common)
+    intrinsic = _line_library()
+    _, truth = simulate_rvs_dataset(components, grid, library=intrinsic, **common)
+    assert truth.library_resolving_power is None
+    np.testing.assert_allclose(truth.quadrature_sigma_kms, rvs_lsf_sigma_kms())
+    published = intrinsic.replace(meta={"resolution": 20000})
+    _, truth = simulate_rvs_dataset(components, grid, library=published, **common)
+    assert truth.library_resolving_power == 20000.0
+    np.testing.assert_allclose(truth.quadrature_sigma_kms, quadrature_sigma_kms(20_000.0))
+    # an explicit declaration still works on its own, and must agree with a library given too
+    _, truth = simulate_rvs_dataset(components, grid, library_resolving_power=20_000.0, **common)
+    assert truth.library_resolving_power == 20000.0
+    with pytest.raises(ValueError, match="contradicts the library"):
+        simulate_rvs_dataset(
+            components, grid, library=intrinsic, library_resolving_power=20_000.0, **common
+        )
 
 
 def test_delivery_masks_what_reads_a_masked_detector_pixel():

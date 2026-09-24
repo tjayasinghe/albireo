@@ -2,10 +2,10 @@
 
 See the [science overview](../science.md) for background and references.
 
-The other pages on this site apply one stage to one star. This one applies all of them to a
-list: read the epochs, disentangle, fit labels to the components, measure one velocity per
-component per epoch, fit the orbit to the table, and write the products out, for every star in
-a file, with the failures recorded and the results in a table a spreadsheet can read.
+The pipeline applies every stage to each star in a file: read the epochs, disentangle, fit
+labels to the components, measure one velocity per component per epoch, fit the orbit to the
+table, and write the products out. Failures are recorded, and the results go into a table a
+spreadsheet can read.
 
 ```bash
 pip install -e ".[io,plots]"
@@ -53,7 +53,7 @@ then
 albireo run albireo.toml --jobs 4
 ```
 
-Three entries in that file are places where the pipeline refuses to guess.
+The pipeline refuses to guess three declarations.
 
 **The light fractions are required.** With constant light fractions the likelihood sees only
 $`\ell_i d_i`$ ([§5.2](../math.md#52-light-ratio-line-depth)), so every recovered line depth
@@ -81,16 +81,22 @@ skipped with a flag rather than run on an 83 km/s guess.
 [labels]
 library = "bosz2024-fgk-r20000"   # albireo.library_names(); ~621 MB once, then cached
 mh = [-1.0, 0.5]
+# compare = "epochs"              # the default; "native" or "matched" compare with the components
 ```
 
 With a library declared, each disentangled component is fitted for Teff, log *g*, [M/H] and
 *v* sin *i* against the grid ([the previous tutorial](labels.md)) and, for the velocities, for
-the offset of its rest frame. A disentangled component's zero point is not identified
+the offset of its rest frame. By default the templates are compared with the epoch spectra
+themselves, through the disentangling's sufficient statistics, rather than with the
+disentangled components, and the light fraction the fit measures does not depend on the one
+declared; `result.json` records it beside the declaration under `labels`.
+
+A disentangled component's zero point is not identified
 ([§5.3](../math.md#53-systemic-velocity-zero-point)); the label fit measures it, and the
-pipeline applies it to the templates so that the epoch velocities come out absolute, unless
-the fit disowned that offset (it beat neither of its nulls, the offset was pinned on the bound
-of its own scan, or the two components disagree by more than one systemic velocity can hold),
-in which case the offset is refused with a flag and the table stays differential. Without a
+pipeline applies it to the templates so that the epoch velocities come out absolute. If the
+fit disowned that offset (it beat neither of its nulls, it was pinned on the bound of its own
+scan, or the two components disagree by more than one systemic velocity can hold), the offset
+is refused with a flag and the table stays differential. Without a
 library the velocities are differential: semi-amplitudes, eccentricity and mass ratio exact,
 systemic velocity meaningless, and the orbit fit gives each component its own $`\gamma`$. Every
 report states which it got, in the first lines of the velocity table's summary and in
@@ -108,9 +114,10 @@ period = "search"
 ```
 
 renders library templates at the starting labels, measures a first velocity table against them,
-proposes candidate periods from three periodograms, fits an orbit to the table from each and
-keeps the one with the lowest chi-square, and warm-starts the disentangling from it. Template mismatch costs a constant per component here, which the period and the
-semi-amplitudes are insensitive to. This route needs the library.
+proposes candidate periods from three periodograms, fits an orbit to the table from each,
+keeps the one with the lowest chi-square, and warm-starts the disentangling from it. Template
+mismatch costs a constant per component here, to which the period and the semi-amplitudes are
+insensitive. This route needs the library.
 
 ```toml
 velocities = "aiphe_rv.txt"        # columns: [bjd] v_primary v_secondary
@@ -125,7 +132,7 @@ free per-epoch table instead of a Keplerian
 `summary.txt` collects every stage's own report: the dataset, the derivations
 `Disentangler.explain()` prints, the fit, the labels against their nulls, the velocity table
 with its zero-point status, and the orbit with its errors. It ends with the flags, every caveat
-the run recorded. Read those first. The ones that recur:
+the run recorded; read those first. Recurring flags:
 
 - *residual z-score rms 1.4: the noise model does not describe these data*: the inverse
   variances are off; read [the benchmarks](../benchmarks.md) before reaching for a jitter.
@@ -134,8 +141,13 @@ the run recorded. Read those first. The ones that recur:
   and the prior came back as the result.
 - *K_secondary from the velocity table disagrees with the disentangling*: the templates or the
   light fractions need inspection.
-- *the label fit measures a light fraction of 0.38 for 'primary' against the declared 0.62*:
-  the components are probably declared in the wrong order.
+- *the label fit measures light fractions of primary 0.380 +- 0.004, secondary 0.620 +- 0.004
+  against the declared 0.620, 0.380*: the components are probably declared in the wrong order,
+  or the declared fractions are wrong. The flag fires above a factor of 1.5 or a difference of
+  0.15.
+- *labels with no formal error: vsini_B (rotation plateau)*: the epoch comparison left that
+  label out of its covariance, because it sits on a bound or below half a model pixel of
+  rotation, where the chi-square is flat; the value is a limit.
 
 `result.json` carries the same content in a shape a script can read, and the batch's
 `results.csv` has one row per star with the period, eccentricity, semi-amplitudes and systemic
@@ -182,7 +194,7 @@ offset range is ±300 km/s, and why an OB grid is needed for those stars
 
 ## What this page does not do
 
-It does not make the assumptions on the user's behalf, which is why the flags exist and why a
-report is worth reading in preference to a table. A pipeline that ran to completion on every
-star of a survey has turned every light fraction it was given into a line depth, and each
-report repeats that, because no downstream number escapes it.
+It does not make the assumptions on the user's behalf; the flags record them, and a report is
+worth reading in preference to a table. A pipeline that completed every star of a survey has
+turned every light fraction it was given into a line depth, and each report repeats that
+because no downstream number escapes it.

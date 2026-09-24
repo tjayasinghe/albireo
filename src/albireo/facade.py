@@ -138,8 +138,8 @@ class Known(Spec):
 
     Appropriate for a literature period or a semi-amplitude from a cross-correlation
     study. In :meth:`Disentangler.scan` a ``Known`` primary semi-amplitude is marginalized
-    over rather than held fixed, which is what prevents a 10% error in K₁ from inflating
-    the detection statistic.
+    over rather than held fixed, which prevents a 10% error in K₁ from inflating the
+    detection statistic.
 
     Parameters
     ----------
@@ -232,8 +232,8 @@ class Scanned(Spec):
 class Sampled(Spec):
     """Any numpyro distribution, with a starting value and a declared upper bound.
 
-    This is the specification that cannot derive its own bound: a distribution object need
-    not have finite support, and the starting value is not a bound. The velocity budget is
+    The one specification that cannot derive its own bound: a distribution object need not
+    have finite support, and the starting value is not a bound. The velocity budget is
     derived from the reach of the semi-amplitude priors, so ``upper_bound`` is required
     wherever the specification is used for a quantity that must be bounded. Without it, a
     ``Sampled`` ``k`` would size the solver from the optimizer's starting point.
@@ -297,8 +297,8 @@ class Smoothness:
     """Starting point of one component's smoothness hyperparameters.
 
     ``tau`` and ``eta`` are fitted by empirical Bayes (ML-II) in
-    :meth:`Disentangler.fit`, so these values are the centre and width of the hyperprior
-    rather than the values used in the final model. The starting point still matters:
+    :meth:`Disentangler.fit`, so these values are the centre and width of the hyperprior,
+    not the values used in the final model. The starting point still matters:
     on HR 6819 the rotationally broadened Be star requires a ``tau0`` five orders of
     magnitude larger than its sharp-lined companion. A hyperparameter that does not move
     from its start was not constrained by the data, and :meth:`Fit.summary` flags it.
@@ -335,15 +335,14 @@ class LSF:
 
     Notes
     -----
-    This width also fixes the radius of the convolution kernel, so it acts as an upper
-    bound as well as a value: a fit that subsequently infers a wider LSF is rejected
-    rather than truncated without notice. Declare some margin if the width is to be
-    inferred through the low-level API.
+    This width also fixes the radius of the convolution kernel, so it is an upper bound as
+    well as a value: a fit that later infers a wider LSF is rejected rather than silently
+    truncated. A width to be inferred through the low-level API needs some margin.
 
     Gauss-Hermite skewness (``h3``) has no field here. It reaches the kernel only
-    through :func:`albireo.build_problem` and not through the model class built by this
-    module, so a field would have been accepted and then discarded. Use
-    :meth:`Disentangler.expert` to declare it.
+    through :func:`albireo.build_problem`, not through the model class built by this
+    module, so a field would be accepted and then discarded. It is declared through
+    :meth:`Disentangler.expert`.
     """
 
     sigma_kms: Any
@@ -391,10 +390,9 @@ class LSF:
         (:attr:`albireo.EpochData.lsf_sigma_kms`), and this declaration models every
         epoch at that width, so exposures at two resolving powers filed under one
         instrument name (HARPS's high-accuracy and high-efficiency modes, for instance)
-        each get their own kernel. Every epoch of the instrument must carry a width; the
-        declaration is refused, naming the epochs, otherwise. The string
-        ``"per-epoch"`` is accepted in its place, which is how a TOML configuration
-        writes it.
+        each get their own kernel. Every epoch of the instrument must carry a width;
+        otherwise the declaration is refused, naming the epochs. The string
+        ``"per-epoch"`` (the TOML form) is accepted in its place.
 
         Returns
         -------
@@ -476,8 +474,8 @@ class Star:
         Fraction of the total light contributed by this star. Required, and an
         assumption: with constant light fractions only the products ``l_i * d_i`` are
         observable (``docs/math.md`` §5.2), so every recovered depth scales as ``1 / l_i``
-        and no part of the fit constrains this value. Quote it beside any result derived
-        from the spectra. The star light fractions must sum to 1.
+        and no part of the fit constrains this value. It should be quoted beside any
+        result derived from the spectra. The star light fractions must sum to 1.
     smoothness
         Starting point of this component's ML-II hyperparameters. A rotationally
         broadened star requires a much larger ``tau0`` than a sharp-lined one.
@@ -510,9 +508,9 @@ class Telluric:
 class Nebular:
     """A nebular emission component: static in the barycentric frame, free amplitude.
 
-    The counterpart of :class:`Telluric`. Nebular flux is added
-    on top of the total continuum and takes no light from the stars, so its per-epoch
-    amplitude is a free parameter rather than a light fraction.
+    The counterpart of :class:`Telluric`. Nebular flux is added on top of the total
+    continuum and takes no light from the stars, so its per-epoch amplitude is a free
+    parameter rather than a light fraction.
 
     Declaring one assembles several coupled pieces: the component column, the
     ``log_nebular_amp`` site with its prior and starting value, the per-pixel
@@ -527,12 +525,12 @@ class Nebular:
     v_kms
         Velocity of the nebula in km/s, in the model grid's frame. Not identified: it sets
         only where the component's lines fall on the grid, which the window profile must
-        then match. It is a placement convention and is reported as one.
+        match. It is a placement convention and is reported as one.
     lines
         Rest wavelengths in air angstrom. Default :data:`albireo.NEBULAR_LINES`.
     halfwidth_kms
         Half-width of each window in km/s. A generous value is preferable: too narrow a
-        window pushes real emission back into the stellar components, whereas too wide a
+        window pushes real emission back into the stellar components, while too wide a
         window only restores some of the freedom the profile removes.
     smoothness
         Starting point of this component's ML-II hyperparameters. The default ``tau0`` is
@@ -558,9 +556,9 @@ class Orbit:
     Parameters
     ----------
     period
-        Orbital period in days. Required. This declaration does not perform a period
-        search: it scans conjunction phase at a single period. Supply a prior narrow
-        enough for a phase scan to be meaningful, or run a periodogram first.
+        Orbital period in days. Required. This declaration does not search in period: it
+        scans conjunction phase at a single period, so the prior must be narrow enough for
+        a phase scan to be meaningful (or a periodogram run first).
     k
         Velocity semi-amplitude in km/s per :class:`Star`, in the order the stars are
         declared. Either one specification covering all of them, or one per star.
@@ -695,14 +693,12 @@ def _centred_velocities(velocities) -> np.ndarray:
     :func:`albireo.inference.relative_velocities` removes one zero point per component,
     because with no orbit tying the stars together each free spectrum absorbs a constant
     added to its own shifts. The declared absolute level, such as a systemic velocity of
-    +150 km/s for the SMC, therefore costs the solver nothing and is not charged to the
-    bandwidth.
+    +150 km/s for the SMC, costs the solver nothing and is not charged to the bandwidth.
 
-    The centring is done here in velocity space rather than in pixel space. The model
-    does it exactly, in pixels, where ``xi = artanh(v/c)`` makes the offset a
-    translation. This function computes only a bound, and the two differ by
-    ``O(v^2/c^2)``, of order 1e-8 at stellar velocities, against the factor-of-two
-    headroom the budget adds on top.
+    The centring is done here in velocity space. The model does it exactly, in pixels,
+    where ``xi = artanh(v/c)`` makes the offset a translation. This function computes only
+    a bound, and the two differ by ``O(v^2/c^2)``, of order 1e-8 at stellar velocities,
+    against the factor-of-two headroom the budget adds on top.
     """
     v = np.asarray(velocities, dtype=float)
     return v - v.mean(axis=1, keepdims=True)
@@ -914,16 +910,15 @@ class Disentangler:
         orbital elements are sampled, and :meth:`fit` returns a velocity-mode
         :class:`Fit` whose table can be searched for a period.
 
-        This mode exists because the free table requires a warm start, a cold one being
-        measured at 122,000 nats worse, while the other warm
-        start available, :meth:`Fit.free_velocities`, requires a Keplerian fit and hence
-        a period. For a system with no published period the sequence is: declare the
-        measured velocities, obtain the table, derive the period, then declare an
-        :class:`Orbit`.
+        The free table requires a warm start (a cold one was measured at 122,000 nats
+        worse), and the other warm start, :meth:`Fit.free_velocities`, requires a
+        Keplerian fit and hence a period. For a system with no published period the
+        sequence is: declare the measured velocities, obtain the table, derive the period,
+        then declare an :class:`Orbit`.
 
         The declared velocities are a starting point, not a constraint. The per-component
-        zero point is unidentified in either mode, so what they must be right about is
-        the epoch-to-epoch pattern, not the absolute scale.
+        zero point is unidentified in either mode, so they must be right about the
+        epoch-to-epoch pattern, not the absolute scale.
     lsf
         Per-instrument :class:`LSF`, or a bare sigma in km/s. Every instrument in the
         dataset must appear.
@@ -1088,7 +1083,7 @@ class Disentangler:
     def ordered_components(self) -> tuple[Component, ...]:
         """The components in model row order: stars, then telluric, then nebular.
 
-        The model fixes this order regardless of how the declaration was written, so every
+        The model fixes this order whatever the order of the declaration, so every
         per-component array (the smoothness rows, the hyperprior centres, the assumptions
         report) is assembled through this property. Iterating the declaration instead
         misassigns rows without raising: the vectors still have the correct length, so the
@@ -1106,9 +1101,9 @@ class Disentangler:
         """The eccentricity at which the model clips: the declared bound or the solver's.
 
         The ``(secosw, sesinw)`` sites are bounded independently, so their box reaches
-        ``e = 2 * hi`` at the corner. The model's disk factor is what enforces the bound,
-        so a declared ``ecc=Between(0, hi)`` must become the model's ``ecc_max``;
-        otherwise the fit can return an eccentricity above the declared bound.
+        ``e = 2 * hi`` at the corner. The model's disk factor enforces the bound, so a
+        declared ``ecc=Between(0, hi)`` must become the model's ``ecc_max``; otherwise the
+        fit can return an eccentricity above the declared bound.
         """
         declared = self.ecc_max
         if self.orbit is None:  # a free-velocity declaration has no eccentricity at all
@@ -1556,18 +1551,17 @@ class Disentangler:
         declared), a coarse scan over every semi-amplitude declared as a range (see
         ``k_scan``), a profile of each star's prior amplitude at the orbit located with the
         scan repeated where that moved a start by a factor of two or more, the phase scan
-        again at the chosen semi-amplitudes, and then
-        :func:`albireo.run_map` over the orbital sites and the smoothness
-        hyperparameters. With the spectra already marginalized out, optimizing the
-        hyperparameters is the ML-II step. The fitted hyperparameters are returned on
-        :attr:`Fit.hyper`, keyed by component name, and :meth:`Fit.sample` holds them
-        fixed.
+        again at the chosen semi-amplitudes, and then :func:`albireo.run_map` over the
+        orbital sites and the smoothness hyperparameters. With the spectra already
+        marginalized out, optimizing the hyperparameters is the ML-II step. The fitted
+        hyperparameters are returned on :attr:`Fit.hyper`, keyed by component name, and
+        :meth:`Fit.sample` holds them fixed.
 
-        A ``velocities=`` declaration has no orbit and therefore no phase to locate: the
-        scan is skipped and the free per-epoch table is fitted directly, warm-started from
-        the declared velocities, returning a :class:`Fit` in ``"velocity"`` mode. Read it
-        with :meth:`Fit.velocities` and :meth:`Fit.velocity_errors`; the implied period
-        can then be used in a second declaration carrying an :class:`Orbit`.
+        A ``velocities=`` declaration has no orbit and no phase to locate: the scan is
+        skipped and the free per-epoch table is fitted directly, warm-started from the
+        declared velocities, returning a :class:`Fit` in ``"velocity"`` mode, read with
+        :meth:`Fit.velocities` and :meth:`Fit.velocity_errors`. The implied period can
+        then be used in a second declaration carrying an :class:`Orbit`.
 
         Parameters
         ----------
@@ -1593,9 +1587,8 @@ class Disentangler:
             twice at half the spacing; among trials within a few nats of the best the one
             honouring the declared order (the first star moving least) is taken. The
             scans run on a copy of the declaration with the model grid at twice the pixel
-            (:meth:`_scan_declaration`), which is what makes the joint search affordable;
-            the fit itself runs on the full grid. The scan is retained on
-            :attr:`Fit.k_scan`.
+            (:meth:`_scan_declaration`), which makes the joint search affordable; the fit
+            itself runs on the full grid. The scan is retained on :attr:`Fit.k_scan`.
 
         Returns
         -------
@@ -1724,11 +1717,10 @@ class Disentangler:
     def _warn_if_the_period_prior_is_a_search(self) -> None:
         """Warn when the period prior is wide enough to constitute a period search.
 
-        The conjunction scan resolves phase at one period, taken as the period prior's
-        midpoint. A prior wide enough to be a search therefore locates a phase for a
-        period that may be badly wrong, leaving L-BFGS to cross the multimodal structure
-        the scan exists to avoid. The degradation is gradual, so this warns rather than
-        raises.
+        The conjunction scan resolves phase at one period, the period prior's midpoint. A
+        prior wide enough to be a search locates a phase for a period that may be badly
+        wrong, leaving L-BFGS to cross the multimodal structure the scan exists to avoid.
+        The degradation is gradual, so this warns rather than raises.
         """
         if self.orbit is None:  # no period prior at all, so nothing here can be a search
             return
@@ -1760,7 +1752,7 @@ class Disentangler:
         squared (D63: to 5e-10 nats). A profile over the light at fixed hyperparameters
         is therefore a profile over the prior amplitude the data want for that component,
         not a measurement of its flux fraction (on four benchmark systems it sat at 0.3 to
-        0.7 of the injected fraction). It is nonetheless what a scan needs: a companion
+        0.7 of the injected fraction). It is what a scan needs: a companion
         declared at six times its light, with the hyperparameters at their starts, made
         the coarse scan prefer a static secondary by 43 nats, and the profile rejected the
         declared amplitude by 150 nats at that very orbit.
@@ -1829,8 +1821,8 @@ class Disentangler:
 
         A scan asks which basin holds the maximum, not where within it. The grid at twice
         the pixel halves the pixel count and the solver bandwidth, and a marginal solve
-        costs a quarter to an eighth of the full model's, which is what makes a joint scan
-        over the semi-amplitudes and the phase affordable.
+        costs a quarter to an eighth of the full model's, which makes a joint scan over the
+        semi-amplitudes and the phase affordable.
         """
         return replace(self, dv_kms=2.0 * float(self.grid.dv_kms))
 
@@ -2178,8 +2170,8 @@ class Disentangler:
         as a second set of lines. Declaring the primary's ``k`` as :class:`Known` rather
         than :class:`Fixed` marginalizes over it. A K₁ 10% high reduces the correlation of
         the recovered companion with the truth from 0.96 to 0.49 while tripling the
-        detection statistic, so the artifact presents as a stronger detection and no
-        calibrated threshold identifies it.
+        detection statistic, so the artifact presents as a stronger detection that no
+        calibrated threshold identifies.
 
         Parameters
         ----------
@@ -2231,8 +2223,7 @@ class Disentangler:
         Companions are injected into resimulations of this dataset, through its own
         operators, and recovered with :meth:`scan`, giving the light fraction above which
         a companion would have been detected at a stated confidence. Sharing the
-        :class:`Disentangler` with :meth:`scan` guarantees that the two use identical
-        scan arguments.
+        :class:`Disentangler` with :meth:`scan` guarantees identical scan arguments.
 
         Parameters
         ----------
@@ -2376,17 +2367,17 @@ def _default_v_range(fitted: np.ndarray, templates, margin: float = 40.0):
     :func:`albireo.todcor` searches the shift of each template's own rest frame and
     reports it composed with that template's ``v_zero_kms``, so a single ``(lo, hi)``
     pair searches a different interval of *reported* velocity for every component whose
-    zero point differs. The windows are therefore offset by each template's zero point
-    relative to the median of them, which leaves one common interval of reported
-    velocity: the span of the fitted velocities widened by ``margin`` at each end, moved
-    to the median zero point. Templates whose zero point is unknown are placed at zero,
-    which is the frame the fitted velocities are already in.
+    zero point differs. The windows are offset by each template's zero point relative to
+    their median, which leaves one common interval of reported velocity: the span of the
+    fitted velocities widened by ``margin`` at each end, moved to the median zero point.
+    Templates whose zero point is unknown are placed at zero, the frame the fitted
+    velocities are already in.
 
     The zero points come from a label match, which measures each component's frame
-    separately (``docs/math.md`` §9); when two of them disagree by more than the fitted
-    velocities span, no interval of reported velocity holds every component's own
-    velocities, and searching one anyway measures nothing. That is refused here rather
-    than reported as a table of velocities pinned to the edge of the search.
+    separately (``docs/math.md`` §9). When two disagree by more than the fitted velocities
+    span, no interval of reported velocity holds every component's own velocities, and a
+    search measures nothing. That is refused here rather than reported as a table of
+    velocities pinned to the edge of the search.
     """
     fitted = np.asarray(fitted, dtype=np.float64)
     zeros = np.array([0.0 if t.v_zero_kms is None else float(t.v_zero_kms) for t in templates])
@@ -2443,8 +2434,8 @@ class Fit:
         per-epoch table was fitted instead.
     priors_used
         The priors the fit was run under. Retained because they are not recoverable from
-        the declaration once the Keplerian has been replaced by a free velocity table,
-        and a Laplace covariance is meaningful only against the model it came from.
+        the declaration once the Keplerian is replaced by a free velocity table, and a
+        Laplace covariance is meaningful only against the model it came from.
     k_scan
         The :class:`SemiAmplitudeScan` run before optimization, or ``None`` when no
         semi-amplitude was a range, the scan was switched off, or the fit is in
@@ -2747,8 +2738,8 @@ class Fit:
         the Laplace covariance at the MAP as the starting mass matrix, and samples.
 
         Fixing the hyperparameters is a plug-in approximation: the orbital credible
-        intervals do not include smoothness uncertainty. To marginalize over them instead,
-        take :meth:`Disentangler.expert` and leave them in the priors dictionary, at a
+        intervals do not include smoothness uncertainty. Marginalizing over them instead
+        means leaving them in the priors dictionary of :meth:`Disentangler.expert`, at a
         higher sampling cost.
 
         Parameters
@@ -2829,19 +2820,18 @@ class Fit:
         """Refit with one free velocity per component per epoch, warm-started from here.
 
         The per-epoch radial-velocity table is the customary product of a spectroscopic
-        binary analysis, and it is the model check for the Keplerian mode: fit free
-        velocities, then test whether a Keplerian threads them
+        binary analysis, and the model check for the Keplerian mode: free velocities are
+        fitted, then tested for whether a Keplerian threads them
         (:meth:`keplerian_residuals`).
 
-        The method is defined on :class:`Fit` rather than being constructible on its own
-        because a cold start is measured at 122,000 nats worse than the warm-started
-        solution; warm-starting is the only mode shown to
-        succeed.
+        The method is defined on :class:`Fit`, not constructible on its own, because a
+        cold start is measured at 122,000 nats worse than the warm-started solution;
+        warm-starting is the only mode shown to succeed.
 
         This is the entry point when a Keplerian fit already exists and the table is
-        wanted as a model check. For an unsolved system, where the table is what yields
-        the period, declare ``Disentangler(velocities=...)`` and call
-        :meth:`Disentangler.fit`, which warm-starts from measured velocities instead.
+        wanted as a model check. For an unsolved system, where the table yields the
+        period, ``Disentangler(velocities=...)`` and :meth:`Disentangler.fit` warm-start
+        from measured velocities instead.
 
         Parameters
         ----------
@@ -2903,17 +2893,229 @@ class Fit:
             )
         )
 
+    def _stellar_lsf_widths(self, group) -> np.ndarray:
+        """The declared Gaussian widths of one epoch group, in km/s (one per anchor)."""
+        spec = _coerce_lsf(self.dis.lsf[group.instrument], group.instrument)
+        if spec.is_per_epoch:
+            index = int(group.epoch_indices[0])
+            for sigma, epochs in declared_lsf_widths(self.dis.dataset, group.instrument).items():
+                if index in epochs:
+                    return np.atleast_1d(np.asarray(sigma, dtype=float))
+            raise ValueError(  # pragma: no cover - the build grouped by these widths
+                f"no declared width covers epoch {index} of instrument {group.instrument!r}"
+            )
+        return np.atleast_1d(np.asarray(spec.sigma_kms, dtype=float))
+
+    def epoch_statistics(
+        self, resolving_power: float | None = None, *, grid_compensation: bool = True
+    ):
+        """The sufficient statistics of the epoch comparison, at this fit's MAP.
+
+        Evaluates the model problem at the fitted parameters and returns ``h = A^T W z``,
+        ``z^T W z`` and the band of ``G = A^T W A`` for the stellar rows, so that the epoch
+        chi-square of any template composite ``m`` costs one band product
+        (:class:`albireo.EpochStatistics`, ``docs/math.md`` §9.2a). The result goes to
+        :func:`albireo.match_labels` with ``compare="epochs"``; :meth:`match_labels` builds
+        it itself.
+
+        Three things differ from the disentangling's own problem. First, every
+        instrument's LSF in the stellar operator is replaced by the width the library does
+        not already carry, ``sigma_q = sqrt(sigma_inst^2 - sigma_lib^2)`` per declared width
+        (per anchor, or per epoch for a per-epoch declaration), through
+        :func:`albireo.forward.with_lsf`, because a template drawn from a library at its own
+        resolving power would otherwise be broadened twice. Second, with
+        ``grid_compensation`` (the default) that width is reduced once more by the
+        smoothing the model grid itself adds (below). Third, a telluric or nebular
+        component is held at its posterior mean: its predicted contribution, through the
+        declared LSF under which that mean was solved, is subtracted from the data, so the
+        chi-square is ``||z - A_e d_hat_e - A_s m||_W^2``. The noise model (weights,
+        jitter, AR(1) correlation) and the orbit are this fit's, unchanged.
+
+        **The grid compensation.** Between a library spectrum and the epoch pixels a
+        template passes five discrete steps on the model grid of pixel ``dv``, and each adds
+        a variance that a continuous spectrum does not have. A box average of width ``dv``
+        has variance ``dv^2 / 12``; a linear-interpolation shift by a fraction ``f`` of a
+        pixel is the two-tap kernel with weights ``1 - f`` at ``-f dv`` and ``f`` at
+        ``(1 - f) dv``, of mean zero and variance ``f (1 - f) dv^2``, which averages to
+        ``dv^2 / 6`` over ``f``. The steps are the library's box average onto the model grid
+        (``dv^2 / 12``), the pixel integration of the rotation kernel (``dv^2 / 12``), the
+        label rows' shift by the frame velocity (``dv^2 / 6``), the operator's shift of each
+        epoch (``dv^2 / 6``), and the model pixel held constant across the rebin onto the
+        native pixels (``dv^2 / 12``), so that
+
+            sigma_grid^2 = (1/12 + 1/12 + 1/6 + 1/6 + 1/12) dv^2 = (7/12) dv^2,
+
+        independent of the line width. The epoch data carry none of it, and ``v sin i``,
+        whose limb-darkened profile has variance ``0.225 (v sin i)^2``, gives it back:
+        uncompensated, ``v_fit^2 = v^2 - (7/12) dv^2 / 0.225``. The stellar operator
+        therefore applies
+
+            sigma_op^2 = sigma_inst^2 - sigma_lib^2 - (7/12) dv^2.
+
+        On the closed-loop fixture of ``tests/test_pipeline.py`` (native pixel 4.63 km/s,
+        LSF sigma 5.5 km/s, ``v sin i`` injected at 11 km/s) the uncompensated comparison
+        returned 7.37 km/s with the orbit fixed at the truth and the compensated one 10.08;
+        over five noise draws the mean error was -3.02 km/s uncompensated and -0.24
+        compensated (``docs/math.md`` §9.2a). Temperatures, gravities, metallicities and
+        light fractions did not move. The formula is a mean: the frame shift's phase is a
+        fitted parameter, the rotation kernel's pixel term oscillates for ``v sin i`` near
+        ``dv``, and computing the epoch shifts' own phases changed ``v sin i`` by at most
+        0.12 km/s.
+
+        Where ``sigma_op`` would fall below half a model pixel, which happens when
+        ``dv > sqrt(6/5) sigma_q``, about ``1.10 sigma_q``, it is floored there (or at
+        ``sigma_q``, when that is narrower), only part of the bias is removed, and a
+        ``UserWarning`` names the grid spacing that avoids the floor; when
+        ``sigma_q < dv`` without a floor the compensated kernel is below 0.65 pixel and a
+        warning says so. Both are recorded in :attr:`albireo.EpochStatistics.notes`. A
+        finer model grid is not a substitute for the compensation: uncompensated, a 1.5
+        km/s grid still returned 10.28 km/s for 11 on that fixture.
+
+        Assembling the band takes a few seconds on a survey-sized problem (4.7 s of a 6.2 s
+        total on the D65 benchmark products).
+
+        Parameters
+        ----------
+        resolving_power
+            The resolving power the template library is already broadened to
+            (:attr:`albireo.SpectralLibrary.resolving_power`). ``None`` declares an
+            intrinsic library and keeps the full declared LSF.
+        grid_compensation
+            Remove ``(7/12) dv^2`` from every operator width (default). ``False`` builds the
+            operator of ``sigma_q`` alone, which the D65 benchmark measured to bias ``v sin
+            i`` low by ``(7/12) dv^2 / 0.225`` in its square.
+
+        Returns
+        -------
+        albireo.EpochStatistics
+
+        Raises
+        ------
+        ValueError
+            If the library is at or below an instrument's resolving power, which no
+            convolution can undo; if the dataset does not declare its wavelength medium; or
+            if the fit's light fractions vary between epochs.
+
+        Warns
+        -----
+        UserWarning
+            If the compensated width was floored at half a model pixel, or if the model grid
+            is coarser than ``sigma_q``.
+        """
+        from albireo.forward import apply_model, with_data, with_lsf
+        from albireo.match import (
+            EpochStatistics,
+            _grid_compensated_widths,
+            _grid_compensation_notes,
+            _grid_variance,
+            _quadrature_width,
+        )
+
+        medium = self.dis.dataset[0].medium
+        if medium is None:
+            raise ValueError(
+                "this dataset does not declare whether its wavelengths are air or vacuum, "
+                "so it cannot be matched against a synthetic grid: the two differ by ~83 "
+                "km/s. Set medium= on the epochs (albireo.air_to_vacuum and "
+                "albireo.vacuum_to_air convert)."
+            )
+        if resolving_power is not None and not (
+            np.isfinite(float(resolving_power)) and float(resolving_power) > 0.0
+        ):
+            raise ValueError(f"resolving_power must be positive or None; got {resolving_power}")
+        model = self.dis.model
+        theta = self.theta
+        problem = model.problem_at(theta)
+        n_stellar = self.dis.n_stellar
+        lights = np.array([s.light for s in self.dis.stars], dtype=float)
+        for group in problem.groups:
+            carried = np.asarray(group.light)[:, :n_stellar]
+            if not np.allclose(carried, lights[None, :], rtol=1e-9, atol=1e-12):
+                raise ValueError(
+                    "the fitted problem carries light fractions that differ from the "
+                    f"declaration {lights.tolist()} (per-epoch or fitted light); the epoch "
+                    "comparison needs one declared light fraction per star"
+                )
+        names = self.dis.component_names
+        conditioned = tuple(names[n_stellar:])
+        if conditioned:
+            d_hat = np.asarray(model.marginal(theta).d_hat)
+            others = np.zeros_like(d_hat)
+            others[n_stellar:] = d_hat[n_stellar:]
+            predicted = apply_model(problem, jnp.asarray(others))
+            problem = with_data(
+                problem,
+                [g.z - g.r * p for g, p in zip(problem.groups, predicted, strict=True)],
+            )
+        dv = float(problem.grid.dv_kms)
+        groups, widths, applied_widths = [], [], []
+        floored_at: dict[str, float] = {}
+        narrow_at: dict[str, tuple[float, float]] = {}
+        for group in problem.groups:
+            declared = self._stellar_lsf_widths(group)
+            instrument = group.instrument
+            reduced = _quadrature_width(declared, resolving_power, f"instrument {instrument!r}")
+            widths.append((instrument, reduced))
+            applied = reduced
+            if grid_compensation:
+                applied, floored = _grid_compensated_widths(reduced, dv)
+                if np.any(floored):
+                    lowest = float(np.min(reduced[floored]))
+                    floored_at[instrument] = min(floored_at.get(instrument, np.inf), lowest)
+                wide = ~floored & (reduced < dv)
+                if np.any(wide):
+                    k = int(np.argmin(np.where(wide, applied, np.inf)))
+                    if instrument not in narrow_at or applied[k] < narrow_at[instrument][1]:
+                        narrow_at[instrument] = (float(reduced[k]), float(applied[k]))
+            applied_widths.append((instrument, applied))
+            if resolving_power is None and not grid_compensation:
+                groups.append(group)
+                continue
+            width = float(applied[0]) if applied.size == 1 else jnp.asarray(applied)
+            single = with_lsf(replace(problem, groups=(group,)), {instrument: width})
+            groups.append(single.groups[0])
+        problem = replace(problem, groups=tuple(groups))
+        notes = _grid_compensation_notes(floored_at, narrow_at, dv)
+        for note in notes:
+            warnings.warn(note, UserWarning, stacklevel=2)
+        return EpochStatistics.from_problem(
+            problem,
+            names=[s.name for s in self.dis.stars],
+            medium=medium,
+            light_fractions=lights,
+            half_bandwidth=model.half_bandwidth,
+            block_size=model.block_size,
+            lsf_sigma_kms=widths,
+            library_resolving_power=resolving_power,
+            conditioned=conditioned,
+            grid_variance_kms2=_grid_variance(dv) if grid_compensation else 0.0,
+            operator_sigma_kms=applied_widths,
+            notes=notes,
+        )
+
     def match_labels(self, stars, **kwargs):
         """Fit Teff, log g, [M/H] and v sin i to the stellar components of this fit.
 
         The declarative route to :func:`albireo.match_labels`. The grid, the recovered
         spectra, their uncertainty band, the assumed light fractions, the instrument width
-        and the dataset's wavelength medium are all taken from this fit rather than passed
-        again, so they cannot disagree with what was solved.
+        and the dataset's wavelength medium are taken from this fit, so they cannot
+        disagree with what was solved.
+
+        The comparison defaults to ``compare="epochs"``: the template composite is compared
+        with the epoch spectra through :meth:`epoch_statistics`, built here at the
+        resolving power the stars' libraries declare and with the model grid's own
+        smoothing, ``(7/12) dv^2``, removed from the operator width;
+        ``statistics=fit.epoch_statistics(..., grid_compensation=False)`` leaves it in. It
+        is exact for the fit's noise model, does not depend on the declared light
+        fractions, and on simulated Gaia RVS binaries returned temperatures twice as close
+        to the truth as the diagonal comparison against ``d_hat`` converged the same way
+        (``docs/math.md`` §9.2a). ``compare="native"`` and ``compare="matched"`` compare
+        with the disentangled components instead.
 
         Only the stellar rows are passed on: a telluric or nebular component has no
-        atmospheric parameters. The light fractions travel with them because the label
-        fit's dilution model is defined in terms of what was assumed.
+        atmospheric parameters, and the epoch comparison holds it at its posterior mean.
+        The light fractions travel with the stars because the label fit's dilution model is
+        defined in terms of what was assumed.
 
         Parameters
         ----------
@@ -2921,7 +3123,8 @@ class Fit:
             Mapping of star name to :class:`albireo.StarLabels`, one per stellar component
             of this declaration. Names must match :attr:`Disentangler.stars`.
         **kwargs
-            Passed to :func:`albireo.match_labels`.
+            Passed to :func:`albireo.match_labels`. ``statistics`` may be passed to reuse
+            statistics built once with :meth:`epoch_statistics`.
 
         Returns
         -------
@@ -2931,7 +3134,8 @@ class Fit:
         ------
         ValueError
             If ``stars`` names a component that is not a star of this declaration, if it
-            omits one, or if the dataset does not declare its wavelength medium.
+            omits one, if the dataset does not declare its wavelength medium, or, for the
+            epoch comparison, if the stars' libraries declare different resolving powers.
 
         Notes
         -----
@@ -2961,6 +3165,19 @@ class Fit:
                 "albireo.vacuum_to_air convert)."
             )
         ordered = {name: stars[name] for name in names}
+        compare = kwargs.setdefault("compare", "epochs")
+        if compare == "epochs" and kwargs.get("statistics") is None:
+            declared = {name: ordered[name].library.resolving_power for name in names}
+            if len(set(declared.values())) > 1:
+                raise ValueError(
+                    f"the stars' libraries declare different resolving powers {declared}; the "
+                    "epoch comparison applies one operator width per instrument, so every "
+                    "star's template must start at the same resolution. Use libraries at one "
+                    "resolving power, or pass compare='native'."
+                )
+            kwargs["statistics"] = self.epoch_statistics(
+                resolving_power=next(iter(declared.values()))
+            )
         spectra, std = self.spectra(), self.std()
         rows = [self.dis.component_names.index(name) for name in names]
         kwargs.setdefault("lsf_sigma_kms", self.dis._widest_lsf())
@@ -3002,9 +3219,9 @@ class Fit:
     def templates(self, *, pixels_per_sigma: float = 3.0) -> list:
         """The stellar components of this fit as :class:`albireo.todcor.Template` objects.
 
-        A system's own disentangled components make the closest templates available for
-        it: they carry the correct lines, depths and rotational broadening, having been
-        measured from these epochs. They do not carry an absolute rest frame, since each
+        A system's own disentangled components are the closest templates available for
+        it: measured from these epochs, they carry the correct lines, depths and rotational
+        broadening. They do not carry an absolute rest frame, since each
         component has its own unidentified zero point (``docs/math.md`` §5.3, §7.6), so
         every template returned here has ``v_zero_kms=None`` and the velocities measured
         against it are differential. A label match (:meth:`match_labels`, then
@@ -3017,10 +3234,10 @@ class Fit:
         The fit's grid samples the native pixel at about two points, which suits the
         solver but is too coarse for a correlation template: the pixel-locking ripple of
         the linear shift operator is ``~0.1 / sigma_px^2`` pixels (``docs/math.md``
-        §10.3). The components are therefore linearly upsampled by an integer factor onto
-        a grid carrying at least ``pixels_per_sigma`` pixels per narrowest declared LSF
-        sigma. The smoothness prior has already band-limited them well above that scale,
-        so the upsampling adds no information and removes the ripple.
+        §10.3). The components are linearly upsampled by an integer factor onto a grid
+        carrying at least ``pixels_per_sigma`` pixels per narrowest declared LSF sigma.
+        The smoothness prior has already band-limited them well above that scale, so the
+        upsampling adds no information and removes the ripple.
 
         Parameters
         ----------
@@ -3086,14 +3303,14 @@ class Fit:
             Defaults to the declared fractions when the templates are this fit's own, and
             to ``"global"`` otherwise.
         v_range
-            Search range in km/s, one ``(lo, hi)`` pair or one per template. It defaults
-            to the span of the fitted velocities widened by 40 km/s at each end, offset
-            per template by that template's zero point relative to the median of them, so
-            that every component searches the same interval of *reported* velocity: the
-            range is in each template's own frame, and a template carrying a zero point
-            reports its velocities composed with it. Templates whose zero points disagree
-            by more than the fitted velocities span admit no such interval, and that is
-            raised rather than searched.
+            Search range in km/s, one ``(lo, hi)`` pair or one per template. Defaults to
+            the span of the fitted velocities widened by 40 km/s at each end, offset per
+            template by that template's zero point relative to their median, so that every
+            component searches the same interval of *reported* velocity: the range is in
+            each template's own frame, and a template carrying a zero point reports its
+            velocities composed with it. Templates whose zero points disagree by more than
+            the fitted velocities span admit no such interval, which raises rather than
+            being searched.
 
         **kwargs
             Passed to :func:`albireo.todcor`.

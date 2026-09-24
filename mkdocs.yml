@@ -45,6 +45,7 @@ nav:
       - Measure epoch velocities with TODCOR: tutorials/todcor.md
       - Run everything in one command: tutorials/pipeline.md
       - Simulate Gaia RVS binaries and measure recovery: tutorials/gaia-rvs.md
+      - Benchmark on Gaia RVS spectra, step by step: tutorials/gaia-rvs-benchmark.ipynb
   - Mathematical foundations: math.md
   - Benchmarks: benchmarks.md
   - API reference:

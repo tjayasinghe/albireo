@@ -2,21 +2,20 @@
 
 See the [science overview](../science.md) for background and references.
 
-Disentangling returns two spectra. It does not identify which synthetic template the
-individual epochs should be cross-correlated against, and that choice is where the next tool
-in a pipeline begins. This page covers that step.
+Disentangling returns two spectra but does not identify the synthetic template against which
+the individual epochs should be cross-correlated. Choosing it is the next step in a pipeline.
 
 The mode is [`albireo.match`](../api/match.md), and it is scoped narrowly: it fits four
 labels, Teff, log g, [M/H] and *v* sin *i*, against a published synthetic grid, so that a
 template can be selected or rendered. It synthesizes nothing, carries no line list, and fits no
 abundances. For those, [`albireo.handoff`](../api/handoff.md) exports to GSSP, iSpec, Korg.jl
-and PySME, and [Propagate into Teff and log g](downstream.md) remains the page for it.
+and PySME, and [Propagate into Teff and log g](downstream.md) covers the procedure.
 
 ## How good the labels need to be
 
-The question is not whether a label is the star's true temperature but whether a better
-template would change the epoch velocities, and the literature indicates that the answer goes
-flat quickly:
+The relevant question is whether a better template would change the epoch velocities, not
+whether a label is the star's true temperature. The literature indicates that the gain
+flattens quickly:
 
 | Label | Enough for template selection |
 |---|---|
@@ -28,9 +27,8 @@ flat quickly:
 Posbic et al. (2012) measured that a template 400–1000 K too warm biases solar-type velocities
 by about 0.2 km/s, roughly FWHM/60, with no loss of precision. What a wrong template does cost
 is a constant velocity zero point per component, which is the quantity albireo already tracks
-as unidentified ([§5.3](../math.md#53-systemic-velocity-zero-point)). The claim for this mode
-is therefore that it fixes zero points and flux ratios, not that it improves velocity
-precision.
+as unidentified ([§5.3](../math.md#53-systemic-velocity-zero-point)). This mode therefore
+fixes zero points and flux ratios; it does not improve velocity precision.
 
 A label from this mode is a template coordinate. A label for a published abundance table is a
 different measurement with a different error budget.
@@ -56,18 +54,26 @@ assumed light fractions, the instrument width and the dataset's wavelength mediu
 itself, so none of them can disagree with what was solved. The module-level
 [`match_labels`](../api/match.md) takes arrays instead, for spectra that came from elsewhere.
 
-Note `logg=ab.Fixed(...)` in that example. It is the most consequential choice on the page, and
-the next section is about it.
+By default `Fit.match_labels` compares the template composite with the epoch spectra rather
+than with the disentangled components (`compare="epochs"`,
+[§9.2a](../math.md#92a-comparing-in-the-epoch-space)). That chi-square is exact for the fit's
+noise model, it does not depend on the declared light fractions, and it takes the libraries'
+own resolving power into account, so a grid at R = 20,000 is not broadened twice. On simulated
+Gaia RVS binaries it returned temperatures twice as close to the truth as the comparison
+against the components. `compare="native"` remains available, and the module-level
+`match_labels` defaults to it because on its own it has only the component spectra.
+
+`logg=ab.Fixed(...)` in that example is the most consequential choice on the page.
 
 ## Fix log g where possible
 
-Teff and log g correlate at about 0.98 when both are free. This is not an albireo artifact; it
-is the published behaviour of the problem (Tamajo et al. 2011), and `summary()` flags the pair
-and says so rather than reporting two confident numbers.
+Teff and log g correlate at about 0.98 when both are free. This is the published behaviour of
+the problem, not an albireo artifact (Tamajo et al. 2011); `summary()` flags the pair rather
+than reporting two confident numbers.
 
-For an eclipsing binary the correlation need not be accepted: the light curve and the orbit
-give masses and radii, hence log g, to 0.01 dex, an order of magnitude better than any
-spectroscopic determination. Declaring it makes the fit well posed.
+For an eclipsing binary the light curve and the orbit give masses and radii, hence log g, to
+0.01 dex, an order of magnitude better than any spectroscopic determination. Declaring it
+makes the fit well posed.
 
 For a non-eclipsing SB2 there is no such anchor. Run the fit three ways and report the spread
 as the uncertainty:
@@ -88,7 +94,7 @@ unless the fit has somewhere else to put it.
 The default `RadiusRatio` provides that. Both components are fitted together through one shared
 scalar, with wavelength-dependent light fractions derived from the grids' own continua,
 constructed so that they sum to one at every wavelength. This is GSSP's binary-mode
-parameterization, and it means the light ratio comes out of the fit:
+parameterization, and the light ratio comes out of the fit:
 
 ```python
 labels.flux_ratio           # {"A": 0.62, "B": 0.38} - measured, not assumed
@@ -96,9 +102,9 @@ labels.light_fractions()    # (n_star, n_pix), summing to 1 at every pixel
 ```
 
 Published spectroscopic light ratios of this kind agree with light-curve ratios to a few
-percent, and are competitive with them when the photometric solution is degenerate. The value
-is worth quoting: downstream cross-correlation codes are more sensitive to a wrong flux ratio
-than to a wrong temperature, as the saphires documentation states.
+percent, and are competitive with them when the photometric solution is degenerate. Quote the
+value: downstream cross-correlation codes are more sensitive to a wrong flux ratio than to a
+wrong temperature, as the saphires documentation states.
 
 `FixedDilution()` freezes the dilution at the assumed light fractions. Run it as a diagnostic:
 the difference between the two fits measures how far the assumed light fractions were bending
@@ -106,7 +112,7 @@ the temperatures.
 
 ## Read the report against its nulls
 
-`summary()` leads with the caveats. Every number is quoted against something:
+`summary()` leads with the caveats and quotes every number against a reference:
 
 - **`chi2` against `chi2_continuum`**: a fit with no template at all, only the nuisance. A
   `chi2` not far below it means the spectrum carried no label information and the result is the
@@ -120,24 +126,34 @@ the temperatures.
 
 ## Quote the wider error bar
 
-The Laplace covariance measures how sharp the optimum is. On disentangled components that
-understates the error, because the residuals are correlated rather than white: disentangling
-artifacts are structured across wavelength by construction. Every code that has checked finds
-formal errors optimistic by five to ten times; Gebruers et al. (2022) report 70 K formal
-against 425 K realistic for B stars at S/N 150.
+For the default epoch comparison the formal errors were measured against the truth on
+simulated Gaia RVS binaries: close to calibrated for Teff, log g and [M/H] (68th-percentile
+pulls of 1.4, 1.0 and 1.4), and too small by about three for *v* sin *i* and the light
+fraction (3.5 and 2.7), whose remaining errors come from smoothing and orbit errors the formal
+covariance does not include ([§9.5](../math.md#95-uncertainties-and-why-the-formal-one-is-not-enough)).
+Quote those two with an error enlarged by about three. `labels.flux_ratio_errors` holds the
+formal light-fraction errors, and `summary()` prints the calibration beside them.
 
-Refit the disentangling posterior's own draws:
+For the comparisons against the disentangled components (`compare="native"` or `"matched"`)
+the Laplace covariance understates the error more, because the residuals are correlated rather
+than white: disentangling artifacts are structured across wavelength by construction. Every
+code that has checked finds formal errors optimistic by five to ten times; Gebruers et al.
+(2022) report 70 K formal against 425 K realistic for B stars at S/N 150. For those fits,
+refit the disentangling posterior's own draws:
 
 ```python
-draws = posterior.spectra(num_draws=32)     # joint draws, correlated across components
-labels = ab.refit_draws(labels, draws[:, :2])   # stellar rows only
-labels.errors("draws")     # the number to quote
-labels.errors("laplace")   # the number to quote it beside
+native = fit.match_labels(stars, compare="native")
+draws = posterior.spectra(num_draws=32)          # joint draws, correlated across components
+native = ab.refit_draws(native, draws[:, :2])    # stellar rows only
+native.errors("draws")     # the number to quote
+native.errors("laplace")   # the number to quote it beside
 ```
 
 The draws must be joint. Independent per-component draws would miss the exchange modes, the
 low-*k* directions that trade flux between the two stars, which are what this propagation is
 for. Once the refit is done, `summary()` prints both errors and the ratio between them.
+`refit_draws` refuses an epoch-comparison fit, whose natural spread would come from draws of
+the epoch noise, which is not implemented.
 
 ## Working example
 
@@ -150,8 +166,7 @@ from an assumed 0.72/0.28.
 
 ## Getting a real grid
 
-The toy grid above keeps the example offline. For real work, `fetch_library` downloads and
-caches a published one:
+For real work, `fetch_library` downloads and caches a published grid:
 
 ```python
 ab.library_names()
@@ -178,8 +193,7 @@ shipped grids are CC BY 4.0, which obliges attribution.
 ## Choosing a grid, and the wavelength medium
 
 `SpectralLibrary.medium` is required and has no default. Air and vacuum wavelengths differ by
-about 83 km/s across the optical, the same order as the semi-amplitudes being measured, so the
-convention is not bookkeeping.
+about 83 km/s across the optical, the same order as the semi-amplitudes being measured.
 
 The distribution's own README is not a reliable source for it. BOSZ 2017 was vacuum throughout;
 BOSZ 2024 is air above 200 nm, under the same name. A cached copy from the wrong year is an
@@ -199,6 +213,6 @@ ab.crossval_library(library)   # rms flux error at doubled node spacing
 
 For context, on the 250 K / 0.5 dex spacing BOSZ uses, linear flux interpolation scores about
 0.05% and a cubic about 0.03%, against roughly 0.1% for a Payne-style neural emulator. On a
-well-sampled grid the differentiable cubic used here is the more accurate option, which is why
-albireo ships no neural emulator for it. On a coarse, strongly non-linear grid the ordering may
-differ, and `crossval_library` measures it.
+well-sampled grid the differentiable cubic used here is more accurate, so albireo ships no
+neural emulator. On a coarse, strongly non-linear grid the ordering may differ, and
+`crossval_library` measures it.

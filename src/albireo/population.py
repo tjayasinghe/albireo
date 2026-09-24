@@ -6,9 +6,10 @@ A :class:`BinarySystem` is one complete truth: two main-sequence stars with mass
 temperatures, gravities and rotation; a Keplerian orbit with its inclination; the
 semi-amplitudes that follow; whether the pair eclipses; the light ratio in the RVS band;
 the system's Gaia photometry and G_RVS; its sky position, its ecliptic latitude and the
-number of RVS transits Gaia records for it. :func:`draw_population` builds such systems from the
-empirical distributions of the field, and the catalogue adapters build them from real
-binaries (Gaia DR3 double-lined orbits, DEBCat), filling only what the catalogue lacks.
+number of RVS transits Gaia records for it. :func:`draw_population` builds such systems
+from the empirical distributions of the field, and the catalogue adapters build them from
+real binaries (Gaia DR3 double-lined orbits, DEBCat), filling only what the catalogue
+lacks.
 
 The parametric arm composes published prescriptions with no free choices left. Primary
 masses follow a Salpeter power law over the requested range. Periods are weighted by the
@@ -130,8 +131,8 @@ def ecliptic_to_icrs(lon_deg, lat_deg):
     """ICRS right ascension and declination from ecliptic longitude and latitude.
 
     One rotation about the equinox by the J2000 obliquity ``eps = 23.4392911`` degrees,
-    written out here rather than delegated to a coordinates package because albireo takes
-    no such dependency. With ``lam`` the longitude and ``beta`` the latitude,
+    written out because albireo takes no coordinates dependency. With ``lam`` the
+    longitude and ``beta`` the latitude,
 
     ``x = cos(beta) cos(lam)``, ``y = cos(beta) sin(lam)``, ``z = sin(beta)``;
 
@@ -140,14 +141,14 @@ def ecliptic_to_icrs(lon_deg, lat_deg):
     ``alpha = atan2(y', x') mod 360``, ``delta = asin(z')``.
 
     The frame is the mean equinox and ecliptic of J2000. Measured over 500 positions
-    against astropy 8.0, the result sits 0.04 arcsec from ``BarycentricMeanEcliptic``,
-    which is the same frame and leaves only the ICRS frame bias and the rounding of the
-    obliquity; 14 arcsec at most from ``BarycentricTrueEcliptic``, which adds the nutation
-    of the equinox and of the obliquity; and 35 arcsec at most from
-    ``GeocentricTrueEcliptic``, which places the origin at the Earth. All three are under
-    an arcminute, and a sky position enters this module only through the ecliptic latitude
-    that sets the transit count and through the position a transit forecast is requested
-    for, where an arcminute is immaterial.
+    against astropy 8.0, the result sits 0.04 arcsec from ``BarycentricMeanEcliptic``
+    (the same frame; the residual is the ICRS frame bias and the rounding of the
+    obliquity), at most 14 arcsec from ``BarycentricTrueEcliptic`` (which adds the
+    nutation of the equinox and of the obliquity), and at most 35 arcsec from
+    ``GeocentricTrueEcliptic`` (origin at the Earth). All three are under an arcminute. A
+    sky position enters this module only through the ecliptic latitude that sets the
+    transit count and the position a transit forecast is requested for, where an
+    arcminute is immaterial.
 
     Parameters
     ----------
@@ -323,10 +324,10 @@ class MainSequence:
 
     Notes
     -----
-    Both relations describe field dwarfs of solar composition and no age; a real detached
-    binary of the same mass can sit above the sequence by the evolution of its primary,
-    which is one reason the catalogue adapters take the radii and temperatures from the
-    catalogue where they exist.
+    Both relations describe field dwarfs of solar composition and no age. A real detached
+    binary of the same mass can sit above the sequence by the evolution of its primary;
+    the catalogue adapters therefore take radii and temperatures from the catalogue where
+    they exist.
     """
 
     relation: str = "mamajek"
@@ -752,9 +753,9 @@ def rvs_light_ratio(library, labels1, labels2, radius_ratio: float) -> float:
 
     The light ratio of two stars is the ratio of their surface fluxes times the ratio of
     their projected areas, ``(R_2 / R_1)^2 C_2 / C_1``, with the continua taken from the
-    library at each star's labels and averaged over the band. This is the quantity the
-    label fit's :class:`albireo.RadiusRatio` dilution model parameterizes, so a population
-    drawn with it and a fit that measures the radius ratio are speaking the same language.
+    library at each star's labels and averaged over the band. The label fit's
+    :class:`albireo.RadiusRatio` dilution model uses the same parameterization, so a
+    population drawn with it is directly comparable with a fitted radius ratio.
 
     Parameters
     ----------
@@ -845,12 +846,12 @@ def draw_population(
     """Draw ``n`` double-lined binaries from the field's distributions.
 
     The sky position is drawn with the rest: an ecliptic latitude from an isotropic
-    distribution, which is what the transit count depends on, and an ecliptic longitude
-    uniform over [0, 360), converted to ICRS through :func:`ecliptic_to_icrs`. The system
-    then carries a position a real transit forecast can be requested for
-    (:func:`albireo.gaia.gost_transits`), and the longitude is kept in ``meta``. The
-    longitude comes from a generator spawned from ``seed`` rather than from the main
-    stream, so that a population drawn before positions existed still reproduces.
+    distribution (the transit count depends on it) and an ecliptic longitude uniform over
+    [0, 360), converted to ICRS through :func:`ecliptic_to_icrs`. The position can be
+    passed to a real transit forecast (:func:`albireo.gaia.gost_transits`); the longitude
+    is kept in ``meta``. The longitude comes from a generator spawned from ``seed``, not
+    from the main stream, so populations drawn by versions without positions still
+    reproduce.
 
     Parameters
     ----------
@@ -1403,12 +1404,11 @@ def from_gaia_sb2(
     Each row supplies the period, eccentricity, argument of periastron, both
     semi-amplitudes and the systemic velocity, the G magnitude and colour, the ICRS
     position, the ecliptic latitude and the number of good transits. Masses come from
-    ``binary_masses`` where
-    the archive has them and otherwise from the semi-amplitudes and the main sequence
-    (``q = K_1 / K_2``, the primary at the mass whose sequence temperature is the
-    GSP-Phot value); radii and temperatures follow from the masses along the sequence,
-    and the inclination is the one that reconciles the masses with the catalogue's K.
-    Rows without a period or a semi-amplitude are skipped.
+    ``binary_masses`` where the archive has them, and otherwise from the semi-amplitudes
+    and the main sequence (``q = K_1 / K_2``, the primary at the mass whose sequence
+    temperature is the GSP-Phot value). Radii and temperatures follow from the masses
+    along the sequence, and the inclination is the one that reconciles the masses with
+    the catalogue's K. Rows without a period or a semi-amplitude are skipped.
     """
     rng = np.random.default_rng(seed)
     sequence = relation if isinstance(relation, MainSequence) else MainSequence(relation)

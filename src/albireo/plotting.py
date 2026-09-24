@@ -83,8 +83,8 @@ def plot_rv_curve(samples, bjd, *, truth=None, n_draws: int = 60, ax=None):
     """Posterior orbit draws, phase-folded, with the epochs marked.
 
     One panel: the radial velocity of each component from ``n_draws`` posterior draws,
-    against orbital phase measured from conjunction. albireo infers the orbit from the
-    spectra directly and measures no per-epoch radial velocity, so the figure shows the
+    against orbital phase measured from conjunction. The orbit is inferred from the
+    spectra directly, with no per-epoch radial velocities, so the figure shows the
     posterior curve rather than a fit through velocity points. Ticks along the bottom mark
     the epoch phases, whose coverage sets how well the orbit is constrained.
 
@@ -162,10 +162,9 @@ def plot_phase_fold(bjd, values, period: float, t_conj: float, *, yerr=None, ax=
     """Fold a per-epoch quantity on the orbital period.
 
     One panel: ``values`` against orbital phase measured from conjunction, with error bars
-    where ``yerr`` is given. The intended use is a quantity that should carry no phase
-    dependence, such as a jitter, a light fraction or a residual scatter; a phase-dependent
-    pattern in one of these indicates that the model is absorbing signal it should be
-    describing.
+    where ``yerr`` is given. Intended for quantities that should carry no phase
+    dependence (a jitter, a light fraction, a residual scatter); a phase-dependent pattern
+    indicates that the model is absorbing signal it should describe.
 
     Parameters
     ----------
@@ -210,10 +209,9 @@ def plot_spectra(grid, spectra, *, std=None, truth=None, labels=None, axes=None,
 
     One panel per component: the posterior mean deviation spectrum against wavelength,
     inside a band of plus and minus two pointwise posterior standard deviations, with the
-    injected truth overplotted when one is given. The band gives the posterior uncertainty
-    on the component spectrum at each pixel. Between the lines, and wherever the epochs
-    provide little leverage, the recovered spectrum is set by the smoothness prior rather
-    than by the data, and the band widens accordingly (``docs/math.md`` §5.1).
+    injected truth overplotted when one is given. Between the lines, and wherever the
+    epochs provide little leverage, the recovered spectrum is set by the smoothness prior
+    rather than by the data, and the band widens accordingly (``docs/math.md`` §5.1).
 
     Parameters
     ----------
@@ -227,9 +225,9 @@ def plot_spectra(grid, spectra, *, std=None, truth=None, labels=None, axes=None,
         Pointwise standard deviations matching a ``(n_comp, n_pix)`` mean, e.g. from
         :func:`albireo.likelihood.spectra_std`.
     truth
-        Optional injected truth, shape ``(n_comp, n_pix)``, for simulated data. It must
-        already be on ``grid``. A simulation stores its truth on the grid it was generated
-        on, which is not the grid the model was solved on; resample it first with
+        Optional injected truth, shape ``(n_comp, n_pix)``, for simulated data, already on
+        ``grid``. A simulation stores its truth on its generation grid, not the grid the
+        model was solved on; resample it first with
         ``np.interp(grid.wave, truth_grid.wave, component, left=0.0, right=0.0)``.
     labels
         Component names for the y-axis; defaults to ``d_1``, ``d_2``, ...
@@ -321,13 +319,12 @@ def plot_residual_zscores(problem, d_stack, *, bjd=None, axes=None):
     """Three views of the whitened residuals: distribution, per epoch, and lag-1.
 
     Under a correct noise model the whitened residuals are standard normal and
-    independent, and the three panels test that in different ways. Left, a histogram of
-    all pixels against the ``N(0, 1)`` density. Middle, the residual standard deviation of
-    each epoch, which equals 1.0 when the noise model matches. Right, the lag-1
-    autocorrelation of each epoch. A large lag-1 coefficient indicates correlation between
-    neighbouring pixels, which inflates every uncertainty derived from the fit and does
-    not show up in the histogram; it is the statistic the AR(1) noise model addresses
-    (``docs/benchmarks.md``).
+    independent. Left, a histogram of all pixels against the ``N(0, 1)`` density. Middle,
+    the residual standard deviation of each epoch, which equals 1.0 when the noise model
+    matches. Right, the lag-1 autocorrelation of each epoch. A large lag-1 coefficient
+    indicates correlation between neighbouring pixels, which inflates every uncertainty
+    derived from the fit and does not show up in the histogram; it is the statistic the
+    AR(1) noise model addresses (``docs/benchmarks.md``).
 
     The lag-1 coefficient is computed within each epoch, since consecutive pixels of
     different exposures are unrelated.
@@ -409,9 +406,9 @@ def plot_lsf(anchor_wave, sigma, *, h3=None, sigma_max=None, axes=None):
     parameters are the most degenerate part of the model: they trade against the intrinsic
     line widths of the components and against the smoothness prior, so a width that drifts
     with wavelength may describe the spectrograph or may be absorbing other structure
-    (``docs/benchmarks.md``). Passing ``sigma_max`` draws the build-time upper
-    bound; the kernel radius is fixed when the model is built, so a width sitting at that
-    bound indicates a kernel built too narrow for the fit.
+    (``docs/benchmarks.md``). ``sigma_max`` draws the build-time upper bound. The kernel
+    radius is fixed when the model is built, so a width sitting at that bound indicates a
+    kernel built too narrow for the fit.
 
     Parameters
     ----------
@@ -476,7 +473,7 @@ def plot_light_fractions(samples, *, bjd=None, period=None, t_conj=None, ax=None
     otherwise.
 
     A constant light ratio is not determined by the spectra alone, so albireo does not
-    assume one (``internal/design.md`` §5). A ratio that varies, as it does during eclipses,
+    assume one (``docs/math.md`` §5.2). A ratio that varies, as it does during eclipses,
     breaks that degeneracy; the figure shows whether the inferred variation follows the
     eclipse or the noise.
 
@@ -547,9 +544,9 @@ def plot_detection(result, *, injected_k2=None, threshold=None, ax=None, label=N
     ``D`` is twice the log-likelihood ratio against the no-companion model. It is not a
     chi-squared and implies no p-value: the Occam term keeps ``D`` below zero when there
     is nothing to find, and converting a peak into a false-alarm probability requires an
-    injection-recovery calibration (:mod:`albireo.calibrate`). Where a calibrated threshold
-    exists, passing it as ``threshold`` draws it; a detection claim rests on that line
-    rather than on the peak height.
+    injection-recovery calibration (:mod:`albireo.calibrate`). A calibrated threshold
+    passed as ``threshold`` is drawn; a detection claim rests on that line, not on the
+    peak height.
 
     Parameters
     ----------
@@ -694,9 +691,9 @@ def plot_forecast(forecast, *, axes=None):
     Left panel, the forecast pointwise standard deviation of each component spectrum
     against wavelength, together with the same quantity under the prior alone. Where the
     forecast band meets the prior line the design constrains nothing at that wavelength,
-    and additional exposure time does not change it. The shaded span marks the
-    region the summaries are taken over; outside it the band rises to the prior because
-    the model grid is wider than the data.
+    and additional exposure time does not change it. The shaded span marks the region the
+    summaries are taken over; outside it the band rises to the prior because the model
+    grid is wider than the data.
 
     Middle panel, the worst-determined mode: the spectral pattern the design constrains
     least. For two components this is the ``k = 0`` exchange of ``docs/math.md`` §5.1,
@@ -704,9 +701,9 @@ def plot_forecast(forecast, *, axes=None):
     shape of the mode gives the form of the error the disentangled spectra will carry,
     which its eigenvalue alone does not.
 
-    Right panel, the ladder of mode standard deviations on a log axis, which is what ranks
-    one design against another: the leading mode changes little, and a good cadence lowers
-    the remaining rungs. With a baseline present both ladders are drawn, and the gap
+    Right panel, the ladder of mode standard deviations on a log axis, which ranks one
+    design against another: the leading mode changes little, and a good cadence lowers the
+    remaining rungs. With a baseline present both ladders are drawn, and the gap
     between them is the contribution of the planned epochs.
 
     Parameters
@@ -783,10 +780,8 @@ _ORBIT_SITES = ("period", "t_conj", "secosw", "sesinw", "k", "ecc", "omega")
 def _default_corner_vars(idata):
     """The orbital sites present in ``idata``, or None to let arviz choose.
 
-    The sampled space is small because the component spectra are marginalized out, but the
-    smoothness hyperparameters, the per-epoch light fractions and the LSF anchors would
-    still make a corner plot over every site unreadable, so the default is the orbital
-    block alone.
+    The smoothness hyperparameters, per-epoch light fractions and LSF anchors would make a
+    corner plot over every site unreadable, so the default is the orbital block alone.
     """
     posterior = getattr(idata, "posterior", None)
     if posterior is None:
@@ -817,11 +812,10 @@ def plot_corner(idata, *, var_names=None, **kwargs):
     object
         Whatever ``arviz.plot_pair`` returns. This is the one function in the module that
         does not return ``(fig, axes)``: arviz 0.x returns an array of matplotlib axes,
-        arviz 1.x returns its own ``PlotMatrix``. Adapting between them would depend on
-        arviz internals that are still changing, so the call is a thin passthrough and the
-        caller works with the object the installed arviz produces. Only ``var_names`` is
-        supplied on the caller's behalf, for the same reason: styling arguments valid in
-        arviz 0.x (``kind``, ``marginals``) raise in 1.x.
+        arviz 1.x returns its own ``PlotMatrix``. The call is a thin passthrough because
+        adapting between them would depend on arviz internals that are still changing. For
+        the same reason only ``var_names`` is supplied by default: styling arguments valid
+        in arviz 0.x (``kind``, ``marginals``) raise in 1.x.
     """
     az = _require_arviz()
     _plt()

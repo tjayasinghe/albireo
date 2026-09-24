@@ -52,13 +52,12 @@ p(\omega) = \frac{SS \, YC^2 + CC \, YS^2 - 2 \, CS \, YC \, YS}{YY \, (CC \, SS
 the fraction of the weighted variance that the sinusoid and the free constant remove
 together. The weights enter through $`W_i`$ alone; the data are never rescaled by them.
 
-The free constant is what makes the search usable on clumped sampling. A classical
-periodogram fits $`a \cos \omega t + b \sin \omega t`$ with the offset held at zero, which is
-harmless when the epochs are spread evenly enough that the sampling window has no mean at the
-frequencies of interest, and is not harmless for a survey cadence: with ten to twenty-five
-epochs falling into about eleven visibility windows separated by hundreds of days, the
-constant the classical model cannot fit is absorbed into the sinusoid and the spurious power
-buries the true period. Over the Gaia-like velocity tables of the
+The free constant makes the search usable on clumped sampling. A classical periodogram fits
+$`a \cos \omega t + b \sin \omega t`$ with the offset held at zero. This is harmless when the
+epochs are spread evenly enough that the sampling window has no mean at the frequencies of
+interest, but not for a survey cadence: with ten to twenty-five epochs falling into about
+eleven visibility windows separated by hundreds of days, the constant the classical model
+cannot fit is absorbed into the sinusoid and the spurious power buries the true period. Over the Gaia-like velocity tables of the
 [D62 benchmark](../benchmarks.md) the true period is the highest peak of the classical
 periodogram in 5 systems of 13 and of this one in 9 of 13.
 
@@ -74,6 +73,81 @@ the baseline is therefore good to a few per cent only, and it is the Keplerian f
 whose period bounds are $`0.5 P_0`$ to $`2 P_0`$, that pins the period down. Refining the grid
 was measured at 10, 20 and 50 samples per $`1/T`$ and changed no outcome for the
 single-sinusoid search.
+
+The default grid is anchored at its low end. Its step is $`1/(N T)`$; its points are
+$`1/P_\mathrm{max} + k/(N T)`$ below the highest frequency, and the highest frequency
+$`1/P_\mathrm{min}`$ is appended as the last point. $`N`$ is 10, raised where needed to the
+smallest integer that gives at least 20,000 frequencies, computed with the frequency span
+rounded down to two significant figures. The default shortest period is twice the
+smallest gap between two epochs, so a grid spaced evenly between its two ends (the search's
+grid before D65) moves every upper frequency whenever one epoch time moves. On a Gaia-like
+table, with a smallest gap of 0.074 d over some 1500 d, a shift of $`10^{-6}`$ d in the
+closest pair moves the high end by more than one step, and near-degenerate short-period
+peaks change order. That is the size of the six-decimal rounding the velocity tables used to
+be written with: the recorded peaks of five benchmark tables could only be reproduced by
+moving the shortest period by 0.5 to $`4 \times 10^{-6}`$ d. The tables now carry every digit
+of the epoch time, and the anchored grid guarantees the following. When an epoch other than
+the first and the last moves, $`T`$ and the low end do not, so every point below both the old
+and the new highest frequency stays where it was, bit for bit; the last point moves with the
+high end, and points are added or removed only between the two, unless $`N`$ changes. $`N`$
+is 10 on any table where $`10 T`$ times the span reaches 20,000, which includes every
+multi-year survey table, and there does not depend on the high end. Below that, $`N`$ changes
+only when the shift carries the span across a two-significant-figure boundary, or carries
+$`20000/(T \times \mathrm{span})`$ across an integer. A shift of $`10^{-6}`$ d moves a span of
+about 6.8 per day by about $`10^{-4}`$, so the case is rare but possible, and the whole grid is
+then respaced. Moving the first or the last epoch changes $`T`$ and respaces every point by a
+relative $`\delta T / T`$. An explicit `n_frequencies` keeps the evenly spaced grid it asks
+for.
+
+The anchored grid's peaks sit at slightly different frequencies from the evenly spaced
+grid's, and a Keplerian started from them can converge elsewhere. Over the 33 blind tables of
+the benchmark's third run, searched as the pipeline's bootstrap searches them, it leaves the
+number of systems whose true period ranks first at 20 and reshuffles near-degenerate
+candidates: one Gaia system from rank 39 to 11, one from 23 to 24, one from 3 to 4, and field
+systems from 40 to 41 and from 2 to 6. On the last, the start nearest the true period now
+converges at chi-square 587 instead of 460, which takes the truth out of the top four that
+the pipeline's decision by the disentangling compares; that decision has converted no miss
+into a hit on either population (D64). These moves are the cost of a grid that no longer
+moves with the rounding of one epoch time.
+
+`fit_rv_orbit` and `RVOrbit.predict` compile once per configuration and array shape.
+Compiled at every call, they made the working set of a harness that fits every candidate
+period of a table grow. With the fit's objective compiled once but `predict` evaluating the
+Kepler solver's Newton loop eagerly, three tables through six search configurations took
+269 s and reached a peak working set of 5061 MB; with both compiled once they take 26 s and
+446 MB, and the whole 33-table rerun peaked at 697 MB.
+
+**Which velocities enter.** A velocity enters the search and the fit where its own component
+was measured: a finite velocity and error, off that component's search edge, at an epoch that
+is not blended. The relative velocity needs both components. A component searched alone
+(`components=[name]`), or fitted jointly with the others, keeps every epoch at which it was
+measured, whatever happened to the others there. Neither function intersects this test with
+`VelocityTable.good`, which requires every component to be measured; before D65 both did, so
+the search on the primary alone, which exists for a companion the templates could not
+follow, lost exactly the epochs at which that companion sat at the search edge.
+`find_period` returns the epochs its series used under `used`.
+
+In a joint fit a component with no more usable velocities than parameters of its own (one, its
+semi-amplitude, or two where each component has its own systemic velocity) is held, and
+`RVOrbit.held` names it. Its semi-amplitude stays at 1e-3 km/s, or at the caller's `k`, and its
+own systemic velocity at its start. Neither is fitted or counted as a parameter, both have
+`nan` errors, and its velocities carry no weight, so `residuals` and `rms` are `nan` for it.
+`mass_ratio` is `None`, and `minimum_masses` and `projected_semiaxes` leave it out. Left free,
+the optimizer does not keep an unconstrained parameter where it started: on a benchmark table
+whose secondary was gated at every epoch the semi-amplitude ran to $`1.5 \times 10^7`$ km/s,
+and the true period was set aside as outside the declared ranges.
+
+**The semi-amplitude start.** Without `k`, `fit_rv_orbit` starts each component at half the
+range of its own usable velocities, which is $`K`$ at any eccentricity once the phases are
+covered. Where every component is usable this equals the start before D65, which took the
+range over the epochs at which all components were. An undetected companion's draws
+still set it (321 km/s on a benchmark system whose 7% secondary the templates never detected,
+above the declared ceiling of 250 km/s); removing those velocities is the caller's decision,
+and the pipeline's detection gate makes it. $`\sqrt{2}`$ times the weighted standard deviation
+was tried in its place and rejected: sampled evenly in time it is 0.34 to 0.51 of $`K`$ at
+$`e = 0.9`$, and it moved the chi-square ranking on six benchmark tables whose components were
+all usable. The only bound the fit places on a semi-amplitude is zero, and the start is held
+at or above 1e-3 km/s.
 
 `n_peaks` sets how many distinct peaks are reported, the best and `n_peaks - 1` aliases, two
 peaks counting as distinct when their periods differ by more than 2%. With `n_harmonics = 2`
@@ -91,12 +165,12 @@ unchanged; its dominant peak sits at half the period for a circular orbit.
 A peak is a starting point and not a period. The Keplerian fitted at a candidate uses the
 shape of the curve and every velocity at once, and over the same tables it separated the truth
 from the best alias by hundreds in chi-square wherever the truth was reachable at all, while
-an alias outranked the truth on the periodogram in 10 systems of 32. Propose many candidates
-and let the fit decide, which is what the [pipeline's search route](pipeline.md) does. There
-is a floor to this: a table of ten or eleven epochs whose true Keplerian already leaves a
-reduced chi-square above about five cannot be searched by any statistic computed on it, since
-an alias then fits better than the truth, and the honest output for such a table is a failure
-rather than a period.
+an alias outranked the truth on the periodogram in 10 systems of 32. Many candidates should
+therefore be proposed and the fit left to decide, as the
+[pipeline's search route](pipeline.md) does. There is a floor: a table of ten or eleven
+epochs whose true Keplerian already leaves a reduced chi-square above about five cannot be
+searched by any statistic computed on it, since an alias then fits better than the truth,
+and the correct output for such a table is a failure rather than a period.
 
 Background and references: [science overview](../science.md).
 

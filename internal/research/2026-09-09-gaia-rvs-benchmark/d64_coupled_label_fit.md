@@ -1,5 +1,7 @@
 # Does fitting the labels through the coupled operator recover the temperature? (D64, 2026-09-11)
 
+**[Corrected in part by `d65_label_likelihoods.md` and `d65_converged_labels.md` (D65, 2026-09-16). Every fit in this note ran 80 L-BFGS steps from the node-scan warm start and did not converge, so its temperatures measure that start rather than either likelihood. Started at the injected labels instead, the shipped fit reaches a lower value of its own objective on 8 of the 12 products and lands a median 7.1 K from the truth. Converged by a bounded Levenberg-Marquardt with restarts, the shipped diagonal comparison returns a median 119 K and the exact comparison of the template composite against the epoch spectra returns 60 K. The light-fraction and rotation gains reported here survive, and the epoch comparison improves on both. The recommendation not to rebuild `match_labels` around this operator stands, for a different reason: the epoch comparison is the exact likelihood and a filtered comparison under a diagonal likelihood is not.]**
+
 `d64_posterior_smoothing.md` established that the archived posterior mean is exactly the
 injected pair passed through the coupled operator, plus a noise term,
 
@@ -70,7 +72,7 @@ flags; $`v\sin i`$ agrees to a median 0.004 km/s and at worst 0.29 km/s. Where
 `mixed-0015__oracle` at -188.2 K and +232.5 K on the archive and +104.4 K and +233.8 K on the
 injected component.
 
-**The answer is no: passing the model through the coupled operator does not recover the
+**[Corrected by D65: the fits below did not converge; see the note under the title.]** **The answer is no: passing the model through the coupled operator does not recover the
 injected temperature.** Recovered minus injected $`T_{\rm eff}`$, in K, under the present
 route on the archived component, the patched route on the archived component, and the present
 route on the injected component:

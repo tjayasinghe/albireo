@@ -1,8 +1,8 @@
 """Differentiable Keplerian orbits and radial-velocity laws.
 
-The module provides Kepler's equation, the true anomaly, the Keplerian radial-velocity
-law of ``docs/math.md`` §1.2, and the conversion from a time of conjunction to a time of
-periastron. All functions are vectorized over time and differentiable in every parameter.
+Kepler's equation, the true anomaly, the Keplerian radial-velocity law of
+``docs/math.md`` §1.2, and the conversion between times of conjunction and periastron.
+All functions are vectorized over time and differentiable in every parameter.
 
 The eccentric-anomaly solver is a fixed-count Newton iteration wrapped in
 ``jax.custom_jvp`` with the implicit-function tangent rule (``docs/math.md`` §1.2), so
@@ -124,8 +124,8 @@ def t_peri_from_t_conj(t_conj, *, period, ecc, omega):
     of the component whose ``omega`` is given. The line-of-sight displacement is
     ``r sin(i) sin(nu + omega)`` measured away from the observer, so at ``nu + omega =
     pi/2`` that component is farthest behind the plane of the sky and, in an eclipsing
-    system, is the one being eclipsed; passing the primary's ``omega`` therefore makes
-    ``t_conj`` the time of primary eclipse. The inverse mapping is ``nu -> E -> M -> t``.
+    system, is the one eclipsed. With the primary's ``omega``, ``t_conj`` is the time of
+    primary eclipse. The inverse mapping is ``nu -> E -> M -> t``.
     """
     nu_conj = 0.5 * jnp.pi - omega
     e_conj = 2.0 * jnp.arctan2(

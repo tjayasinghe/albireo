@@ -2,21 +2,20 @@
 
 See the [science overview](../science.md) for background and references.
 
-The rest of this site infers the orbit from the composite spectra directly and never writes
-down a velocity for a single night. That is the right approach when the component spectra are
-unknown. It is not what an eclipsing-binary analysis, a survey pipeline or an existing orbit
-code consumes: those need a table with one velocity per component per epoch. This page produces
-that table.
+The joint model infers the orbit from the composite spectra directly and never writes down a
+velocity for a single night, which is the right approach when the component spectra are
+unknown. An eclipsing-binary analysis, a survey pipeline or an existing orbit code instead
+needs a table with one velocity per component per epoch.
 
 The method is TODCOR, the two-dimensional correlation of Zucker & Mazeh (1994). Instead of
 correlating a spectrum against one template and reading two peaks off the result, it correlates
 the spectrum against a combination of two templates, each with its own shift, and reads both
 velocities off the location of the single maximum. Because the second star is in the model, the
 two peaks stop pulling each other as they approach, and a companion much fainter than the
-primary can be measured from one spectrum. albireo's [`todcor`](../api/todcor.md) is that
-estimator written as the weighted least-squares fit it is, so that masks, gaps, cosmics,
-per-pixel weights and mixed instruments enter through the weights, generalized to any number of
-components, with the maximum-likelihood errors of Zucker (2003). On a uniform grid with uniform
+primary can be measured from one spectrum. albireo's [`todcor`](../api/todcor.md) writes the
+estimator as the weighted least-squares fit it is, so masks, gaps, cosmics, per-pixel weights
+and mixed instruments enter through the weights. It generalizes to any number of components
+and quotes the maximum-likelihood errors of Zucker (2003). On a uniform grid with uniform
 weights it reproduces the published formulae to 1e-10, which the test suite checks.
 
 The runnable version of this page is
@@ -26,7 +25,7 @@ the numbers below are its output.
 ## Where the templates come from
 
 A correlation needs one template per component, and the choice determines what the velocities
-mean. There are three routes:
+mean:
 
 | Route | Zero point | When |
 |---|---|---|
@@ -72,10 +71,8 @@ TODCOR velocities: 2 components x 12 epochs, 12 usable (data topocentric; veloci
 ```
 
 Against the injected velocities the primary comes back with an rms error of 0.140 km/s on a
-quoted 0.124, the secondary 0.135 on 0.194: a pull rms of 1.13 and 0.70, which is what
-calibrated errors look like on twelve epochs.
-
-Three arguments in that call need a note each.
+quoted 0.124, the secondary 0.135 on 0.194: a pull rms of 1.13 and 0.70, consistent with
+calibrated errors on twelve epochs.
 
 **The grid.** Every template must live on one `LogGrid`, it must extend beyond the data by the
 velocity range being searched (`LogGrid.covering(dataset, dv_kms=..., v_margin_kms=...)` builds
@@ -86,12 +83,12 @@ $`0.1/\sigma_{\rm px}^2`$ pixels
 thousandths of a pixel at three per sigma, a few hundredths at one. `todcor` warns below two;
 `fit.templates()` upsamples automatically; a library template's grid is built by the caller and
 should be built fine. The packaged example's truth grid samples the DEMO LSF at one pixel per
-sigma, which is why the snippet upsamples it by three.
+sigma, so the snippet upsamples it by three.
 
 **The light fractions.** `light="global"` (the default) fits them freely in every epoch, takes
 the weighted median over the well-detected, unblended epochs of each instrument, and holds
-that. This is standard practice, because a per-epoch ratio is noisy and a ratio fitted at a
-blended phase is not a measurement. Pass a sequence to hold declared values instead. If the
+that. This is standard practice: a per-epoch ratio is noisy, and a ratio fitted at a blended
+phase is not a measurement. Pass a sequence to hold declared values instead. If the
 templates are the disentangled components, hold the fractions the disentangling assumed: those
 spectra were solved against them, and no other amplitude is consistent with what they are
 ([§9.1](../math.md#91-what-a-disentangled-component-actually-is)).
@@ -100,12 +97,14 @@ spectra were solved against them, and no other amplitude is consistent with what
 **The LSF.** The templates are intrinsic, and each instrument's LSF is applied to them in
 quadrature above whatever resolution the template already carries (`Template.sigma_kms`). A
 template rendered from an $`R = 20{,}000`$ grid is therefore not broadened twice, and a template
-broader than the instrument is used as it is, with a warning.
+broader than the instrument is used as it is, with a warning. `Template.from_labels` records
+the library's resolving power in the same way, and for a `compare="matched"` match the
+instrument width the fit already applied (versions before D65 recorded neither and broadened
+such a template twice).
 
 ## Reading the diagnostics
 
-`VelocityTable` carries more than velocities, and the extra columns are what make a batch
-checkable:
+`VelocityTable` carries diagnostic columns beside the velocities that make a batch checkable:
 
 - `sigma` is the curvature of the chi-square surface at its minimum, rescaled by the reduced
   chi-square so that the noise level is measured from the residuals rather than taken from
@@ -123,9 +122,8 @@ checkable:
 
 ## Why two dimensions
 
-Running the same spectra against the primary's template alone, the one-dimensional CCF, and
-comparing the primary's velocity error against the two-dimensional result epoch by epoch, in
-order of the separation between the two stars' lines:
+The primary's velocity error from a one-dimensional CCF against its template alone, beside the
+two-dimensional result, epoch by epoch in order of the separation between the two stars' lines:
 
 ```
 |v1 - v2| [km/s]   1-D error   2-D error   (km/s)
@@ -168,10 +166,10 @@ Keplerian fit to 24 velocities of 2 component(s): chi2 15.65 for 17 dof (errors 
 against an injected $`P = 6`$, $`e = 0.15`$, $`\omega = 40.1^\circ`$, $`K = 42, 63`$. The fit uses the
 same Kepler solver and angle conventions as the joint model, so `orbit.to_theta()` is what
 `Disentangler(orbit=...)` takes as a warm start: measure against a library template, fit the
-orbit, disentangle from it. The period search returns nineteen further peaks as well, under
-`aliases`; a sparsely sampled table's periodogram is rarely unambiguous, and the aliases
-should be inspected. The pipeline's search route does that automatically, fitting an orbit
-from each of about three dozen candidates and keeping the best.
+orbit, disentangle from it. The period search also returns nineteen further peaks under
+`aliases`. A sparsely sampled table's periodogram is rarely unambiguous, and the aliases
+should be inspected; the pipeline's search route does so automatically, fitting an orbit from
+each of several dozen candidates and keeping the best.
 
 ## Closing the loop
 
@@ -182,7 +180,7 @@ own_orbit = ab.fit_rv_orbit(own, period=orbit.period)
 ```
 
 The disentangled components are the best templates available for a system, with the right
-lines, depths and rotation, measured from these very epochs. The velocities measured against
+lines, depths and rotation, measured from the same epochs. The velocities measured against
 them recover the injected ones to 0.13 and 0.10 km/s rms once each component's zero point is
 removed. They are differential: `own.absolute` is `(False, False)`, `summary()` reports
 "template zero point unknown", and `fit_rv_orbit` fits one $`\gamma`$ per component rather than

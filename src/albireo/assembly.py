@@ -11,12 +11,12 @@ and the (i, j) component block of one epoch's term is
 a narrow band: G_e has half-bandwidth (s - 1) + 2r (rebin row support s, kernel radius
 r) regardless of the velocities, and the T-sandwich only translates it to the epoch's
 relative-shift offset and mixes 2x2 neighboring entries (linear-interpolation tent
-weights). Global comb probing (``docs/math.md`` §4.2, ``solver.py``) instead pays
-for the union of those offsets over all epochs: 2p + 1 full matvecs with p ~ max
-relative shift. Assembling per epoch replaces O(p) operator applications with O(w)
-banded work per epoch (w = band width ~ 2s + 4r + 3), a >10x flop reduction at survey
-bandwidths, for the identical exact result (same matrix, different summation order;
-agreement is verified against probing and dense construction in the tests).
+weights). Global comb probing (``docs/math.md`` §4.2, ``solver.py``) pays for the union
+of those offsets over all epochs: 2p + 1 full matvecs with p ~ max relative shift.
+Per-epoch assembly replaces O(p) operator applications with O(w) banded work per epoch
+(w = band width ~ 2s + 4r + 3), a >10x flop reduction at survey bandwidths, for the
+identical exact result (same matrix, different summation order; the tests verify
+agreement with probing and dense construction).
 
 Stages per epoch (all exact, all differentiable in shifts, lights, kernel and weights):
 
@@ -28,23 +28,22 @@ Stages per epoch (all exact, all differentiable in shifts, lights, kernel and we
    ``ar_step`` (``operators.rebin_link_pair_tables``; the traced link weights carry
    phi, so the whole band stays differentiable in it).
 2. ``G = K^T H K`` as the band-image form of the two convolutions. The first
-   application translates rows, so it stays an unrolled accumulation over the 2r + 1
-   taps (static slices only); the second translates columns alone, which makes it a
-   contraction of the band image against a static ``(w_u, w_g)`` banded matrix, one
-   GEMM rather than 2r + 1 further read-modify-write passes over the widest image in
-   the assembly. As elsewhere in this module the equality holds up to summation
-   order (measured 0.5 ulp; XLA does not promise a GEMM's accumulation order, although
-   it matched the loop's exactly on the benchmark configurations). A
-   wavelength-dependent LSF (``forward.build_problem(lsf_anchors_angstrom=...)``)
-   keeps the identical structure with the scalar kernel taps replaced by row-shifted
-   profile columns; there both applications translate rows, so both stay loops, and
-   the second runs against the band-transpose of the first, since only left
-   applications broadcast on a row-major band image and ``G`` is symmetric,
-   ``G = K^T (K^T H)^T``. ``G`` is a matrix on the model grid, so its off-grid columns,
-   which the kernel populates by smearing in-grid mass outward, are masked; the
-   sandwich would otherwise read them whenever a shift places a component's support
-   against a grid edge. Being velocity-independent, this whole stage is a pre-pass
-   over epochs, batched by ``epoch_chunk`` (memory only; see
+   application translates rows, so it is an unrolled accumulation over the 2r + 1
+   taps (static slices only). The second translates columns alone, so it is a
+   contraction of the band image against a static ``(w_u, w_g)`` banded matrix: one
+   GEMM instead of 2r + 1 further read-modify-write passes over the widest image in
+   the assembly. The equality holds up to summation order (measured 0.5 ulp; XLA does
+   not promise a GEMM's accumulation order, although it matched the loop's exactly on
+   the benchmark configurations). A wavelength-dependent LSF
+   (``forward.build_problem(lsf_anchors_angstrom=...)``) keeps the same structure with
+   the scalar kernel taps replaced by row-shifted profile columns. There both
+   applications translate rows and stay loops, and the second runs against the
+   band-transpose of the first, ``G = K^T (K^T H)^T``, since only left applications
+   broadcast on a row-major band image and ``G`` is symmetric. ``G`` lives on the model
+   grid, so its off-grid columns, which the kernel populates by smearing in-grid mass
+   outward, are masked; the sandwich would otherwise read them whenever a shift places a
+   component's support against a grid edge. Being velocity-independent, this stage is a
+   pre-pass over epochs, batched by ``epoch_chunk`` (memory only; see
    :func:`_epoch_chunk_default`).
 3. The T-sandwich: column q of ``T(delta)`` has entries at rows ``floor(q + delta)``
    (weight ``1 - frac(delta)``) and ``floor(q + delta) + 1`` (weight ``frac(delta)``),
@@ -53,13 +52,12 @@ Stages per epoch (all exact, all differentiable in shifts, lights, kernel and we
 4. Accumulation into a global band tensor ``BAND[q, i, k, d]`` holding the interleaved
    band entry at row ``q * nc + i``, column offset ``k * nc + d``. The per-epoch
    integer offset enters as a traced ``dynamic_update_slice`` start, so no scatter is
-   needed. The update is ``band + place(f)``, the identity in ``band``, but reverse
-   mode reassembles that identity out of three whole-tensor passes unless told
-   otherwise, so it goes through the closed-form :func:`_band_accumulate` (3.5 s
-   of a 5.9 s backward at the benchmark ladder's first row). The epoch loop is a
-   ``lax.scan`` with the band tensor as carry (buffer reuse; the body is
-   rematerialized in reverse mode, since recomputing one epoch's band is much cheaper
-   than storing 50 of them).
+   needed. The update ``band + place(f)`` is the identity in ``band``, but plain reverse
+   mode reassembles that identity from three whole-tensor passes (3.5 s of a 5.9 s
+   backward at the benchmark ladder's first row), so it goes through the closed-form
+   :func:`_band_accumulate`. The epoch loop is a ``lax.scan`` with the band tensor as
+   carry (buffer reuse); the body is rematerialized in reverse mode, since recomputing
+   one epoch's band is much cheaper than storing 50 of them.
 
 The bandwidth contract is inherited from probing: entries beyond the static
 half-bandwidth ``p`` are dropped (out of contract; the inference model guards the
@@ -96,19 +94,19 @@ def _band_accumulate(band, f, start, comp: int, d: int):
     """``band`` with ``f`` added at ``[:, comp, start : start + f.shape[1], d]``.
 
     Mathematically ``band + place(f)``: linear in both arguments and the identity in
-    ``band``. The forward is one in-place slice update either way; the ``custom_vjp``
-    is there for the reverse pass. Written as nested dynamic slices, reverse mode
-    transposes the two primitives separately and reassembles the identity as
+    ``band``. The forward is one in-place slice update; the ``custom_vjp`` serves the
+    reverse pass. Written as nested dynamic slices, reverse mode transposes the two
+    primitives separately and reassembles the identity as
 
         ``band_bar = dus(out_bar, 0, idx) + dus(zeros_like(band), ds(out_bar, idx), idx)``
 
-    which is three passes over the whole band tensor to reproduce its own input, once
-    per (i, j) block per epoch. At the benchmark ladder's first row that is 4 x 50 x 3
-    passes over 522 MB = 313 GB of traffic, measured at 3.5 s of a 5.9 s backward, and
-    it grows with the band tensor rather than with the slice touched (D49). The closed
-    form here is exact: the operand cotangent is the output cotangent, and ``f``'s is
-    the corresponding slice of it. Values and gradients are bit-identical to the
-    nested-slice route (``test_assembly.py``).
+    three passes over the whole band tensor to reproduce its own input, once per (i, j)
+    block per epoch. At the benchmark ladder's first row that is 4 x 50 x 3 passes over
+    522 MB = 313 GB of traffic, measured at 3.5 s of a 5.9 s backward, growing with the
+    band tensor rather than with the slice touched (D49). The closed form here is exact:
+    the operand cotangent is the output cotangent, and ``f``'s is the corresponding
+    slice of it. Values and gradients are bit-identical to the nested-slice route
+    (``test_assembly.py``).
 
     ``comp`` and ``d`` are Python ints (the component and interleave-offset loop
     counters), hence static; only ``start`` is traced, and being an integer it
@@ -159,21 +157,19 @@ def _band_offsets(p: int, nc: int):
 def _epoch_chunk_default(n_ep: int, n_pix: int, w_gp: int, n_groups: int = 1) -> int:
     """Epochs per G batch: hoist the whole pre-pass while it is cheap, else batch it.
 
-    The velocity-independent stage ``G_e`` is computed once per epoch either way, so any
-    chunking below ``n_ep`` costs exactly one extra G pass in the backward (the chunk
-    body is rematerialized); the chunk size only trades live bytes against ``vmap``
-    width. Hence the two-regime policy: keep every epoch's G live while that is under
-    ``_GP_HOIST_BYTES``, and otherwise batch to about ``_GP_CHUNK_BYTES``, which at the
-    design target reduces 4.5 GB of ``gp_all`` to under 0.5 GB and is the difference
+    ``G_e`` is computed once per epoch either way, so any chunking below ``n_ep`` costs
+    exactly one extra G pass in the backward (the chunk body is rematerialized); the chunk
+    size only trades live bytes against ``vmap`` width. Policy: keep every epoch's G live
+    while that is under ``_GP_HOIST_BYTES``, otherwise batch to about ``_GP_CHUNK_BYTES``.
+    At the design target this reduces 4.5 GB of ``gp_all`` to under 0.5 GB, the difference
     between a gradient that fits in 32 GB and one that does not.
 
-    The budgets are shared out over ``n_groups``, because the group loop is unrolled into
-    a single jit graph: every group's pre-pass is live in the same buffer-assignment plan,
-    so a per-group budget would be multiplied by the group count. That count is 1 for
-    simulations and for any pipeline delivering one wavelength solution, but real archival
-    data routinely gives one group per exposure (:func:`albireo.forward._epoch_groups`),
-    where the un-divided budget was measured at 40 GB against the 11 GB a shared grid
-    needs.
+    The budgets are shared out over ``n_groups``: the group loop is unrolled into a single
+    jit graph, so every group's pre-pass is live in the same buffer-assignment plan and a
+    per-group budget would be multiplied by the group count. That count is 1 for
+    simulations and for any pipeline delivering one wavelength solution, but archival data
+    routinely gives one group per exposure (:func:`albireo.forward._epoch_groups`); there
+    the undivided budget was measured at 40 GB against the 11 GB a shared grid needs.
     """
     per_epoch = n_pix * w_gp * 8
     groups = max(1, int(n_groups))
@@ -251,10 +247,10 @@ def _epoch_band_scan(
         """G = K^T (R^T W' R) K for one epoch, as a band image (n_pix, w_g + 4).
 
         Depends only on the weights and the LSF kernel, not on the velocities, so it
-        is computed in a ``vmap``ped pre-pass rather than inside the accumulation
-        body. How many epochs' worth are kept live at once is the ``chunk`` policy of
-        :func:`_epoch_chunk_default`. The weights are velocity-independent but still
-        traced: jitter, response and phi all flow through them.
+        is computed in a ``vmap``ped pre-pass outside the accumulation body; how many
+        epochs are live at once is the ``chunk`` policy of :func:`_epoch_chunk_default`.
+        The weights are velocity-independent but traced: jitter, response and phi all
+        flow through them.
         """
         # 1. H = R^T W' R, upper diagonals (n_pix, h_eff): the diagonal part through
         # the equal-row pair tables, plus, on a correlated problem, one symmetrized
@@ -525,9 +521,9 @@ def band_block_tridiagonal(
 ) -> BlockTridiagonal:
     """Assemble the posterior precision ``Lambda_p + A^T W A`` by direct band assembly.
 
-    Drop-in replacement for probing the full operator: returns the same
-    :class:`BlockTridiagonal` (to floating-point reordering) at a fraction of the
-    cost. ``half_bandwidth`` is the per-component bound ``b_nat`` (as in
+    Replaces probing of the full operator: returns the same :class:`BlockTridiagonal`
+    (to floating-point reordering) at a fraction of the cost. ``half_bandwidth`` is the
+    per-component bound ``b_nat`` (as in
     :func:`albireo.likelihood.marginal_loglikelihood`); the stacked bandwidth is
     ``p = nc * b_nat + nc - 1``.
 
@@ -548,9 +544,9 @@ def band_block_tridiagonal(
         Epochs per batch of the velocity-independent ``G`` pre-pass. ``None``
         (default) applies the size-adaptive policy of :func:`_epoch_chunk_default`:
         hoist the whole pre-pass while it is under 1 GB, otherwise batch to ~0.5 GB.
-        Pass ``n_epochs`` to force the fully hoisted (fastest, most memory-hungry)
-        path, or a small integer to cap live memory further. Raise it on a GPU with
-        spare memory; lower it if the gradient does not fit.
+        ``n_epochs`` forces the fully hoisted (fastest, most memory-hungry) path; a small
+        integer caps live memory further. Raise it on a GPU with spare memory; lower it
+        if the gradient does not fit.
     """
     nc, n_pix = problem.n_components, problem.grid.n
     p = nc * int(half_bandwidth) + nc - 1
@@ -582,12 +578,12 @@ def prior_logdet(prior: SmoothnessPrior, n_pix: int):
         ``b_i = (beta_i - a_i b_{i-1}) / c_{i-1}``,
         ``c_i = sqrt(gamma_i - a_i^2 - b_i^2)``,
 
-    with ``log det = 2 sum_i log c_i`` accumulated in the carry. Routing this through
-    :func:`prior_block_tridiagonal` and :func:`albireo.solver.block_cholesky` instead
-    pads the bandwidth-2 matrix out to dense blocks of size 64 and factorizes
-    ``n_comp * n_pix / 64`` of them, 0.78 GB of live blocks at the design target, for a
-    quantity that is exactly this ``O(n_pix)`` recursion. Components are carried as a
-    leading ``vmap``-free axis, so the scan is one pass regardless of ``n_comp``.
+    with ``log det = 2 sum_i log c_i`` accumulated in the carry. The route through
+    :func:`prior_block_tridiagonal` and :func:`albireo.solver.block_cholesky` pads the
+    bandwidth-2 matrix to dense blocks of size 64 and factorizes ``n_comp * n_pix / 64``
+    of them (0.78 GB of live blocks at the design target) for a quantity that is exactly
+    this ``O(n_pix)`` recursion. Components are carried as a leading ``vmap``-free axis,
+    so the scan is one pass regardless of ``n_comp``.
     """
     d0, d1, d2 = _prior_diagonals(prior, n_pix)  # (nc, n), (nc, n-1), (nc, n-2)
     nc = d0.shape[0]

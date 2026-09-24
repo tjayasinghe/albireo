@@ -1,8 +1,8 @@
 # From archival FITS files to a `Dataset`
 
-The other tutorials start from the simulator, where the spectra are already normalized,
-already carry inverse variances, and already share a wavelength grid. Reduced archival
-spectra do none of those things. This page covers the steps in between.
+The other tutorials start from the simulator, whose spectra are normalized, carry inverse
+variances, and share a wavelength grid. Reduced archival spectra do none of these. This page
+covers the steps in between.
 
 See the [science overview](../science.md) for background and references.
 
@@ -31,8 +31,7 @@ grid = ab.LogGrid.covering(ds, dv_kms=1.5, v_margin_kms=90.0, lsf_sigma_kms=2.65
 
 Reading spectra needs astropy: `pip install -e ".[io]"`. Nothing else in albireo does.
 
-The sections below describe what those four lines do, and why each step is a decision
-rather than a default.
+Each step behind those four lines is a decision rather than a default.
 
 ## 1. What the header must supply
 
@@ -56,11 +55,11 @@ rather than guessing when a file is silent about any of them.
 albireo must not apply it again; it composes the barycentric motion into the *telluric*
 component instead. An error here offsets every velocity by up to 25 km/s and raises nothing.
 
-**The applied barycentric velocity.** This is needed even in the barycentric frame, because
-telluric lines are at rest topocentrically and therefore move barycentrically. It is taken
-from the pipeline's own keyword (`ESO DRS BARYCORR`, `ESO DRS BERV`, …), because the
-pipeline's value defines the frame of the delivered wavelengths; astropy is only the
-fallback. On the HR 6819 files the two agree to 0.017 km/s.
+**The applied barycentric velocity.** Needed even in the barycentric frame, because telluric
+lines are at rest topocentrically and so move barycentrically. It is taken from the pipeline's
+own keyword (`ESO DRS BARYCORR`, `ESO DRS BERV`, …), since the pipeline's value defines the
+frame of the delivered wavelengths; astropy is the fallback. On the HR 6819 files the two
+agree to 0.017 km/s.
 
 !!! note "Verifying the sign on new data"
     Cross-correlate a strong telluric band (the O₂ A band at 7580–7720 Å) across epochs with
@@ -86,7 +85,7 @@ the log a steep exponential response is a straight line, which lies in the *null
 the curvature penalty and is therefore free to represent. Fitting the flux itself, a stiff
 smoother lags the gradient and the normalized spectrum comes out 30% wrong at the blue end.
 
-The consequence is that the answer barely depends on `smooth_angstrom`. On these spectra the
+The answer therefore barely depends on `smooth_angstrom`. On these spectra the
 97th percentile of the normalized flux sits at 1.007–1.011 in every 50 Å bin across the whole
 20× gradient, whether the requested stiffness is 80 Å or 150 Å.
 
@@ -108,8 +107,8 @@ smooth. Noisy weights bias a maximum-likelihood fit; a smooth `σ(λ)` does not.
     print(z.std())   # 1 if the inverse variances are calibrated
     ```
 
-    If it is not 1, the instrument for that is a `log_jitter` site rather than rescaling
-    `ivar` by hand, either one shared factor or one per epoch:
+    If it is not 1, fit a `log_jitter` site rather than rescaling `ivar` by hand, either one
+    shared factor or one per epoch:
 
     ```python
     import jax.numpy as jnp
@@ -128,27 +127,26 @@ smooth. Noisy weights bias a maximum-likelihood fit; a smooth `σ(λ)` does not.
     data-determined), 4.6% in the weak-prior test fixture. Comparing the two gives
     `p_eff = N[1 − (z.std()/α̂)²]`.
 
-    Then read the next warning, because a jitter that fits is not the same as a noise model
-    that is right.
+    A jitter that fits is not a noise model that is right; see the next warning.
 
 !!! danger "A jitter widens error bars, and can also move the answer"
     Inflating a diagonal noise model cannot represent a residual that is correlated across
     pixels, and on real spectra it usually is: imperfect continua, LSF mismatch, and, for a
     Be star, line profiles that change between epochs. Fitting `log_jitter` against that
     drives `data_residual_zscores` to ≈1 by construction, so the diagnostic stops warning
-    while the condition it was warning about is untouched.
+    while the underlying condition persists.
 
-    On HR 6819 the effect is not confined to a wider interval around the same point.
+    On HR 6819 the effect is more than a wider interval around the same point.
     Per-epoch factors came out spanning 1.1–3.6, the noisiest exposures clustered in the
     first third of the 135-day baseline, and downweighting them moved the period by 174× the
     no-jitter formal error, both fits being genuine optima under their own weights. Adding a
     jitter is a change of model, and here the model change dominates the uncertainty it was
     meant to express. See [benchmarks](../benchmarks.md).
 
-    The practical consequences: inspect the *shape* of the residuals rather than their
-    scale, per epoch and per pixel rather than pooled; and take the error bar from the
-    spread across independent wavelength windows and across defensible noise models. On this
-    dataset that spread is 4–18× the formal errors however the noise is modelled.
+    Inspect the *shape* of the residuals rather than their scale, per epoch and per pixel
+    rather than pooled, and take the error bar from the spread across independent wavelength
+    windows and across defensible noise models. On this dataset that spread is 4–18× the
+    formal errors however the noise is modelled.
 
 ## 4. Region, masks, and the quadratic cost of deleting pixels
 
@@ -159,12 +157,11 @@ emission (the Be star's disc varies, and albireo assumes one static spectrum per
 and no telluric band within 1200 Å.
 
 Trim the ends with `select_region`. For anything interior (telluric windows, interstellar
-lines, a bad column) use `mask_ranges`, which sets `ivar = 0` and keeps the pixels. This is
-not a style preference: albireo takes bin edges at midpoints between samples, so deleting an
-interior block makes the two bracketing pixels absorb half the gap each, and the rebin row
-support (a maximum) feeds the solver half-bandwidth, whose cost is quadratic. Deleting one
-telluric band has been measured to take the half-bandwidth from 159 to 3067. `build_problem`
-warns if it sees the pattern.
+lines, a bad column) use `mask_ranges`, which sets `ivar = 0` and keeps the pixels. albireo
+takes bin edges at midpoints between samples, so deleting an interior block makes the two
+bracketing pixels absorb half the gap each, and the rebin row support (a maximum) feeds the
+solver half-bandwidth, whose cost is quadratic. Deleting one telluric band was measured to take
+the half-bandwidth from 159 to 3067. `build_problem` warns if it sees the pattern.
 
 ## 5. One wavelength grid
 
@@ -172,9 +169,9 @@ Pipelines that apply the barycentric correction by shifting *before* resampling 
 exposure its own grid: the 51 HR 6819 spectra share a 0.03 Å step, but their start
 wavelengths span 0.78 Å and their lengths differ by tens of pixels, giving 28 distinct grids.
 
-albireo handles that correctly on its own, by giving each distinct grid its own rebin
-operator. Every group's assembly pre-pass is live in the same compiled graph, however, so 28
-groups is a real cost. `ab.share_wavelength_grid` relabels them onto one:
+albireo handles this correctly by giving each distinct grid its own rebin operator, but every
+group's assembly pre-pass is live in the same compiled graph, so 28 groups is a real cost.
+`ab.share_wavelength_grid` relabels them onto one:
 
 ```python
 ds = ab.Dataset(ab.share_wavelength_grid(list(ds), atol_kms=0.05), frame=ds.frame)
@@ -193,7 +190,7 @@ grid = ab.LogGrid.covering(ds, dv_kms=1.5, v_margin_kms=90.0, lsf_sigma_kms=2.65
 ```
 
 The grid must be wider than the data by the largest component shift **plus** the LSF kernel
-radius. The shift part is evident; the LSF part is not. Inside that margin the shift and
+radius. The LSF term is easy to miss. Inside that margin the shift and
 convolution operators zero-fill, so pixels there are modelled with missing flux while still
 carrying full weight. `LogGrid.covering` computes the margin, and `build_problem` warns if
 weighted pixels still fall outside it.

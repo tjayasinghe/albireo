@@ -28,6 +28,7 @@ import json
 import os
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -354,6 +355,26 @@ def test_the_report_is_json_and_carries_the_survey_columns(quick_run):
     assert set(report["orbit"]["k"]) == {"A", "B"}
     assert report["labels"]["components"]["A"]["teff_err"] > 0.0
     assert "total" in report["seconds"] and report["seconds"]["disentangle"] > 0.0
+    # The label fit's comparison, and the light it measured beside the declared one (D65).
+    labels = report["labels"]
+    assert labels["compare"] == "epochs"
+    assert set(labels["flux_ratio_errors"]) == {"A", "B"}
+    assert all(np.isfinite(v) and v >= 0.0 for v in labels["flux_ratio_errors"].values())
+    assert labels["light_declared"] == {"A": LIGHT[0], "B": LIGHT[1]}
+    assert labels["epoch_fit"]["lm_runs"] > 0 and isinstance(labels["notes"], list)
+    assert isinstance(labels["at_bounds"], dict)
+    assert report["velocities"]["light_source"] in ("declared", "global re-measure")
+    # The operator the epoch comparison ran with: the declared 5.5 km/s (an intrinsic toy
+    # library) less the model grid's own (7/12) dv^2 on the native 4.63 km/s pixel.
+    operator = labels["epoch_operator"]
+    dv = report["declaration"]["grid"]["dv_kms"]
+    assert operator["dv_kms"] == pytest.approx(dv)
+    assert operator["library_resolving_power"] is None
+    assert operator["grid_variance_kms2"] == pytest.approx(7.0 / 12.0 * dv**2)
+    assert operator["quadrature_sigma_kms"] == [["TOY", [5.5]]]
+    ((instrument, (width,)),) = operator["operator_sigma_kms"]
+    assert instrument == "TOY" and width == pytest.approx(np.sqrt(5.5**2 - 7.0 / 12.0 * dv**2))
+    assert operator["notes"] == [], "dv = 4.63 km/s is inside sigma_q = 5.5 km/s"
 
 
 def test_the_truth_block_carries_elements_pulls_and_spectra(quick_run):
@@ -979,6 +1000,417 @@ def test_the_orbit_loop_merges_fits_and_names_every_ambiguity(monkeypatch):
     assert [round(o.period, 2) for o, _ in decision["ranked"]] == [6.30, 12.62, 3.15]
 
 
+def _orbit_table(bjd, *, sigma=0.3, seed=0):
+    """A two-component ``VelocityTable`` of ``ORBIT`` at ``bjd``, every velocity detected."""
+    from albireo.todcor import VelocityTable
+
+    bjd = np.asarray(bjd, dtype=float)
+    n = bjd.size
+    truth = ORBIT.component_velocities(bjd)
+    velocity = truth + np.random.default_rng(seed).normal(0.0, sigma, truth.shape)
+    errors = np.full(truth.shape, sigma)
+    return VelocityTable(
+        names=("A", "B"),
+        bjd=bjd,
+        instrument=("TOY",) * n,
+        velocity=velocity,
+        sigma=errors,
+        sigma_ivar=errors,
+        covariance=np.tile(np.diag([sigma**2, sigma**2]), (n, 1, 1)),
+        light=np.repeat([[0.62], [0.38]], n, axis=1),
+        light_mode="global median",
+        chi2=np.full(n, 1000.0),
+        chi2_null=np.full(n, 1e5),
+        n_pixels=np.full(n, 1000),
+        delta_chi2=np.full(truth.shape, 1e4),
+        blended=np.zeros(n, dtype=bool),
+        at_edge=np.zeros(truth.shape, dtype=bool),
+        refined=np.ones(n, dtype=bool),
+        absolute=(True, True),
+        frame="barycentric",
+        settings={"n_parameters": 3},
+    )
+
+
+def test_the_detection_gate_takes_the_weight_off_undetected_velocities_only(monkeypatch):
+    """A companion the templates lost leaves draws the gate removes, and the primary stays (D65).
+
+    On the benchmark system that motivated it the 7% secondary was undetected at 24 of 26
+    epochs, its velocities spread across the search window at detection statistics of 1.4 to
+    61, and the joint fit from the true period ended at 511 d with semi-amplitudes of 49 and
+    66 km/s. The gate sets those velocities to nan in a copy of the table that only the
+    search and the candidate fits see.
+    """
+    from types import SimpleNamespace
+
+    from albireo.pipeline import _detection_gate, _orbit_over_candidates, _period_candidates
+    from albireo.rvorbit import fit_rv_orbit
+
+    rng = np.random.default_rng(4)
+    table = _orbit_table(np.sort(rng.uniform(0.0, 60.0, size=24)), seed=4)
+    lost = np.zeros(24, dtype=bool)
+    lost[rng.choice(24, size=18, replace=False)] = True
+    velocity = np.array(table.velocity)
+    statistic = np.array(table.delta_chi2)
+    velocity[1, lost] = rng.uniform(-300.0, 300.0, size=18)
+    statistic[1, lost] = rng.uniform(1.0, 60.0, size=18)
+    weak = replace(table, velocity=velocity, delta_chi2=statistic)
+
+    gated, mask = _detection_gate(weak, 100.0)
+    np.testing.assert_array_equal(mask, np.vstack([np.zeros(24, dtype=bool), lost]))
+    assert np.isnan(gated.velocity[1, lost]).all() and np.isnan(gated.sigma[1, lost]).all()
+    np.testing.assert_array_equal(gated.velocity[:, ~lost], weak.velocity[:, ~lost])
+    np.testing.assert_array_equal(gated.velocity[0], weak.velocity[0])
+    same, none = _detection_gate(weak, 0.0)
+    assert same is weak and not none.any()
+    # The first component is never gated, however weak: that is the rule measured, and
+    # gating it took one benchmark system's true period from rank 2 to absent.
+    faint_first = np.array(statistic)
+    faint_first[0, :5] = 12.0
+    primary_weak = replace(weak, delta_chi2=faint_first)
+    kept, first_mask = _detection_gate(primary_weak, 100.0)
+    assert not first_mask[0].any()
+    np.testing.assert_array_equal(first_mask, mask)
+    np.testing.assert_array_equal(kept.velocity[0], weak.velocity[0])
+    weak_first_only = np.array(table.delta_chi2)
+    weak_first_only[0, :5] = 12.0
+    only_first = replace(table, delta_chi2=weak_first_only)
+    alone, alone_mask = _detection_gate(only_first, 100.0)
+    assert alone is only_first and not alone_mask.any()
+
+    # The search: the first component's source keeps every epoch, the relative velocity
+    # only the six at which both were detected.
+    _, searches = _period_candidates(weak, swap_invariant=True, detection_min=100.0)
+    assert searches["first"]["used"].all()
+    np.testing.assert_array_equal(searches["single"]["used"], ~lost)
+    # A companion detected nowhere leaves the first component's source alone, not a failure.
+    nowhere = np.array(statistic)
+    nowhere[1] = 10.0
+    blind = replace(weak, delta_chi2=nowhere)
+    candidates, searches = _period_candidates(blind, swap_invariant=True, detection_min=100.0)
+    assert searches["single"] is None and searches["invariant"] is None
+    assert searches["first"] is not None and candidates
+
+    # The candidate fits see the gated copy and hand back the table as measured.
+    flags: list[str] = []
+    ctx = SimpleNamespace(settings=Analysis(k_min=2.0, k_max=250.0, ecc_max=0.9), flag=flags.append)
+    best, best_table, _ = _orbit_over_candidates(
+        ctx, weak, [6.35], circular=False, detection_min=100.0
+    )
+    assert abs(best.period - ORBIT.period) < 0.02 and abs(best.k[0] - 30.0) < 1.0
+    assert best.chi2 == pytest.approx(fit_rv_orbit(gated, period=6.35).chi2, rel=1e-6)
+    np.testing.assert_array_equal(best_table.velocity, weak.velocity)
+    ungated, _, _ = _orbit_over_candidates(ctx, weak, [6.35], circular=False)
+    assert ungated.chi2 > 100.0 * best.chi2
+
+    # The exchange is decided on the gated copy: the refit is on the exchanged gated copy,
+    # so a gated velocity still carries no weight, and the table handed back is the table
+    # as measured with the same epochs exchanged.
+    import albireo.rvorbit as rvorbit_module
+    from albireo.rvorbit import _exchanged
+
+    swap = np.zeros(24, dtype=bool)
+    swap[np.flatnonzero(~lost)[0]] = True
+    decided_on = []
+    monkeypatch.setattr(
+        rvorbit_module,
+        "reassign_by_orbit",
+        lambda t, p: (decided_on.append(t) or _exchanged(t, swap), swap),
+    )
+    fitted_to = []
+
+    def spy_fit(t, **kwargs):
+        fitted_to.append(t)
+        return fit_rv_orbit(t, **kwargs)
+
+    monkeypatch.setattr(rvorbit_module, "fit_rv_orbit", spy_fit)
+    _, exchanged, _ = _orbit_over_candidates(ctx, weak, [6.35], circular=False, detection_min=100.0)
+    assert len(decided_on) == 1 and np.isnan(decided_on[0].velocity[1, lost]).all()
+    assert len(fitted_to) == 2
+    np.testing.assert_array_equal(fitted_to[0].velocity, gated.velocity)
+    np.testing.assert_array_equal(fitted_to[1].velocity, _exchanged(gated, swap).velocity)
+    assert np.isnan(fitted_to[1].velocity[1, lost]).all()
+    np.testing.assert_array_equal(exchanged.velocity, _exchanged(weak, swap).velocity)
+    np.testing.assert_array_equal(exchanged.velocity[:, swap], weak.velocity[::-1, swap])
+    np.testing.assert_array_equal(exchanged.velocity[:, ~swap], weak.velocity[:, ~swap])
+    assert exchanged.settings["reassigned_by_orbit"] == 1
+    monkeypatch.setattr(rvorbit_module, "fit_rv_orbit", fit_rv_orbit)
+
+    # Without the exchange nothing is re-assigned at all.
+    def refuse(*args, **kwargs):
+        raise AssertionError("the exchange was not allowed")
+
+    monkeypatch.setattr(rvorbit_module, "reassign_by_orbit", refuse)
+    _, kept, _ = _orbit_over_candidates(ctx, weak, [6.35], circular=False, exchange=False)
+    assert kept is weak
+
+    assert Analysis().detection_min == 100.0
+    for bad in (-1.0, float("nan"), True):
+        with pytest.raises(ValueError, match="detection_min must be a non-negative"):
+            Analysis(detection_min=bad)
+
+
+def test_leave_one_epoch_out_peaks_follow_the_merge_on_a_short_table(monkeypatch):
+    """The fifth source: three peaks per left-out epoch, after the round robin (D65).
+
+    On the benchmark system that motivated it one epoch of twelve had its twin components
+    exchanged, which put the true period at peak 108 of the one-harmonic search; leaving each
+    epoch out in turn and adding the three highest peaks of each put it at rank 1 of the
+    chi-square ranking. The block is appended after the round robin, in epoch order, and a
+    peak within 2% of anything already listed is dropped, which is the form that was measured.
+    """
+    import albireo.rvorbit as rvorbit_module
+    from albireo.pipeline import _LEAVE_ONE_OUT_MAX_EPOCHS, _period_candidates
+
+    base = {
+        "single": [10.0, 21.0, 6.3],
+        "harmonic": [11.0, 10.05, 13.0],
+        "first": [15.0, 30.0, 10.0],
+        "invariant": [3.0, 4.0, 5.0, 7.0],
+    }
+    left_out = {
+        0: [5.356, 10.1, 2.6],  # 10.1 is within 2% of 10.0, already listed
+        1: [5.36, 1.8, 12.5],  # 5.36 within 2% of 5.356 from the epoch before
+        2: [40.0, 1.81, 0.9],
+    }
+    calls = []
+
+    def stub(table, *, swap_invariant=False, n_harmonics=1, n_peaks=20, components=None):
+        missing = np.flatnonzero(np.all(np.isnan(np.asarray(table.velocity)), axis=0))
+        if missing.size:
+            assert n_peaks == 3 and n_harmonics == 1 and not swap_invariant and components is None
+            calls.append(int(missing[0]))
+            peaks = left_out.get(int(missing[0]), [])
+            if not peaks:
+                raise ValueError("stands for a search with too few epochs")
+            return {"period": peaks[0], "aliases": peaks[1:]}
+        if components:
+            peaks = base["first"]
+        elif swap_invariant:
+            peaks = base["invariant"]
+        elif n_harmonics == 2:
+            peaks = base["harmonic"]
+        else:
+            peaks = base["single"]
+        return {"period": peaks[0], "aliases": list(peaks[1:])}
+
+    monkeypatch.setattr(rvorbit_module, "find_period", stub)
+    table = _velocity_table(n_epochs=5)
+    # Only on request: the bootstrap asks, the route that fits declared velocities does not.
+    plain, searches = _period_candidates(table, swap_invariant=True)
+    assert searches["leave_one_out"] is None and calls == []
+    candidates, searches = _period_candidates(table, swap_invariant=True, leave_one_out=True)
+    head = [10.0, 11.0, 15.0, 3.0, 21.0, 30.0, 6.0, 6.3, 13.0, 4.0, 8.0, 5.0, 7.0, 14.0]
+    assert plain == head
+    assert candidates[: len(head)] == head  # the round robin, as without the source
+    assert candidates[len(head) :] == [5.356, 2.6, 1.8, 12.5, 40.0, 0.9]
+    assert searches["leave_one_out"] == [5.356, 2.6, 1.8, 12.5, 40.0, 0.9]
+    assert calls == [0, 1, 2, 3, 4]
+    # A leave-one-out start is never listed within 2% of a periodogram start, so a deeper
+    # periodogram list can take its place: 5.3 from the one-harmonic search replaces 5.356.
+    base["single"] = [10.0, 21.0, 6.3, 5.3]
+    deeper, _ = _period_candidates(table, swap_invariant=True, leave_one_out=True)
+    assert 5.3 in deeper and 5.356 not in deeper and 5.36 not in deeper
+
+    # Above the limit the source does not run.
+    calls.clear()
+    long_table = _velocity_table(n_epochs=_LEAVE_ONE_OUT_MAX_EPOCHS + 1)
+    _, searches = _period_candidates(long_table, swap_invariant=True, leave_one_out=True)
+    assert searches["leave_one_out"] is None and calls == []
+
+    # The limit is on the usable epochs as measured, before the detection gate: gating the
+    # companion at six of 26 epochs leaves 20 relative velocities, and still no source.
+    statistic = np.array(long_table.delta_chi2)
+    statistic[1, :6] = 10.0
+    gated_long = replace(long_table, delta_chi2=statistic)
+    _, searches = _period_candidates(
+        gated_long, swap_invariant=True, detection_min=100.0, leave_one_out=True
+    )
+    assert searches["leave_one_out"] is None and calls == []
+    # At 25 measured epochs it runs, leaving out each of the 25, gated or not.
+    at_limit = _velocity_table(n_epochs=_LEAVE_ONE_OUT_MAX_EPOCHS)
+    statistic = np.array(at_limit.delta_chi2)
+    statistic[1, :6] = 10.0
+    _period_candidates(
+        replace(at_limit, delta_chi2=statistic),
+        swap_invariant=True,
+        detection_min=100.0,
+        leave_one_out=True,
+    )
+    assert calls == list(range(_LEAVE_ONE_OUT_MAX_EPOCHS))
+
+
+def test_the_known_period_and_declared_velocity_routes_never_gate_or_leave_epochs_out(
+    toy, tmp_path, monkeypatch
+):
+    """The gate and the leave-one-out source belong to the bootstrap alone (D65).
+
+    Both were measured on the bootstrap's library-template tables. The template table of the
+    known-period route (``_table_orbit``) and the table measured after a free-velocity
+    disentangling (``_orbit``) are searched and fitted as measured.
+    """
+    import types
+
+    import albireo.pipeline as pipeline_module
+    from albireo.pipeline import _orbit, _table_orbit
+
+    dataset, truth, grid = toy
+    star = _star(dataset, truth, grid, name="routes")
+    ctx = _context(star, tmp_path / "routes", Analysis())
+    seen: dict[str, list] = {"candidates": [], "fits": []}
+    real_candidates = pipeline_module._period_candidates
+
+    def spy_candidates(t, **kwargs):
+        seen["candidates"].append(kwargs)
+        candidates, searches = real_candidates(t, **kwargs)
+        seen["searches"] = searches
+        return candidates, searches
+
+    stub_orbit = types.SimpleNamespace(period=6.31, chi2=1.0, k=np.array([30.0, 55.0]), ecc=0.1)
+
+    def spy_fits(ctx_, t, periods, **kwargs):
+        seen["fits"].append(kwargs)
+        return stub_orbit, t, {"n_candidates": 1, "ambiguous": [], "ranked": [(stub_orbit, t)]}
+
+    monkeypatch.setattr(pipeline_module, "_period_candidates", spy_candidates)
+    monkeypatch.setattr(pipeline_module, "_orbit_over_candidates", spy_fits)
+    table = _velocity_table(n_epochs=12)
+    statistic = np.array(table.delta_chi2)
+    statistic[1, :4] = 10.0  # weak companion velocities a gate would have removed
+    table = replace(table, delta_chi2=statistic)
+
+    orbit, source = _orbit(ctx, _StubFit(("A", "B"), mode="free"), table)
+    assert orbit is stub_orbit and "periodogram" in source
+    assert seen["candidates"] == [{"swap_invariant": True}]
+    assert seen["searches"]["leave_one_out"] is None
+    assert seen["fits"] == [{"circular": False}]
+
+    seen["fits"].clear()
+    assert _table_orbit(ctx, table, star, Analysis()) is stub_orbit
+    assert seen["fits"] == [{"circular": False}]
+
+
+def test_the_bootstrap_flags_a_table_on_few_nights_and_honours_the_exchange_rule(
+    toy, tmp_path, monkeypatch
+):
+    """Two rules of D65 on the bootstrap: the few-nights flag and the light ratio of the exchange.
+
+    The flag changes nothing; three of the 33 blind tables of the third run had their usable
+    epochs on fewer than eight nights and the search recovered none of them. The exchange
+    in the candidate fits now follows the rule the velocities measured after the
+    disentangling follow, on the light fractions of the table's own amplitudes.
+    """
+    from types import SimpleNamespace
+
+    import albireo.pipeline as pipeline_module
+    from albireo.pipeline import _bootstrap
+
+    dataset, truth, grid = toy
+    star = _star(dataset, truth, grid, name="sparse", period="search")
+    orbit = SimpleNamespace(
+        period=6.31,
+        chi2=12.0,
+        k=np.array([30.0, 55.0]),
+        ecc=0.12,
+        omega=0.7,
+        t_conj=2455000.5,
+        names=("A", "B"),
+        errors={"k": np.array([1.2, 1.6]), "ecc": 0.01},
+        summary=lambda: "  orbit",
+    )
+    seen: dict = {}
+
+    def table_with(bjd, light):
+        n = len(bjd)
+        statistic = np.full((2, n), 1e4)
+        statistic[1, :3] = [5.0, 40.0, 99.0]
+        statistic[0, 3] = 5.0  # a weak first component is never gated
+        return SimpleNamespace(
+            names=("A", "B"),
+            n_components=2,
+            settings={},
+            n_epochs=n,
+            bjd=np.asarray(bjd, dtype=float),
+            velocity=np.zeros((2, n)),
+            delta_chi2=statistic,
+            light=np.repeat(np.asarray(light, dtype=float)[:, None], n, axis=1),
+            good=np.ones(n, dtype=bool),
+            summary=lambda: "  table summary",
+        )
+
+    def run(table, name):
+        monkeypatch.setattr(pipeline_module, "_library_table", lambda *a, **k: (table, []))
+
+        def candidates(t, **kwargs):
+            seen["search"] = kwargs
+            return [6.3], {"single": None, "harmonic": None, "invariant": None, "first": None}
+
+        def fits(ctx_, t, periods, **kwargs):
+            seen["fits"] = kwargs
+            return orbit, t, {"n_candidates": 1, "ambiguous": [], "ranked": [(orbit, t)]}
+
+        monkeypatch.setattr(pipeline_module, "_period_candidates", candidates)
+        monkeypatch.setattr(pipeline_module, "_orbit_over_candidates", fits)
+        ctx = _context(
+            star, tmp_path / name, Analysis(period_decision_candidates=0), library="stub"
+        )
+        _spec, block = _bootstrap(ctx, dataset, {"TOY": 5.5}, None)
+        return ctx, block["report"]
+
+    # Nine epochs on five nights, light fractions 0.9 and 0.1.
+    sparse = 2455000.2 + np.array([0.0, 0.07, 0.14, 3.0, 3.07, 40.0, 41.0, 90.0, 90.05])
+    ctx, report = run(table_with(sparse, [0.9, 0.1]), "sparse")
+    assert seen["search"]["detection_min"] == 100.0 and seen["fits"]["detection_min"] == 100.0
+    assert seen["search"]["leave_one_out"] is True
+    assert seen["fits"]["exchange"] is False and report["exchange_allowed"] is False
+    assert report["n_nights"] == 5
+    assert report["detection_gate"] == {"threshold": 100.0, "gated": {"A": 0, "B": 3}}
+    assert any("usable epochs fall on 5 night(s), fewer than 8" in f for f in ctx.flags)
+    assert any(
+        "exchange of the two components in the bootstrap's candidate fits was skipped" in f
+        for f in ctx.flags
+    )
+    assert report["periodogram_peak"] is None and report["aliases"] == []
+
+    # Eight nights and alike light: neither flag, and the exchange runs.
+    spread = 2455000.2 + 5.0 * np.arange(8.0)
+    ctx, report = run(table_with(spread, [0.55, 0.45]), "spread")
+    assert seen["fits"]["exchange"] is True and report["n_nights"] == 8
+    assert not any("night(s)" in f or "was skipped" in f for f in ctx.flags)
+
+
+def test_the_velocity_products_carry_every_digit_of_the_epoch_time(tmp_path):
+    """Six decimals of a BJD could not reproduce a period search; the products round-trip (D65)."""
+    import csv
+
+    from albireo.pipeline import _write_velocity_csv
+
+    table = _velocity_table()
+    table = replace(
+        table, bjd=2457946.280993 + np.array([0.0, 1.23e-7, 0.0739612345, 3.1, 4.2, 5.3])
+    )
+    written = np.loadtxt(table.write(tmp_path / "table.rv"), comments="#", usecols=(0,))
+    np.testing.assert_array_equal(written, table.bjd)
+    with _write_velocity_csv(tmp_path / "table.csv", table).open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    np.testing.assert_array_equal([float(r["bjd"]) for r in rows], table.bjd)
+    assert rows[0]["v_A"] == f"{table.velocity[0, 0]:.6f}"  # everything else as before
+
+    # The edge flag: merged in the .rv file and the CSV's at_edge, per component in the CSV.
+    at_edge = np.zeros((2, 6), dtype=bool)
+    at_edge[1, 2] = True
+    velocity = np.array(table.velocity)
+    velocity[1, 2] = np.nan
+    edge = replace(table, at_edge=at_edge, velocity=velocity)
+    with _write_velocity_csv(tmp_path / "edge.csv", edge).open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [r["at_edge"] for r in rows] == ["0", "0", "1", "0", "0", "0"]
+    assert [r["at_edge_A"] for r in rows] == ["0"] * 6
+    assert [r["at_edge_B"] for r in rows] == ["0", "0", "1", "0", "0", "0"]
+    header = edge.write(tmp_path / "edge.rv").read_text(encoding="utf-8").splitlines()
+    assert "at_edge_A" not in " ".join(header)
+
+
 def test_the_disentangling_decides_among_the_best_candidate_periods(toy, tmp_path, monkeypatch):
     """The table ranks the candidates by chi-square; the disentangling chooses among the best.
 
@@ -1013,8 +1445,14 @@ def test_the_disentangling_decides_among_the_best_candidate_periods(toy, tmp_pat
         )
 
     table = SimpleNamespace(
+        names=("A", "B"),
+        n_components=2,
         settings={},
         n_epochs=12,
+        bjd=2455000.25 + 3.0 * np.arange(12.0),
+        velocity=np.zeros((2, 12)),
+        delta_chi2=np.full((2, 12), 1e4),
+        light=np.repeat([[0.6], [0.4]], 12, axis=1),
         good=np.ones(12, dtype=bool),
         summary=lambda: "  table summary",
     )
@@ -1172,8 +1610,8 @@ def test_a_degenerate_bootstrap_falls_back_to_the_declared_range(library, tmp_pa
     star = _star(dataset, truth, grid, period="search")
     real = pipeline_module._orbit_over_candidates
 
-    def degenerate(ctx, table, periods, *, circular):
-        orbit, table, decision = real(ctx, table, periods, circular=circular)
+    def degenerate(ctx, table, periods, *, circular, **kwargs):
+        orbit, table, decision = real(ctx, table, periods, circular=circular, **kwargs)
         # The decision by the disentangling takes its candidates from the ranked list, so
         # every candidate is made degenerate too, whichever it chooses.
         broken = dataclasses.replace(orbit, k=np.array([0.0, 5000.0]))
@@ -1872,3 +2310,228 @@ def test_a_diverged_disentangling_stops_the_star(toy, library, tmp_path, monkeyp
     log = (directory / "log.txt").read_text(encoding="utf-8")
     assert "flag: the disentangling diverged" in log
     assert "FAILED: RuntimeError" in log
+
+
+# ---------------------------------------------------------------------------
+# The label stage and the epoch comparison (D65)
+# ---------------------------------------------------------------------------
+
+
+def test_the_label_comparison_is_declared_checked_and_passed_to_the_fit(toy, library, tmp_path):
+    """``label_compare`` defaults to the epochs, is refused by name, and reaches the fit."""
+    from albireo.pipeline import _labels, config_template
+
+    assert Analysis().label_compare == "epochs"
+    with pytest.raises(ValueError, match="label_compare must be one of 'epochs', 'native'"):
+        Analysis(label_compare="diagonal")
+    one_star = {
+        "stars": [
+            {
+                "name": "x",
+                "spectra": "x/*.fits",
+                "period": 6.3,
+                "components": [{"name": "A", "light": 0.6}, {"name": "B", "light": 0.4}],
+            }
+        ]
+    }
+    loaded = config_from_dict({**one_star, "labels": {"compare": "native", "steps": 40}})
+    assert loaded.analysis.label_compare == "native" and loaded.analysis.label_steps == 40
+    direct = config_from_dict({**one_star, "analysis": {"label_compare": "matched"}})
+    assert direct.analysis.label_compare == "matched"
+    with pytest.raises(ValueError, match="label_compare must be one of"):
+        config_from_dict({**one_star, "labels": {"compare": "diagonal"}})
+    assert '# compare = "epochs"' in config_template()
+
+    dataset, truth, grid = toy
+    star = _star(dataset, truth, grid, name="compare")
+    seen = {}
+
+    class _Fit(_StubFit):
+        def match_labels(self, stars, **options):
+            seen.update(options)
+            return _EpochMatch({"A": LIGHT[0], "B": LIGHT[1]})
+
+    for compare, budget in (("epochs", "70 Levenberg-Marquardt iterations per run"),
+                            ("matched", "70 steps")):  # fmt: skip
+        fit = _Fit(("A", "B"), lights=LIGHT)
+        fit.dis.dataset = [SimpleNamespace(medium="air")]
+        ctx = _context(
+            star, tmp_path / compare, Analysis(label_compare=compare, label_steps=70), library
+        )
+        assert _labels(ctx, fit, library) is not None
+        assert seen["compare"] == compare and seen["max_steps"] == 70
+        log = (ctx.directory / "log.txt").read_text(encoding="utf-8")
+        assert f"label fit ({compare} comparison)" in log and budget in log
+
+
+class _EpochMatch(_StubMatch):
+    """A label match that ran the epoch comparison: bounds, notes, light and its errors."""
+
+    def __init__(self, flux, *, errors=None, at_bounds=None, notes=(), widths=None):
+        super().__init__({name: 12.0 for name in flux}, widths=widths or {})
+        self.names = tuple(flux)
+        self.compare = "epochs"
+        self.flux_ratio = dict(flux)
+        self.flux_ratio_errors = dict(errors or {})
+        self.at_bounds = dict(at_bounds or {})
+        self.epoch_fit = SimpleNamespace(notes=tuple(notes))
+        self.multimodal = False
+
+
+def test_the_label_stage_flags_what_the_epoch_fit_did_not_measure(toy, tmp_path):
+    """A label on a bound has no posterior width, so the width test cannot see it.
+
+    In the epochs comparison a site on a bound, or a v sin i on the plateau below half a
+    model pixel, is left out of the formal covariance, and ``posterior_over_prior`` has no
+    entry for it; the flag names it with the reason. A collapse the restarts could not
+    resolve is a note on the fit, and it travels into the flags as it stands.
+    """
+    from albireo.pipeline import _assess_labels
+
+    dataset, truth, grid = toy
+    star = _star(dataset, truth, grid, name="bounds")
+    declared = {"A": 0.62, "B": 0.38}
+    note = "'B' looks collapsed after the joint restart (its light fraction is 0.0016)"
+
+    ctx = _context(star, tmp_path / "held")
+    match = _EpochMatch(
+        {"A": 0.62, "B": 0.38},
+        errors={"A": 0.004, "B": 0.004},
+        at_bounds={
+            "vsini_B": "rotation plateau",
+            "logg_B": "lower bound",
+            "offset_A[0]": "no curvature",
+        },
+        notes=(note,),
+        widths={"teff_B": 0.9, "offset_B": 0.95},
+    )
+    _assess_labels(ctx, match, declared)
+    assert "labels learned nothing about teff_B (posterior width >= 80% of the prior)" in ctx.flags
+    (held,) = [f for f in ctx.flags if f.startswith("labels with no formal error")]
+    assert "logg_B (lower bound), vsini_B (rotation plateau)" in held
+    assert "offset" not in held.split(".")[0], "the additive offsets are not labels"
+    assert f"labels: {note}" in ctx.flags
+    assert not any("light fractions" in f for f in ctx.flags), "the light agrees"
+
+    # A d_hat comparison carries none of the epoch fit's attributes and raises none of these.
+    ctx = _context(star, tmp_path / "native")
+    plain = _StubMatch({"A": 12.0, "B": 12.0}, widths={})
+    plain.flux_ratio, plain.multimodal = {"A": 0.6, "B": 0.4}, False
+    _assess_labels(ctx, plain, declared)
+    assert not ctx.flags
+
+
+def test_the_label_stage_flags_and_records_the_grid_compensation(toy, tmp_path):
+    """A floored compensation, or a model grid coarser than sigma_q, is flagged as it stands,
+    and the operator widths and the grid variance are recorded for result.json."""
+    from albireo.pipeline import _assess_labels, _describe_operator
+
+    dataset, truth, grid = toy
+    star = _star(dataset, truth, grid, name="grid")
+    floored = (
+        "grid compensation floored for TOY: the model grid's discretisation variance (7/12) "
+        "dv^2 = 12.48 km^2/s^2 at dv = 4.626 km/s leaves 0.000 km/s of sigma_q = 3.000 km/s"
+    )
+    statistics = SimpleNamespace(
+        grid=SimpleNamespace(dv_kms=4.626),
+        library_resolving_power=20_000.0,
+        grid_variance_kms2=12.48,
+        lsf_sigma_kms=(("TOY", (3.0,)),),
+        operator_sigma_kms=(("TOY", (2.313,)),),
+        notes=(floored,),
+    )
+    match = _EpochMatch({"A": 0.62, "B": 0.38}, errors={"A": 0.004, "B": 0.004})
+    match.statistics = statistics
+    ctx = _context(star, tmp_path / "floored")
+    _assess_labels(ctx, match, {"A": 0.62, "B": 0.38})
+    assert f"labels: {floored}" in ctx.flags
+    described = _describe_operator(statistics)
+    assert described == {
+        "dv_kms": 4.626,
+        "library_resolving_power": 20_000.0,
+        "grid_variance_kms2": 12.48,
+        "quadrature_sigma_kms": [["TOY", [3.0]]],
+        "operator_sigma_kms": [["TOY", [2.313]]],
+        "notes": [floored],
+    }
+    json.dumps(described)  # result.json takes it as it stands
+
+    # Without notes nothing is flagged, and without the compensation the widths coincide.
+    statistics = SimpleNamespace(
+        grid=SimpleNamespace(dv_kms=2.0),
+        library_resolving_power=None,
+        grid_variance_kms2=0.0,
+        lsf_sigma_kms=(("TOY", (5.5,)),),
+        operator_sigma_kms=(),
+        notes=(),
+    )
+    match.statistics = statistics
+    ctx = _context(star, tmp_path / "quiet")
+    _assess_labels(ctx, match, {"A": 0.62, "B": 0.38})
+    assert not any("grid compensation" in f for f in ctx.flags), ctx.flags
+    assert _describe_operator(statistics)["operator_sigma_kms"] == [["TOY", [5.5]]]
+
+
+@pytest.mark.parametrize(
+    ("declared", "measured", "off"),
+    [
+        ((0.62, 0.38), (0.60, 0.40), ""),  # inside both limits
+        ((0.62, 0.38), (0.67, 0.33), ""),  # factors 1.08 and 1.15, differences of 0.05
+        ((0.90, 0.10), (0.84, 0.16), "B off by a factor 1.60"),  # the factor alone
+        ((0.45, 0.55), (0.62, 0.38), "A off by a factor 1.38, B off by a factor 1.45"),  # 0.17
+        ((0.62, 0.38), (0.93, 0.07), "A off by a factor 1.50, B off by a factor 5.43"),
+    ],
+)
+def test_a_measured_light_far_from_the_declared_one_is_flagged(
+    toy, tmp_path, declared, measured, off
+):
+    """A factor of 1.5 catches a faint component; a difference of 0.15 a bright one."""
+    from albireo.pipeline import _assess_labels
+
+    dataset, truth, grid = toy
+    star = _star(dataset, truth, grid, name="light")
+    ctx = _context(star, tmp_path / "x")
+    match = _EpochMatch(dict(zip("AB", measured, strict=True)), errors={"A": 0.01, "B": 0.01})
+    _assess_labels(ctx, match, dict(zip("AB", declared, strict=True)))
+    flags = [f for f in ctx.flags if f.startswith("the label fit measures light fractions")]
+    assert bool(flags) is bool(off), ctx.flags
+    if off:
+        (flag,) = flags
+        assert f"A {measured[0]:.3f} +- 0.010, B {measured[1]:.3f} +- 0.010" in flag
+        assert f"against the declared {declared[0]:.3f}, {declared[1]:.3f} ({off};" in flag
+        assert "flagged above a factor 1.5 or a difference of 0.15" in flag
+        assert "declared in the wrong order" in flag
+        assert "measures the light without reference to the declaration" in flag
+
+
+def test_the_velocity_stage_records_where_the_amplitudes_came_from(toy, tmp_path, monkeypatch):
+    """The declared fractions, or the global re-measure; never the label fit's light.
+
+    The disentangled components are ``(w / l0) t``, so the amplitude that reproduces the
+    epochs with them is the declared ``l0`` (``test_match_epochs`` measures what holding
+    the measured light instead does to the velocities).
+    """
+    import albireo.pipeline as pipeline_module
+    from albireo.pipeline import _run_stages
+
+    dataset, truth, grid = toy
+    measured = _velocity_table()
+
+    def run(taus, name):
+        star = replace(_star(dataset, truth, grid, name=name), truth=None)
+        ctx = _context(star, tmp_path / name, Analysis(plots=False))
+        fit = _StubFit(("A", "B"), lights=LIGHT, taus=taus, table=measured)
+        monkeypatch.setattr(pipeline_module, "_declare", lambda *args, **kwargs: fit.dis)
+        monkeypatch.setattr(pipeline_module, "_write_products", lambda *args, **kwargs: None)
+        monkeypatch.setattr(pipeline_module, "_orbit", lambda *args, **kwargs: (None, None))
+        report, _text, _live = _run_stages(ctx)
+        return ctx, report, fit
+
+    ctx, report, fit = run((400.0, 400.0), "held")
+    assert report["velocities"]["light_source"] == "declared"
+    assert fit.measured[1] == list(LIGHT)
+    assert "amplitudes declared" in (ctx.directory / "log.txt").read_text(encoding="utf-8")
+
+    ctx, report, fit = run((400.0, 141452.0), "moved")
+    assert report["velocities"]["light_source"] == "global re-measure"
+    assert fit.measured[1] == "global"

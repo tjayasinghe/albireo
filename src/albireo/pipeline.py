@@ -11,8 +11,8 @@ component per epoch by TODCOR against those templates (:mod:`albireo.todcor`), f
 Keplerian to the resulting table (:mod:`albireo.rvorbit`), and writes the products with
 figures. A stage that cannot be run (a label fit on data whose wavelength medium is
 undeclared, an orbit from too few usable epochs) is recorded as a flag on the star's
-report, and a failure in one star does not stop the batch. ``albireo run config.toml`` is
-the command line.
+report; a failure in one star does not stop the batch. The command line is
+``albireo run config.toml``.
 
 Two rules of the underlying stages are enforced unchanged. Light fractions must be
 declared and have no default: with constant light the likelihood constrains only
@@ -116,6 +116,7 @@ __all__ = [
 _DEFAULT_OUTPUT = "albireo_results"
 _LIBRARY_PAD_ANGSTROM = 2.0
 _MAX_NAME_LENGTH = 80
+_LABEL_COMPARISONS = ("epochs", "native", "matched")
 
 
 # ---------------------------------------------------------------------------
@@ -190,11 +191,11 @@ class ComponentConfig:
         light fractions of a star must sum to one, and no part of the fit can detect a
         wrong value (``docs/math.md`` §5.2). It should be quoted beside every result
         derived from the spectra. The string ``"measure"`` (for every component of the
-        star) takes the fractions from a correlation against library templates instead:
+        star) instead takes the fractions from a correlation against library templates:
         the amplitudes the templates receive in the well-detected epochs
-        (``light="global"`` of :func:`albireo.todcor`), which is a measurement rather
-        than a default, recorded in the report and flagged. It needs a library, and on
-        the ``period = "search"`` route it reuses the bootstrap's own table.
+        (``light="global"`` of :func:`albireo.todcor`), a measurement recorded in the
+        report and flagged. It needs a library, and on the ``period = "search"`` route it
+        reuses the bootstrap's own table.
     teff, logg, vsini
         Label priors for the template-identification stage, in K, cgs dex and km/s: a
         number to hold, a ``[lo, hi]`` range, or ``None`` for the library's own range
@@ -271,10 +272,9 @@ class Analysis:
         Ceiling on the residual z-score rms of the disentangling
         (:attr:`albireo.Fit.z_rms`). Above it the fit is taken as diverged and the star
         stops with an error before the label and velocity stages, which would otherwise
-        report velocities measured against components that fit nothing. A healthy fit sits
-        near 1; a fit at the wrong period on the blind route sits near 2 to 3; the one
-        divergence seen in the D62 benchmark sat at 45, with the semi-amplitudes held only
-        by their priors.
+        measure velocities against components that fit nothing. A healthy fit sits near 1;
+        a fit at the wrong period on the blind route near 2 to 3; the one divergence seen
+        in the D62 benchmark sat at 45, with the semi-amplitudes held only by their priors.
     dv_kms
         Model-grid pixel size in km/s; the default is the finest sampling in the data.
     v_range
@@ -283,46 +283,57 @@ class Analysis:
     period_decision_candidates
         How many of the best candidate periods the disentangling itself decides among on
         the ``period = "search"`` route (:func:`_decide_period_by_disentangling`). The
-        velocity table's chi-square ranks the candidates; the top few are then measured
-        against each other by the disentangling's own marginal likelihood, which uses
-        every pixel of every epoch and has no per-epoch freedom, and the best of those is
-        the period the fit is started from. ``0`` or ``1`` leaves the decision to the
-        table. The comparison costs one coarse scan per candidate.
+        velocity table's chi-square ranks the candidates; the top few are compared by the
+        disentangling's own marginal likelihood, which uses every pixel of every epoch and
+        has no per-epoch freedom, and the best is the period the fit starts from. ``0`` or
+        ``1`` leaves the decision to the table. Each candidate costs one coarse scan.
 
-        Four, and not more, on a measurement (D64). Over the 33 blind systems of the third
-        run the true period is first in the chi-square ranking on the 18 the run recovered
-        and absent from the candidate list altogether on 9, so raising the count to eight
-        would put the truth in front of this comparison on exactly one further system while
-        costing every blind star four more coarse scans. The comparison is also weaker than
-        it looks: it scans the semi-amplitudes and the conjunction but scores each candidate
-        at a single point in the period and the eccentricity, which are the two quantities a
-        sparse table measures worst. On the one system where the truth was among the four
-        compared it lost by 251 nats, and the same model at the true period, eccentricity
-        and conjunction beats the winner by 185. The stage has so far converted no miss into
-        a hit on either population, and it has cost none.
+        Four was set by measurement (D64): eight would put the truth before the comparison
+        on one further benchmark system, at four more coarse scans per blind star. The
+        comparison scores each candidate at a single point in period and eccentricity, the
+        two quantities a sparse table measures worst, so the stage is a warning rather than
+        a correction: on the Gaia RVS benchmark it has converted no miss into a hit, and
+        every system on which it overruled the table ended on a wrong period. Its flag reads
+        as "this period is not to be trusted", not as "this period is better". The
+        measurements are in
+        ``docs/benchmarks.md`` (Gaia RVS, the third run).
+    detection_min
+        The detection statistic (:attr:`albireo.todcor.VelocityTable.delta_chi2`, the rise
+        in chi-square when the component is removed) below which a companion's velocity at
+        an epoch carries no weight in the ``period = "search"`` bootstrap's period search
+        and candidate orbit fits (:func:`_detection_gate`). Only the components after the
+        first (declared in order of decreasing mass) are gated; the first component's
+        velocities are never gated, including at a gated epoch. ``0`` turns the gate off.
+        Beyond the search, the orbit that wins on the search route is fitted to the gated
+        copy and seeds the disentangling's semi-amplitude, conjunction and eccentricity
+        starts. The gate does not reach the written ``template_velocities.rv``, the light
+        measured from that table, the template table of the known-period route
+        (``_table_orbit``), or the velocities measured after the disentangling, all of which
+        stay as measured.
 
-        Scoring each candidate over its whole declared window rather than at a point, which
-        is the obvious repair, does not work and cannot be afforded. The window maximum
-        favours the shortest period, because peaks are spaced by about ``0.28 P / T`` and a
-        three percent window therefore holds some 50 independent trials for a candidate near
-        the truth against 550 to 1500 for its shorter rivals; correcting that bias by extreme
-        value extrapolation leaves two estimators disagreeing over which candidate wins. The
-        semi-amplitudes have to be scanned inside the period loop for the truth to be found
-        at all, and that costs about 62 hours for four candidates against the 116 seconds the
-        point comparison takes, scaling as ``T / P``.
-
-        What the stage is good for is therefore a warning rather than a correction. On the
-        Gaia blind tier it overruled the table on four systems and every one of those four
-        ended on a wrong period, while three further misses drew no overrule, so the flag it
-        raises reads as "this period is not to be trusted" and not as "this period is
-        better".
+        A hundred was set by measurement (D65): over the 33 blind tables of the Gaia RVS
+        benchmark's third run it recovered one period whose faint companion the library
+        templates never detected and cost no system its rank 1, where the table summary's
+        own threshold of 25 fails. The first component is not gated because gating it as
+        well cost a system. The measurements are in ``docs/benchmarks.md`` (Gaia RVS, after
+        the third run).
     vsini_max, v_zero_range
         Default ceiling of the ``vsini`` prior, and the half-range of the per-component
         frame offset the label fit may measure, both in km/s. The disentangled frame sits
         at the systemic velocity, so the range must cover it; 300 km/s reaches the
         Magellanic Clouds.
     label_steps
-        L-BFGS cap for the label fit.
+        Optimizer cap for the label fit: the iteration cap of each Levenberg-Marquardt run
+        in the ``"epochs"`` comparison, and the L-BFGS steps per start in the other two.
+    label_compare
+        What the label fit compares the templates with (:func:`albireo.match_labels`):
+        ``"epochs"`` (default), the template composite against the epoch spectra through
+        the disentangling's sufficient statistics, which does not depend on the declared
+        light fractions; ``"native"`` or ``"matched"``, the templates against the
+        disentangled components. On simulated Gaia RVS binaries the epoch comparison
+        returned temperatures twice as close to the truth as the native one and light
+        fractions three times closer (``docs/math.md`` §9.2a). The report records it as
+        ``labels.compare``.
     dilution
         ``"radius_ratio"`` (joint, the default), ``"scalar"`` or ``"fixed"``.
     sample, num_warmup, num_samples, num_chains
@@ -343,8 +354,8 @@ class Analysis:
         Scan the marginal likelihood over a coarse grid of every semi-amplitude declared
         as a range before the disentangling's L-BFGS, and start from the best trial when
         it beats the declared start (:meth:`albireo.Disentangler.fit`). Default on: the
-        likelihood is multimodal in the semi-amplitudes, and a start from a template
-        table of a dozen epochs can sit in the wrong basin.
+        likelihood is multimodal in the semi-amplitudes, and a start from a dozen-epoch
+        template table can sit in the wrong basin.
     plots
         Write the diagnostic figures (needs matplotlib).
     fast
@@ -364,9 +375,11 @@ class Analysis:
     dv_kms: float | None = None
     v_range: float = 300.0
     period_decision_candidates: int = 4
+    detection_min: float = 100.0
     vsini_max: float = 300.0
     v_zero_range: float = 300.0
     label_steps: int = 500
+    label_compare: str = "epochs"
     dilution: str = "radius_ratio"
     sample: bool = False
     num_warmup: int = 300
@@ -395,6 +408,11 @@ class Analysis:
             raise ValueError(f"ecc_max must be in (0, 0.95]; got {self.ecc_max}")
         if self.dilution not in ("radius_ratio", "scalar", "fixed"):
             raise ValueError("dilution must be 'radius_ratio', 'scalar' or 'fixed'")
+        if self.label_compare not in _LABEL_COMPARISONS:
+            raise ValueError(
+                f"label_compare must be one of {', '.join(repr(c) for c in _LABEL_COMPARISONS)}; "
+                f"got {self.label_compare!r}"
+            )
         if self.max_steps < 1 or self.label_steps < 1:
             raise ValueError("max_steps and label_steps must be positive")
         if not float(self.z_rms_max) > 0.0:
@@ -403,6 +421,11 @@ class Analysis:
             raise ValueError(
                 "period_decision_candidates must be a non-negative count of candidate "
                 f"periods; got {self.period_decision_candidates!r}"
+            )
+        if isinstance(self.detection_min, bool) or not float(self.detection_min) >= 0.0:
+            raise ValueError(
+                "detection_min must be a non-negative detection statistic (0 turns the gate "
+                f"off); got {self.detection_min!r}"
             )
         declared = self.noise_correlation
         if isinstance(declared, str):
@@ -620,7 +643,7 @@ class PipelineConfig:
         instrument name the files resolve to: a sigma in km/s, ``{"resolving_power": R}``,
         ``{"sigma_kms": ...}``, ``"per-epoch"`` or an :class:`~albireo.LSF`. An instrument
         with no entry anywhere takes ``R`` from each file's own header when every file
-        carries one, which is the per-epoch declaration.
+        carries one (the per-epoch declaration).
     library
         The synthetic grid for the label stage: a registry name
         (:func:`albireo.library_names`), a path to a saved library, or a
@@ -808,6 +831,9 @@ z_rms_max = 10.0                # stop a star whose disentangling diverged: the 
 # k_scan = true                 # scan the semi-amplitudes declared as ranges before the fit
 # period_decision_candidates = 4  # candidate periods the disentangling itself decides among
 #                               # on the search route; 0 leaves the decision to the table
+# detection_min = 100.0         # on the search route, a companion's velocity whose detection
+#                               # statistic is below this carries no weight in the period
+#                               # search and the candidate fits; 0 turns the gate off
 # sample = true                 # NUTS after the MAP: posterior widths, slow
 
 # Template identification: fit Teff, log g, [M/H] and v sin i to the disentangled
@@ -817,6 +843,8 @@ z_rms_max = 10.0                # stop a star whose disentangling diverged: the 
 library = "bosz2024-fgk-r20000"   # albireo.library_names(); downloads ~621 MB once
 mh = [-1.0, 0.5]                  # shared metallicity range, or a number to hold it
 v_zero_range = 300.0              # how far the disentangled frame may sit from rest, km/s
+# compare = "epochs"              # the templates against the epoch spectra (default), or
+#                                 # "native"/"matched" against the disentangled components
 
 [[stars]]
 name = "AI Phe"
@@ -929,6 +957,8 @@ def config_from_dict(data: Mapping[str, Any], *, base_dir: str | os.PathLike | N
             analysis_values[key] = labels_table.pop(key)
     if "steps" in labels_table:
         analysis_values["label_steps"] = int(labels_table.pop("steps"))
+    if "compare" in labels_table:
+        analysis_values["label_compare"] = str(labels_table.pop("compare"))
     if labels_table:
         raise ValueError(f"unknown [labels] key(s) {sorted(labels_table)}")
 
@@ -1527,10 +1557,13 @@ def _run_stages(ctx: _Context) -> tuple[dict[str, Any], str, dict[str, Any]]:
     # 6. epoch velocities
     with ctx.stage("velocities"):
         templates = _templates(ctx, fit, match)
+        # The declared fractions, not the label fit's measured ones, even where the latter
+        # are closer to the truth: the disentangled components are (w / l0) t, so l0 is the
+        # amplitude that reproduces the epochs with these templates (docs/math.md §9.1).
         lights = [s.light for s in dis.stars]
-        table, templates = _measure_epoch_velocities(
-            ctx, fit, templates, _template_light(ctx, fit, lights)
-        )
+        amplitudes = _template_light(ctx, fit, lights)
+        light_source = "global re-measure" if isinstance(amplitudes, str) else "declared"
+        table, templates = _measure_epoch_velocities(ctx, fit, templates, amplitudes)
         if fit.mode == "keplerian" and table.n_components == 2 and _exchange_allowed(ctx, lights):
             # Two alike components cannot be told apart in one epoch; the orbit can.
             from albireo.rvorbit import reassign_by_orbit
@@ -1557,12 +1590,14 @@ def _run_stages(ctx: _Context) -> tuple[dict[str, Any], str, dict[str, Any]]:
     sections.append(table.summary())
     report["velocities"] = _describe_table(table)
     report["velocities"]["zero_points"] = ctx.zero_points
+    report["velocities"]["light_source"] = light_source
     _assess_table(ctx, table)
     log(
         f"velocities: {int(table.good.sum())}/{table.n_epochs} usable epochs, median sigma "
         + ", ".join(f"{n} {np.nanmedian(table.sigma[i]):.3f}" for i, n in enumerate(table.names))
         + " km/s, "
         + ("absolute" if all(table.absolute) else "differential")
+        + f", amplitudes {light_source}"
     )
 
     # 7. the orbit from the table
@@ -1917,12 +1952,12 @@ def _k_prior(
     direction the declared order implies: a later-declared (lighter) star at 1.5 times its
     neighbour's semi-amplitude, an earlier-declared (heavier) one at two thirds of it; with
     nothing measured, at its evenly spaced point. Every start is held strictly inside the
-    range, a start on a bound having no valid initial parameters (a Gaia pair whose
+    range, since a start on a bound has no valid initial parameters (a Gaia pair whose
     synchronised primary the table could not measure started at the 250 km/s bound and the
-    run failed there). The first Gaia RVS simulations showed why the evenly spaced points are
-    not enough on their own: over a range of 2 to 250 km/s they start a 23 km/s primary at
-    85 km/s, from where the fit settled in the static-component minimum, both
-    semi-amplitudes at the floor, on a pair whose secondary carries 5 percent of the light.
+    run failed there). The evenly spaced points alone are not enough: over a range of 2 to
+    250 km/s they start a 23 km/s primary at 85 km/s, from where a Gaia RVS simulation
+    settled in the static-component minimum, both semi-amplitudes at the floor, on a pair
+    whose secondary carries 5 percent of the light.
     """
     n = len(star.components)
     declared = [_spec(c.k, f"component {c.name!r}: k") for c in star.components]
@@ -2169,15 +2204,28 @@ def _library_table(ctx: _Context, dataset: Dataset, lsf, library, purpose: str):
     return table, templates
 
 
+def _table_light_fractions(table) -> np.ndarray | None:
+    """The light fractions a table's amplitudes imply, or ``None`` with no usable epoch.
+
+    The median over the usable epochs of each component's share of the summed amplitudes,
+    renormalized to sum to one. With the bootstrap's ``light="global"`` every epoch carries
+    the same amplitudes, so the median is that one pair.
+    """
+    light = np.asarray(table.light, dtype=float)
+    usable = table.good & np.all(np.isfinite(light), axis=0)
+    if not usable.any():
+        return None
+    fractions = light[:, usable] / light[:, usable].sum(axis=0, keepdims=True)
+    measured = np.median(fractions, axis=1)
+    return measured / measured.sum()
+
+
 def _apply_measured_light(ctx: _Context, table) -> np.ndarray:
     """Replace the star's ``"measure"`` fractions by the table's held amplitudes."""
     star = ctx.star
-    usable = table.good & np.all(np.isfinite(table.light), axis=0)
-    if not usable.any():
+    measured = _table_light_fractions(table)
+    if measured is None:
         raise ValueError(f"star {star.name!r}: no usable epoch to measure the light fractions from")
-    fractions = table.light[:, usable] / table.light[:, usable].sum(axis=0, keepdims=True)
-    measured = np.median(fractions, axis=1)
-    measured = measured / measured.sum()
     if np.any(measured <= 0.0):
         raise ValueError(
             f"star {star.name!r}: the correlation measured a non-positive light fraction "
@@ -2236,17 +2284,17 @@ def _bootstrap_spec(
     percent, and the eccentricity and argument of periastron are started from the table's
     orbit wherever it measured them at three sigma (:func:`_element_starts`).
 
-    The two differ in the semi-amplitudes and the conjunction, and both differences are
-    what makes the candidates comparable with each other rather than each with its own
-    declaration. The comparison declares every semi-amplitude as the settings' range
+    The two differ in the semi-amplitudes and the conjunction; both differences make the
+    candidates comparable with each other rather than each with its own declaration. The
+    comparison declares every semi-amplitude as the settings' range
     started at the table's value, where the final declaration makes a usable table
     semi-amplitude a Gaussian around itself: the velocity budget is the sum of the
-    semi-amplitude priors' upper bounds, and the budget fixes the model grid's extent, so
-    a Gaussian centred on 233 km/s and one centred on 40 km/s would put two candidates on
-    grids of different length, on which a marginal likelihood is not one number twice.
-    The comparison also scans the conjunction rather than holding it at the table's, the
-    table's conjunction being exactly as uncertain as its period, unless the star declares
-    one, which is a measurement that holds at every candidate period.
+    semi-amplitude priors' upper bounds and fixes the model grid's extent, so Gaussians
+    centred on 233 km/s and on 40 km/s would put two candidates on grids of different
+    length, where marginal likelihoods are not comparable. The comparison also scans the
+    conjunction rather than holding it at the table's, which is exactly as uncertain as
+    the table's period, unless the star declares one (a measurement that holds at every
+    candidate period).
 
     A semi-amplitude the table left outside the declared range is not a measurement, so
     the final declaration falls back to the range there too (the flag says so, once).
@@ -2325,20 +2373,21 @@ def _coarse_marginal(scanner: Disentangler, init: Mapping[str, Any]) -> float:
 def _decide_period_by_disentangling(ctx: _Context, dataset: Dataset, lsf, ranked) -> dict | None:
     """Decide among the best few candidate periods by the disentangling's own likelihood.
 
-    The velocity table's chi-square cannot separate the aliases of a poor table. Two blind
-    Gaia systems of the D62 population make the case: on a table of fifteen epochs an
-    eccentric Keplerian at 0.2485 d with semi-amplitudes of 233 and 239 km/s at e = 0.73
-    fitted better than the true 6.104 d, and on one of twelve epochs the same happened at
-    1.1293 d with 182 and 185 km/s at e = 0.72 against a true 5.356 d. Both absurd orbits
-    lie inside the declared ranges, so the range filter does not reach them, and both were
-    handed to the disentangling as a period known to 3 percent, which is not recoverable.
-    A Keplerian of five free parameters fitted to a dozen noisy velocities has that
-    freedom; the disentangling does not. Its marginal likelihood uses every pixel of every
-    epoch, the spectra are shared across the epochs rather than free in each, and a wrong
-    period has to explain the whole dataset with one pair of component spectra.
+    The velocity table's chi-square cannot separate the aliases of a poor table. On two
+    blind Gaia systems of the D62 population, an eccentric Keplerian at 0.2485 d with
+    semi-amplitudes of 233 and 239 km/s at e = 0.73 fitted a fifteen-epoch table better
+    than the true 6.104 d, and one at 1.1293 d with 182 and 185 km/s at e = 0.72 fitted a
+    twelve-epoch table better than the true 5.356 d. Both orbits lie inside the declared
+    ranges, so the range filter does not reach them, and both were handed to the
+    disentangling as a period known to 3 percent, which is not recoverable. A
+    five-parameter Keplerian
+    fitted to a dozen noisy velocities has that freedom; the disentangling does not. Its
+    marginal likelihood uses every pixel of every epoch, the spectra are shared across the
+    epochs, and a wrong period has to explain the whole dataset with one pair of component
+    spectra.
 
-    So the top ``period_decision_candidates`` orbits of the chi-square ranking are measured
-    against each other here. Each is declared as :func:`_bootstrap_spec` declares it for a
+    The top ``period_decision_candidates`` orbits of the chi-square ranking are therefore
+    compared here. Each is declared as :func:`_bootstrap_spec` declares it for a
     comparison, on the same coarse grid the façade's own scans use
     (:meth:`albireo.Disentangler._scan_declaration`, twice the pixel, a quarter to an
     eighth of the full model's cost), and its value is the best marginal log-likelihood the
@@ -2351,9 +2400,9 @@ def _decide_period_by_disentangling(ctx: _Context, dataset: Dataset, lsf, ranked
     prior expected it.
 
     The prior-amplitude profile and the second scan pass of :meth:`albireo.Disentangler.fit`
-    are deliberately not run here: they refine a fit, and the question at this point is only
-    which basin. Each candidate's declaration is released as soon as its value is in hand,
-    since it holds a compiled model.
+    are not run: they refine a fit, and the question here is only which basin. Each
+    candidate's declaration, which holds a compiled model, is released once its value is in
+    hand.
 
     ``None`` when the comparison does not apply: fewer than two distinct candidates, or
     ``period_decision_candidates`` below two.
@@ -2486,24 +2535,65 @@ def _bootstrap(ctx: _Context, dataset: Dataset, lsf, library):
 
     Templates at the declared starting labels measure a velocity table, four periodograms
     propose candidate periods (:func:`_period_candidates`), an orbit is fitted from each,
-    and the chi-square ranks them. The best few are then measured against each other by the
-    disentangling itself (:func:`_decide_period_by_disentangling`), because a velocity table
-    of a dozen epochs does not decide between a period and its aliases; the winner of that
-    comparison becomes the warm Keplerian prior for the fit. The report block records the
+    and the chi-square ranks them. The best few are then compared by the disentangling
+    itself (:func:`_decide_period_by_disentangling`), because a dozen-epoch velocity table
+    does not decide between a period and its aliases; the winner becomes the warm Keplerian
+    prior for the fit. The report block records the
     peak of each search, how many candidates were fitted, every other fitted period the
     chi-square cannot separate from the winner, and, under ``decision``, what each compared
     candidate was worth. The returned objects carry the table that goes with the winning
     orbit and, under ``table_unexchanged``, the table the period search itself ran on; the
     two differ at every epoch the winning orbit re-assigned.
+
+    Three rules of D65 act on the search and not on the table. A companion's velocity whose
+    detection statistic is below ``detection_min`` carries no weight in the period search or
+    the candidate fits (:func:`_detection_gate`), and the report counts those velocities per
+    component under ``detection_gate``. The candidate fits exchange the two components only
+    where the light fractions of the table's amplitudes allow it, by the rule the velocities
+    measured after the disentangling follow (:func:`_exchange_allowed`). And a table whose
+    usable epochs fall on fewer than ``_FEW_NIGHTS`` nights is flagged
+    (:func:`_usable_nights`), since its velocities cannot be expected to decide the period.
     """
     star, settings, log = ctx.star, ctx.settings, ctx.log
     table, templates = _library_table(ctx, dataset, lsf, library, "bootstrap")
     unexchanged = table  # the table the period search runs on, before any re-assignment
-    candidates, searches = _period_candidates(table, swap_invariant=True)
+    detection_min = float(settings.detection_min)
+    gated = _detection_mask(table, detection_min)
+    if detection_min > 0.0:
+        log(
+            f"detection gate at {detection_min:g}: "
+            + ", ".join(
+                f"{name} {int(n)} of {int(np.isfinite(v).sum())} measured velocities"
+                for name, n, v in zip(table.names, gated.sum(axis=1), table.velocity, strict=True)
+            )
+            + " carry no weight in the period search and the candidate fits"
+        )
+    n_usable = int(np.sum(table.good))
+    nights = _usable_nights(table)
+    if nights < _FEW_NIGHTS:
+        ctx.flag(
+            f"the bootstrap table's {n_usable} usable epochs fall on {nights} night(s), fewer "
+            f"than {_FEW_NIGHTS}: a table this sparse in phase cannot be expected to decide the "
+            "period, and the one the search chose is a candidate rather than a measurement"
+        )
+    lights = _table_light_fractions(table)
+    exchange = (
+        table.n_components != 2
+        or lights is None
+        or _exchange_allowed(ctx, lights, where="in the bootstrap's candidate fits")
+    )
+    candidates, searches = _period_candidates(
+        table, swap_invariant=True, detection_min=detection_min, leave_one_out=True
+    )
     search = searches["single"]
     harmonic = searches["harmonic"]
     orbit, table, record = _orbit_over_candidates(
-        ctx, table, candidates, circular=settings.circular
+        ctx,
+        table,
+        candidates,
+        circular=settings.circular,
+        detection_min=detection_min,
+        exchange=exchange,
     )
     ranked = record["ranked"]
     # The light fractions, when they are measured rather than declared, must be in hand
@@ -2537,9 +2627,22 @@ def _bootstrap(ctx: _Context, dataset: Dataset, lsf, library):
             "re-assigned by the orbit fitted to the table; alike components are exchanged "
             "at random by a per-epoch correlation"
         )
+    if search is None:
+        # Every relative velocity was gated or unmeasured below four epochs; the first
+        # component's own search, and the candidates it proposed, are what remained.
+        peak_text = "no relative-velocity search: too few epochs measured both components"
+        search_text = "none on the relative velocity (too few epochs measured both components)"
+    else:
+        peak_text = (
+            f"periodogram peak {search['period']:.4f}, "
+            f"aliases {[round(p, 3) for p in search['aliases'][:3]]}"
+        )
+        search_text = (
+            f"{search['period']:.5f} d, aliases {[round(p, 4) for p in search['aliases'][:4]]}"
+        )
+    n_leave_one_out = len(searches.get("leave_one_out") or [])
     log(
-        f"bootstrap orbit: P {orbit.period:.5f} d (periodogram peak {search['period']:.4f}, "
-        f"aliases {[round(p, 3) for p in search['aliases'][:3]]}; "
+        f"bootstrap orbit: P {orbit.period:.5f} d ({peak_text}; "
         f"{record['n_candidates']} candidates, "
         + ("the disentangling decided" if decision is not None else "the orbit fit decided")
         + f"), K {np.round(orbit.k, 2).tolist()} km/s"
@@ -2568,9 +2671,23 @@ def _bootstrap(ctx: _Context, dataset: Dataset, lsf, library):
         )
     text = (
         "Bootstrap from library templates (period = 'search'):\n"
-        f"  templates at the declared starting labels; period search "
-        f"{search['period']:.5f} d, aliases {[round(p, 4) for p in search['aliases'][:4]]}"
+        f"  templates at the declared starting labels; period search {search_text}"
         + (f"; two-harmonic search {harmonic['period']:.5f} d" if harmonic is not None else "")
+        + (
+            f"; {n_leave_one_out} further starts from the leave-one-epoch-out searches"
+            if n_leave_one_out
+            else ""
+        )
+        + (
+            f"\n  detection gate at {detection_min:g}: "
+            + ", ".join(
+                f"{name} {int(n)}"
+                for name, n in zip(unexchanged.names, gated.sum(axis=1), strict=True)
+            )
+            + " velocities without weight in the search"
+            if detection_min > 0.0
+            else ""
+        )
         + f"\n  {record['n_candidates']} candidate periods fitted; "
         f"other fitted periods within reach: {ambiguity}\n"
         + decided
@@ -2585,9 +2702,19 @@ def _bootstrap(ctx: _Context, dataset: Dataset, lsf, library):
         "text": text,
         "report": {
             "period": float(orbit.period),
-            "periodogram_peak": float(search["period"]),
+            "periodogram_peak": None if search is None else float(search["period"]),
             "harmonic_peak": None if harmonic is None else float(harmonic["period"]),
-            "aliases": [float(p) for p in search["aliases"]],
+            "aliases": [] if search is None else [float(p) for p in search["aliases"]],
+            "n_leave_one_out": n_leave_one_out,
+            "detection_gate": {
+                "threshold": detection_min,
+                "gated": {
+                    name: int(n)
+                    for name, n in zip(unexchanged.names, gated.sum(axis=1), strict=True)
+                },
+            },
+            "n_nights": nights,
+            "exchange_allowed": bool(exchange),
             "n_candidates": int(record["n_candidates"]),
             "ambiguous": ambiguous,
             "decision": described,
@@ -2620,76 +2747,196 @@ def _bootstrap(ctx: _Context, dataset: Dataset, lsf, library):
 # twenty were gone at fifty.
 _PERIODOGRAM_PEAKS = 50
 
+# The leave-one-epoch-out source of the bootstrap (D65): on a table of at most
+# `_LEAVE_ONE_OUT_MAX_EPOCHS` usable epochs as measured, the `_LEAVE_ONE_OUT_PEAKS` highest peaks
+# of the one-harmonic search with each epoch left out in turn are appended to the candidates.
+# Measured over the 33 blind tables of the third run, with the code as implemented: the 17 tables
+# of at most 25 usable epochs gain 18 starts in total after the 2% merge (none on eight of them,
+# seven on one), one system whose twin components the correlation exchanged at one epoch of twelve
+# goes from absent in the chi-square ranking to rank 1, one other moves from rank 37 to 38, and no
+# system loses its rank 1 (21 at rank 1 against 20). The limits are those
+# measured, not tuned: one epoch in ten to twenty-five is what a periodogram cannot outvote and a
+# Keplerian fit with re-assignment can, and nothing was measured above twenty-five.
+_LEAVE_ONE_OUT_MAX_EPOCHS = 25
+_LEAVE_ONE_OUT_PEAKS = 3
 
-def _period_candidates(table, *, swap_invariant: bool):
+# A bootstrap table whose usable epochs fall on fewer nights than this is flagged (D65). A night
+# is an integer part of the epoch's BJD. Over the 33 blind tables of the third run three have
+# usable epochs on fewer than eight nights, and the search recovers the period of none of them;
+# on one, nine usable epochs on seven nights, the injected velocities with noise at the quoted
+# errors put the true period first in 2 of 10 draws, every loss inside a chi-square difference
+# of 5. The count is small and the threshold describes those tables rather than a derived limit,
+# so it raises a flag and changes nothing.
+_FEW_NIGHTS = 8
+
+
+def _usable_nights(table) -> int:
+    """The number of distinct nights (integer parts of the BJD) among the usable epochs."""
+    bjd = np.asarray(table.bjd, dtype=float)[np.asarray(table.good, dtype=bool)]
+    return int(np.unique(np.floor(bjd)).size)
+
+
+def _detection_mask(table, detection_min: float) -> np.ndarray:
+    """``(n_comp, n_epochs)``: the gated velocities, measured and below ``detection_min``.
+
+    The first component is never gated (see ``Analysis.detection_min``): only the
+    components after it, which are declared in order of decreasing mass, can be.
+    """
+    statistic = np.asarray(table.delta_chi2, dtype=float)
+    velocity = np.asarray(table.velocity, dtype=float)
+    gated = np.isfinite(velocity) & (np.nan_to_num(statistic, nan=np.inf) < float(detection_min))
+    gated[:1] = False
+    return gated
+
+
+def _detection_gate(table, detection_min: float):
+    """The table with every weakly detected companion velocity removed, and the mask.
+
+    A velocity of a component after the first is removed (its velocity and errors set to
+    ``nan``) where that component's detection statistic, ``table.delta_chi2``, is below
+    ``detection_min``; the first component's velocities are never removed. The other
+    components of the epoch are untouched, and the search and the fits keep them
+    (:func:`albireo.rvorbit.find_period` and :func:`albireo.rvorbit.fit_rv_orbit` take each
+    velocity where its own component was measured). Returns the table itself, and an
+    all-false mask, when nothing falls below the threshold or the threshold is zero.
+    """
+    gated = _detection_mask(table, detection_min)
+    if not gated.any():
+        return table, gated
+
+    def cleared(array):
+        out = np.array(array, dtype=float)
+        out[gated] = np.nan
+        return out
+
+    return (
+        replace(
+            table,
+            velocity=cleared(table.velocity),
+            sigma=cleared(table.sigma),
+            sigma_ivar=cleared(table.sigma_ivar),
+        ),
+        gated,
+    )
+
+
+def _period_candidates(
+    table,
+    *,
+    swap_invariant: bool,
+    detection_min: float | None = None,
+    leave_one_out: bool = False,
+):
     """The starting periods the orbit fit chooses among, and the searches that proposed them.
 
-    Three periodograms on the same grid (:func:`albireo.rvorbit.find_period`): the
+    Four periodograms of the table (:func:`albireo.rvorbit.find_period`): the
     ``_PERIODOGRAM_PEAKS`` highest peaks of the floating-mean generalized Lomb-Scargle of
-    the relative velocity, the same number of its two-harmonic form, which ranks an
-    eccentric orbit's period higher, and, for two components, the first four peaks of the
+    the relative velocity; the same number of its two-harmonic form, which ranks an
+    eccentric orbit's period higher; for two components, the first four peaks of the
     swap-invariant search with their doubles, the only source that survives components
     exchanged between epochs; and, for two or more components, that number of peaks of the
     first component's own velocities, the source that survives a companion the templates
     could not follow (its relative velocity is then noise while the primary's curve is
-    intact). The lists are
-    merged round robin by rank, every source's highest peak, then every source's second,
-    and so on, a source dropping out when its list is exhausted, and the merged sequence is
-    deduplicated greedily at the same 2% the fit loop uses, which on the D62 oracle tables
-    left a median of 37 starting periods out of 48 before the fourth source was added.
+    intact). The lists are merged round robin by rank (every source's highest peak, then
+    every source's second, and so on, a source dropping out when its list is exhausted),
+    and the merged sequence is deduplicated greedily at the same 2% the fit loop uses. On
+    the D62 oracle tables this left a median of 37 starting periods out of 48 before the
+    fourth source was added.
 
     The merge is by rank because the greedy deduplication settles a collision in favour of
-    whichever period it reaches first. Concatenating the sources instead, as this function
-    did before D64, let a deep peak of an early source displace the top peak of a later
-    one, and the source that lost was the swap-invariant one, which comes last and does not
-    grow with the peak count. It also made the proposal non-monotone in that count, so that
-    asking for more peaks could remove a candidate: over the 33 blind-tier stars of D64,
-    233 of the 1296 starts proposed at twenty peaks were absent at fifty and 403 at a
-    hundred, and on one Gaia system the start displaced at a hundred was the one within
-    0.03% of the true period, whose orbit fits at chi-square 2028 against 10072 for the
-    peak that displaced it. Merging by rank settles both: the highest-ranked peak of each
-    source wins its collisions, and a larger peak count only appends entries at ranks
-    beyond the old limit, so the list proposed at the larger count contains the list
-    proposed at the smaller, exactly so for any count at or above the eight entries the
-    swap-invariant source contributes. Ranking the four sources against each other by
-    periodogram power is not available in place of this, because they are different
-    statistics on different series, a relative velocity, its two-harmonic form, one
-    component's own velocities and the magnitude of a difference, whose powers are not on a
-    common scale.
+    whichever period it reaches first. Concatenating the sources (the behaviour before D64)
+    let a deep peak of an early source displace the top peak of a later one, and the
+    source that lost was the swap-invariant one, which comes last and does not grow with
+    the peak count. It also made the proposal non-monotone in that count: over the 33
+    blind-tier stars of D64, 233 of the 1296 starts proposed at twenty peaks were absent at
+    fifty and 403 at a hundred, and on one Gaia system the start displaced at a hundred was
+    the one within 0.03% of the true period, whose orbit fits at chi-square 2028 against
+    10072 for the peak that displaced it. Merging by rank settles both: the highest-ranked
+    peak of each source wins its collisions, and a larger peak count only appends entries
+    beyond the old limit, so the list at the larger count contains the list at the smaller,
+    exactly so for any count at or above the eight entries the swap-invariant source
+    contributes. Ranking the sources against each other by periodogram power is not
+    possible: they are different statistics on different series (a relative velocity, its
+    two-harmonic form, one component's own velocities and the magnitude of a difference),
+    whose powers are not on a common scale.
 
     Measured end to end over those 32 tables this recovers the period of 28 against 23 for
-    the six peaks of the classical periodogram the route used before, and the two parts of
-    the change are separable: the floating mean is worth about three systems and the longer
-    list about two. Halves and doubles of the ordinary peaks are deliberately not added:
-    they made one further truth reachable and changed no decision, every extra candidate
-    being one more chance for an alias to win the chi-square comparison.
+    the six peaks of the classical periodogram used before; the floating mean is worth
+    about three systems and the longer list about two. Halves and doubles of the ordinary
+    peaks are not added: they made one further truth reachable and changed no decision,
+    every extra candidate being one more chance for an alias to win the chi-square
+    comparison.
 
-    A table too short for the five parameters of the two-harmonic fit contributes only the
-    other two sources.
+    A search with too few epochs for its model contributes nothing, and the others stand:
+    a table too short for the five parameters of the two-harmonic fit, and, where
+    velocities are gated or unmeasured, a relative velocity defined at fewer than four
+    epochs while the first component was measured at more. Only when every search fails is
+    the one-harmonic search's refusal raised.
+
+    With ``detection_min`` (the bootstrap passes ``Analysis.detection_min``) every search runs
+    on :func:`_detection_gate`'s copy of the table, in which a companion velocity whose
+    detection statistic is below the threshold is not a measurement; the first component is
+    never gated, so its source keeps every epoch at which it was measured, and on a
+    companion detected nowhere it is the only source left.
+
+    With ``leave_one_out`` (passed only by the bootstrap) and a table of at most
+    ``_LEAVE_ONE_OUT_MAX_EPOCHS`` usable epochs as measured (``table.good`` before any gate),
+    a fifth source follows the merge: the one-harmonic search, on the gated copy where there
+    is one, is repeated with each of those epochs left out in turn, and the
+    ``_LEAVE_ONE_OUT_PEAKS`` highest peaks of each, in epoch order, are appended wherever
+    they lie more than 2% from every candidate already listed. It targets one wrong epoch
+    among ten to twenty-five, which a periodogram cannot outvote and a Keplerian fit with
+    re-assignment can: on the benchmark system that motivated it, twin components exchanged
+    by the correlation at one epoch of twelve, with detection statistics of 15,641 and
+    15,577 that mark nothing, put the true period at peak 108 of the one-harmonic search,
+    and the leave-one-out peaks put it at rank 1 of the chi-square ranking (the
+    measurement is beside ``_LEAVE_ONE_OUT_MAX_EPOCHS``). The block comes after the round
+    robin and is deduplicated against it, as measured. The round robin still only appends
+    as the peak count grows, and the block never removes a periodogram start; but a deeper
+    periodogram list can replace a leave-one-out start with a periodogram start within 2%
+    of it, so the whole list is monotone in the peak count only up to that substitution.
+
+    The searches are returned under their names, with ``"leave_one_out"`` the list of the
+    starts the fifth source added (``None`` where it did not run).
     """
     from albireo.rvorbit import find_period
 
-    single = find_period(table, n_peaks=_PERIODOGRAM_PEAKS)
-    try:
-        harmonic = find_period(table, n_harmonics=2, n_peaks=_PERIODOGRAM_PEAKS)
-    except ValueError:
-        harmonic = None
-    sources: list[list[float]] = [[single["period"], *single["aliases"]]]
+    # The leave-one-out limit and the epochs it leaves out are the table's usable epochs as
+    # measured, before any gate, which is how the source was measured.
+    measured_good = np.asarray(table.good, dtype=bool) if leave_one_out else None
+    if detection_min:
+        table, _ = _detection_gate(table, detection_min)
+
+    def search(**kwargs):
+        try:
+            return find_period(table, **kwargs), None
+        except ValueError as exc:
+            return None, exc
+
+    single, refusal = search(n_peaks=_PERIODOGRAM_PEAKS)
+    harmonic, _ = search(n_harmonics=2, n_peaks=_PERIODOGRAM_PEAKS)
+    sources: list[list[float]] = []
+    if single is not None:
+        sources.append([single["period"], *single["aliases"]])
     if harmonic is not None:
         sources.append([harmonic["period"], *harmonic["aliases"]])
     first = None
     if table.n_components >= 2:
         # The first component alone: a faint companion the templates could not follow
         # leaves the relative velocity as noise, while the primary's own curve is intact.
-        first = find_period(table, components=[table.names[0]], n_peaks=_PERIODOGRAM_PEAKS)
-        sources.append([first["period"], *first["aliases"]])
+        first, _ = search(components=[table.names[0]], n_peaks=_PERIODOGRAM_PEAKS)
+        if first is not None:
+            sources.append([first["period"], *first["aliases"]])
     invariant = None
     if swap_invariant and table.n_components == 2:
-        invariant = find_period(table, swap_invariant=True)
-        doubled: list[float] = []
-        for peak in [invariant["period"], *invariant["aliases"][:3]]:
-            doubled.extend([peak, 2.0 * peak])
-        sources.append(doubled)
+        invariant, _ = search(swap_invariant=True)
+        if invariant is not None:
+            doubled: list[float] = []
+            for peak in [invariant["period"], *invariant["aliases"][:3]]:
+                doubled.extend([peak, 2.0 * peak])
+            sources.append(doubled)
+    if not sources:
+        raise refusal if refusal is not None else ValueError("no period search could run")
     # Round robin by rank, so that the deduplication below settles a collision in favour of
     # the higher-ranked peak whichever source proposed it.
     proposed = [
@@ -2703,30 +2950,56 @@ def _period_candidates(table, *, swap_invariant: bool):
         period = float(period)
         if period > 0.0 and all(abs(period / other - 1.0) > 0.02 for other in candidates):
             candidates.append(period)
+    added = None
+    if leave_one_out and int(np.sum(measured_good)) <= _LEAVE_ONE_OUT_MAX_EPOCHS:
+        added = []
+        for j in np.flatnonzero(measured_good):
+            left_out = {}
+            for key in ("velocity", "sigma", "sigma_ivar"):
+                values = np.array(getattr(table, key), dtype=float)
+                values[:, j] = np.nan
+                left_out[key] = values
+            try:
+                found = find_period(replace(table, **left_out), n_peaks=_LEAVE_ONE_OUT_PEAKS)
+            except ValueError:
+                continue
+            for period in [found["period"], *found["aliases"]]:
+                period = float(period)
+                if period > 0.0 and all(abs(period / other - 1.0) > 0.02 for other in candidates):
+                    candidates.append(period)
+                    added.append(period)
     return candidates, {
         "single": single,
         "harmonic": harmonic,
         "invariant": invariant,
         "first": first,
+        "leave_one_out": added,
     }
 
 
-def _orbit_over_candidates(ctx: _Context, table, periods, *, circular: bool):
+def _orbit_over_candidates(
+    ctx: _Context,
+    table,
+    periods,
+    *,
+    circular: bool,
+    detection_min: float | None = None,
+    exchange: bool = True,
+):
     """Fit an orbit from every candidate period and keep the lowest chi-square.
 
     The periodogram of a sparsely sampled table is rarely unambiguous: on the ten-epoch
     test fixture the highest peak was a 2.25 d alias whose orbit fits at chi-square 73,
     against 16 at the true period, to which every other peak converged. The periodogram
-    peaks are therefore starting points, and the orbit fit decides. It decides well: over
-    the D62 oracle tables, wherever a candidate reached the true period the eccentric
-    chi-square preferred it in 27 of 29 systems, usually by hundreds, while an alias
-    outranked the truth on the periodogram in 10 of 32. That is the argument for proposing
-    many candidates and holding the model order fixed. A circular fit and a BIC choice
-    between the two orders were both measured and neither helped.
+    peaks are starting points, and the orbit fit decides. Over the D62 oracle tables,
+    wherever a candidate reached the true period the eccentric chi-square preferred it in
+    27 of 29 systems, usually by hundreds, while an alias outranked the truth on the
+    periodogram in 10 of 32; hence many candidates and a fixed model order. A circular fit
+    and a BIC choice between the two orders were both measured and neither helped.
 
-    Distinct starting periods are all fitted, and the fits are then merged on the period
-    they converged to, since starts a few per cent apart reach the same optimum and the
-    same period twice is not an ambiguity. Every remaining fitted period within a
+    Distinct starting periods are all fitted, and the fits are merged on the period they
+    converged to, since starts a few per cent apart reach the same optimum and the same
+    period twice is not an ambiguity. Every remaining fitted period within a
     chi-square difference of 25 of the winner is named in one flag: a bootstrap hands the
     disentangling a period to within 3%, which is unrecoverable if it is the wrong one.
 
@@ -2737,9 +3010,19 @@ def _orbit_over_candidates(ctx: _Context, table, periods, *, circular: bool):
     fitted, the ambiguous periods, and under ``"ranked"`` every distinct valid orbit with
     its own table in chi-square order, the winner first, which is what
     :func:`_decide_period_by_disentangling` takes the top few of.
-    """
-    from albireo.rvorbit import fit_rv_orbit, reassign_by_orbit
 
+    The bootstrap passes two further settings. With ``detection_min`` the orbits are fitted
+    to :func:`_detection_gate`'s copy of the table, so that a velocity below the detection
+    threshold carries no weight in any fit, and the exchange is decided on that copy and
+    applied to the table as measured, which is the table returned. With ``exchange`` false
+    no epoch is re-assigned, which is what :func:`_exchange_allowed` decides for light
+    fractions too far apart for the correlation's two peaks to be equivalent solutions.
+    """
+    from albireo.rvorbit import _exchanged, fit_rv_orbit, reassign_by_orbit
+
+    fit_table = table
+    if detection_min:
+        fit_table, _ = _detection_gate(table, detection_min)
     seen: list[float] = []
     fitted = []
     for period in periods:
@@ -2749,12 +3032,15 @@ def _orbit_over_candidates(ctx: _Context, table, periods, *, circular: bool):
         seen.append(period)
         candidate_table = table
         try:
-            orbit = fit_rv_orbit(candidate_table, period=period, circular=circular)
-            if table.n_components == 2:
+            orbit = fit_rv_orbit(fit_table, period=period, circular=circular)
+            if table.n_components == 2 and exchange:
                 predicted = orbit.predict(table.bjd)
-                candidate_table, swapped = reassign_by_orbit(table, predicted)
+                reassigned, swapped = reassign_by_orbit(fit_table, predicted)
                 if swapped.any():
-                    orbit = fit_rv_orbit(candidate_table, period=orbit.period, circular=circular)
+                    candidate_table = (
+                        reassigned if fit_table is table else _exchanged(table, swapped)
+                    )
+                    orbit = fit_rv_orbit(reassigned, period=orbit.period, circular=circular)
         except (ValueError, RuntimeError, np.linalg.LinAlgError):
             continue
         fitted.append((orbit, candidate_table))
@@ -2859,14 +3145,20 @@ def _labels(ctx: _Context, fit: Fit, library):
         )
     options: dict[str, Any] = {
         "dilution": dilution,
+        "compare": settings.label_compare,
         "max_steps": settings.label_steps,
         "scan_velocities": scan_velocities,
     }
     if ctx.config.mh is not None:
         options["mh"] = _spec(ctx.config.mh, "mh")
+    budget = (
+        f"{settings.label_steps} Levenberg-Marquardt iterations per run"
+        if settings.label_compare == "epochs"
+        else f"{settings.label_steps} steps"
+    )
     log(
-        f"label fit against {lib.n_nodes} nodes, {len(scan_velocities)} trial frame offsets "
-        f"over +-{reach:g} km/s, {settings.label_steps} steps"
+        f"label fit ({settings.label_compare} comparison) against {lib.n_nodes} nodes, "
+        f"{len(scan_velocities)} trial frame offsets over +-{reach:g} km/s, {budget}"
     )
     try:
         match = fit.match_labels(stars, **options)
@@ -2874,6 +3166,36 @@ def _labels(ctx: _Context, fit: Fit, library):
         ctx.flag(f"labels failed: {type(exc).__name__}: {exc}")
         log(traceback.format_exc())
         return None
+    _assess_labels(ctx, match, {c.name: c.light for c in star.components})
+    return match
+
+
+_LIGHT_FACTOR = 1.5
+"""Ratio between the label fit's light fraction and the declared one above which it is
+flagged. On the orbit tier of the D65 benchmark products the epoch comparison measured the
+light to a median absolute error of 0.011, and the correlation stage that declared it was
+off by 0.043, with misses of 0.33, 0.23, 0.21 and 0.12 among eleven products
+(``d65_converged_labels.md``)."""
+
+_LIGHT_DIFFERENCE = 0.15
+"""Absolute difference in light fraction above which it is flagged whatever the ratio."""
+
+
+def _assess_labels(ctx: _Context, match, declared_light: Mapping[str, float]) -> None:
+    """The flags a finished label fit raises: what it did not measure, and what it disputes.
+
+    A site whose posterior is as wide as its prior was not measured. In the ``"epochs"``
+    comparison a site on a bound or on the rotation plateau is left out of the formal
+    covariance (:attr:`albireo.LabelMatch.at_bounds`), so it has no posterior width to
+    compare and that test cannot see it. Separate flags name such a site, anything the
+    optimiser's restarts could not resolve (``epoch_fit.notes``, such as a faint component
+    whose light collapsed), and a grid compensation of the epoch operator that was floored
+    at half a model pixel or ran on a model grid coarser than the width it compensates
+    (``statistics.notes``). A light fraction that differs from the declared one by
+    more than a factor :data:`_LIGHT_FACTOR`, or by more than :data:`_LIGHT_DIFFERENCE`, is
+    the signature of a wrong declaration or of a reversed component order. A second basin
+    close in chi-square is flagged, and a fit that does not beat both nulls measured nothing.
+    """
     weak = {
         k: v
         for k, v in match.posterior_over_prior.items()
@@ -2885,16 +3207,61 @@ def _labels(ctx: _Context, fit: Fit, library):
             + ", ".join(sorted(weak))
             + " (posterior width >= 80% of the prior)"
         )
-    declared_light = {c.name: c.light for c in star.components}
-    for name, fitted in match.flux_ratio.items():
-        if abs(fitted - declared_light[name]) > 0.15:
-            ctx.flag(
-                f"the label fit measures a light fraction of {fitted:.2f} for {name!r} "
-                f"against the declared {declared_light[name]:.2f}: either the declared "
-                "light fractions are wrong, or the components were declared in the wrong "
-                "order (the pipeline assumes decreasing mass: the first star moves least)"
+    held = {
+        k: why
+        for k, why in (getattr(match, "at_bounds", None) or {}).items()
+        if not k.startswith(("log_jitter", "offset"))
+    }
+    if held:
+        ctx.flag(
+            "labels with no formal error: "
+            + ", ".join(f"{k} ({why})" for k, why in sorted(held.items()))
+            + ". A site on a bound, or a v sin i on the plateau below half a model pixel where "
+            "the chi-square is flat, is left out of the covariance, so the posterior-width "
+            "test cannot flag it; the value is a limit, not a measurement"
+        )
+    epoch_fit = getattr(match, "epoch_fit", None)
+    for note in () if epoch_fit is None else tuple(epoch_fit.notes):
+        ctx.flag(f"labels: {note}")
+    # The grid compensation of the epoch operator: a width floored at half a model pixel, or
+    # a model grid coarser than the width it compensates (Fit.epoch_statistics).
+    statistics = getattr(match, "statistics", None)
+    for note in () if statistics is None else tuple(statistics.notes):
+        ctx.flag(f"labels: {note}")
+
+    errors = getattr(match, "flux_ratio_errors", None) or {}
+    measured = dict(match.flux_ratio)
+    off = {}
+    for name, fitted in measured.items():
+        declared = float(declared_light[name])
+        ratio = max(fitted, 1e-12) / declared
+        factor = max(ratio, 1.0 / ratio)
+        if factor > _LIGHT_FACTOR or abs(fitted - declared) > _LIGHT_DIFFERENCE:
+            off[name] = factor
+    if off:
+        ctx.flag(
+            "the label fit measures light fractions of "
+            + ", ".join(
+                f"{n} {measured[n]:.3f}"
+                + (f" +- {errors[n]:.3f}" if errors.get(n) is not None else "")
+                for n in measured
             )
-            break
+            + " against the declared "
+            + ", ".join(f"{float(declared_light[n]):.3f}" for n in measured)
+            + " ("
+            + ", ".join(f"{n} off by a factor {f:.2f}" for n, f in off.items())
+            + f"; flagged above a factor {_LIGHT_FACTOR:g} or a difference of "
+            f"{_LIGHT_DIFFERENCE:g}): either the declared light fractions are wrong, or the "
+            "components were declared in the wrong order (the pipeline assumes decreasing "
+            "mass: the first star moves least)"
+            + (
+                ". The epochs comparison measures the light without reference to the "
+                "declaration, which the disentangled components and the velocity table "
+                "still carry"
+                if getattr(match, "compare", None) == "epochs"
+                else ""
+            )
+        )
     if match.multimodal:
         ctx.flag("labels: the scan found a second basin within delta chi2 < 9")
     if not _beats_both_nulls(match):
@@ -2903,7 +3270,6 @@ def _labels(ctx: _Context, fit: Fit, library):
             f"{match.chi2:.1f}, nearest node {match.chi2_nearest_node:.1f}, no template "
             f"{match.chi2_continuum:.1f}); treat the labels and the zero points as unmeasured"
         )
-    return match
 
 
 def _v_zero_scan(fit: Fit, settings: Analysis) -> tuple[float, float]:
@@ -3048,13 +3414,13 @@ def _template_light(ctx: _Context, fit: Fit, lights: list):
     The disentangling recovers each component as ``(w / l0) t`` at the declared fraction
     ``l0``, so ``l0`` is the amplitude consistent with the template only while the posterior
     mean is not shrunk. When ML-II raises a component's smoothness precision by an order of
-    magnitude or more the recovered lines are shallower than the truth (on a pair whose
-    primary's ``tau`` went from 800 to 36,000 and secondary's from 400 to 2000, the
-    secondary lost a quarter of its depth and the table then lost it, at -89 percent,
-    under the declared fraction; a free amplitude brought it back to -25), and the
-    consistent amplitude is larger than the fraction. The
-    correlation then fits the amplitudes freely (``light="global"``): the table's light
-    column is that scale, not a light fraction, and the flag says so.
+    magnitude or more the recovered lines are shallower than the truth, and the consistent
+    amplitude is larger than the fraction (on a pair whose primary's ``tau`` went from 800
+    to 36,000 and secondary's from 400 to 2000, the secondary lost a quarter of its depth
+    and the table then lost it, at -89 percent, under the declared fraction; a free
+    amplitude brought it back to -25). The correlation then fits the amplitudes freely
+    (``light="global"``): the table's light column is that scale, not a light fraction, and
+    the flag says so.
     """
     moved = {}
     for star in fit.dis.stars:
@@ -3075,7 +3441,7 @@ def _template_light(ctx: _Context, fit: Fit, lights: list):
     return "global"
 
 
-def _exchange_allowed(ctx: _Context, lights: list) -> bool:
+def _exchange_allowed(ctx: _Context, lights, *, where: str = "by the orbit") -> bool:
     """Whether the orbit may exchange the two components between epochs.
 
     The exchange assumes two alike spectra at alike light fractions, where the
@@ -3084,6 +3450,15 @@ def _exchange_allowed(ctx: _Context, lights: list) -> bool:
     amplitude, and a swap decided on a noise draw of the faint component's velocity moves
     a well-measured primary velocity into the wrong column (a 95/5 pair went from 5 to 56
     percent off in the primary that way, with nineteen of eighty epochs swapped).
+
+    The same rule applies to the bootstrap's candidate fits (D65), with the fractions of the
+    library table's own amplitudes (:func:`_table_light_fractions`). Without it, the
+    winning orbits of two benchmark systems whose amplitudes stood a factor 7.1 and 3.25
+    apart had re-assigned 3 and 11 of their epochs. Over the 33 blind tables of the third
+    run the rule skips the exchange on 8
+    and costs no system its rank 1 in the chi-square ranking. Under it one Gaia system's
+    true period moves from rank 20 to 28, another's from 37 to 38, and the field system with
+    the 7% secondary from absent to rank 25. ``where`` names the step in the flag.
     """
     fractions = np.asarray(lights, dtype=float)
     if fractions.size != 2 or not np.all(np.isfinite(fractions)) or np.any(fractions <= 0):
@@ -3092,7 +3467,7 @@ def _exchange_allowed(ctx: _Context, lights: list) -> bool:
     if ratio <= _EXCHANGE_LIGHT_RATIO:
         return True
     ctx.flag(
-        f"the exchange of the two components by the orbit was skipped: the light fractions "
+        f"the exchange of the two components {where} was skipped: the light fractions "
         f"{np.round(fractions, 3).tolist()} differ by a factor {ratio:.1f}, above "
         f"{_EXCHANGE_LIGHT_RATIO:g}, and under held amplitudes the two correlation peaks "
         "are not equivalent solutions"
@@ -3109,10 +3484,10 @@ def _measure_epoch_velocities(ctx: _Context, fit: Fit, templates: list, lights):
     apart, on velocities spanning 60). The zero points are then dropped rather than the
     star: the velocities stay differential, as when the label fit disowns them
     (:func:`_disowned_zero_points`), and the orbit fit carries one systemic velocity per
-    component. A failure with no zero point to drop is a real one and is re-raised.
+    component. A failure with no zero point to drop is re-raised.
 
-    Returns the table and the templates it was measured against, which are the ones the
-    report and the figures must show.
+    Returns the table and the templates it was measured against, which the report and the
+    figures must show.
     """
     try:
         return fit.measure_velocities(templates=templates, light=lights), templates
@@ -3158,12 +3533,20 @@ def _orbit(ctx: _Context, fit: Fit, table):
             source = "the disentangling"
             orbit = fit_rv_orbit(table, period=period, circular=settings.circular)
         else:
+            # No detection gate and no leave-one-epoch-out starts here: both were measured
+            # on the bootstrap's library-template tables only (D65).
             candidates, searches = _period_candidates(table, swap_invariant=True)
             search = searches["single"]
+            if search is None:
+                peak = "no relative-velocity search: too few epochs measured both components"
+            else:
+                peak = (
+                    f"peak {search['period']:.4f} d, aliases "
+                    f"{[round(p, 4) for p in search['aliases'][:3]]}"
+                )
             source = (
-                f"a periodogram (peak {search['period']:.4f} d, aliases "
-                f"{[round(p, 4) for p in search['aliases'][:3]]}; {len(candidates)} candidates "
-                "from the one- and two-harmonic searches, the orbit fit decided)"
+                f"a periodogram ({peak}; {len(candidates)} candidates from the periodogram "
+                "searches, the orbit fit decided)"
             )
             orbit, _, _ = _orbit_over_candidates(ctx, table, candidates, circular=settings.circular)
     except (ValueError, RuntimeError, np.linalg.LinAlgError) as exc:
@@ -3191,7 +3574,11 @@ def _sample(ctx: _Context, fit: Fit, match):
         n_div = int(np.sum(np.asarray(extra["diverging"])))
         if n_div:
             ctx.flag(f"sampling: {n_div} divergent transitions")
-    if match is not None:
+    if match is not None and getattr(match, "epoch_fit", None) is not None:
+        # refit_draws refits d_hat draws, which the epochs comparison does not use; its
+        # summary states how its formal errors were calibrated instead.
+        log("label draws skipped: the epochs comparison is not refitted over d_hat draws")
+    elif match is not None:
         from albireo.match import refit_draws
 
         n_draws = 8 if settings.fast else 16
@@ -3256,8 +3643,8 @@ def _refuse_diverged(ctx: _Context, fit: Fit) -> None:
     on the blind route, and 45 in the one divergence of the D62 benchmark, where the
     component spectra correlated with the injected ones at 0.07 and 0.02 and the
     semi-amplitudes were held by their priors alone. Everything downstream (labels,
-    templates, epoch velocities) is measured against those spectra, so every product after
-    it is arithmetic on a failure, written in the form of a measurement. The ceiling is
+    templates, epoch velocities) is measured against those spectra, so every later product
+    would be arithmetic on a failure presented as a measurement. The ceiling is
     ``z_rms_max``.
     """
     z = float(fit.z_rms)
@@ -3279,9 +3666,9 @@ def _refuse_diverged(ctx: _Context, fit: Fit) -> None:
 def _table_failure(table) -> str | None:
     """Why the velocity table as a whole carries no measurement, or ``None``.
 
-    A median R-squared below zero says the templates fit the epochs worse than no template
-    at all, and no usable epoch says nothing was measured at all. Either way the rows are
-    arithmetic on a failed correlation rather than velocities.
+    A median R-squared below zero means the templates fit the epochs worse than no template,
+    and no usable epoch means nothing was measured. Either way the rows are arithmetic on a
+    failed correlation, not velocities.
     """
     reasons = []
     median = _finite_median(table.r_squared)
@@ -3503,9 +3890,29 @@ def _describe_match(match) -> dict[str, Any]:
         entry["fixed"] = list(match.fixed.get(name, []))
         entry["nearest_node"] = match.nearest_node(name)
         components[name] = entry
+    epoch_fit = getattr(match, "epoch_fit", None)
+    statistics = getattr(match, "statistics", None)
     return {
+        "compare": match.compare,
+        "epoch_operator": None if statistics is None else _describe_operator(statistics),
         "components": components,
         "flux_ratio": dict(match.flux_ratio),
+        "flux_ratio_errors": dict(match.flux_ratio_errors),
+        "light_declared": dict(
+            zip(match.names, match.assumptions.get("light_fractions", []), strict=False)
+        ),
+        "at_bounds": dict(match.at_bounds),
+        "notes": [] if epoch_fit is None else list(epoch_fit.notes),
+        "epoch_fit": None
+        if epoch_fit is None
+        else {
+            "status": epoch_fit.status,
+            "iterations": int(epoch_fit.iterations),
+            "lm_runs": int(epoch_fit.lm_runs),
+            "restart_rounds": len(epoch_fit.rounds),
+            "moved_by": list(epoch_fit.moved_by),
+            "seconds": float(epoch_fit.seconds),
+        },
         "radius_ratio": dict(match.radius_ratio),
         "chi2": float(match.chi2),
         "chi2_nearest_node": float(match.chi2_nearest_node),
@@ -3516,6 +3923,26 @@ def _describe_match(match) -> dict[str, Any]:
         "correlations_flagged": [list(t) for t in match.flagged_correlations()],
         "assumptions": dict(match.assumptions),
         "errors_from_draws": match.draws is not None,
+    }
+
+
+def _describe_operator(statistics) -> dict[str, Any]:
+    """The stellar operator the epoch comparison ran with, for ``labels`` in result.json.
+
+    ``quadrature_sigma_kms`` is the declared width reduced for the library's resolving power
+    and ``operator_sigma_kms`` what the operator applied once the model grid's own smoothing,
+    ``grid_variance_kms2``, was removed from it (:meth:`albireo.Fit.epoch_statistics`); one
+    entry per epoch group, one width per LSF anchor. ``notes`` records a floored width or a
+    model grid coarser than the width, each also flagged.
+    """
+    operator = statistics.operator_sigma_kms or statistics.lsf_sigma_kms
+    return {
+        "dv_kms": float(statistics.grid.dv_kms),
+        "library_resolving_power": statistics.library_resolving_power,
+        "grid_variance_kms2": float(statistics.grid_variance_kms2),
+        "quadrature_sigma_kms": [[k, list(v)] for k, v in statistics.lsf_sigma_kms],
+        "operator_sigma_kms": [[k, list(v)] for k, v in operator],
+        "notes": list(statistics.notes),
     }
 
 
@@ -3562,6 +3989,7 @@ def _describe_orbit(orbit, period_source) -> dict[str, Any]:
         "gamma": {n: float(g) for n, g in zip(orbit.names, orbit.gamma, strict=True)},
         "gamma_err": {n: float(g) for n, g in zip(orbit.names, e["gamma"], strict=True)},
         "gamma_mode": orbit.gamma_mode,
+        "k_held": list(orbit.held),
         "q": orbit.mass_ratio,
         "m_sin3i_msun": orbit.minimum_masses(),
         "a_sini_rsun": orbit.projected_semiaxes(),
@@ -3993,9 +4421,8 @@ def _write_products(ctx: _Context, fit: Fit, table, orbit, match, posterior) -> 
 def _velocity_header(ctx: _Context, table) -> str:
     """The header of ``velocities.rv``: the star, marked ``FAILED`` where the table is.
 
-    A reader of the file sees the refusal on the line under the format line, before any
-    row, which is the only place a reader who takes the columns and not the flags will
-    look.
+    The refusal sits on the line under the format line, before any row: the only place a
+    reader who takes the columns and not the flags will look.
     """
     header = f"star: {ctx.star.name}"
     failure = _table_failure(table)
@@ -4016,8 +4443,7 @@ def _write_template_table(ctx: _Context, table, purpose: str, *, unexchanged=Non
     (:func:`_orbit_over_candidates`), so some rows carry an assignment the correlation did
     not make. The header says so, and ``unexchanged``, the table the period search itself
     ran on, is written beside it as ``template_velocities_unexchanged.rv`` whenever an epoch
-    was re-assigned. Without that file the period search cannot be reproduced from the
-    written products.
+    was re-assigned, so that the period search can be reproduced from the written products.
     """
     directory = ctx.directory
     directory.mkdir(parents=True, exist_ok=True)
@@ -4055,7 +4481,18 @@ def _write_template_table(ctx: _Context, table, purpose: str, *, unexchanged=Non
 
 
 def _write_velocity_csv(path: Path, table) -> Path:
-    columns = table.to_dict()
+    """The velocity table as CSV: the columns of ``VelocityTable.to_dict`` and more.
+
+    ``at_edge`` is merged over the components, as in the ``.rv`` file; the CSV adds one
+    ``at_edge_<component>`` column per component, since a velocity now counts wherever its
+    own component was measured (D65) and the merged flag cannot say which one was lost.
+    """
+    columns = dict(table.to_dict())
+    at_edge = np.broadcast_to(
+        np.asarray(table.at_edge, dtype=bool), (table.n_components, table.n_epochs)
+    )
+    for i, name in enumerate(table.names):
+        columns[f"at_edge_{name}"] = at_edge[i]
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         writer.writerow(list(columns))
@@ -4065,6 +4502,10 @@ def _write_velocity_csv(path: Path, table) -> Path:
                 value = col[j]
                 if key == "instrument":
                     row.append(str(value))
+                elif key == "bjd":
+                    # Every digit a float64 holds: the period search is to be reproducible
+                    # from the written table (D65).
+                    row.append(repr(float(value)))
                 elif isinstance(value, bool | np.bool_):
                     row.append(int(value))
                 elif key == "n_pix":
@@ -4213,11 +4654,10 @@ def _thread_environment(n_jobs: int) -> dict[str, str]:
 
     XLA's CPU backend and every BLAS size their thread pools to the whole machine, so N
     workers would run N x cores threads between them. The cap is a precaution against
-    that oversubscription rather than a measured gain: on the recorded benchmark eight
-    capped workers and eight uncapped ones finished the same batch in 54.1 and 54.7 s
-    (``docs/benchmarks.md``, D58). It is kept because it has no measured cost there and
-    because oversubscription has been observed in BLAS-heavy stages (the 32-thread
-    OpenBLAS of the D50 record).
+    that oversubscription, not a measured gain: on the recorded benchmark eight capped and
+    eight uncapped workers finished the same batch in 54.1 and 54.7 s
+    (``docs/benchmarks.md``, D58). It has no measured cost there, and oversubscription has
+    been observed in BLAS-heavy stages (the 32-thread OpenBLAS of the D50 record).
     """
     cores = os.cpu_count() or 1
     threads = max(1, cores // max(1, n_jobs))
@@ -4310,9 +4750,9 @@ def run_pipeline(
     -----
     Stars are independent, so with ``jobs > 1`` they run in a process pool started with
     the ``spawn`` method on every platform. A script that calls this with ``jobs > 1``
-    must therefore do so from under ``if __name__ == "__main__":``: the workers import
-    the script as a module, and an unguarded call would start the batch again in each of
-    them. The ``albireo`` command is guarded.
+    must do so from under ``if __name__ == "__main__":``: the workers import the script as
+    a module, and an unguarded call would start the batch again in each of them. The
+    ``albireo`` command is guarded.
 
     The scaling is sub-linear because a single star already occupies several cores, so
     the workers overlap only the serial part of each star (compilation, the Python-side
@@ -4425,7 +4865,7 @@ def demo_config(
     The first star is the packaged example (:func:`albireo.load_example`), disentangled
     and measured against its own components. Its velocities are differential, because
     its files declare no wavelength medium and no library is consulted for it. The second
-    is a star whose components are drawn from a toy synthetic library
+    star's components are drawn from a toy synthetic library
     (:func:`albireo.simulate.synthetic_library`) at known labels, so the label stage
     recovers them and pins the zero point: its systemic velocity of +12 km/s is not
     identifiable by the disentangling alone, and the orbit fitted to the absolute

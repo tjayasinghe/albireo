@@ -1,11 +1,9 @@
 # Scientific background
 
 This page summarises the science that albireo implements and places each part of the
-package in the context of the published literature. It is written for astronomers who
-work with spectroscopic binaries and is intended to be read before the
-[mathematical foundations](math.md), which give the equations. Every method with a
-literature source is cited in the text, and the [reference list](#references) at the end carries an
-ADS link for each entry.
+package in the context of the published literature. It is intended to be read before the
+[mathematical foundations](math.md), which give the equations. The
+[reference list](#references) carries an ADS link for each cited work.
 
 ## 1. Spectroscopic binaries and the disentangling problem
 
@@ -23,7 +21,7 @@ Torres, Andersen & Giménez 2010). The second is the spectrum of each component 
 from which effective temperatures, surface gravities, rotation rates and abundances follow.
 
 *Spectral disentangling* is the inverse problem that recovers both from the composite
-spectra without a template for either star. Its scientific reach is wide: the multiplicity
+spectra without a template for either star. Its applications include the multiplicity
 of massive stars (Sana et al. 2012), where most systems will interact and where the
 components must be characterised separately; benchmark eclipsing binaries, where a
 disentangled spectrum feeds a model-atmosphere analysis of each star; and searches for
@@ -137,7 +135,7 @@ during eclipses, by external photometry, or by assumption. Because an assumed li
 propagates into every line depth and every atmospheric parameter derived from it, albireo
 has no default light fraction: the treatment must be declared, and per-epoch light
 fractions can be inferred where eclipses exist. The interpretation of LB-1 and HR 6819
-turned on exactly this choice (Shenar et al. 2020; Bodensteiner et al. 2020; El-Badry &
+turned on this choice (Shenar et al. 2020; Bodensteiner et al. 2020; El-Badry &
 Quataert 2021).
 
 **Systemic velocity.** Translating every component spectrum by the same amount and
@@ -243,10 +241,9 @@ Candidate dormant black holes such as LB-1 (Liu et al. 2019) and HR 6819 (Rivini
 lines had not been recognised in the composite spectra (Shenar et al. 2020; Bodensteiner
 et al. 2020; El-Badry & Quataert 2021), a conclusion later confirmed for HR 6819 by
 interferometry (Frost et al. 2022; Klement et al. 2025). Genuine dormant compact objects
-have since been identified astrometrically (El-Badry et al. 2023). Whether a second set of
-lines is present, at what light fraction it would have been seen, and how often noise
-alone produces a comparable signal are therefore the questions a companion search must
-answer.
+have since been identified astrometrically (El-Badry et al. 2023). A companion search must
+therefore establish whether a second set of lines is present, at what light fraction it
+would have been seen, and how often noise alone produces a comparable signal.
 
 albireo's SB1 mode scans the companion semi-amplitude $`K_2`$ with the companion spectrum
 marginalised at every trial, which is a matched filter that assumes no template; the
@@ -336,8 +333,8 @@ Section 3. A Keplerian is fitted to the resulting table by weighted nonlinear le
 squares, with a period search by the floating-mean generalized Lomb-Scargle periodogram
 (Lomb 1976; Scargle 1982; Zechmeister & Kürster 2009; VanderPlas 2018) and with one systemic
 velocity per component whenever a component is differential. The periodogram proposes
-candidate periods and the Keplerian decides among them, which on a survey cadence is not a
-refinement but the difference between finding the period and not.
+candidate periods and the Keplerian fit decides among them; on a survey cadence this step
+decides whether the period is found at all.
 
 ## 9. Systems used for validation
 

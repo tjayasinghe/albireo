@@ -50,22 +50,22 @@ coarse minimum is kept inside it. The interval is stated in each template's *own
 frame. A template that carries a zero point (`v_zero_kms`, which a label match measures)
 has that zero point composed into every velocity reported against it, so one shared
 `(lo, hi)` searches a different interval of reported velocity for every component whose
-zero point differs, and the window has to be declared per template instead: `v_range`
-accepts one pair per template as readily as one shared pair.
+zero point differs. The window must then be declared per template; `v_range` accepts one
+pair per template as well as one shared pair.
 
 `Fit.measure_velocities()` builds them that way. The common interval is the span of the
 fitted velocities widened by 40 km/s at each end; each template's window is that interval
 moved by its own zero point relative to the median of them, so that every component
 searches the same reported velocities. Where the zero points disagree by more than the
 fitted velocities span, no interval holds every component's own velocities, and the façade
-raises and names the component rather than searching a window that cannot contain it. That
-case is not hypothetical: a label fit whose frame-offset scan stopped at its bound reports a
-zero point which is a bound rather than a measurement, and one shared window built around it
-misses the other component's velocities entirely.
+raises and names the component rather than searching a window that cannot contain it. This
+occurs when a label fit's frame-offset scan stopped at its bound: the reported zero point
+is a bound rather than a measurement, and one shared window built around it misses the
+other component's velocities entirely.
 
 Where the chi-square is still falling as the search runs out of room, nothing has been
-measured. The last point evaluated is the edge of the search, not a minimum of anything, so
-that component is flagged `at_edge` and its `velocity`, `sigma` and `sigma_ivar` are `nan`,
+measured: the last point evaluated is the edge of the search, not a minimum, so that
+component is flagged `at_edge` and its `velocity`, `sigma` and `sigma_ivar` are `nan`,
 in the table and in the file `write()` produces alike. The diagnostics of the point that
 was evaluated are kept, since they are what says the epoch sat at an edge rather than at a
 peak: `chi2`, `light`, `delta_chi2`, `r_squared`, the pixel count and the curvature.

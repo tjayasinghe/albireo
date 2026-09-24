@@ -31,6 +31,88 @@ This file records what changed. The reasons are recorded elsewhere:
 
 ### Added
 
+- **A step-by-step Gaia RVS notebook.** `docs/tutorials/gaia-rvs-benchmark.ipynb` renders two
+  stars from the library, simulates the epochs Gaia would deliver, disentangles them, measures
+  the epoch velocities and the labels, draws a population and runs a three-system benchmark,
+  with the outputs committed; `scripts/build_gaia_rvs_notebook.py` regenerates it.
+- **The pipeline's label comparison is a setting, and the report carries what the epoch fit
+  measured (D65).** `Analysis.label_compare` (`compare` under `[labels]`, default `"epochs"`,
+  checked against `"epochs"`, `"native"` and `"matched"`) is passed to `Fit.match_labels`, whose
+  default it already was, and recorded as `labels.compare`. `result.json` also records under
+  `labels` the light fraction the fit measured with its formal error (`flux_ratio`,
+  `flux_ratio_errors`) beside the declared one (`light_declared`), the sites the epoch fit left
+  without a formal error and why (`at_bounds`), the notes of its restarts (`notes`) and a
+  summary of its optimisation (`epoch_fit`), and under `velocities` where the correlation's
+  amplitudes came from (`light_source`: `"declared"` or `"global re-measure"`). The measured
+  light is not used as the correlation's amplitude: the disentangled components are
+  `(w / l0) t`, so `l0` is the amplitude that reproduces the epochs with them, and on a
+  simulated pair with the true light at 0.70 and 0.30 holding the true fractions instead raised
+  the fainter component's rms velocity error from 0.34 to 14.3 km/s at a declaration of 0.45
+  and 0.55, while templates rescaled by `l0 / w` gave the declared case's velocities exactly
+  (`test_disentangled_templates_are_reproduced_by_the_declared_light_not_the_measured_one`).
+- **`albireo.gaia.rvs_delivered_sigma_kms` (D65).** The Gaussian width a line carries after
+  `deliver` has resampled it: `sigma_eff^2 = sigma_R^2 + Delta_det^2 / 6 + (Delta_det^2 -
+  Delta_prod^2) / 12`, since a linear interpolation at fraction `t` between detector pixels is
+  a two-tap kernel of zero mean and variance `t (1 - t) Delta_det^2`, `t` runs through every
+  value across the band on both shipped grids, and each delivered sample carries the detector
+  pixel's box where an analysis's operator integrates over the delivered pixel. At the nominal
+  11,500 that is 11.60 km/s on the DR4 grid and 11.83 km/s on the DR3 grid against 11.07, with
+  `Delta_det = 8.56` km/s at the band centre; `simulation_dv_kms` adds the simulation's own
+  `(5/12) dv^2` (entry under Changed). The tests measure the second moment `deliver` adds to
+  49 lines placed at every phase of the DR4 grid's beat, within 0.1 percent of `Delta_det^2 / 6`
+  on both products, and to lines integrated over the detector pixels against the same lines
+  integrated over the delivered ones, 17.312 km^2/s^2 against 17.303 predicted on the DR3 grid
+  and 12.06 against 11.96 on the DR4 grid.
+- `compare="epochs"` for `match_labels`, which compares the template composite with the epoch
+  spectra through the disentangling's sufficient statistics (`EpochStatistics`,
+  `Fit.epoch_statistics`). The chi-square is exact for the noise model including AR(1) and
+  independent of the declared light fractions. It is minimised by a bounded
+  Levenberg-Marquardt with rotation, node and joint restarts; formal errors come from the
+  Gauss-Newton matrix and the restarts are recorded on the result. (D65)
+- `SpectralLibrary.resolving_power`, read from `meta["resolving_power"]` or the BOSZ
+  `meta["resolution"]`. (D65)
+- `LabelMatch.restarts`, `LabelMatch.at_bounds`, `LabelMatch.flux_ratio_errors` and
+  `LabelMatch.epoch_fit`. (D65)
+- **A detection gate in the bootstrap's period search (D65).** `Analysis.detection_min`
+  (`detection_min` under `[analysis]`, default 100, `0` to turn it off): in the period search
+  and the candidate orbit fits of the `period = "search"` bootstrap, and nowhere else, a
+  companion's velocity whose detection statistic is below the threshold is set to `nan` in a
+  copy of the table, and the first component of the epoch is kept. Only the components after
+  the first, declared in order of decreasing mass, are gated. The orbit that wins is fitted to
+  the gated copy and seeds the disentangling's semi-amplitude, conjunction and eccentricity
+  starts; the written table, the light measured from it, the known-period route's template
+  table and every velocity measured after the disentangling are left as measured, and
+  `bootstrap.detection_gate` counts the velocities removed per component. Over the 33 blind
+  tables of the benchmark's third run, rerun with the code as implemented, the gate changes 9,
+  takes a field system whose 7% secondary the library templates never detected from absent in
+  the chi-square ranking to rank 1 (547.4 d against a true 552.5 d), moves a Gaia system from
+  rank 20 to 8, takes another field system from rank 24 to absent, and costs no system its
+  rank 1 (21 at rank 1 against 20); at the table summary's threshold of 25 it fails, because six
+  epochs with statistics between 25 and 61 keep secondary velocities up to 212 km/s off. The
+  first component is never gated: that is the rule measured, and gating every component was
+  measured to take a field system whose first template fell below 100 at 5 of 16 epochs from
+  rank 2 to absent, where the period decision compares the top four.
+- **Leave-one-epoch-out candidate periods on short bootstrap tables (D65).** In the bootstrap
+  only (`_period_candidates(..., leave_one_out=True)`; the `velocities = "file"` route does not
+  run it), on a table of at most 25 usable epochs as measured (`_LEAVE_ONE_OUT_MAX_EPOCHS`,
+  counted before the detection gate), the one-harmonic search is repeated with each of those
+  epochs left out in turn and the three highest peaks of each (`_LEAVE_ONE_OUT_PEAKS`) are
+  appended after the round robin, wherever they lie more than 2% from every start already
+  listed. Rerun with the code as implemented, over the 17 blind tables of at most 25 usable
+  epochs this adds 18 starts, takes a Gaia system whose twin components were exchanged at one
+  epoch of twelve from absent to rank 1, moves one other from rank 37 to 38, and costs no
+  system its rank 1 (21 at rank 1 against 20). The searches record the added starts under
+  `leave_one_out`, and the bootstrap report counts them.
+- **The D65 search changes measured together (D65).** Over the 33 blind tables of the third run the chi-square
+  ranking puts the true period first on 22 systems against 20 before, gaining the two above and
+  losing none. The other ranks move among near-degenerate candidates: one Gaia system from 39 to
+  12, one from 23 to 24, one from 20 to 9, one from 3 to 4, one from 37 to 39, and field systems
+  from 40 to 41, 2 to 6 and 24 to absent.
+- **A flag for a bootstrap table on fewer than eight nights (D65).** When the usable epochs of
+  the bootstrap table fall on fewer than eight distinct integer parts of the BJD
+  (`_FEW_NIGHTS`), a flag says the velocities cannot be expected to decide the period, and
+  `bootstrap.n_nights` records the count. Nothing else changes. Three of the 33 blind tables
+  were that sparse and the search recovered none of them.
 - **The table the period search ran on is kept beside the delivered one (D64).** On the
   search route the delivered `template_velocities.rv` carries the winning orbit's component
   assignment rather than the correlation's, because the bootstrap re-assigns the epochs
@@ -169,6 +251,99 @@ This file records what changed. The reasons are recorded elsewhere:
   compares in that order.
 ### Changed
 
+- **The epoch comparison removes the model grid's own smoothing from its operator (D65).**
+  `Fit.epoch_statistics(grid_compensation=True)`, the default, and so `Fit.match_labels`, build
+  the stellar operator of `sigma_op^2 = sigma_inst^2 - sigma_lib^2 - (7/12) dv^2`: five discrete
+  steps between a library spectrum and the epoch pixels (the library's box average onto the
+  model grid, the rotation kernel's pixel integration and the model pixel in the rebin, each
+  `dv^2 / 12`, and the frame shift and the epoch shifts by linear interpolation, each `dv^2 / 6`
+  on average) smooth the template by `(7/12) dv^2`, which the epochs do not carry and which
+  `v sin i` gave back. On the closed-loop fixture of `tests/test_pipeline.py` (native pixel 4.63
+  km/s, LSF 5.5 km/s, 11 km/s injected) the mean `v sin i` error over five noise draws went
+  from -3.02 to -0.24 km/s, and `test_the_pipeline_recovers_the_injected_system`, which had
+  returned 6.91 km/s against the 8.25 its 25 percent tolerance allows, passes with the
+  tolerance unchanged (9.82 km/s in the study, with the temperatures, gravities, light
+  fractions, semi-amplitudes and systemic velocity unchanged; `d65_grid_smoothing.md`). The
+  compensation assumes epochs that carry no discretisation of their own: epochs simulated on
+  the model grid itself carry all of it but the frame shift, and against them it biases
+  `v sin i` high (9 km/s fitted at 11.1 in `tests/test_match_epochs.py`, whose recovery test
+  now renders its epochs on a 1 km/s grid). A width that would fall below half a model pixel (once
+  `dv > 1.10 sigma_q`) is floored there, and a model grid coarser than `sigma_q` is warned about
+  as well; each `UserWarning` names the grid spacing that avoids it. `EpochStatistics` records
+  `grid_variance_kms2`, `operator_sigma_kms` and `notes` beside `lsf_sigma_kms`, which now holds
+  the widths before the compensation, and prints them in the new `EpochStatistics.summary()`;
+  `LabelMatch.assumptions` carries `epoch_quadrature_lsf_sigma_kms` and
+  `epoch_grid_variance_kms2`. `match_labels` checks a compensated operator through those fields
+  and refuses one whose widths do not follow from the declared instrument width, which is what
+  the resolving-power workaround of the research runs produced. The pipeline records the
+  operator as `labels.epoch_operator` in `result.json` and flags a floored or coarse-grid
+  compensation. `grid_compensation=False` reproduces the previous operator exactly.
+- **The Gaia benchmark declares the simulation's discretisation and the detector pixel as well
+  (D65).** `build_star` declares `rvs_delivered_sigma_kms(product, simulation_dv_kms=grid.dv_kms)`,
+  11.67 km/s on the DR4 grid (11.90 km/s on the DR3 grid), where it declared 11.61. The
+  simulation renders its epochs on a 2 km/s model grid through the box average, the rotation
+  kernel, the shift interpolation and the rebin, `(5/12) dv^2` in variance (measured through
+  the shipped chain: 1.29 km^2/s^2 without rotation, 1.52 to 1.58 with it), and each delivered
+  sample carries the 0.245 A detector pixel's box where the operator integrates over the
+  delivered pixel, `(Delta_det^2 - Delta_prod^2) / 12`: -0.25 km^2/s^2 on the DR4 grid and
+  +5.09 on the DR3 grid (measured 17.312 against 17.303 with the interpolation), which the
+  previous declaration left out. `gaia.SIMULATION_VARIANCE_FACTOR` is the `5/12`. On three
+  slow-rotator products rebuilt at their archived MAP with the grid compensation on, the median
+  `v sin i` error of the six components is +0.63 km/s (+0.32 for the primaries) at this
+  declaration, against +1.09 at 11.61, +4.22 at the nominal width and +3.06 for the previous,
+  uncompensated fit, with temperatures within 0.9 K, gravities within 0.003 dex and light
+  fractions within 0.0001 of that fit. Benchmark results before and after are not comparable in
+  rotation.
+- **`gaia.simulate_rvs_dataset` takes the components' resolving power from their library
+  (D65).** The new `library=` argument supplies `SpectralLibrary.resolving_power` (20,000 for
+  the BOSZ entries, `None` for an intrinsic grid) as the default of `library_resolving_power`,
+  which no longer defaults to 20,000; one of the two must be given, and they must agree when
+  both are. The 20,000 default had broadened an intrinsic library to 9.06 km/s where the RVS
+  gives 11.07. `benchmark.simulate_system`, `examples/14_gaia_rvs.py` and the tutorial pass the
+  library, and the example and the tutorial now declare the delivered width to the
+  disentangler and to TODCOR rather than the nominal 11,500.
+- **The Gaia benchmark declares the line-spread width the delivered epochs carry (D65).**
+  `build_star` declares `rvs_delivered_sigma_kms`, 11.61 km/s at first and 11.67 km/s with the
+  terms of the entry above, where it
+  declared the nominal resolving power of 11,500 (11.07 km/s), under both `resolving_power`
+  settings; the manifest records it as `settings.lsf_sigma_kms` and the report states it. Only
+  the delivery's smoothing is added, not any model-grid smoothing of the analysis. On the D65
+  products the converged label fit had absorbed the difference into `v sin i`, so benchmark
+  results from before and after this change are not comparable in rotation, and the
+  disentangled components, the velocity tables and the label fits all see the wider operator.
+  `simulate_system` now takes the library's resolving power from
+  `SpectralLibrary.resolving_power` instead of `meta.get("resolution", 20_000)`, which is the
+  same 20,000 for every BOSZ registry entry but had simulated an intrinsic library (the test
+  suite's toy grid) as one at 20,000, so that its delivered epochs carried 9.71 km/s against a
+  declared 11.61. With the new declaration and the old fallback, one oracle system of the
+  benchmark's end-to-end test lost its velocity table (semi-amplitudes from the table 463 and
+  695 percent high, reduced chi-square 42.5); with both changes they are 1.7 and 3.7 percent
+  low at quoted errors of 2.7 and 2.9 percent.
+- **The label stage flags what the epoch fit did not measure, and the light test is a ratio as
+  well as a difference (D65).** A label in `LabelMatch.at_bounds` is named in its own flag with
+  the reason, since a site on a bound or on the rotation plateau is left out of the covariance
+  and the posterior-width flag cannot see it; every note of `epoch_fit.notes` (a collapsed faint
+  component) becomes a flag; and the light flag fires when the measured fraction differs from
+  the declared one by more than a factor of 1.5 as well as by more than 0.15, lists every
+  component with its formal error, and replaces the flag that named only the first component
+  past 0.15. With sampling on, an epochs match is not refitted over `d_hat` draws, which
+  `refit_draws` refuses; the stage logs that instead of flagging a failure.
+- **`LabelMatch.summary()` groups the additive-offset pairs of the epochs comparison (D65).**
+  The offsets of the components reach the epochs only as their light-weighted sum, so their
+  pairs correlate near -0.99 on every fit; they are now one line under "Degenerate pairs"
+  rather than one line each, and an offset paired with a label is still listed.
+  `flagged_correlations` is unchanged.
+- `Fit.match_labels` defaults to `compare="epochs"`, built at the libraries' common resolving
+  power; `albireo.match_labels` keeps `"native"` and refuses `statistics` without
+  `compare="epochs"`. (D65)
+- The warm-start `scan_vsini` default is 1, 5 and 10 km/s and a fifth and a half of the
+  prior's upper bound, so slow rotation is tried. (D65)
+- `compare="matched"` convolves each template with sqrt(sigma_inst^2 - sigma_lib^2) when its
+  library declares a resolving power, and refuses a library at or below the instrument's.
+  (D65)
+- `match_labels(jitter=...)` defaults to None, which means on for the d_hat comparisons and off
+  for "epochs". (D65)
+- docs/math.md gains section 9.2a and the measured pull calibration in 9.5. (D65)
 - **The candidate periods are merged by rank, and fifty peaks are taken instead of twenty
   (D64).** `_period_candidates` concatenated its four periodogram sources in a fixed order with
   the swap-invariant peaks last, then deduplicated greedily at two percent, so a deep peak of an
@@ -260,6 +435,82 @@ This file records what changed. The reasons are recorded elsewhere:
 
 ### Fixed
 
+- **`MAPResult.potential` is documented as what it is (D65).** The docstring called it the
+  negative log joint; it is numpyro's unconstrained-space potential, which also carries the
+  log-Jacobian of every bounded site's transform, so `run_map` returns the mode in the
+  unconstrained coordinates. Measured over the 72 archived benchmark fits that sample a bounded
+  site, the difference from the constrained-space MAP on recovered orbits is a median 0.007
+  formal sigma and at most 0.23, so `run_map` itself is unchanged.
+- **`Template.from_labels` records the width the label template already carries (D65).** It
+  read `match.config["lsf_sigma_kms"]`, a key the config never has, so a `"matched"` template
+  recorded `sigma_kms = 0` and TODCOR applied the instrument profile a second time; a
+  `"native"` or `"epochs"` template drawn from a library at its own resolving power carried
+  that width without recording it, and TODCOR applied the whole instrument profile on top. It
+  now records `c / (R 2 sqrt(2 ln 2))` from the match's library, as `Template.from_library`
+  does, and for `"matched"` the width the fit applied as well, which makes the declared
+  instrument width, so TODCOR applies only the quadrature remainder. This changes the
+  velocities measured against label templates. The pipeline correlates against the
+  disentangled components and is not affected.
+- Label templates drawn from a library at its own resolving power are no longer broadened
+  twice in the epoch and matched comparisons. (D65)
+- **A velocity counts wherever its own component was measured (D65).** `find_period` and
+  `fit_rv_orbit` intersected their own finiteness test with `VelocityTable.good`, which requires
+  every component to be finite and off the search edge, so the search on the first component
+  alone, the source that exists for a companion the templates could not follow, lost exactly the
+  primary epochs at which that companion sat at the edge (one on a benchmark system with a 7%
+  secondary, two on another). A velocity now enters where its own component has a finite
+  velocity and error off its own search edge at an epoch that is not blended; the relative
+  velocity still needs both. Where every component is valid nothing changes. `find_period`
+  returns the epochs its series used under `used`. The semi-amplitude start is still half the
+  range of a component's velocities, now of its own usable ones. In a joint fit a component with
+  no more usable velocities than parameters of its own (one, or two with its own systemic
+  velocity) is held (`RVOrbit.held`): its semi-amplitude stays at 1e-3 km/s or the caller's `k`,
+  its own systemic velocity at its start, neither is fitted or counted, both have `nan` errors,
+  its velocities carry no weight, and `mass_ratio`, `minimum_masses` and `projected_semiaxes`
+  report nothing for it. Left free, the optimizer ran such a semi-amplitude to 1.5e7 km/s on a
+  benchmark table whose secondary was gated at every epoch, and the ranking set the true period
+  aside as outside the ranges. A `sqrt(2)` times weighted standard deviation start was tried and
+  rejected: it is 0.34 to 0.51 of `K` at `e = 0.9` and moved the ranking on six tables whose
+  components were all usable.
+- **`fit_rv_orbit` and `RVOrbit.predict` no longer compile anew at every call (D65).** The
+  residuals and Jacobian were closures over each call's data, and `predict` evaluated the Kepler
+  solver eagerly, which compiled its fixed-count Newton loop again at every call; the period
+  search's candidate loop calls both once per starting period. Both are now module-level
+  functions compiled once per configuration and array shape (`_objective`, `_predictor`), with
+  results bit-identical to the base commit on the pinned all-valid table. On the benchmark
+  harness three tables through six search configurations took 269 s and reached a peak working
+  set of 5061 MB with the objective alone moved, and 26 s and 446 MB with `predict` moved too;
+  the full 33-table rerun of every configuration peaked at 697 MB.
+- **The velocity CSV carries each component's edge flag (D65).** `velocities.csv` and
+  `template_velocities.csv` add one `at_edge_<component>` column per component beside the
+  merged `at_edge`, which the `.rv` files keep as they were.
+- **A period search can be reproduced from the written velocity table (D65).** `find_period`'s
+  default grid was spaced evenly between `1/(2 T)` and `1/(2 dt_min)`, so a shift of 1e-6 d in
+  the closest pair of epochs moved every upper frequency and, on a Gaia-like table, the top of
+  the grid by more than a step, and the order of near-degenerate short-period peaks followed;
+  the velocity tables carried six decimals of the epoch time, and the recorded peaks of five
+  benchmark tables could only be reproduced by moving the shortest period by 0.5 to 4e-6 d. The
+  default grid is now anchored at its low end with a step of `1/(N T)`, `N` computed from the
+  span rounded down to two significant figures, and the high end appended; moving an epoch
+  other than the first and last leaves every point below both high ends in place unless `N`
+  changes, which on a multi-year table (`N = 10`) it cannot and below that only at a rounding
+  boundary. `VelocityTable.write` and the pipeline's CSV write the epoch times with every digit
+  of a float64. An explicit `n_frequencies` keeps the evenly spaced grid it asks for. Over the
+  33 blind tables of the third run the new grid leaves the number of systems whose true period
+  ranks first at 20 and reshuffles near-degenerate candidates elsewhere: one Gaia system from
+  rank 39 to 11, one from 23 to 24, one from 3 to 4, and field systems from 40 to 41 and from 2
+  to 6. The last takes that system's true period out of the top four that the decision by the
+  disentangling compares, where the start nearest the truth now converges at chi-square 587
+  instead of 460; that decision has converted no miss into a hit on either population (D64).
+- **The bootstrap's candidate fits follow the exchange rule of the later stage (D65).**
+  `_orbit_over_candidates` re-assigned the components at every candidate, while the velocities
+  measured after the disentangling are exchanged only where the light fractions are within a
+  factor 3 (`_exchange_allowed`). The candidate fits now apply the same rule to the light
+  fractions of the library table's own amplitudes and flag the skip; the winning orbits of two
+  field systems at factors 7.1 and 3.25 had re-assigned 3 and 11 of their epochs.
+  Measured over the 33 blind tables of the third run, the rule skips the exchange on 8 and costs
+  none its rank 1; under it the true period of one Gaia system moves from rank 20 to 28, of
+  another from 37 to 38, and of the field system with the 7% secondary from absent to 25.
 - **The conjunction-phase grid holds its own antipodes (D64).** `Disentangler._scan_phase`
   laid 41 trials over one period, an odd count, so the antipode of every trial it sampled
   fell midway between two others and the grid could not choose between the two mirrors of a

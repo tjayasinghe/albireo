@@ -3,10 +3,10 @@
 See the [science overview](../science.md) for background and references.
 
 Gaia DR4 (2 December 2026) publishes an epoch RVS spectrum for every transit, in the
-barycentric frame, for the double-lined transits the Gaia pipeline itself rejects. This
-page builds such spectra for a synthetic binary, checks that albireo recovers what was
-put in, and then runs a population of systems through the pipeline to measure recovery
-as a function of brightness, transit count, separation and light ratio. The instrument
+barycentric frame, for the double-lined transits the Gaia pipeline itself rejects. Here
+such spectra are built for a synthetic binary, albireo's recovery of the input is checked,
+and a population of systems is run through the pipeline to measure recovery as a function
+of brightness, transit count, separation and light ratio. The instrument
 model follows the reference implementation of Rowan's `synthetic_rvs_spectra` notebook;
 the component spectra come from the BOSZ 2024 grid in the RVS band rather than from a
 synthesis code, which is the one deliberate difference, stated in the
@@ -17,6 +17,9 @@ pip install -e ".[io,plots]"
 python -c "import albireo; albireo.fetch_library('bosz2024-fgk-rvs')"   # 621 MB, 5 MB cached
 python examples/14_gaia_rvs.py     # the notebook's own system, end to end
 ```
+
+The same workflow, run cell by cell with its outputs, is the
+[step-by-step notebook](gaia-rvs-benchmark.ipynb).
 
 ## One binary
 
@@ -52,29 +55,34 @@ dataset, truth = simulate_rvs_dataset(
     orbit=orbit,
     snr=40.0,
     product=RVS_DR3_MEAN,
-    library_resolving_power=float(library.meta["resolution"]),
+    library=library,          # the components already carry its R = 20,000
 )
 print(dataset.summary())
 print(truth.delivery.pixel_ratio, np.mean(truth.delivery.lag1))   # 2.45, 0.8
 ```
 
-The last line is the point of the delivery step: the archive's 0.01 nm grid has 2.45
+The last line shows the effect of the delivery step: the archive's 0.01 nm grid has 2.45
 samples per detector pixel, and the noise on it is correlated with a lag-one coefficient
 of 0.8, which the archive's per-pixel `flux_error` does not express. On the DR4 epoch
 grid (`RVS_DR4_EPOCH`, the default) the sampling is 0.025 nm and the correlation is
 weaker and periodic.
 
-The dataset is declared barycentric and vacuum with the RVS width on every epoch, so the
-disentangler needs nothing but the light fractions and the orbit prior:
+The dataset is declared barycentric and vacuum with the nominal RVS width on every epoch,
+as the archive declares it. The delivered lines are wider (see below), and that width is
+the one to declare to the disentangler, which otherwise needs only the light fractions and
+the orbit prior:
 
 ```python
+from albireo.gaia import rvs_delivered_sigma_kms
+
+delivered = rvs_delivered_sigma_kms(RVS_DR3_MEAN, simulation_dv_kms=grid.dv_kms)   # 11.90 km/s
 dis = ab.Disentangler(
     dataset,
     components=[ab.Star("primary", 1 / 1.6), ab.Star("secondary", 0.6 / 1.6)],
     orbit=ab.Orbit(period=ab.Known(4.0, 0.004),
                    k=ab.Between([20.0, 20.0], [160.0, 160.0], start_at=[70.0, 110.0]),
                    ecc=ab.Between(0.0, 0.5)),
-    lsf={"RVS": ab.LSF.from_resolution(11_500)},
+    lsf={"RVS": ab.LSF(sigma_kms=delivered)},
     dv_kms=3.0,
     noise_correlation={"RVS": float(np.mean(truth.delivery.lag1))},   # the delivered grid's 0.8
 )
@@ -82,19 +90,32 @@ fit = dis.fit()
 print(fit.star("primary")["k"], fit.star("secondary")["k"])   # within a percent of 87.7 and 95.0
 ```
 
-The last argument declares what the delivery did to the noise: the disentangling then runs
-the AR(1) noise model along the pixel index, and the velocity table measured afterwards
-carries the same correlation in its errors. Left out, the pixels are taken as independent,
-which is what the archive's errors say and what the delivered spectra are not.
+`noise_correlation` declares what the delivery did to the noise: the disentangling then
+runs the AR(1) noise model along the pixel index, and the velocity table measured afterwards
+carries the same correlation in its errors. Without it the pixels are taken as independent,
+as the archive's errors state and the delivered spectra are not.
+
+The delivery also smooths the lines, and so does the simulation. Linear interpolation from
+the 0.245 Å detector pixels adds a mean variance of a sixth of the detector step squared,
+3.49 km/s in quadrature at the band centre; each delivered sample carries the detector
+pixel's width rather than its own, which on this 0.01 nm grid adds 2.26 km/s more; and the
+simulation's own 2 km/s model grid adds $`(5/12)\,\Delta v^2`$ in variance, 1.29 km/s, through
+its box averages and its shift interpolation. The epochs therefore carry 11.90 km/s where the
+nominal resolving power gives 11.07, and 11.67 km/s on the DR4 grid, whose pixel is the
+wider ([API page](../api/gaia.md#what-the-simulator-reproduces-and-what-it-does-not)). A
+stationary width is absorbed by the free component spectra (`docs/math.md` §1.3), so the
+nominal width would recover the orbit as well, but a label fit that compares library
+templates with the epochs puts whatever width is not declared into $`v \sin i`$. For archive
+epochs, which were never simulated, leave `simulation_dv_kms` out.
 
 `examples/14_gaia_rvs.py` runs this and adds the epoch-velocity measurement by TODCOR
 against library templates, which the notebook also prints.
 
-The epochs above are evenly spaced over one period, which no real star is observed at.
-`rvs_transit_times` draws the scanning law's structure without its phase, and
-`gost_transits(ra, dec)` fetches the transits the Gaia Observation Forecast Tool actually
-predicts for a position, which `rvs_transit_times_from_gost` cuts to a release, to the
-four of seven CCD rows the RVS covers and to the 0.78 that reach the ground; the
+No real star is observed at epochs evenly spaced over one period.
+`rvs_transit_times` draws the scanning law's structure without its phase.
+`gost_transits(ra, dec)` fetches the transits the Gaia Observation Forecast Tool predicts
+for a position, and `rvs_transit_times_from_gost` cuts them to a release, to the four of
+seven CCD rows the RVS covers and to the 0.78 that reach the ground. The
 [API page](../api/gaia.md#real-transit-times-from-gost) sets out what each step rests on
 and what it gets wrong.
 
@@ -115,8 +136,8 @@ bosz2024-hot-rvs` selects the box that runs 7000 to 10,000 K instead, which admi
 systems and leaves the cool ones out, since one run uses one library. What the hot box
 states about a velocity measured above 8000 K, where the Paschen series has taken the band
 over from Ca II, and about the rotation of A stars against a resolving power of 11,500, is
-in [`albireo.library`](../api/library.md#above-7000-k-the-hot-box), and it should be read
-before its numbers are quoted.
+in [`albireo.library`](../api/library.md#above-7000-k-the-hot-box); read it before quoting
+the hot box's numbers.
 
 ```python
 from albireo.population import draw_population, population_summary
@@ -157,24 +178,25 @@ The report tabulates, per tier, the median and 16th to 84th percentile of the
 semi-amplitude errors from the disentangling and from the orbit fitted to the velocity
 table (the two fail differently: a secondary of a few percent of the light is recovered
 by the disentangling and lost by the correlation), the pulls of the latter, the element
-errors, the epoch-velocity residuals
-and their pulls, the recovered spectra's correlation and equivalent-width ratios against
-the injected ones, the label offsets and the measured light fractions, plus the period
-search's recovery rate and the failures and flags, with figures of each against G_RVS,
-the transit count and the separation. The epoch velocities themselves, one per component
-per epoch from TODCOR against the disentangled components, are gathered with the injected
-velocity of each epoch into `velocities.csv`, pooled per tier in an "Epoch velocities"
-section of the report, and drawn phase-folded against the injected orbit for every system
-of every tier. The numbers of the runs on the 32-thread desktop are recorded in the
-[benchmarks](../benchmarks.md).
+errors, the epoch-velocity residuals and their pulls, the recovered spectra's correlation
+and equivalent-width ratios against the injected ones, the label offsets and the measured
+light fractions. It also gives the period search's recovery rate and the failures and
+flags, with figures of each against G_RVS, the transit count and the separation. The epoch
+velocities, one per component per epoch from TODCOR against the disentangled components,
+are gathered with the injected velocity of each epoch into `velocities.csv`, pooled per
+tier in an "Epoch velocities" section of the report, and drawn phase-folded against the
+injected orbit for every system of every tier. The runs on the 32-thread desktop are
+recorded in the [benchmarks](../benchmarks.md).
 
 ## Reading the results honestly
 
-Three things the report cannot tell you, because the simulation cannot. The templates
-and the truth come from the same grid, so template mismatch is absent: a real star's
-lines are not BOSZ's, and the label offsets here are a floor. The line-spread function
-is a Gaussian at the nominal resolving power unless `resolving_power="per-transit"` is
-requested, and even then it is a Gaussian, which the DPAC model is not. And the epochs
-follow the scanning law's statistics, not its phase, so a real star's period aliases are
-its own. What the report does tell you is how the recovery scales with the observables,
-and where the quoted errors are calibrated.
+The simulation, and therefore the report, omits three effects. The templates and the
+truth come from the same grid, so template mismatch is absent: a real star's lines are
+not BOSZ's, and the label offsets here are a floor. The line-spread function is a
+Gaussian at the nominal resolving power unless `resolving_power="per-transit"` is
+requested, and even then it is a Gaussian, which the DPAC model is not; the analysis
+declares it with the mean smoothing of the delivery and of the simulation's model grid
+added, and the smoothing's variation along the band and between epochs is not modelled.
+The epochs follow the scanning law's statistics, not its phase, so a real star's period
+aliases are its own. The report does measure how the recovery scales with the
+observables, and where the quoted errors are calibrated.

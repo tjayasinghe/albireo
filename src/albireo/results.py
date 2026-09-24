@@ -10,7 +10,7 @@ h5netcdf and FITS would require astropy. The header records a format version, an
 
 :func:`to_inference_data` converts a NUTS run to arviz, which provides the convergence
 diagnostics, the plotting, and the on-disk netCDF format the rest of the Bayesian Python
-ecosystem reads. albireo does not reimplement any of that.
+ecosystem reads; albireo does not reimplement them.
 
 :func:`write_ascii` writes the disentangled spectra and their uncertainty band as plain
 text, with no optional dependency; :func:`albireo.io.write_spectra` writes FITS and ECSV
@@ -19,8 +19,7 @@ and requires astropy.
 A loaded result is plain data. A :class:`~albireo.likelihood.MarginalResult` read back
 from disk is no longer differentiable in the orbital parameters, and, unless it was saved
 with ``precision=True``, no longer carries the posterior precision, so it cannot generate
-new spectrum draws. What the file holds is the inference result, not the machinery that
-produced it.
+new spectrum draws.
 """
 
 from __future__ import annotations
@@ -158,9 +157,8 @@ def load_fit(path):
     Returns
     -------
     object
-        An instance of the class the result was saved from. It is plain data rather than a
-        live JAX computation; the module docstring states what a loaded result can and
-        cannot do.
+        An instance of the class the result was saved from: plain data, not a live JAX
+        computation (the module docstring states what a loaded result can and cannot do).
 
     Raises
     ------
@@ -335,13 +333,13 @@ _LOADERS = {
 def to_inference_data(mcmc, *, coords=None, dims=None, component_names=None):
     """Convert a NUTS run to arviz's inference-data container.
 
-    The container is the bridge to the rest of the Bayesian Python ecosystem: R-hat and
-    effective sample size, trace and pair plots, and ``.to_netcdf()`` for on-disk storage.
+    The container provides R-hat and effective sample size, trace and pair plots, and
+    ``.to_netcdf()`` for on-disk storage.
 
     The type returned is whatever the installed arviz builds: its own ``InferenceData`` up
     to arviz 0.x, an xarray ``DataTree`` from arviz 1.0 onwards. Both expose the
     ``.posterior`` group and the plotting entry points, so code that reads groups rather
-    than checking the class works across the change.
+    than checking the class works with either.
 
     Parameters
     ----------

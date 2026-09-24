@@ -14,17 +14,16 @@ and its pointwise uncertainty at the peak follow from the conditional Gaussian.
 ``K_1`` may be marginalized instead of held fixed (``k1_sigma=``; §6.1). The integral is a
 Gauss-Hermite rule over a Gaussian prior on ``K_1``, applied to both the companion and the
 no-companion model, so ``D`` remains a ratio of two marginal likelihoods. Shift-and-add
-analyses hold ``K_1`` fixed at a literature value (Shenar et al. 2020), and those analyses
-report that small deviations in the assumed primary semi-amplitude put spurious features
-in the recovered secondary spectrum.
+analyses hold ``K_1`` fixed at a literature value (Shenar et al. 2020) and report that
+small deviations in the assumed primary semi-amplitude put spurious features in the
+recovered secondary spectrum.
 
 ``D`` depends on the companion's prior scale ``(tau_2, eta_2)`` and is not asymptotically
 chi-squared. Its null distribution is estimated by injection-recovery on datasets
 resimulated through the observed data's own operators (:mod:`albireo.calibrate`, §6.2).
-The light fraction of the putative companion must be supplied explicitly (design decision
-): the observable is ``ell_2 * d_2``, so ``ell_2`` trades exactly against the
-companion's line depths, and only external information (photometry, eclipse depths) sets
-it.
+The light fraction of the putative companion must be supplied explicitly: the observable
+is ``ell_2 * d_2``, so ``ell_2`` trades exactly against the companion's line depths, and
+only external information (photometry, eclipse depths) sets it.
 
 References
 ----------
@@ -51,9 +50,9 @@ __all__ = ["K2ScanResult", "k2_scan"]
 def _check_search(orbit: Mapping, k2_grid):
     """Validate the fixed SB1 solution and the trial grid; return them normalized.
 
-    Shared by :func:`k2_scan` and :func:`albireo.calibrate.detection_limit`, so that a
-    calibration and the scan it calibrates accept the same arguments and reject the same
-    mistakes with the same messages.
+    Shared by :func:`k2_scan` and :func:`albireo.calibrate.detection_limit`, so a
+    calibration and the scan it calibrates accept and reject the same arguments with the
+    same messages.
     """
     orbit = {name: jnp.asarray(v) for name, v in dict(orbit).items()}
     expected = ("period", "t_conj", "secosw", "sesinw")

@@ -1,7 +1,7 @@
 # Citing albireo
 
-If albireo contributed to a result, please cite it. Software citations are the record
-that makes maintenance of research software visible and fundable.
+If albireo contributed to a result, please cite it. Software citations make the
+maintenance of research software visible and fundable.
 
 !!! warning "Pre-release"
 
@@ -44,7 +44,7 @@ dependencies in the machine-readable record as well as in the text:
 
 ## Dependencies to cite
 
-albireo is a scientific layer over the following packages. Please cite them alongside it:
+Please cite the packages albireo builds on alongside it:
 
 | Package | Reference |
 |---|---|
@@ -68,7 +68,7 @@ that albireo follows and Hadrava (1995) for the Fourier-domain formulation. The 
 albireo evaluates and the analytic marginalization of the component spectra are written
 out in [Mathematical foundations](math.md). The epoch-velocity mode implements the
 two-dimensional correlation of Zucker & Mazeh (1994) with the maximum-likelihood errors of
-Zucker (2003), and the label-fitting mode follows the binary mode of GSSP (Tkachenko 2015)
+Zucker (2003). The label-fitting mode follows the binary mode of GSSP (Tkachenko 2015)
 and reads the BOSZ (Bohlin et al. 2017; Mészáros et al. 2024) and POLLUX (Palacios et al.
 2010) grids, each of which carries its own citation requirement recorded in
 `albireo.library_info`. See the [scientific background](science.md) for the complete list.

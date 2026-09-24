@@ -6,13 +6,13 @@ continuum at each node, and the wavelength scale on which they are defined. albi
 grids computed elsewhere and carries their citations; it contains no line list and no
 radiative transfer.
 
-Two requirements of this module are stricter than usual, because the alternative in each
-case fails without warning.
+Two requirements are stricter than usual, because the alternative in each case fails
+without warning.
 
 **The wavelength medium is a required field with no default.** Air and vacuum wavelengths
 differ by about 83 km/s across the optical, the same order as the orbital semi-amplitudes
-albireo measures, so a library on the wrong scale does not produce a slightly worse fit; it
-produces a confident wrong answer. Upstream documentation is not a reliable source: BOSZ
+albireo measures, so a library on the wrong scale gives a confident wrong answer rather
+than a slightly worse fit. Upstream documentation is not a reliable source: BOSZ
 2017 was vacuum throughout and BOSZ 2024 is air above 200 nm, under the same name.
 `line_core_medium` therefore measures the convention from the spectra themselves, and the
 ingest paths use it to verify a declaration rather than to supply one.
@@ -22,8 +22,8 @@ that BOSZ uses, Mészáros & Allende Prieto (2013) measured 0.19% scatter when i
 atmospheres, against 0.051% when interpolating fluxes linearly and 0.031% with a cubic,
 while a Payne-style neural emulator reaches about 0.1%. On a well-sampled grid the
 differentiable cubic used here is therefore the more accurate option, with no training cost
-and no weights to host. Whether this holds for a particular grid is an empirical question,
-and `crossval_library` is the measurement that answers it.
+and no weights to host. Whether this holds for a particular grid is measured by
+`crossval_library`.
 
 `library_interpolator` selects its method from the grid's geometry: a separable
 Catmull-Rom cubic on a complete axis product, and barycentric interpolation over a Delaunay
@@ -35,7 +35,7 @@ spectra across the simplex, at the ulp level for a library whose neighbouring no
 alike. Either is far below anything the data can distinguish, so the warm-start node scan in
 [`albireo.match`](match.md) and the continuous fit can be compared on the same footing.
 
-The two are not equivalent for the fit that follows, though. The simplex interpolant is
+They are not equivalent for the fit that follows. The simplex interpolant is
 piecewise linear, and on a lattice with a piece removed the triangulation is arbitrary, so
 the objective has kinks along simplex faces where a gradient method stops: on a perfect
 spectrum drawn from the BOSZ grid itself, the label fit under the simplex path ended 20 to
@@ -47,6 +47,30 @@ published neighbours bracket along one axis by linear interpolation between them
 `meta["filled_nodes"]`, and the summary and the label report name it; a node with no
 neighbours across it, a corner, is still dropped. A fit within one grid step of a filled
 node rests partly on that interpolation.
+
+## The library's own resolving power
+
+A published grid is not an intrinsic spectrum: every BOSZ entry in the registry is the
+R = 20,000 file, so each line already carries a Gaussian of
+$`\sigma_{\mathrm{lib}} = c/(R\, 2\sqrt{2\ln 2}) = 6.37`$ km/s. A comparison that convolves such
+a template with the whole instrument profile broadens it twice, and the fitted *v* sin *i*
+absorbs the difference; on the D65 Gaia RVS benchmark that put *v* sin *i* at the floor of its
+prior on 6 of 24 components. `SpectralLibrary.resolving_power` therefore reports the value,
+and the label fit applies only the quadrature width
+$`\sqrt{\sigma_{\mathrm{inst}}^2 - \sigma_{\mathrm{lib}}^2}`$ wherever it convolves a template
+([§9.2a](../math.md#92a-comparing-in-the-epoch-space)), refusing a library at or below the
+instrument's resolving power.
+
+The property reads `meta["resolving_power"]`, the key to set on a hand-built library, and
+otherwise `meta["resolution"]`, which `ingest_bosz` records:
+
+| source | `resolving_power` |
+|---|---|
+| `fetch_library` / `ingest_bosz`, all four `bosz2024-*` entries | 20,000, carried through the cache, `wave_range=`, `sliced`, `in_medium` and `resampled_to` |
+| `pollux-ob-smc24`, built by hand (`ingest_pollux` raises) | `None` unless the builder sets `meta["resolving_power"]`, which it should |
+| `albireo.simulate.synthetic_library` and any library declaring neither key | `None`: an intrinsic grid |
+
+A value that is not a finite positive number raises rather than being read as intrinsic.
 
 ## Obtaining a grid
 
@@ -67,8 +91,8 @@ library = ab.fetch_library("bosz2024-fgk-r20000")   # ~621 MB once, ~51 MB cache
 The cache lives under `albireo.examples.cache_dir()`, and `$ALBIREO_DATA_DIR` redirects
 it, which is also how a shared or pre-populated directory is used on a cluster. Narrowing
 the band with `wave_range=` is supported; widening it is refused, because the registered
-band is what was downloaded, and returning a narrower band than was requested without an
-error would be a silent failure.
+band is what was downloaded and returning a narrower band than requested would be a silent
+failure.
 
 | name | grid | coverage | band | nodes |
 |---|---|---|---|---|
@@ -103,8 +127,8 @@ calculation.
 `bosz2024-hot-rvs` and `bosz2024-hot-r20000` carry Teff 7000 to 10,000 K in 250 K steps,
 log g 3.5 to 5.0 in 0.5 dex, and [M/H] −1.0 to +0.5 in 0.25 dex. All 364 nodes are
 published at the composition the registry pins, checked against the archive's own index on
-2026-09-10, so nothing is filled and nothing is dropped and the cubic applies with no
-caveat about an interpolated node. The temperature axis continues the FGK box's 250 K
+2026-09-10, so nothing is filled or dropped and the cubic applies without the filled-node
+caveat. The temperature axis continues the FGK box's 250 K
 spacing rather than reaching the step changes BOSZ's grid has at 4000 and 12,000 K, which
 is what keeps the Catmull-Rom weights, written in their uniform-parameter form, valid over
 the whole range. The gravity floor at 3.5 is a main-sequence floor, since an A or early-F

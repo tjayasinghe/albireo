@@ -68,16 +68,15 @@ def _iau_n_minus_one(sigma2):
 def vacuum_to_air(wave_vacuum):
     """Convert vacuum wavelengths [Angstrom] to standard air.
 
-    Air wavelengths are what most optical spectrographs report and what most optical line
-    lists are tabulated in; vacuum is used in the UV and the IR and by ESPRESSO and Gaia RVS.
-    The difference is 0.87 Angstrom at 3000 A, rising to 2.74 A at 10000 A. Expressed as a
-    velocity it is nearly constant at 83 km/s across the optical (87.4 at 3000 A, 82.8 at
-    Halpha, 82.2 at 10000 A), the same order as the orbital semi-amplitudes albireo measures,
-    and it does not average out over epochs.
+    Most optical spectrographs and optical line lists use air wavelengths; vacuum is used in
+    the UV and the IR and by ESPRESSO and Gaia RVS. The difference is 0.87 Angstrom at
+    3000 A, rising to 2.74 A at 10000 A. As a velocity it is nearly constant at 83 km/s
+    across the optical (87.4 at 3000 A, 82.8 at Halpha, 82.2 at 10000 A), the same order as
+    the orbital semi-amplitudes albireo measures, and it does not average out over epochs.
 
     The conversion uses the IAU-adopted Edlén (1966) refractivity in the Birch & Downs (1994)
-    parameterization, evaluated at the vacuum wavenumber. That is the convention Morton (2000)
-    tabulates, and therefore the one published air line lists agree with.
+    parameterization, evaluated at the vacuum wavenumber: the convention Morton (2000)
+    tabulates and published air line lists follow.
 
     Parameters
     ----------
@@ -108,11 +107,11 @@ def vacuum_to_air(wave_vacuum):
 def air_to_vacuum(wave_air):
     """Convert standard-air wavelengths [Angstrom] to vacuum, the inverse of :func:`vacuum_to_air`.
 
-    The refractivity is defined at the vacuum wavenumber, so the inverse has no closed form.
-    Two fixed-point iterations are used. The refractivity changes by ~1e-8 over the 0.03% by
-    which the wavelength moves, so the first iteration is already correct to ~1e-11 Angstrom
-    and the second makes the round trip exact to float64. The test suite verifies the round
-    trip to 1e-10 Angstrom over 3000-10000 Angstrom.
+    The refractivity is defined at the vacuum wavenumber, so the inverse has no closed form;
+    two fixed-point iterations are used. The refractivity changes by ~1e-8 over the 0.03% by
+    which the wavelength moves, so the first iteration is correct to ~1e-11 Angstrom and the
+    second makes the round trip exact to float64. The tests verify the round trip to
+    1e-10 Angstrom over 3000-10000 Angstrom.
 
     Parameters
     ----------
@@ -200,8 +199,7 @@ class LogGrid:
     ) -> LogGrid:
         """Build a model grid covering a dataset, with the margin the solver requires.
 
-        The model grid must be wider than the data by an amount set by two effects, plus a
-        few pixels of slack:
+        The margin beyond the data is set by two effects, plus a few pixels of slack:
 
         - Velocity. A component shifted by ``v`` maps model pixel ``q`` onto data at
           ``q + xi(v)/dx``, so the grid must extend beyond the data by the largest shift any
@@ -296,9 +294,9 @@ class LogGrid:
         """Radial velocity [km/s] corresponding to a shift of ``pixels``, the exact inverse.
 
         With the default relativistic mapping ``xi = artanh(v/c)`` the inverse is
-        ``v = c tanh(xi)``. Because ``xi`` turns relativistic velocity addition into ordinary
-        addition, differences of pixel shifts map to exact relative velocities rather than to
-        approximations of them. A per-epoch velocity table is therefore exactly identified
+        ``v = c tanh(xi)``. Since ``xi`` turns relativistic velocity addition into ordinary
+        addition, differences of pixel shifts map to exact relative velocities. A per-epoch
+        velocity table is therefore exactly identified
         (:func:`albireo.inference.relative_velocities`): the arbitrary zero point is removed
         by subtraction in pixel space, and this method maps the remainder back to km/s.
 

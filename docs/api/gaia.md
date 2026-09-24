@@ -1,7 +1,7 @@
 # Gaia RVS: simulator, populations, benchmark
 
-Three modules that together answer, with numbers, how well albireo recovers double-lined
-binaries from Gaia RVS epoch spectra. `albireo.gaia` is the instrument: the S/N that
+Three modules measure how well albireo recovers double-lined binaries from Gaia RVS epoch
+spectra. `albireo.gaia` is the instrument: the S/N that
 follows from G_RVS, the detector and delivered grids, the noise correlation the archive's
 resampling introduces, the transit cadence of the scanning law. `albireo.population`
 draws the systems, either from the field's distributions or from real catalogues.
@@ -28,6 +28,7 @@ dataset, truth = ab.simulate_rvs_dataset(
     light_fractions=(0.625, 0.375),
     orbit=ab.OrbitParams(period=4.0, t_peri=2457000.76, ecc=0.1, omega=0.7, k=(87.7, 95.0)),
     grvs=10.5,
+    library=library,   # its resolving power is what the components already carry
 )
 ```
 
@@ -46,18 +47,61 @@ model and to be re-checked against the release.
 
 The component spectra come from a published grid through [`albireo.library`](library.md),
 not from a synthesis code: albireo synthesises nothing (the roadmap's standing non-goal).
-The consequences are stated rather than hidden. BOSZ 2024 at R = 20,000 is broadened to
-the RVS resolving power by a Gaussian of the quadrature width, which costs 0.3% in line
-depth against a direct convolution; its microturbulence is fixed; its scale is air and is
-converted to vacuum, as Gaia's is; and its FGK box stops at 7000 K, above which
-`bosz2024-hot-rvs` continues to 10,000 K on the same 250 K spacing over MARCS and then
-ATLAS9 atmospheres. One run uses one library, so `--library bosz2024-hot-rvs` admits the
-catalogue systems the FGK box excludes and leaves the cool ones out; what the hot box
-costs in exchange, a seam between two model codes, a band carried by the Paschen series
-rather than by Ca II, and rotation against a resolving power of 11,500, is set out in
-[`albireo.library`](library.md#above-7000-k-the-hot-box). The resolving power can be
-drawn per transit from the values measured in flight per CCD row (10,983 to 12,587) while
-the analysis declares the nominal 11,500, which is the systematic a real analysis carries.
+BOSZ 2024 at R = 20,000 is broadened to the RVS resolving power by a Gaussian of the
+quadrature width, which costs 0.3% in line depth against a direct convolution; its
+microturbulence is fixed; its scale is air and is converted to vacuum, as Gaia's is; and
+its FGK box stops at 7000 K, above which `bosz2024-hot-rvs` continues to 10,000 K on the
+same 250 K spacing over MARCS and then ATLAS9 atmospheres. One run uses one library, so
+`--library bosz2024-hot-rvs` admits the catalogue systems the FGK box excludes and leaves
+the cool ones out. The hot box's costs (a seam between two model codes, a band carried by
+the Paschen series rather than by Ca II, and rotation against a resolving power of 11,500)
+are set out in [`albireo.library`](library.md#above-7000-k-the-hot-box). The resolving
+power can be drawn per transit from the values measured in flight per CCD row (10,983 to
+12,587) while the analysis declares the nominal 11,500, the systematic a real analysis
+carries.
+
+The delivery smooths the lines as well as correlating the noise. A delivered sample a
+fraction $`t`$ of the way between two detector pixels, $`(1 - t) f_k + t f_{k+1}`$, is a
+two-tap kernel of zero mean and variance $`t(1 - t)\,\Delta_{\rm det}^2`$, and on both shipped
+grids $`t`$ runs through every value across the band (the DR4 grid's 0.25 Å against the
+detector's 0.245 Å beat with a period of 49 samples), so the mean added variance is
+$`\Delta_{\rm det}^2 / 6`$. Each detector sample also integrated the line over a detector pixel,
+where an analysis's operator integrates over the delivered pixel, which adds
+$`(\Delta_{\rm det}^2 - \Delta_{\rm prod}^2)/12`$. A simulated epoch carries, in addition, the
+smoothing of the model grid it was rendered on: the library's box average onto the grid, the
+pixel-integrated rotation kernel and the model pixel held constant in the rebin onto the
+detector pixels each add $`\Delta v_{\rm sim}^2/12`$, and the linear-interpolation shift to the
+epoch velocity adds $`f(1-f)\,\Delta v_{\rm sim}^2`$, $`\Delta v_{\rm sim}^2/6`$ on average. The
+width the delivered epochs carry is therefore
+
+```math
+\sigma_{\rm eff}^2 = \sigma_R^2 + \frac{\Delta_{\rm det}^2}{6}
++ \frac{\Delta_{\rm det}^2 - \Delta_{\rm prod}^2}{12} + \frac{5}{12}\,\Delta v_{\rm sim}^2 ,
+```
+
+with $`\Delta_{\rm det}`$ and $`\Delta_{\rm prod}`$ the detector and delivered steps in km/s at the
+band centre (8.56 km/s for the detector at 8580 Å) and the last term only for simulated
+epochs. `rvs_delivered_sigma_kms(product, resolving_power, simulation_dv_kms=None)` returns
+it. At the nominal resolving power the pixel term is $`-0.25`$ km$`^2`$ s$`^{-2}`$ on the DR4 grid
+and $`+5.09`$ on the DR3 grid, so archive epochs carry 11.60 and 11.83 km/s against 11.07,
+and epochs simulated on the 2 km/s grid of `rvs_model_grid` carry 11.67 and 11.90 km/s.
+Measured through the shipped chain on narrow lines at 2496 positions and phases, the
+simulation added 1.29 km$`^2`$ s$`^{-2}`$ on the 2 km/s grid without rotation, which is
+$`(4/12)\,\Delta v^2`$ less the 0.05 by which the sampled Gaussian kernel, truncated at four
+sigma, falls short of $`\sigma^2`$, and 1.52 to 1.58 with rotation at 5 to 25 km/s, where the
+rotation kernel's pixel term averages 0.70 to 0.89 of $`\Delta v^2/12`$; the delivery added
+12.09 on the DR4 grid and 17.31 on the DR3 grid, against 11.96 and 17.30 predicted.
+
+The width declared on the delivered epochs (`EpochData.lsf_sigma_kms`) stays the nominal
+one, since that is what the archive states, and the benchmark declares the carried width to
+the analysis. It is a mean: a line where $`t`$ is near 0 or 1 is not smoothed and one where
+$`t = 1/2`$ is smoothed by $`\Delta_{\rm det}^2 / 4`$, which no stationary profile represents, and
+the simulation's shift term varies with each epoch's phase in the same way. An analysis's own
+model-grid smoothing is not counted, since it belongs to the model: the label fit removes
+$`(7/12)\,\Delta v^2`$ of it from its operator ([`albireo.match`](match.md)). On the D65
+benchmark products the label fit, which compares a library template broadened to the
+declared width with the epochs, had absorbed the undeclared smoothing into $`v \sin i`$ while
+the nominal width was declared.
 
 The cadence model reproduces the measured structure of the scanning law: the count
 distribution of `rv_nb_transits` and its dependence on ecliptic latitude, the visibility
@@ -89,10 +133,10 @@ cutting to the release's data span:
   puts it as the spectroscopic instrument being "only served by 4 of the 7 Video
   Processing Units". The anonymous endpoint does not publish which row a transit crossed
   (the interactive form's CSV does, as `CcdRow[1-7]`, and `GostTransits` carries it when
-  given), so the row is drawn uniformly from the seven. That is an approximation stated as
-  one: the across-scan position drifts slowly with the scanning law and is correlated
-  inside a visibility period, so an independent draw gets the number of RVS epochs right
-  and their clumping wrong.
+  given), so the row is drawn uniformly from the seven. This is an approximation: the
+  across-scan position drifts slowly with the scanning law and is correlated inside a
+  visibility period, so an independent draw gets the number of RVS epochs right and their
+  clumping wrong.
 - **The losses.** `GOST_USABLE_FRACTION = 0.78` of the predicted RVS transits yield a
   usable spectrum. GOST's own landing page puts the probability of the data reaching the
   ground at about 80%; Katz et al. (2023) §2 report that dead time and the processing
@@ -105,11 +149,10 @@ Both steps are random and seeded, so the result is one realisation of a plausibl
 list rather than a claim about which nights Gaia observed a particular star.
 
 The raw response is cached under `cache_dir() / "gost"` in a file named for every
-parameter of the query, and the cache is read before the network is touched, so a
-benchmark that revisits a position pays for it once and a machine without a network
-keeps working. When the request fails and nothing is cached, the `RuntimeError` names the
-endpoint and the path the answer would have been written to, so the file can be fetched
-elsewhere and copied in.
+parameter of the query, and the cache is read before the network, so a benchmark that
+revisits a position pays for it once and a machine without a network keeps working. When
+the request fails and nothing is cached, the `RuntimeError` names the endpoint and the path
+the answer would have been written to, so the file can be fetched elsewhere and copied in.
 
 `draw_population` gives every drawn system a position (an ecliptic longitude uniform over
 [0, 360) at the latitude it already drew, rotated to ICRS by `ecliptic_to_icrs`), and
@@ -169,20 +212,24 @@ follows the orbit.
 
 The tiers are declared through the pipeline's own vocabulary (`StarConfig`'s `period`,
 `t_conj`, `ecc`, `omega`, `k` and `light = "measure"`), so the benchmark runs exactly what
-a user runs, and every number in the report is the pipeline's own comparison against the
+a user runs. Every number in the report is the pipeline's own comparison against the
 injected truth: semi-amplitude, element and velocity pulls against the quoted errors,
 epoch-velocity residuals, the recovered spectra's correlation and equivalent widths
 against the injected ones, label offsets, the measured light fractions. Every tier
 declares the delivered grid's lag-one noise correlation to the analysis as the simulation
 measured it (`noise_model="correlated"`, the default; `"diagonal"` takes the pixels as
-independent), an instrument property declared like the LSF. The measured epoch velocities
-are a product of the run and not only a statistic: `collect_velocities` gathers every
-star's table with the injected velocity of each epoch into `velocities.csv` (one row per
-system, tier, epoch and component), `summarize_velocities` pools the usable epochs per
-tier, and the report draws each tier's systems phase-folded against the injected orbit
-(`figures/rv_curves_<tier>.png`). The report (`report.md`, `rows.csv`, `velocities.csv`,
-`summary.json`, figures) is regenerated by `write_report` at any time, and an interrupted
-run resumes.
+independent), an instrument property declared like the LSF. The LSF is declared as the
+width the simulated, delivered epochs carry: the nominal resolving power with the
+smoothing of the resampling and of the simulation's 2 km/s model grid added
+(`rvs_delivered_sigma_kms(product, simulation_dv_kms=2.0)`, 11.67 km/s on the DR4 grid and
+11.90 km/s on the DR3 grid), under both `resolving_power` settings; until D65 it was the
+nominal 11.07 km/s. The measured epoch velocities are also a product of the run:
+`collect_velocities` gathers every star's table with the injected velocity of each epoch
+into `velocities.csv` (one row per system, tier, epoch and component),
+`summarize_velocities` pools the usable epochs per tier, and the report draws each tier's
+systems phase-folded against the injected orbit (`figures/rv_curves_<tier>.png`). The
+report (`report.md`, `rows.csv`, `velocities.csv`, `summary.json`, figures) is regenerated
+by `write_report` at any time, and an interrupted run resumes.
 
 ```bash
 python scripts/gaia_rvs_benchmark.py --n 40 --jobs 8 --out bench/rvs

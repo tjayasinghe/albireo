@@ -117,6 +117,36 @@ def test_library_reports_its_geometry(library):
     assert "complete box" in library.summary()
 
 
+def test_resolving_power_is_read_from_the_metadata(library):
+    """A published grid is already broadened; the container must say to what (D65).
+
+    ``resolving_power`` wins over the BOSZ ingest's ``resolution``, a library with neither
+    is intrinsic, and a value that is not a positive number is refused rather than read as
+    intrinsic, since that would broaden every template twice without a word.
+    """
+    assert library.resolving_power is None
+    assert "intrinsic" in library.summary()
+    bosz_like = library.replace(meta={**library.meta, "resolution": 20000})
+    assert bosz_like.resolving_power == 20000.0
+    assert "R = 20000" in bosz_like.summary()
+    declared = library.replace(meta={"resolving_power": 115000.0, "resolution": 20000})
+    assert declared.resolving_power == 115000.0
+    # every transform carries the metadata, so the value survives slicing and projection
+    assert bosz_like.sliced(5160.0, 5240.0).resolving_power == 20000.0
+    assert bosz_like.in_medium("vacuum").resolving_power == 20000.0
+    for bad in ("orig", -1.0, 0.0, float("nan")):
+        with pytest.raises(ValueError, match="finite positive resolving power"):
+            _ = library.replace(meta={"resolution": bad}).resolving_power
+    # the registry pins every BOSZ entry at R = 20,000, which the ingest records
+    for name in lib_mod.library_names():
+        info = lib_mod.library_info(name)
+        if info["source"] == "bosz2024":
+            assert info["fixed"]["resolution"] == 20000
+    from albireo.simulate import synthetic_library
+
+    assert synthetic_library(n_pix=64).resolving_power is None
+
+
 def test_library_detects_irregular_coverage():
     punched = build_library(drop={(5500.0, 3.0, -1.0), (4000.0, 5.0, 0.5)})
     assert punched.axes() is None

@@ -2,9 +2,9 @@
 
 The posterior covariance of the component spectra contains no fluxes; it depends only on
 the epochs, their phases, the weights, the masks, the line-spread functions, the light
-fractions and the prior. It can therefore be computed for observations that have not been
-taken, so whether a planned set of epochs at given phases will separate two stars is
-answerable before the observations are made.
+fractions and the prior. It can therefore be computed for observations not yet taken, which
+answers before observing whether a planned set of epochs at given phases will separate two
+stars.
 
 `sensitivity_forecast` reports the result in three forms: the pointwise uncertainty band
 each component would have, the worst-determined modes of the covariance (the spectral
@@ -15,8 +15,7 @@ inherited from the regularizer.
 
 The function does not forecast the orbit. The Fisher information for a velocity depends on
 the derivative of the component spectrum, so an error bar on \(K_2\) requires the line
-depths, which are what has not yet been measured. This asymmetry is why the forecast is
-restricted to the spectra.
+depths, which have not yet been measured.
 
 The theory is in [§5.1](../math.md#51-the-low-frequency-degeneracy-the-undulations-theorem)
 and [§5.5](../math.md#55-forecasting-a-design). The module docstring below states the

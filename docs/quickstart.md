@@ -71,9 +71,8 @@ takes about a minute, most of it JAX compilation on the first call. No per-epoch
 velocity is measured at any stage: the orbit is inferred from the spectra directly, with
 the component spectra integrated out in closed form.
 
-Four quantities in that fit were derived from the declaration rather than supplied, and
-each is something the low-level interface requires the user to set. `dis.explain()`
-prints all of them:
+Four quantities in that fit were derived from the declaration; the low-level interface
+requires the user to set each. `dis.explain()` prints them:
 
 ```python
 print(dis.explain())
@@ -82,15 +81,14 @@ print(dis.explain())
 - **The velocity budget**, which sets the solver's bandwidth. It must bound the largest
   relative velocity the priors allow, not the value the fit converges to; it is derived
   from the support of the `k` priors, and narrowing those priors reduces the cost of a fit.
-- **The model grid**, which is widened by that budget plus the LSF kernel radius so that
-  the shifted model does not run off the grid.
+- **The model grid**, widened by that budget plus the LSF kernel radius so that the
+  shifted model does not run off the grid.
 - **The conjunction phase**, located by a 42-point scan before optimization. The marginal
   likelihood is strongly multimodal in phase (about 10⁵ nats between the best and worst
   phase here), and an optimizer started in the wrong trough converges to the wrong answer.
 - **The smoothness hyperparameters**, fitted by empirical Bayes and then frozen. The
-  report flags any hyperparameter that did not move from its starting value, which
-  indicates that the hyperprior rather than the data is setting that component's
-  smoothness.
+  report flags any hyperparameter that did not move from its starting value, a sign that
+  the hyperprior rather than the data sets that component's smoothness.
 
 ## Sample the posterior
 
@@ -101,9 +99,9 @@ print(post.star("secondary"))   # {'k': 62.99, 'k_std': 0.08, 'k_hdi': (62.84, 6
 ```
 
 This runs NUTS over the orbital parameters with the component spectra marginalized and
-the smoothness hyperparameters held at their empirical-Bayes values. The latter is a
-plug-in approximation, and the summary states it: the orbital credible intervals do not
-include the uncertainty in the smoothness hyperparameters.
+the smoothness hyperparameters held at their empirical-Bayes values. This plug-in
+approximation is stated in the summary: the orbital credible intervals do not include the
+uncertainty in the smoothness hyperparameters.
 
 ## Inspect the component spectra
 

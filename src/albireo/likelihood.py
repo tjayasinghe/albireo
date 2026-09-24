@@ -166,12 +166,12 @@ class MarginalResult:
         """Cholesky factor of :attr:`precision`, built on demand.
 
         The likelihood's own factorization is computed inside a ``custom_vjp`` whose
-        reverse rule cannot carry a cotangent on the factor, so returning that factor
-        would make gradients of anything derived from it (spectral uncertainties, draws)
-        zero without warning. Refactorizing here keeps those paths on plain autodiff, at
-        the cost of one extra block Cholesky, paid only by callers that use the factor.
-        The sampling path reads :attr:`log_likelihood` and :attr:`d_hat` and never
-        triggers it.
+        reverse rule cannot carry a cotangent on the factor; returning that factor would
+        make gradients of anything derived from it (spectral uncertainties, draws) zero
+        without warning. Refactorizing here keeps those paths on plain autodiff at the
+        cost of one extra block Cholesky, paid only by callers that use the factor. The
+        sampling path reads :attr:`log_likelihood` and :attr:`d_hat` and never triggers
+        it.
 
         Raises
         ------
@@ -221,9 +221,9 @@ def marginal_loglikelihood(
     conditional spectra are recovered (§3.3).
 
     The log-likelihood is ``-inf`` wherever the chi-square term ``z^T W z - b^T Lt^-1 b``
-    evaluates negative: it equals ``z^T (W^-1 + A Lambda_p^-1 A^T)^-1 z`` and is therefore
+    evaluates negative. That term equals ``z^T (W^-1 + A Lambda_p^-1 A^T)^-1 z`` and is
     positive definite, so a negative value means the forward substitution against ``Lt``
-    has lost every significant digit, which happens once the assembled pivots outrun the
+    has lost every significant digit. This happens once the assembled pivots outrun the
     data term (measured at a prior stiffness ratio ``tau/eta`` above about ``1e13``, which
     :class:`albireo.inference.MarginalOrbitModel` bounds away).
 
@@ -246,7 +246,7 @@ def marginal_loglikelihood(
         ``validate``.
     validate
         If True, verify that the assembled matrix reproduces the matrix-free operator on
-        a random vector, which guards against a bandwidth underestimate and any assembly
+        a random vector, guarding against a bandwidth underestimate and any assembly
         defect; raises ``AssertionError`` on mismatch. Cheap relative to assembly and
         enabled in the tests. Not jit-compatible.
     assembly
@@ -254,11 +254,11 @@ def marginal_loglikelihood(
         (:func:`albireo.assembly.band_block_tridiagonal`, ``docs/math.md`` §4.5),
         O(band width) work per epoch instead of O(bandwidth) operator applications, more
         than 10x faster at survey bandwidths, with an identical result up to
-        floating-point summation order. Correlated AR(1) noise runs on the same path
-        the chain's cross-row terms enter through static link pair tables
+        floating-point summation order. Correlated AR(1) noise uses the same path; the
+        chain's cross-row terms enter through static link pair tables
         (:func:`albireo.operators.rebin_link_pair_tables`). ``"probe"`` selects global
-        comb probing, retained as the reference implementation and as the independent
-        construction behind the ``validate`` oracle.
+        comb probing, the reference implementation and the independent construction
+        behind the ``validate`` oracle.
 
     Returns
     -------

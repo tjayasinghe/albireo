@@ -42,14 +42,14 @@ CELLS: list[tuple[str, str]] = [
         """\
 # Labels on real data: AI Phoenicis
 
-The other checks on `albireo.match` score it against spectra this package injected
-itself. This one scores it against a star.
+The other checks on `albireo.match` score it against spectra the package injected itself.
+This one scores it against a star.
 
 Background and references: [science overview](../science.md).
 
 AI Phe (HD 6980) is a detached eclipsing binary whose orbit is published to better than
 0.02 per cent and whose components have independently known temperatures, gravities and
-radii, so every quantity the label fit produces has an external value to compare against:
+radii, so every quantity the label fit produces has an external comparison value:
 
 | quantity | published | source |
 |---|---|---|
@@ -58,13 +58,12 @@ radii, so every quantity the label fit produces has an external value to compare
 | R₂/R₁ | 1.6237 | from the fractional radii, run C |
 
 The third is the strongest test. `RadiusRatio` fits both components jointly through a
-single shared scalar, so the radius ratio is a quantity the label fit returns, and here it
-can be compared with a value measured photometrically from the eclipses, which the
-spectroscopic fit is never given.
+single shared scalar, so the label fit returns a radius ratio. It is compared here with
+the value measured photometrically from the eclipses, which the spectroscopic fit is never
+given.
 
-This notebook cannot be re-run without the data. It requires 36 HARPS spectra (~194 MB,
-`scripts/download_aiphe.py`) and the BOSZ library (~621 MB on first use). The committed
-outputs are the record.""",
+Re-running this notebook requires 36 HARPS spectra (~194 MB, `scripts/download_aiphe.py`)
+and the BOSZ library (~621 MB on first use). The committed outputs are the record.""",
     ),
     (
         PY,
@@ -97,9 +96,8 @@ photometric elements alone, without absolute masses, radii or a distance:
 
 $$g_1 = \\frac{2\\pi\\sqrt{1-e^2}\\,K_2}{P\\,r_1^2 \\sin i}$$
 
-which is Kepler's third law combined with the mass ratio, with the common factors
-cancelled. It reproduces the published absolute masses and radii to 0.002 dex, and the
-next cell checks that.""",
+which is Kepler's third law combined with the mass ratio, common factors cancelled. It
+reproduces the published absolute masses and radii to 0.002 dex, as the next cell checks.""",
     ),
     (
         PY,
@@ -114,9 +112,9 @@ print(f"Teff   {TEFF1:.0f} K and {TEFF2:.0f} K")""",
         """\
 ## Disentangle at the published orbit
 
-The orbit is not re-derived here. It is known far better than disentangling could recover
-it, so fixing the velocities at the published solution isolates the quantity under test,
-the label fit.
+The orbit is not re-derived. It is known far better than disentangling could recover it,
+so fixing the velocities at the published solution isolates the quantity under test, the
+label fit.
 
 The light fractions are a blackbody estimate from the published radii and temperatures,
 accurate to a few per cent at best. That makes this a test of the claim that a wrong
@@ -154,8 +152,7 @@ fig.set_layout_engine("constrained")""",
 
 `log g` is declared rather than fitted. For an eclipsing binary it is known to about
 0.003 dex, an order of magnitude better than any spectroscopic determination, and Teff and
-log g correlate at about 0.98 when both are free. The next cell shows the result when
-log g is left free.""",
+log g correlate at about 0.98 when both are free.""",
     ),
     (
         PY,
@@ -210,16 +207,15 @@ print(f"\\nR2/R1 fitted {fixed.radius_ratio['secondary']:.4f}  "
         """\
 ## The fit with log g free
 
-This is the failure mode the tutorial describes, here on real data. Teff and log g trade
-against each other: the fit follows the degeneracy, log g runs to the lower bound of its
-prior, and the temperatures follow it down. χ² improves while this happens, so the lower
-χ² accompanies the worse physical solution.
+This is the failure mode the tutorial describes, on real data. Teff and log g trade
+against each other: log g runs to the lower bound of its prior and the temperatures follow
+it down, while χ² improves. The lower χ² accompanies the worse physical solution.
 
 The correlation report does not detect it. Once log g has reached the edge of the grid it
 stops varying, so the curvature at the optimum no longer shows the degeneracy that
 produced the answer. A flagged correlation is evidence of a degeneracy; an empty report is
-not evidence of its absence. What detects this case is an external log g to compare
-against, which is the argument for declaring it.""",
+not evidence of its absence. Only an external log g detects this case, which is the
+argument for declaring it.""",
     ),
     (
         PY,
@@ -239,8 +235,8 @@ print("strong correlations:", free.flagged_correlations())""",
 ## The effect of the assumed dilution
 
 `FixedDilution` freezes the light fractions at the blackbody estimate. The difference
-between the two fits measures how strongly that assumption biases the temperatures, and is
-the reason the dilution is fitted jointly rather than assumed.""",
+between the two fits measures how strongly that assumption biases the temperatures; this
+bias is why the dilution is fitted jointly rather than assumed.""",
     ),
     (
         PY,
@@ -262,26 +258,25 @@ print(f"chi2              fitted {fixed.chi2:.0f}   frozen {rigid.chi2:.0f}")"""
 ## The result
 
 The primary lands within one per cent of its published temperature. The secondary does
-not: it comes back several hundred kelvin hot, outside the 2–3 per cent this mode claims,
-and the fitted radius ratio is about 6 per cent low. Two explanations were tested, of which
+not: it comes back about 200 K hot, outside the 2–3 per cent this mode claims,
+and the fitted radius ratio is about 5 per cent low. Two explanations were tested, of which
 one accounts for part of the discrepancy.
 
 Microturbulence is not the explanation. The library is pinned at ξ = 2 km s⁻¹ while a K
-subgiant requires nearer 1.3 km s⁻¹, and excess microturbulence makes the model lines too
-strong, which the fit could compensate by raising Teff. Rebuilding the library at
-ξ = 1 km s⁻¹ changes the equivalent widths by 8.5 per cent, in the expected direction, but
-the secondary's temperature and χ² both became worse. The change in ξ was absorbed by
-[M/H] instead (+0.10 dex), which is the documented [M/H]–ξ degeneracy.
+subgiant requires nearer 1.3 km s⁻¹; excess microturbulence makes the model lines too
+strong, which the fit could compensate by raising Teff. A library rebuilt at ξ = 1 km s⁻¹
+changes the equivalent widths by 8.5 per cent, in the expected direction, but makes the
+secondary's temperature and χ² both worse. [M/H] absorbs the change in ξ instead
+(+0.10 dex), the documented [M/H]–ξ degeneracy.
 
-The comparison mode accounts for part of the discrepancy, and the default was changed as a
-result. `matched` convolves both the model and the data with the LSF before comparing, on
-the argument that `d_hat` is a partial deconvolution. That argument is correct about the
-deconvolution but not about the cost: convolving the residuals correlates them while the
-likelihood remains diagonal. On this dataset it inflated χ² by 4.26× where the kernel
-predicts 4.91×, and `v sin i` absorbed the mis-specification, with both components pinned
-to the floor of their prior. `native` returns 2.2 km s⁻¹ for both, which is physical. The
-default is now `native`. The closed-loop test did not detect this, because its rows have no
-LSF and no disentangling behind them.
+The comparison mode accounts for part of the discrepancy, and is why the default is
+`native`. `matched` convolves both the model and the data with the LSF before comparing,
+since `d_hat` is a partial deconvolution. That is correct about the deconvolution but not
+about the cost: convolving the residuals correlates them while the likelihood remains
+diagonal. On this dataset it inflated χ² by 4.26× where the kernel predicts 4.91×, and
+`v sin i` absorbed the mis-specification, with both components pinned to the floor of
+their prior. `native` returns a physical 2.2 km s⁻¹ for both. The closed-loop test did not
+detect this, because its rows have no LSF and no disentangling behind them.
 
 Most of the secondary's offset remains unexplained. The candidates, in order: a 100 Å
 window carrying more temperature leverage for an F star than for a K subgiant; the
@@ -307,9 +302,8 @@ The labels exist to select a template, and `LabelMatch.template` renders one: th
 interpolated model at the fitted labels, broadened and shifted as fitted, and undiluted,
 since a template represents the star rather than the star's share of the system's light.
 
-It is returned as flux on the fit's own grid. Writing it in the file formats the
-downstream cross-correlation codes read is the role of `albireo.handoff` and is not yet
-implemented.""",
+It is returned as flux on the fit's own grid. Writing it in the file formats read by
+downstream cross-correlation codes is the role of `albireo.handoff`, not yet implemented.""",
     ),
     (
         PY,
@@ -332,14 +326,14 @@ fig.set_layout_engine("constrained")""",
         """\
 ## Summary
 
-The mode performs the task it was scoped for, template selection, and this run measures
-how well it does so on a real star:
+This run measures, on a real star, how well the mode performs the task it was scoped for,
+template selection:
 
 - The primary Teff is recovered to within 1 per cent.
-- The secondary is several hundred kelvin hot, outside the claimed accuracy, and the
+- The secondary is about 200 K hot, outside the claimed accuracy, and the
   reason is not yet established.
-- The radius ratio, which the fit is never given, comes back about 5 per cent low, from
-  spectroscopy alone, against a photometric measurement.
+- The radius ratio, never given to the fit, comes back from spectroscopy alone about
+  5 per cent low against the photometric measurement.
 - log g should be declared when the system determines it. Left free, it carries the
   temperatures with it, reports a lower χ² while doing so, and leaves the correlation
   report empty because it ends against a bound.

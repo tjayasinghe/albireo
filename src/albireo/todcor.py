@@ -278,12 +278,21 @@ class Template:
         measured against it are therefore absolute, since the label fit measures the zero
         point of the disentangled frame (``docs/math.md`` §9).
 
-        If the match was run with ``compare="matched"`` the model already carries the
-        instrument LSF, which is recorded in :attr:`sigma_kms` so that it is not applied
-        twice.
+        The Gaussian width the spectrum already carries is recorded in :attr:`sigma_kms`, so
+        that :func:`todcor` applies only the rest of the instrument profile, as for
+        :meth:`from_library`. A library that declares its resolving power
+        (:attr:`albireo.SpectralLibrary.resolving_power`) carries
+        ``sigma_lib = c / (R 2 sqrt(2 ln 2))``, which is what a ``"native"`` or ``"epochs"``
+        match renders. A ``"matched"`` match convolves the template further with
+        ``sqrt(sigma_inst^2 - sigma_lib^2)`` (the whole declared width for an intrinsic
+        library), so its template carries the declared instrument width, and that is
+        recorded.
         """
+        from albireo.match import _quadrature_width
+
         if name not in match.names:
             raise ValueError(f"unknown component {name!r}; the match has {list(match.names)}")
+        index = list(match.names).index(name)
         labels = match.labels[name]
         grid = LogGrid(
             x0=float(np.log(match.wave[0])),
@@ -292,17 +301,29 @@ class Template:
             relativistic=bool(match.problem.relativistic),
         )
         deviation = np.asarray(match.template(name), dtype=np.float64) - 1.0
-        sigma = 0.0
+        resolving_power = getattr(match.libraries[index], "resolving_power", None)
+        library_sigma = (
+            0.0
+            if resolving_power is None
+            else C_KMS / (float(resolving_power) * 2.0 * math.sqrt(2.0 * math.log(2.0)))
+        )
+        sigma = library_sigma
         if bool(match.problem.matched):
-            kernel = np.asarray(match.problem.lsf_kernel)
-            sigma = float(match.config.get("lsf_sigma_kms", 0.0)) if kernel.size > 1 else 0.0
+            declared = float(match.assumptions["lsf_sigma_kms"])
+            applied = float(_quadrature_width(declared, resolving_power, f"star {name!r}")[0])
+            sigma = math.sqrt(library_sigma**2 + applied**2)
         return cls(
             name=name,
             grid=grid,
             deviation=deviation,
             sigma_kms=sigma,
             v_zero_kms=float(labels["v_kms"]),
-            meta={"source": "label match", "labels": dict(labels)},
+            meta={
+                "source": "label match",
+                "labels": dict(labels),
+                "compare": str(match.assumptions.get("compare", "native")),
+                "library_resolving_power": resolving_power,
+            },
         )
 
 
@@ -1160,7 +1181,14 @@ class VelocityTable:
         return out
 
     def write(self, path, *, header: str = "") -> Path:
-        """Write the table as whitespace-separated ASCII with a commented header."""
+        """Write the table as whitespace-separated ASCII with a commented header.
+
+        The epoch times are written with as many digits as it takes to read the same float64
+        back, and every other number with six decimals. Six decimals of a BJD is an error of
+        up to 5e-7 d, and shifts that size reorder the near-degenerate short-period peaks of
+        a period search (:func:`albireo.rvorbit.find_period`), which then would not
+        reproduce from the written table.
+        """
         path = Path(path)
         columns = self.to_dict()
         lines = ["# albireo.todcor velocity table"]
@@ -1178,6 +1206,8 @@ class VelocityTable:
                 value = col[j]
                 if key == "instrument":
                     fields.append(str(value))
+                elif key == "bjd":
+                    fields.append(repr(float(value)))
                 elif key in ("n_pix",):
                     fields.append(f"{int(value):d}")
                 elif isinstance(value, (bool, np.bool_)):
@@ -1374,10 +1404,10 @@ def todcor(
         over the well-detected, unblended epochs of each instrument, and re-measures with
         them held fixed; a per-epoch light ratio is noisy, and a ratio fitted at a blended
         phase is not a measurement. ``"free"`` reports the per-epoch fit itself. A
-        sequence or a ``{name: fraction}`` mapping, summing to one, holds them fixed. Fixed
-        fractions are the appropriate choice when they were assumed by a disentangling
-        whose components are the templates, since that is the only choice consistent with
-        the definition of those components (``docs/math.md`` §9.1).
+        sequence or a ``{name: fraction}`` mapping, summing to one, holds them fixed. When
+        the templates are the components of a disentangling that assumed fractions, hold
+        those fixed: no other choice is consistent with the definition of the components
+        (``docs/math.md`` §9.1).
     lsf_sigma_v
         Per-instrument Gaussian LSF sigma in km/s, as :func:`albireo.build_problem` takes
         it (a scalar, or one width per anchor with ``lsf_anchors_angstrom``). Applied to
@@ -1398,14 +1428,14 @@ def todcor(
         The minimum found is then refined at full resolution and below a pixel.
     errors
         ``"profiled"`` (default) rescales the curvature error by the reduced chi-square,
-        so that the noise level is estimated from the residuals; this is the
-        maximum-likelihood estimator of Zucker (2003) and the appropriate choice when
-        ``ivar`` is known only to a scale. ``"ivar"`` trusts the declared weights.
+        so that the noise level is estimated from the residuals: the maximum-likelihood
+        estimator of Zucker (2003), appropriate when ``ivar`` is known only to a scale.
+        ``"ivar"`` trusts the declared weights.
     scale
         With fixed or global light fractions, ``"fixed"`` (default) holds the composite at
         the fractions exactly, since continuum-normalized data pin its scale, while
-        ``"free"`` solves one overall scale per epoch on top of the fixed ratios, which is
-        the original form of TODCOR with a known light ratio (its correlation is
+        ``"free"`` solves one overall scale per epoch on top of the fixed ratios, the
+        original form of TODCOR with a known light ratio (its correlation is
         scale-invariant). ``"free"`` is appropriate when the normalization is uncertain;
         the fitted scale is then the sum of the reported ``light`` row, and its departure
         from one is a normalization diagnostic. Ignored when ``light="free"``.
@@ -1413,8 +1443,8 @@ def todcor(
         Lag-one correlation of each epoch's noise along its pixel index, one value or one
         per instrument, as a pipeline that resampled the spectra onto a common step leaves
         it (Gaia's RVS grids carry 0.27 and 0.81; :mod:`albireo.gaia` measures it). The
-        estimator is unchanged, since the weighted least squares stays the right thing to
-        minimize, but its error is not: with the noise AR(1) along the pixel index the
+        weighted least-squares estimator is unchanged, but its error is not: with the
+        noise AR(1) along the pixel index the
         covariance is the sandwich of ``docs/math.md`` §10.4, which grows with the
         correlation, and the diagonal curvature error is optimistic by that factor.
         ``None`` (default) takes the noise as white.

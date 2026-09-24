@@ -31,8 +31,16 @@ from albireo.benchmark import (
     write_report,
 )
 from albireo.facade import Between, Fixed, Known
-from albireo.gaia import RVS_DR4_EPOCH, RVS_SPANS, GostTransits, rvs_transit_times_from_gost
-from albireo.pipeline import _spec
+from albireo.gaia import (
+    RVS_DR4_EPOCH,
+    RVS_SPANS,
+    GostTransits,
+    rvs_delivered_sigma_kms,
+    rvs_lsf_sigma_kms,
+    rvs_transit_times_from_gost,
+)
+from albireo.grids import C_KMS
+from albireo.pipeline import _lsf, _spec
 from albireo.population import BinarySystem, draw_population, write_population
 from albireo.simulate import synthetic_library
 
@@ -106,6 +114,19 @@ def test_each_tier_becomes_the_declaration_it_describes(systems, library):
 
     oracle = build_star(system, TIERS["oracle"], **kwargs)
     assert oracle.name == f"{system.name}__oracle"
+    # The analysis declares the width the simulated, delivered epochs carry: the nominal
+    # line-spread function with the resampling's Delta_det^2 / 6, the detector pixel's width
+    # in place of the delivered one, and the simulation's (5/12) dv^2 on its 2 km/s grid
+    # added, 11.67 km/s against 11.07 (D65).
+    assert grid.dv_kms == pytest.approx(2.0)
+    delivered = rvs_delivered_sigma_kms(RVS_DR4_EPOCH, simulation_dv_kms=grid.dv_kms)
+    assert oracle.lsf == {"RVS": {"sigma_kms": delivered}}
+    assert _lsf(oracle.lsf["RVS"], "RVS").sigma_kms == pytest.approx(11.670, abs=5e-4)
+    det = C_KMS * RVS_DR4_EPOCH.detector_step / 8580.0
+    prod = C_KMS * RVS_DR4_EPOCH.step / 8580.0
+    assert delivered**2 - rvs_lsf_sigma_kms() ** 2 == pytest.approx(
+        det**2 / 6.0 + (det**2 - prod**2) / 12.0 + (5.0 / 12.0) * grid.dv_kms**2, rel=1e-12
+    )
     assert isinstance(_spec(oracle.period, "p"), Known)
     assert isinstance(_spec(oracle.t_conj, "t"), Known)
     assert isinstance(_spec(oracle.ecc, "e"), Fixed) and oracle.ecc == system.ecc

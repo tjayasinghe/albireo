@@ -5,9 +5,9 @@ one is, what the spectrograph does, and what is already known about the orbit, a
 assembles the fit from that declaration.
 
 !!! warning "Experimental"
-    This class defines a vocabulary, and a vocabulary is expensive to change once other
-    code depends on it, so it remains marked experimental until it has been used on a
-    problem outside this project. [`MarginalOrbitModel`](inference.md) and the functions
+    This class defines a vocabulary, which is expensive to change once other code depends
+    on it, so it stays experimental until it has been used on a problem outside this
+    project. [`MarginalOrbitModel`](inference.md) and the functions
     around it are the supported surface and are stable. `Disentangler.expert()` returns
     exactly that surface, so moving to the low-level path costs three lines rather than a
     rewrite.
@@ -37,7 +37,7 @@ prints each one:
 | The **velocity budget** | It must bound the largest relative velocity the priors allow, not the one the answer turns out to have. Too small a budget stalls the sampler against a guard it cannot see; reached through `log_likelihood` directly, too small a budget gives a wrong result without an error. The information is already in the support of the `k` priors. |
 | The **model grid** | Wide enough for that budget plus the LSF kernel radius. Short of that margin the shifted model runs off the grid and the fit silently loses flux there. |
 | The **conjunction phase** | Located by a 42-point scan over one period before anything is optimized. The likelihood is sharply multimodal in phase, and L-BFGS started in the wrong trough converges tightly on the wrong answer. The count is even so that the grid holds the antipode of every trial it samples, which an odd count leaves midway between two trials; for a near-equal pair the two mirrors are nearly equally good and the scan can only choose between them if both are on the grid. |
-| The **semi-amplitude basin** | When a semi-amplitude is declared as a `Between` range, a scan of the marginal likelihood precedes the fit: the first ranged component crosses a geometric grid over its range (a factor of 1.25 between neighbours) together with eight conjunction phases, each further ranged component crosses its own grid at what has been located so far, two joint refinements halve the spacings around the best trial, a final pass takes each component once more over its whole grid at the refined best, and for two ranged components the exchange-symmetric twin of the best is tried; L-BFGS starts from the best trial when it beats the declared start. Between the two passes each star's prior amplitude is profiled at the orbit located so far: the marginal likelihood is exactly invariant under scaling a star's light by a factor and its two smoothness hyperparameters by the factor squared, so a profile over the light at fixed hyperparameters is a profile over the amplitude the data want for that star (not a measurement of its light, which it puts at 0.3 to 0.7 of the truth), and where it asks for a factor of two or more the hyperparameter starts are moved and the scan repeated (`fit.k_scan.prior_scales`); a companion declared at six times its light had made the scan prefer a static secondary, and the profile rejected that amplitude by 150 nats. The axes are taken in turn rather than as a product because a companion of a few percent of the light prefers its true semi-amplitude only while the primary's is within about ten percent of the truth, which no product grid coarse enough to afford holds. The likelihood is multimodal in the semi-amplitudes too: a start at half the true value settles at half, a start far above it in the static-component minimum, and a phase located at semi-amplitudes a factor of three off can sit a quarter of a period from the truth, which is why the two are scanned together. The scans run on a copy of the declaration with the model grid at twice the pixel, a quarter of the cost at a dozen epochs, and the fit itself on the full grid. Two guards keep a scan on a coarse model of the wrong shape from doing harm: a best trial with every ranged semi-amplitude at the floor of its grid is the static-component minimum and is refused, and the start moves only when the best trial beats it by more than 25 nats jointly, after which a component whose own move is worth less than 5 nats, with the others at the best trial, returns to its start (a companion of a few percent of the light commands some 25 nats over its whole range, so the evidence is judged jointly and a template table's seed is kept where the data are indifferent). `fit.k_scan` retains the trials, the hold losses and the notes; `fit(k_scan=False)` skips it. |
+| The **semi-amplitude basin** | When a semi-amplitude is declared as a `Between` range, a scan of the marginal likelihood precedes the fit. The first ranged component crosses a geometric grid over its range (a factor of 1.25 between neighbours) together with eight conjunction phases; each further ranged component crosses its own grid at what has been located so far; two joint refinements halve the spacings around the best trial; a final pass takes each component once more over its whole grid at the refined best; and for two ranged components the exchange-symmetric twin of the best is tried. L-BFGS starts from the best trial when it beats the declared start. Between the two passes each star's prior amplitude is profiled at the orbit located so far. The marginal likelihood is exactly invariant under scaling a star's light by a factor and its two smoothness hyperparameters by the factor squared, so a profile over the light at fixed hyperparameters is a profile over the amplitude the data want for that star (not a measurement of its light, which it puts at 0.3 to 0.7 of the truth). Where it asks for a factor of two or more, the hyperparameter starts are moved and the scan repeated (`fit.k_scan.prior_scales`); a companion declared at six times its light had made the scan prefer a static secondary, and the profile rejected that amplitude by 150 nats. The axes are taken in turn rather than as a product because a companion of a few percent of the light prefers its true semi-amplitude only while the primary's is within about ten percent of the truth, which no affordable product grid holds. The likelihood is multimodal in the semi-amplitudes too: a start at half the true value settles at half, a start far above it in the static-component minimum, and a phase located at semi-amplitudes a factor of three off can sit a quarter of a period from the truth, so the two are scanned together. The scans run on a copy of the declaration with the model grid at twice the pixel, a quarter of the cost at a dozen epochs; the fit itself runs on the full grid. Two guards keep a scan on a coarse model of the wrong shape from doing harm. A best trial with every ranged semi-amplitude at the floor of its grid is the static-component minimum and is refused. The start moves only when the best trial beats it by more than 25 nats jointly, after which a component whose own move is worth less than 5 nats, with the others at the best trial, returns to its start (a companion of a few percent of the light commands some 25 nats over its whole range, so the evidence is judged jointly and a template table's seed is kept where the data are indifferent). `fit.k_scan` retains the trials, the hold losses and the notes; `fit(k_scan=False)` skips it. |
 | The **smoothness hyperparameters** | Fitted by empirical Bayes, then frozen for sampling, and reported per component with a flag on any that did not move from its start. |
 
 A fifth quantity is structural rather than derived: a spec such as `Between(5.5, 6.5)`
@@ -47,9 +47,8 @@ them.
 
 ## Declaring velocities instead of an orbit
 
-Not every binary has a published period, and for many systems of interest none exists:
-BLOeM's 59 double-lined systems have no orbital solutions. Measured velocities can be
-declared in place of an orbit:
+Many binaries of interest have no published period: BLOeM's 59 double-lined systems have
+no orbital solutions. Measured velocities can be declared in place of an orbit:
 
 ```python
 dis = ab.Disentangler(
@@ -111,8 +110,7 @@ required or the call is refused.
   `Assumed, not measured`.
 - **A phase scan is not a period search.** The scan resolves phase at one period, the
   prior's midpoint, so a prior wide enough to constitute a search warns and names the
-  remedy. The result degrades rather than failing, which is why this is a warning rather
-  than a refusal.
+  remedy. It warns rather than refuses because the result degrades rather than fails.
 - **Air versus vacuum must be declared when it matters.** A `Nebular` or `Telluric`
   component is keyed to absolute line positions, so an undeclared wavelength scale raises
   rather than being assumed. The difference between the two scales is a nearly constant
@@ -140,13 +138,40 @@ value is listed among the assumptions. The same value reaches `fit.measure_veloc
 whose errors carry it through the sandwich of
 [§10.4](../math.md#104-uncertainties-and-detection).
 
+## Stellar labels from a fit
+
+`fit.match_labels(stars)` fits Teff, log g, [M/H] and *v* sin *i* to the stellar components,
+taking the grid, the spectra, the declared light fractions, the LSF and the medium from the
+fit. It compares the template composite with the epoch spectra by default
+(`compare="epochs"`), through the statistics that `fit.epoch_statistics(resolving_power=...)`
+returns: $`h = A^\top W z`$, $`z^\top W z`$ and the band of $`G = A^\top W A`$ at the MAP, with
+the stellar operator's LSF reduced by the libraries' own resolving power and by the model
+grid's own smoothing, $`\tfrac{7}{12}\,\Delta v^2`$ in variance, and any telluric or nebular row
+held at its posterior mean ([§9.2a](../math.md#92a-comparing-in-the-epoch-space)). The stars'
+libraries must declare one resolving power between them, and the statistics are built once
+per call, in a few seconds; pass `statistics=` to reuse them. A compensated width that would
+fall below half a model pixel is floored there with a warning that names the grid spacing
+that avoids it.
+
+```python
+labels = fit.match_labels(stars)                               # epoch comparison
+native = fit.match_labels(stars, compare="native")             # against the components
+stats = fit.epoch_statistics(resolving_power=20_000)           # reuse across calls
+print(stats.summary())                                         # the operator's widths
+again = fit.match_labels(stars, statistics=stats, restart_rounds=0)
+```
+
+The epoch comparison does not depend on the declared light fractions, so its
+`labels.flux_ratio` is a measurement of the light. [`albireo.match`](match.md) describes the
+optimiser, the restarts and the measured calibration of the formal errors.
+
 ## Outside the scope of v1
 
 Per-epoch jitter, inferred light fractions and inferred LSF widths are not offered through
-the façade. Each is a one-line site in the low-level API, and each is a scientific claim
-rather than a convenience, which a keyword such as `jitter=True` would present as the
-latter. `fit.z_rms` is printed unconditionally as the diagnostic for whether they are
-needed, and `dis.expert()` is the route to adding them.
+the façade. Each is a one-line site in the low-level API and a scientific claim, which a
+keyword such as `jitter=True` would present as a convenience. `fit.z_rms` is printed
+unconditionally as the diagnostic for whether they are needed, and `dis.expert()` is the
+route to adding them.
 
 Three further declarations are refused rather than approximated:
 
@@ -157,8 +182,8 @@ Three further declarations are refused rather than approximated:
   without an error. There is no such field.
 - **A lower bound on eccentricity.** The sampled pair is (√e·cos ω, √e·sin ω), in which a
   lower bound on *e* is an annulus rather than a box. `ecc=Between(lo, hi)` with `lo > 0`
-  raises; before the refusal was added, a declared lower bound was measured returning half
-  its value.
+  raises; without the refusal, a declared lower bound was measured returning half its
+  value.
 
 `Disentangler` does not wrap plotting: [`albireo.plotting`](results.md) already covers it,
 and wrapping it would double the surface without adding a guarantee.

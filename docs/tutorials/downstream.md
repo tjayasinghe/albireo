@@ -2,10 +2,10 @@
 
 See the [science overview](../science.md) for background and references.
 
-A disentangled spectrum is rarely the result. It is fed to an atmosphere code (GSSP, iSpec,
-Korg.jl, PySME), and the parameters that code returns are what is tabulated: effective
+A disentangled spectrum is rarely the final result. It is fed to an atmosphere code (GSSP,
+iSpec, Korg.jl, PySME), whose returned parameters are what is tabulated: effective
 temperature, surface gravity, abundances. The uncertainty on the disentangled spectrum is
-usually dropped at that boundary, and the papers say so:
+usually dropped at that boundary, as the papers state:
 
 > We stress that the uncertainties that could arise from the normalisation procedure are not
 > taken into account in the global uncertainties on the presented properties
@@ -17,22 +17,21 @@ usually dropped at that boundary, and the papers say so:
 >
 > — Pavlovski, Southworth & Tamajo (2018)
 
-This page describes how to carry the uncertainty across that boundary. It has two halves: the
-half albireo runs, and the half that needs an atmosphere code installed.
+This page carries the uncertainty across that boundary, in two halves: the half albireo runs,
+and the half that needs an atmosphere code installed.
 
 !!! tip "When four labels are enough"
 
-    If what is needed is a *template*, the synthetic spectrum against which individual epochs
-    are cross-correlated, rather than an abundance table, there is a shorter route that stays
-    inside albireo and does not drop the uncertainty at a file boundary:
+    If the goal is a *template* (the synthetic spectrum against which individual epochs are
+    cross-correlated) rather than an abundance table, a shorter route stays inside albireo
+    and does not drop the uncertainty at a file boundary:
     [Turn a component into an RV template](labels.md). It fits Teff, log g, [M/H] and
     *v* sin *i* against a published grid, propagates the spectral posterior by refitting its
-    draws, and measures the light ratio along the way.
+    draws, and measures the light ratio.
 
     It does not replace this page. It fits four labels and nothing else: no abundances, no
     microturbulence, no bespoke synthesis. A parameter that belongs in a published table still
-    needs an atmosphere code, and everything below is how to reach one without losing the
-    error bar.
+    needs an atmosphere code, reached as described below without losing the error bar.
 
 ## The file formats
 
@@ -46,7 +45,7 @@ GSSP and iSpec differ in most of the conventions that can fail without an error 
 | Per-pixel error | none: there is no column | `err`, absolute 1σ |
 | Flux | normalized | normalized |
 
-Two of those rows fail silently rather than loudly.
+Two of those rows fail silently.
 
 **iSpec performs no unit conversion on the text path.** Its internal scale is nanometres, line
 lists included. A wavelength written in ångström lands a factor of ten outside every model
@@ -59,8 +58,7 @@ will be used for the calculation of synthetic spectra is computed from the obser
 no source repository). albireo solves on a log-wavelength grid, whose linear spacing drifts
 across the window by 1.32% on the packaged example. Written out as it stands, GSSP would take
 the first pixel pair as the step for the whole spectrum. `write_gssp` resamples onto an
-equidistant grid, and applies the identical grid to every draw so that the draws stay
-comparable.
+equidistant grid, and applies the identical grid to every draw so the draws stay comparable.
 
 ```python
 import albireo as ab
@@ -119,14 +117,14 @@ Independent per-pixel noise understates the integrated uncertainty by a factor o
 three. The pointwise band answers a pointwise question; every atmospheric parameter integrates
 the spectrum, and for an integrated quantity the band is not the right input.
 
-The second result concerns the two components jointly. The correlation between their
-equivalent widths across draws is −0.992, against −0.052 for the same statistic under
-independent per-pixel noise. That is the *k* = 0 exchange mode of the forecast, the delocalized see-saw that
-sits at about 1× the prior for every observing design, appearing in a derived quantity. The two
-stars trade line depth almost exactly, so their difference is better determined than either one
-alone, and fitting the components separately with independent error bars misstates both. Keep
-the draw index: a plot of *T*<sub>eff,A</sub> against *T*<sub>eff,B</sub> per draw shows the
-structure, and pooling the draws per component discards it.
+Across draws, the correlation between the two components' equivalent widths is −0.992,
+against −0.052 under independent per-pixel noise. This is the *k* = 0 exchange mode of the
+forecast (the delocalized see-saw at about 1× the prior for every observing design) appearing
+in a derived quantity. The two stars trade line depth almost exactly, so their difference is
+better determined than either one alone, and fitting the components separately with
+independent error bars misstates both. Keep the draw index: a plot of *T*<sub>eff,A</sub>
+against *T*<sub>eff,B</sub> per draw shows the structure, and pooling the draws per component
+discards it.
 
 ## What the spread does not contain
 
@@ -153,6 +151,6 @@ Intel-Fortran and OpenMPI and runs on Linux; Tkachenko (2015) reports 5–6 minu
 cluster job, provided the grid is generated once and reused.
 
 Neither writer converts between air and vacuum, by design. iSpec ships `air_to_vacuum` /
-`vacuum_to_air` as explicit user steps and does no conversion on read; albireo does the same,
-for one reason: the offset is a nearly constant 83 km/s, the same order as the orbits
-being measured, so guessing it is worse than declining to.
+`vacuum_to_air` as explicit user steps and does no conversion on read. albireo does the same
+because the offset is a nearly constant 83 km/s, the same order as the orbits being measured,
+so guessing it is worse than declining to.

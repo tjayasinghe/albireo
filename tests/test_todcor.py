@@ -736,6 +736,81 @@ def test_template_from_library_renders_at_labels_with_rotation():
         Template.from_library("A", library, {"teff": 4800.0}, grid=grid, medium="air")
 
 
+@pytest.mark.parametrize("compare", ["native", "matched"])
+def test_a_label_template_records_the_width_it_already_carries(compare, monkeypatch):
+    """TODCOR broadens a label template only by what it lacks of the instrument profile.
+
+    A ``"native"`` (or ``"epochs"``) match renders its template from the library at the
+    library's own resolving power, so the template carries ``sigma_lib``; a ``"matched"``
+    match convolves it further with ``sqrt(sigma_inst^2 - sigma_lib^2)``, so it carries the
+    declared instrument width. Before D65 ``from_labels`` recorded neither (it read a key the
+    match's config never has), and TODCOR applied the whole instrument profile again. The
+    optimiser and the Laplace step are replaced by the scan's own start, since what is
+    pinned is the bookkeeping, not the fit.
+    """
+    from test_library import build_library
+
+    import albireo.match as match_module
+    from albireo.inference import MAPResult
+    from albireo.match import StarLabels, match_labels
+    from albireo.todcor import _convolved_templates, _effective_sigma
+
+    def start_only(model, *, init, **kwargs):
+        return MAPResult(
+            params=dict(init),
+            unconstrained={},
+            potential=0.0,
+            grad_norm=0.0,
+            converged=True,
+            num_steps=0,
+        )
+
+    monkeypatch.setattr(match_module, "run_map", start_only)
+    monkeypatch.setattr(match_module, "_laplace", lambda model, result, seed: (None, ()))
+
+    grid = ab.LogGrid.from_wavelength_range(5165.0, 5235.0, dv_kms=2.0)
+    sigma_inst = 12.0
+    intrinsic = build_library()
+    for resolving_power in (None, 20_000.0):
+        library = (
+            intrinsic
+            if resolving_power is None
+            else intrinsic.replace(meta={**intrinsic.meta, "resolving_power": resolving_power})
+        )
+        sigma_lib = 0.0 if resolving_power is None else ab.C_KMS / (resolving_power * 2.354820045)
+        labels = {"teff": ab.Between(4200.0, 5300.0), "logg": ab.Between(3.5, 4.5)}
+        match = match_labels(
+            grid,
+            np.zeros((2, grid.n)),
+            stars={n: StarLabels(library=library, **labels) for n in ("A", "B")},
+            medium="air",
+            light_fractions=[0.6, 0.4],
+            lsf_sigma_kms=sigma_inst,
+            compare=compare,
+            mh=ab.Fixed(0.0),
+            top_k=1,
+        )
+        template = Template.from_labels(match, "B")
+        expected = sigma_inst if compare == "matched" else sigma_lib
+        assert template.sigma_kms == pytest.approx(expected, rel=1e-9), (compare, resolving_power)
+        assert template.meta["compare"] == compare
+        assert template.meta["library_resolving_power"] == resolving_power
+
+        # What TODCOR then applies: the quadrature remainder, which is nothing for matched.
+        remainder = _effective_sigma("a", sigma_inst, template)
+        np.testing.assert_allclose(remainder, [np.sqrt(sigma_inst**2 - expected**2)], atol=1e-6)
+        rows, _ = _convolved_templates([template], grid, "a", {"a": sigma_inst}, None)
+        if compare == "matched":
+            np.testing.assert_array_equal(rows[0], template.deviation)
+        else:
+            kernel = ab.gaussian_kernel(float(remainder[0]) / grid.dv_kms)
+            np.testing.assert_allclose(
+                rows[0],
+                np.convolve(template.deviation, np.asarray(kernel), mode="same"),
+                atol=1e-12,
+            )
+
+
 def test_template_and_argument_validation(sb2):
     dataset, _, templates = sb2
     c1, c2 = components()

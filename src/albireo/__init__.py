@@ -120,6 +120,7 @@ from albireo.likelihood import (
     spectra_std,
 )
 from albireo.match import (
+    EpochStatistics,
     FixedDilution,
     LabelMatch,
     RadiusRatio,
@@ -280,6 +281,7 @@ __all__ = [
     "DetectionLimit",
     "Disentangler",
     "EpochData",
+    "EpochStatistics",
     "Fit",
     "Fixed",
     "FixedDilution",

@@ -136,8 +136,8 @@ needs neither:
 - `pip install -e ".[plots]"` installs matplotlib and ArviZ for `albireo.plotting` and
   the posterior diagnostics.
 
-Every install command in the documentation takes the same editable form, for the same
-reason; each becomes `pip install "albireo[...]"` at the first PyPI release.
+Every install command in the documentation takes this editable form until the first PyPI
+release, when each becomes `pip install "albireo[...]"`.
 
 For a GPU build, install the `jax[cuda]` wheel for your platform following the
 [JAX installation guide](https://docs.jax.dev/en/latest/installation.html).
@@ -222,8 +222,7 @@ mkdocs serve
 decision ledger and architecture ([`internal/design.md`](internal/design.md)), the plan
 and the stated non-goals ([`internal/roadmap.md`](internal/roadmap.md)), and the release
 procedure ([`internal/releasing.md`](internal/releasing.md)). They are kept in the
-repository because the code and the tests cite them, but they are addressed to
-maintainers, not to users.
+repository because the code and the tests cite them, but are addressed to maintainers.
 
 ## Citation
 

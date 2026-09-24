@@ -8,23 +8,25 @@ file layout and one proprietary period: FEROS, HARPS, UVES, X-shooter, GIRAFFE a
 ESPRESSO all deliver ``SCIENCE.SPECTRUM`` products, and every product becomes public a
 year after observation. One loader therefore serves all of them.
 
-This module is the fetch half, an ObsCore/TAP client and a downloader; reading the files
-is the job of :mod:`albireo.io`. It uses the standard library only (``urllib``, ``json``,
+This module is the fetch half, an ObsCore/TAP client and a downloader; :mod:`albireo.io`
+reads the files. It uses the standard library only (``urllib``, ``json``,
 ``concurrent.futures``), so locating data adds no dependency; astropy is needed only to
 open a file.
 
-Three properties of the archive determine the design. Searches are by cone, not by name:
-``target_name`` is PI free text and is not resolver-normalized (HR 6819 is filed as
-``HR-6819``), and for one-dimensional spectra ``s_region`` is a bare
-``POSITION J2000 ra dec`` (a point, not a footprint), so the form ESO's own documentation
-shows for images, ``CONTAINS(POINT(...), s_region)=1``, matches nothing;
-``INTERSECTS(s_region, CIRCLE(...))`` is used instead. Truncation is silent: the sync
-endpoint caps output at 20,000 rows by default, and the JSON and CSV serializations carry
-no overflow marker (only VOTable does), so :func:`query` compares the row count against
-``maxrec`` and raises at the cap. An archive row is not necessarily one epoch: GIRAFFE
-delivers one file per science fibre (up to 130 per raw frame), and multi-epoch stacks
-spanning weeks are flagged with ``M_EPOCH=True``; :func:`query` returns the metadata
-needed to select products, and the selection itself is left to the caller.
+Three properties of the archive determine the design.
+
+- Searches are by cone, not by name. ``target_name`` is PI free text and is not
+  resolver-normalized (HR 6819 is filed as ``HR-6819``). For one-dimensional spectra
+  ``s_region`` is a bare ``POSITION J2000 ra dec`` (a point, not a footprint), so the form
+  ESO's own documentation shows for images, ``CONTAINS(POINT(...), s_region)=1``, matches
+  nothing; ``INTERSECTS(s_region, CIRCLE(...))`` is used instead.
+- Truncation is silent. The sync endpoint caps output at 20,000 rows by default, and the
+  JSON and CSV serializations carry no overflow marker (only VOTable does), so
+  :func:`query` compares the row count against ``maxrec`` and raises at the cap.
+- An archive row is not necessarily one epoch. GIRAFFE delivers one file per science fibre
+  (up to 130 per raw frame), and multi-epoch stacks spanning weeks are flagged with
+  ``M_EPOCH=True``. :func:`query` returns the metadata needed to select products; the
+  selection is left to the caller.
 
 The BLOeM functions (:func:`bloem_spectra`, :class:`BloemTarget`) apply all three to one
 survey: a BLOeM identifier such as ``"1-002"`` is resolved to that star's ~25 epochs. The
@@ -175,10 +177,10 @@ class ArchiveRecord:
 def local_filename(dp_id: str) -> str:
     """Filesystem-safe name for an ESO dataset id.
 
-    ESO ids embed an ISO timestamp (``ADP.2016-09-20T09:32:35.364``), and a colon is not a
-    legal character in a Windows filename (NTFS reads ``name:stream`` as an alternate data
-    stream, and the open fails with ``EINVAL``). Colons become hyphens on every platform
-    so that a data directory copied between machines keeps the same names.
+    ESO ids embed an ISO timestamp (``ADP.2016-09-20T09:32:35.364``), and a colon is not
+    legal in a Windows filename (NTFS reads ``name:stream`` as an alternate data stream,
+    and the open fails with ``EINVAL``). Colons become hyphens on every platform, so a data
+    directory copied between machines keeps the same names.
     """
     return dp_id.replace(":", "-") + ".fits"
 
@@ -294,8 +296,8 @@ def query(
     maxrec
         Row cap. Reaching it raises, because the archive does not signal truncation: the
         sync endpoint's JSON and CSV serializations carry no overflow marker (only VOTable
-        does), so a capped result is indistinguishable from a complete one, and a partial
-        list of a programme's epochs would yield a wrong orbit.
+        does). A capped result is indistinguishable from a complete one, and a partial list
+        of a programme's epochs would yield a wrong orbit.
     timeout
         Socket timeout in seconds. The service's own default execution limit is 60 s.
     url
@@ -462,8 +464,7 @@ def download(
     Each file is written to a ``.part`` temporary and renamed atomically, so an
     interrupted run leaves no half-written FITS file under the final name; re-running
     skips files already present. Downloads are checked against ``Content-Length`` where
-    the server sends it, since a cleanly truncated transfer is otherwise
-    indistinguishable from success.
+    the server sends it, since a cleanly truncated transfer otherwise looks like success.
 
     Parameters
     ----------
@@ -479,9 +480,9 @@ def download(
     timeout
         Per-file socket timeout in seconds.
     manifest
-        Write ``manifest.json`` recording every product's archive metadata and the
-        outcome of its download. It is written after the transfers, so it cannot list a
-        failed file as present.
+        Write ``manifest.json`` with every product's archive metadata and download
+        outcome. It is written after the transfers, so it cannot list a failed file as
+        present.
     progress
         Optional ``callback(done, total, status_line)``.
 
@@ -569,8 +570,8 @@ class BloemTarget:
         As published, whitespace stripped.
     binary_class : str or None
         ``"SB1"``, ``"SB2"``, ``"SB3"``, ``"RVvar"`` or ``"RVcst"`` where the star appears
-        in the B-star multiplicity table, else ``None``. ``None`` means unclassified in
-        that table, not single: it covers all 620 stars the table does not list, including
+        in the B-star multiplicity table, else ``None``. ``None`` means absent from that
+        table, not single: it covers all 620 stars the table does not list, including
         every O star.
     row : dict
         The full catalogue row, so a caller can reach a column this class does not name.
@@ -592,9 +593,9 @@ class BloemTarget:
 def normalize_bloem_id(target: str) -> str:
     """Normalize a BLOeM identifier to the ``field-star`` form the catalogue uses.
 
-    The published tables spell the identifier three ways: the cross-match table writes
-    ``1-001``, the multiplicity table writes ``1-002``, and the O-star table writes
-    ``BLOeM_1-006``. Those spellings and ``BLOeM 1-1`` all reduce to the same identifier.
+    The published tables spell the identifier three ways: ``1-001`` (cross-match table),
+    ``1-002`` (multiplicity table) and ``BLOeM_1-006`` (O-star table). These and
+    ``BLOeM 1-1`` all reduce to the same form.
 
     References
     ----------
@@ -662,8 +663,8 @@ _BINARY_CLASS_CACHE: dict[str, str] = {}
 def _binary_classes(timeout: float) -> dict[str, str]:
     """``{bloem_id: class}`` from the B-star multiplicity table, fetched at most once.
 
-    Cached for the process: it is a 309-row published table that does not change, and
-    without this every :func:`resolve_bloem` in a loop over targets pays for it again.
+    Cached for the process: the 309-row published table does not change, and uncached,
+    every :func:`resolve_bloem` in a loop over targets would fetch it again.
     """
     if _BINARY_CLASS_CACHE:
         return _BINARY_CLASS_CACHE
@@ -773,9 +774,9 @@ def resolve_bloem(
         The survey identifier in any of its published spellings: ``"1-001"``,
         ``"BLOeM_1-1"``, ``"BLOeM 1-001"``.
     with_classification
-        Also fill :attr:`BloemTarget.binary_class`. This takes one extra query the first
-        time in a process; the table is small, published and cached thereafter. Set it to
-        ``False`` when only the source id is needed, as :func:`bloem_spectra` does.
+        Also fill :attr:`BloemTarget.binary_class`, at the cost of one extra query the
+        first time in a process (the table is small, published and cached thereafter).
+        ``False`` when only the source id is needed, as in :func:`bloem_spectra`.
     timeout
         Socket timeout in seconds.
 
@@ -847,12 +848,12 @@ def bloem_spectra(
         sub-runs are the LR02 epochs the BLOeM papers analyse. ``None`` returns every
         GIRAFFE spectrum of the star regardless of programme, which currently includes the
         ``115.28A9`` follow-up: a different setup at R = 17000 and 23000 in two other
-        wavelength windows. Those are usable only as separate instruments with their own
+        wavelength windows, usable only as separate instruments with their own
         line-spread functions, never pooled with LR02.
     public_only
         Drop rows still inside their proprietary period. Sub-run ``.004`` releases through
         2027-01-15, so a fetch before then is partial by construction; without this flag
-        the proprietary rows are returned and will fail to download.
+        the proprietary rows are returned and fail to download.
     maxrec
         Row cap. One star has ~25-32 epochs; the default leaves room without disabling the
         truncation guard.

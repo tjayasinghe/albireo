@@ -2,15 +2,14 @@
 
 **Experimental.** The tiers, the metrics and the report layout may change.
 
-The harness answers one question with numbers: how well does albireo recover the orbit,
-the epoch velocities, the component spectra and the atmospheric labels of a double-lined
-binary from Gaia RVS epoch spectra, as a function of what the system is (brightness,
-transits, separation, light ratio, temperatures) and of what the analysis is told. Every
-system of a population (:mod:`albireo.population`) is simulated once
-(:mod:`albireo.gaia`), the same epochs are run through the pipeline
-(:mod:`albireo.pipeline`) under one or more knowledge tiers, the pipeline's own truth
-block is collected, and a Markdown report with figures is written. Nothing outside
-albireo is used at any stage.
+The harness measures how well albireo recovers the orbit, the epoch velocities, the
+component spectra and the atmospheric labels of a double-lined binary from Gaia RVS epoch
+spectra, as a function of what the system is (brightness, transits, separation, light
+ratio, temperatures) and of what the analysis is told. Every system of a population
+(:mod:`albireo.population`) is simulated once (:mod:`albireo.gaia`), the same epochs are
+run through the pipeline (:mod:`albireo.pipeline`) under one or more knowledge tiers, the
+pipeline's own truth block is collected, and a Markdown report with figures is written.
+Nothing outside albireo is used at any stage.
 
 The knowledge tiers state what the analysis is told; the truth is never told:
 
@@ -26,8 +25,8 @@ The knowledge tiers state what the analysis is told; the truth is never told:
 - ``blind``: nothing known: the period is searched, the light fractions are measured, the
   labels are the library box.
 
-The tiers are declared to the pipeline through its own vocabulary, so the benchmark
-runs exactly what a user runs.
+The tiers are declared in the pipeline's own vocabulary, so the benchmark runs exactly
+what a user runs.
 """
 
 from __future__ import annotations
@@ -53,6 +52,7 @@ from albireo.gaia import (
     RVSTruth,
     gost_transits,
     rvs_components,
+    rvs_delivered_sigma_kms,
     rvs_lsf_sigma_kms,
     rvs_model_grid,
     rvs_snr_per_pixel,
@@ -219,8 +219,11 @@ class BenchmarkConfig:
         ``n_transits``).
     resolving_power
         ``"nominal"`` observes every transit at R = 11,500; ``"per-transit"`` draws each
-        transit's resolving power from the in-flight measurements while the analysis
-        still declares the nominal one.
+        transit's resolving power from the in-flight measurements. Either way the analysis
+        declares the width the delivered epochs carry at the nominal resolving power,
+        including the smoothing of the archive's resampling and of the simulation's own
+        2 km/s model grid (:func:`albireo.gaia.rvs_delivered_sigma_kms`: 11.67 km/s on the
+        DR4 grid and 11.90 km/s on the DR3 grid, against 11.07 before delivery).
     dv_kms
         Model-grid pixel of the disentangling in km/s.
     k_min, k_max, ecc_max
@@ -230,11 +233,10 @@ class BenchmarkConfig:
     mask_ca
         Zero-weight the Ca II triplet windows in the disentangling.
     noise_model
-        ``"correlated"`` (default) declares the delivered grid's lag-one noise correlation
-        to the analysis, as the simulation measured it, so that the disentangling's noise
-        model is AR(1) along the pixel index and the velocity table's errors carry the
-        correlation; ``"diagonal"`` takes the pixels as independent, which is what the
-        archive's errors say.
+        ``"correlated"`` (default) declares the delivered grid's lag-one noise correlation,
+        as the simulation measured it, so the disentangling's noise model is AR(1) along
+        the pixel index and the velocity table's errors carry the correlation;
+        ``"diagonal"`` takes the pixels as independent, as the archive's errors state.
     min_transits
         Systems with fewer transits are left out (Gaia's own double-lined chain needs
         ten).
@@ -342,12 +344,12 @@ def system_transit_times(
     """The epoch times of one system under a cadence model, sorted BJD.
 
     ``"scanning-law"`` and ``"uniform-phase"`` place exactly the system's own
-    ``n_transits`` epochs. ``"gost"`` asks the Gaia Observation Forecast Tool what it
-    predicts for the system's position (:func:`albireo.gaia.gost_transits`, cached under
-    ``cache_dir()``) and cuts the answer to the release span, to the CCD rows the RVS
+    ``n_transits`` epochs. ``"gost"`` takes the Gaia Observation Forecast Tool's
+    prediction for the system's position (:func:`albireo.gaia.gost_transits`, cached
+    under ``cache_dir()``) and cuts it to the release span, to the CCD rows the RVS
     covers and to the fraction that reaches the ground
-    (:func:`albireo.gaia.rvs_transit_times_from_gost`), so the number of epochs is the
-    service's rather than the record's.
+    (:func:`albireo.gaia.rvs_transit_times_from_gost`); the number of epochs is then the
+    service's, not the record's.
 
     Raises
     ------
@@ -419,7 +421,11 @@ def simulate_system(
         orbit=system.orbit(),
         grvs=system.grvs,
         product=product,
-        library_resolving_power=float(library.meta.get("resolution", 20_000.0)),
+        # The library's own declaration: 20,000 for every BOSZ registry entry, and None for an
+        # intrinsic library, which takes the whole width. The fallback to 20,000 this replaced
+        # broadened an intrinsic toy library to 9.71 km/s after delivery where the analysis
+        # declares the delivered 11.67 (D65).
+        library=library,
         resolving_power=r_ep,
         declare_lsf="nominal",
         seed=seed,
@@ -521,7 +527,15 @@ def build_star(
         # An instrument property, declared like the LSF: the correlation the delivery
         # onto the archive grid gives the noise, which the archive's errors do not carry.
         overrides["noise_correlation"] = {"RVS": float(np.nanmean(truth.delivery.lag1))}
-    lsf: dict[str, Any] = {"RVS": {"resolving_power": 11_500.0}}
+    # The width the simulated, delivered epochs carry: the nominal line-spread function, the
+    # smoothing of the archive's linear resampling onto the product grid (Delta_det^2 / 6 in
+    # variance, and the detector pixel's width in place of the delivered one), and the
+    # simulation's own discretisation on its model grid, (5/12) dv^2
+    # (albireo.gaia.rvs_delivered_sigma_kms). Declaring the nominal width alone left 3.7 km/s
+    # of broadening for v sin i and the component spectra to absorb (D65).
+    lsf: dict[str, Any] = {
+        "RVS": {"sigma_kms": rvs_delivered_sigma_kms(config.product, simulation_dv_kms=grid.dv_kms)}
+    }
     return StarConfig(
         name=star_name(system, tier),
         dataset=dataset,
@@ -583,8 +597,8 @@ def build_stars(
     Returns the star declarations and, per system, a record of the simulation (S/N per
     epoch, delivered noise correlation, the resolving powers applied). A system whose
     cadence yields fewer epochs than ``min_transits`` is simulated no further and is
-    recorded with ``skipped`` set; under the GOST cadence, where the count is the
-    service's, that is where the minimum-transit rule takes effect.
+    recorded with ``skipped`` set; this is where the minimum-transit rule takes effect
+    under the GOST cadence, whose epoch count is the service's.
     """
     library = _resolve_library(config.library)
     bounds = _bounds(library)
@@ -701,6 +715,11 @@ def _manifest(config: BenchmarkConfig, stars, records) -> dict[str, Any]:
         "resolving_power": config.resolving_power,
         "tiers": [dataclasses.asdict(t) for t in config.tiers],
         "settings": {
+            # What the stars declare (one simulation grid spacing for every system).
+            "lsf_sigma_kms": max(
+                (float(star.lsf["RVS"]["sigma_kms"]) for star in stars),
+                default=rvs_delivered_sigma_kms(config.product, simulation_dv_kms=2.0),
+            ),
             "dv_kms": config.dv_kms,
             "k_min": config.k_min,
             "k_max": config.k_max,
@@ -727,8 +746,8 @@ def run_benchmark(config: BenchmarkConfig, *, progress: bool = True) -> Benchmar
     """Simulate, run the pipeline under every tier, collect the truth blocks, and report.
 
     With ``resume`` (the default) stars whose ``result.json`` already exists in
-    ``output`` are not run again, so an interrupted benchmark continues where it stopped
-    and a report can be regenerated at any time with :func:`write_report`.
+    ``output`` are not rerun, so an interrupted benchmark continues where it stopped;
+    :func:`write_report` regenerates the report at any time.
     """
     t0 = time.perf_counter()
     directory = Path(config.output)
@@ -1580,7 +1599,13 @@ def write_report(directory, *, title: str | None = None) -> Path:
         f"{manifest.get('albireo')} on {manifest.get('machine')}. Product "
         f"`{manifest.get('product')}` ({manifest.get('product_description')}); library "
         f"`{manifest.get('library')}`; cadence `{manifest.get('cadence')}`; resolving power "
-        f"`{manifest.get('resolving_power')}`; model grid {settings.get('dv_kms')} km/s; "
+        f"`{manifest.get('resolving_power')}`"
+        + (
+            f", declared line-spread sigma {settings['lsf_sigma_kms']:.2f} km/s"
+            if settings.get("lsf_sigma_kms") is not None
+            else ""
+        )
+        + f"; model grid {settings.get('dv_kms')} km/s; "
         f"K prior {settings.get('k_min')} to {settings.get('k_max')} km/s; eccentricity to "
         f"{settings.get('ecc_max')}; {settings.get('max_steps')} disentangling and "
         f"{settings.get('label_steps')} label steps"

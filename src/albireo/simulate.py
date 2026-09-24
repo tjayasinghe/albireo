@@ -1,12 +1,12 @@
 """Synthetic spectroscopic-binary datasets, the test harness for the inference code.
 
-:func:`simulate_dataset` generates composite epochs
-through the same operator stack the inference code uses: shift, LSF convolution, rebin to
-the native grid, then multiplicative response. Closed-loop tests therefore exercise the
-forward model itself, under the pathologies the model claims to handle: chip gaps, cosmic
-hits, mixed instruments and resolutions, tellurics, nebular emission with a per-epoch
-amplitude, barycentric frames, per-epoch light fractions, and photon-counting noise whose
-signal-to-noise is defined at a reference flux (:class:`InstrumentSpec`).
+:func:`simulate_dataset` generates composite epochs through the same operator stack the
+inference code uses: shift, LSF convolution, rebin to the native grid, then multiplicative
+response. Closed-loop tests therefore exercise the forward model itself, under the
+pathologies the model claims to handle: chip gaps, cosmic hits, mixed instruments and
+resolutions, tellurics, nebular emission with a per-epoch amplitude, barycentric frames,
+per-epoch light fractions, and photon-counting noise whose signal-to-noise is defined at a
+reference flux (:class:`InstrumentSpec`).
 
 Component spectra are deviation spectra ``d = s - 1`` on the model
 :class:`~albireo.grids.LogGrid`, zero in the continuum and negative in absorption. Frame
@@ -73,9 +73,9 @@ class InstrumentSpec:
         Native wavelength grid (Å), strictly increasing; must lie inside the model grid.
     sigma_v_lsf
         Gaussian LSF width in km/s: a scalar for a stationary LSF, or, together with
-        ``lsf_anchors_angstrom``, one width per anchor for a wavelength-dependent LSF
-        linearly interpolated across the grid exactly as the forward model
-        realizes it (:func:`albireo.operators.gaussian_lsf_profiles`).
+        ``lsf_anchors_angstrom``, one width per anchor for a wavelength-dependent LSF,
+        linearly interpolated across the grid exactly as the forward model realizes it
+        (:func:`albireo.operators.gaussian_lsf_profiles`).
     snr
         Per-pixel continuum signal-to-noise (noise sigma = 1/snr on normalized flux).
     lsf_anchors_angstrom
@@ -95,7 +95,7 @@ class InstrumentSpec:
     snr_window
         ``(lo, hi)`` in Angstrom over which the reference flux is averaged. Default
         ``None``: with ``shot_noise`` the whole native grid, without it the continuum
-        (``F_ref = 1``), which keeps the historical behaviour bit for bit.
+        (``F_ref = 1``).
     """
 
     wave: np.ndarray
@@ -245,10 +245,9 @@ def synthetic_nebular_spectrum(
 ) -> np.ndarray:
     """Nebular emission deviation spectrum: narrow positive lines at fixed wavelengths.
 
-    The line positions are physical rather than random, unlike those of the stellar and
-    telluric generators. A nebular component contaminates the stellar features its lines
-    coincide with (Balmer, He I), so randomly placed lines would not reproduce the effect
-    the component exists to describe.
+    Unlike the stellar and telluric generators, the line positions are physical rather
+    than random: a nebular component contaminates the stellar features its lines coincide
+    with (Balmer, He I), which randomly placed lines would not reproduce.
 
     Parameters
     ----------
@@ -397,7 +396,7 @@ def simulate_dataset(
     nebular
         Optional nebular deviation spectrum on ``grid``
         (:func:`synthetic_nebular_spectrum`): additive, static in the barycentric frame,
-        and scaled per epoch by ``nebular_amplitudes``. This is the nebular component.
+        and scaled per epoch by ``nebular_amplitudes``.
     nebular_amplitudes
         Per-epoch amplitude of the nebular component, ``(n_ep,)`` or a scalar
         (default 1), representing the seeing and slit-loss variation the component
@@ -412,10 +411,10 @@ def simulate_dataset(
     ar1_phi
         AR(1) correlation of the pixel noise (``|phi| < 1``): the noise is a stationary
         AR(1) process over the native pixel index with marginal standard deviation
-        ``1/snr``. This is the model of :func:`albireo.forward.with_ar1`, so closed-loop
-        tests can inject and recover it. The process runs over all pixels, masked ones
-        included, which is what makes the observed subset carry ``phi**gap`` correlations
-        across masked gaps. 0 = white noise (default).
+        ``1/snr``, the model of :func:`albireo.forward.with_ar1`, so closed-loop tests can
+        inject and recover it. The process runs over all pixels, masked ones included, so
+        the observed subset carries ``phi**gap`` correlations across masked gaps. 0 =
+        white noise (default).
     gap_fraction
         Fraction of each epoch's pixels lost to one contiguous chip gap. The gap is given
         ivar = 0 and its flux is overwritten with unusable values, so downstream code must
@@ -647,8 +646,8 @@ def simulate_dataset(
 def _noise_sigma(spec: InstrumentSpec, wave: np.ndarray, noiseless: np.ndarray, snr: float):
     """The per-pixel noise standard deviation of one epoch, per the instrument's model.
 
-    Returns a scalar in the continuum convention (``1 / snr``), which keeps the historical
-    draws bit-identical, and an array under photon-counting noise or a reference window.
+    Returns a scalar in the continuum convention (``1 / snr``; draws stay bit-identical to
+    earlier versions) and an array under photon-counting noise or a reference window.
     """
     if not spec.shot_noise and spec.snr_window is None:
         return 1.0 / snr
@@ -788,9 +787,9 @@ def _library_line_depths(teff, logg, mh, n_lines: int) -> list[float]:
 
     Two labels that moved the same lines in the same way would be interchangeable, and a
     fit would then drive the chi-square to zero along a curve through label space without
-    recovering the injected values (the degenerate fixture recorded under D53). Teff,
-    log g and [M/H] each drive lines the others do not, so the map from labels to spectrum
-    is invertible and a recovery test measures the code rather than the fixture.
+    recovering the injected values. Teff, log g and [M/H] each drive lines the others do
+    not, so the map from labels to spectrum is invertible and a recovery test measures the
+    code rather than the fixture.
     """
     t = (teff - 4800.0) / 600.0
     g = logg - 4.0
@@ -831,10 +830,10 @@ def synthetic_library(
     grids run to hundreds of megabytes (:func:`albireo.fetch_library`).
 
     Each node is a set of Gaussian absorption lines at fixed wavelengths whose depths
-    depend on the labels, with each label driving lines of its own so that the map from
-    labels to spectrum is invertible (see :func:`_library_line_depths`), plus a continuum
-    that falls with Teff across the window. That wavelength dependence is what makes a
-    light ratio measurable.
+    depend on the labels, each label driving lines of its own so that the map from labels
+    to spectrum is invertible (see :func:`_library_line_depths`), plus a continuum that
+    falls with Teff across the window. That wavelength dependence makes a light ratio
+    measurable.
 
     Parameters
     ----------

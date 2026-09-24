@@ -115,9 +115,9 @@ def nebular_windows(
 
     The windows are where a nebular component is allowed to have structure
     (:func:`window_profile`), so they should be generous. A window that is too narrow
-    clips real emission and pushes the residual into the stellar components, which is
-    the failure the component exists to prevent; a window that is too wide only returns
-    some of the freedom the profile removes. The default half-width of 300 km/s covers
+    clips real emission and pushes the residual into the stellar components, the failure
+    the component exists to prevent; a window that is too wide only returns some of the
+    freedom the profile removes. The default half-width of 300 km/s covers
     the nebular line, the velocity spread of an H II region, and a margin.
 
     Parameters
@@ -194,7 +194,7 @@ def window_profile(
     require different linear algebra, and would remove the model's ability to report a
     disagreement with the windows (``docs/math.md`` §2).
 
-    The function is not specific to nebular emission. Interstellar bands, diffuse
+    The function is not specific to nebular emission: interstellar bands, diffuse
     interstellar bands, or any component known a priori to be line-poor take the same
     treatment.
 
@@ -269,10 +269,10 @@ class SmoothnessPrior:
     tau_profile, eta_profile
         Optional static ``(n_components, n_pixels)`` per-pixel multipliers on the two
         strengths: the effective weights are ``tau[i] * tau_profile[i]`` and
-        ``eta[i] * eta_profile[i]``. ``None`` (default) is a uniform profile and
-        reproduces the v1 prior exactly. The scalars stay separate from the profiles, so
-        the ML-II hyperparameter fit is unchanged: a profile sets where the freedom is,
-        the scalar sets how much. :func:`window_profile` builds one. Curvature rows take
+        ``eta[i] * eta_profile[i]``. ``None`` (default) is a uniform profile, identical
+        to the scalar prior. The scalars stay separate from the profiles, so the ML-II
+        hyperparameter fit is unchanged: a profile sets where the freedom is, the scalar
+        sets how much. :func:`window_profile` builds one. Curvature rows take
         the weight of their center pixel, so ``tau_profile`` is indexed like the
         spectrum.
 
