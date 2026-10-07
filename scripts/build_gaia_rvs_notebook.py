@@ -79,6 +79,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 import albireo as ab
+from albireo.benchmark import collect
 from albireo.gaia import (
     RVS_DR4_EPOCH,
     rvs_components,
@@ -87,7 +88,6 @@ from albireo.gaia import (
     simulate_rvs_dataset,
     uniform_phase_times,
 )
-from albireo.benchmark import collect
 from albireo.population import (
     draw_population,
     population_summary,
@@ -168,8 +168,12 @@ orbit = ab.OrbitParams(
 
 bjd = uniform_phase_times(PERIOD, N_EPOCHS, start=2457000.0)
 dataset, truth = simulate_rvs_dataset(
-    components, grid,
-    bjd=bjd, light_fractions=LIGHT, orbit=orbit, snr=SNR,
+    components,
+    grid,
+    bjd=bjd,
+    light_fractions=LIGHT,
+    orbit=orbit,
+    snr=SNR,
     product=RVS_DR4_EPOCH,
     library=library,  # the components already carry the library's R = 20,000
     seed=42,
@@ -200,7 +204,7 @@ separation = np.abs(truth.velocities[0] - truth.velocities[1])
 far, near = int(np.argmax(separation)), int(np.argmin(separation))
 
 fig, axes = plt.subplots(2, 1, figsize=(8.5, 5.4), sharex=True)
-for ax, i in zip(axes, (far, near)):
+for ax, i in zip(axes, (far, near), strict=True):
     epoch = dataset[i]
     ax.plot(epoch.wave, epoch.flux, lw=0.6, color="0.25")
     v1, v2 = truth.velocities[:, i]
@@ -316,7 +320,7 @@ stars = {
 t0 = time.perf_counter()
 labels = fit.match_labels(stars, scan_velocities=np.arange(-150.0, 150.1, 25.0))
 print(f"[{time.perf_counter() - t0:.0f} s]")
-for name, injected, v in zip(("primary", "secondary"), (PRIMARY, SECONDARY), VSINI):
+for name, injected, v in zip(("primary", "secondary"), (PRIMARY, SECONDARY), VSINI, strict=True):
     got = labels.labels[name]
     print(
         f"{name:9s} Teff {got['teff']:6.0f} K (injected {injected['teff']:.0f}), "
@@ -350,8 +354,12 @@ fig, ax = plt.subplots(figsize=(7.0, 4.0))
 for eclipsing, marker, label in ((True, "o", "eclipsing"), (False, "s", "not eclipsing")):
     chosen = [s for s in systems if s.eclipsing == eclipsing]
     ax.scatter(
-        [s.period for s in chosen], [s.k1 + s.k2 for s in chosen],
-        s=[12 + 3 * s.n_transits for s in chosen], marker=marker, alpha=0.75, label=label,
+        [s.period for s in chosen],
+        [s.k1 + s.k2 for s in chosen],
+        s=[12 + 3 * s.n_transits for s in chosen],
+        marker=marker,
+        alpha=0.75,
+        label=label,
     )
 ax.set_xscale("log")
 ax.set_xlabel("period [d]")
@@ -407,12 +415,20 @@ for s in chosen:
 write_population(out / "population.json", chosen)
 
 command = [
-    sys.executable, "scripts/gaia_rvs_benchmark.py",
-    "--population", str(out / "population.json"),
-    "--tiers", "oracle", "orbit",
-    "--k-max", "150", "--no-plots",
-    "--out", str(out),
-    "--title", "three systems, two tiers",
+    sys.executable,
+    "scripts/gaia_rvs_benchmark.py",
+    "--population",
+    str(out / "population.json"),
+    "--tiers",
+    "oracle",
+    "orbit",
+    "--k-max",
+    "150",
+    "--no-plots",
+    "--out",
+    str(out),
+    "--title",
+    "three systems, two tiers",
 ]
 print("$", " ".join(command[1:]))
 t0 = time.perf_counter()
