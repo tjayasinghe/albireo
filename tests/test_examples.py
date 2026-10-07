@@ -1,8 +1,8 @@
 """The packaged example dataset, and the download/cache machinery around it.
 
-The packaged example is load-bearing for the quickstart, so these tests check the property
-that actually matters: it loads with no network, no astropy, and no matplotlib, and what
-comes back is a usable :class:`~albireo.data.Dataset` whose injected truth is self-consistent.
+The quickstart depends on the packaged example, so these tests check that it loads with no
+network, no astropy, and no matplotlib, and that the result is a usable
+:class:`~albireo.data.Dataset` whose injected truth is self-consistent.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ def test_the_packaged_example_loads_offline():
         assert np.all(np.diff(epoch.wave) > 0)
         assert np.all(epoch.ivar >= 0)
         assert np.all(np.isfinite(epoch.flux[epoch.ivar > 0]))
-    # Continuum-normalized data sits around 1, which is what the model assumes.
+    # Continuum-normalized data are near 1, as the model assumes.
     assert 0.5 < float(np.median(epochs[0].flux)) < 1.5
 
 
@@ -51,10 +51,10 @@ def test_the_truth_is_self_consistent():
     np.testing.assert_allclose(np.sum(truth["light_fractions"]), 1.0, rtol=1e-12)
     assert truth["period"] == pytest.approx(6.0)
     assert truth["k"] == [42.0, 63.0]
-    # A circular orbit with these semi-amplitudes: the two components move in opposition,
-    # so K_1 * v_2 = -K_2 * v_1 at every epoch. Stated multiplicatively rather than as the
-    # ratio v_2 / v_1, which is a 0/0 at the quarter phases where both velocities cross
-    # zero — one of these twelve epochs lands exactly there.
+    # In a circular orbit with these semi-amplitudes the two components move in opposition,
+    # so K_1 * v_2 = -K_2 * v_1 at every epoch. The relation is tested as a product rather
+    # than as the ratio v_2 / v_1, which is 0/0 at the quarter phases where both velocities
+    # cross zero. One of these twelve epochs is exactly at such a phase.
     v1, v2 = truth["velocities"]
     np.testing.assert_allclose(42.0 * v2, -63.0 * v1, atol=1e-10)
 
@@ -64,7 +64,7 @@ def test_the_truth_grid_matches_the_component_spectra():
     grid = ab.LogGrid(x0=truth["grid_x0"], dx=truth["grid_dx"], n=int(truth["grid_n"]))
 
     assert truth["components"].shape[1] == grid.n
-    # The simulated data lie inside the model grid, which is what build_problem requires.
+    # The simulated data lie inside the model grid, as build_problem requires.
     dataset = ab.load_example("sb2_sim")
     for epoch in dataset:
         assert epoch.wave[0] >= grid.wave[0]
@@ -90,7 +90,7 @@ def test_unknown_example_names_are_rejected_with_the_list():
 
 def test_truth_is_refused_for_data_that_has_none(monkeypatch, tmp_path):
     # Rewrite the packaged file into a temporary copy with the truth stripped, which is
-    # what an observed example looks like on disk.
+    # the on-disk form of an observed example.
     source = examples._PACKAGED_DIR / "sb2_sim.npz"
     with np.load(source, allow_pickle=False) as data:
         arrays = {k: data[k] for k in data.files if not k.startswith("truth/")}
@@ -123,7 +123,7 @@ def test_clearing_the_cache_never_deletes_a_packaged_example(monkeypatch, tmp_pa
     monkeypatch.setenv("ALBIREO_DATA_DIR", str(tmp_path))
 
     assert ab.clear_example_cache() == []
-    # The packaged file is part of the installation and must survive.
+    # The packaged file is part of the installation and must not be deleted.
     assert (examples._PACKAGED_DIR / "sb2_sim.npz").is_file()
 
 
@@ -147,6 +147,6 @@ def test_a_corrupted_download_is_rejected_rather_than_cached(monkeypatch, tmp_pa
 
     with pytest.raises(RuntimeError, match="SHA-256"):
         examples._fetch(example, progress=False)
-    # Nothing is left behind that a later run could mistake for a good cache entry.
+    # No file remains that a later run would load as a valid cache entry.
     assert not (tmp_path / "examples" / "fake.npz").exists()
     assert not (tmp_path / "examples" / "fake.npz.part").exists()

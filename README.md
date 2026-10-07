@@ -39,65 +39,68 @@ print(post.summary())
 ab.plot_spectra(dis.grid, fit.spectra(), std=fit.std())
 ```
 
-The semi-amplitudes are recovered to better than 0.1% of the injected values, and no
-per-epoch radial velocity is measured at any stage: the orbit is inferred from the spectra
-directly. The annotated version is [`docs/quickstart.md`](docs/quickstart.md); the
-low-level equivalent is [`examples/00_quickstart.py`](examples/00_quickstart.py).
+The semi-amplitudes are recovered to better than 0.1% of the injected values. No per-epoch
+radial velocities are measured: the orbit is inferred directly from the spectra. The
+annotated version is [`docs/quickstart.md`](docs/quickstart.md), and the low-level
+equivalent is [`examples/00_quickstart.py`](examples/00_quickstart.py).
 
 ## Capabilities
 
 - **Joint inference of orbit and spectra.** Conditional on the orbit, light fractions,
   line-spread function and prior hyperparameters, the model is linear-Gaussian in the
   component spectra, which are integrated out in closed form. The No-U-Turn Sampler then
-  explores 10 to 200 nonlinear parameters regardless of the number of pixels, and the
-  spectra with their covariance are recovered at each posterior draw.
-- **Wavelength-space model on native pixel grids.** Data are never resampled. Masks,
-  chip gaps, cosmic rays, per-pixel weights, non-uniform sampling and multi-instrument
-  data sets are handled by the weights alone.
+  samples 10 to 200 nonlinear parameters, a number that does not depend on the number of
+  pixels, and the spectra with their covariance are recovered at each posterior draw.
+- **Wavelength-space model on native pixel grids.** Data are never resampled: each
+  spectrum is modelled on its own pixel grid with its per-pixel weights. Masks, chip gaps
+  and cosmic-ray hits are pixels of zero weight, and non-uniform sampling and
+  multi-instrument data sets need no special treatment.
 - **Degeneracies made explicit.** The low-frequency separation degeneracy, the light-ratio
   versus line-depth degeneracy, and the systemic-velocity zero point are regularized with
   explicit prior scales and reported in the posterior. There is no default light fraction:
   the treatment must be declared, and per-epoch light fractions can be inferred where
   eclipses exist.
-- **Instrumental and astrophysical nuisance components.** Telluric absorption, nebular
-  emission with a free amplitude per exposure, per-epoch response polynomials,
-  per-instrument and wavelength-dependent line-spread functions with an optional
-  Gauss-Hermite asymmetry, per-epoch noise rescaling, and first-order autoregressive
-  correlated noise. Hierarchical triples are modelled as nested Keplerians.
-- **Faint-companion detection for single-lined systems.** A scan over the companion
-  semi-amplitude with the companion spectrum marginalized at every trial, optionally with
+- **Instrumental and astrophysical nuisance components.** The model includes telluric
+  absorption, nebular emission with a free amplitude per exposure, per-epoch response
+  polynomials, per-instrument and wavelength-dependent line-spread functions with an
+  optional Gauss-Hermite asymmetry, per-epoch noise rescaling, and first-order
+  autoregressive correlated noise. Hierarchical triples are modelled as nested Keplerians.
+- **Faint-companion detection for single-lined systems.** The companion semi-amplitude is
+  scanned with the companion spectrum marginalized at every trial value, optionally with
   the primary semi-amplitude integrated out. Detection limits and false-alarm probabilities
-  are measured by injection and recovery through the observed data's own operators.
-- **Observing-strategy forecasts.** The posterior covariance of the spectra contains no
-  fluxes, so the uncertainty band, the worst-determined spectral modes and the expected
-  information gain of a planned set of epochs are computed before the data are taken.
+  are measured by injection and recovery through the operators of the observed data set.
+- **Observing-strategy forecasts.** The posterior covariance of the spectra does not
+  depend on the observed fluxes, so the uncertainty band, the worst-determined spectral
+  modes and the expected information gain of a planned set of epochs can be computed
+  before the data are taken.
 - **Stellar labels for template selection.** Effective temperature, surface gravity,
   metallicity and projected rotation are fitted to the disentangled components against
-  published synthetic grids (BOSZ, POLLUX), with the dilution of both components fitted
-  jointly through a shared radius ratio and with two uncertainty estimates: the formal
-  covariance and the spread over refits of joint posterior draws.
-- **Epoch radial velocities by TODCOR.** One velocity per component per epoch by
-  N-dimensional correlation against templates from a library, a label fit, or the
-  disentangling itself, evaluated as a weighted least-squares fit so that masks and mixed
-  instruments need no special treatment. A Keplerian is fitted to the resulting table with
-  the same solver and conventions as the joint model.
+  published synthetic grids (BOSZ, POLLUX). The dilution of both components is fitted
+  jointly through a shared radius ratio. Two uncertainty estimates are reported: the
+  formal covariance and the spread over refits of joint posterior draws.
+- **Epoch radial velocities by TODCOR.** One velocity per component per epoch is measured
+  by N-dimensional correlation against templates from a library, a label fit, or the
+  disentangling itself. The correlation is evaluated as a weighted least-squares fit, so
+  masks and mixed instruments need no special treatment. A Keplerian is fitted to the
+  resulting table with the same solver and conventions as the joint model.
 - **Archive access and preprocessing.** ESO Phase 3 and IRAF-style FITS spectra are read
-  with the wavelength frame, time system and barycentric correction taken from the header,
-  the ESO archive is queried and downloaded from with the standard library only, and
-  continuum normalization, noise estimation and masking are provided for reduced spectra
+  with the wavelength frame, time system and barycentric correction taken from the header.
+  The ESO archive is queried and downloaded from with the standard library only.
+  Continuum normalization, noise estimation and masking are provided for reduced spectra
   that lack them.
 - **A pipeline and command line.** `albireo run config.toml` reads each star's epochs,
-  disentangles them, fits labels, measures velocities, fits the orbit, and writes tables,
-  spectra with uncertainty bands, a JSON report and diagnostic figures, running stars in
-  parallel worker processes and recording failures without stopping the batch.
-- **Gaia RVS, simulated and benchmarked.** `albireo.gaia` builds RVS epoch spectra of a
+  disentangles them, fits labels, measures velocities and fits the orbit. It writes
+  tables, spectra with uncertainty bands, a JSON report and diagnostic figures. Stars run
+  in parallel worker processes, and a failure is recorded without stopping the batch.
+- **Gaia RVS simulation and benchmark.** `albireo.gaia` builds RVS epoch spectra of a
   binary as the archive delivers them (the S/N that follows from G_RVS, photon noise on the
-  detector grid, the correlated noise of the delivered grid, the scanning-law cadence),
-  `albireo.population` draws double-lined binaries from the field or from real catalogues,
-  and `scripts/gaia_rvs_benchmark.py` runs them through the pipeline under knowledge tiers
-  and reports how well the orbits, velocities, spectra and labels come back.
+  detector grid, the correlated noise of the delivered grid, the scanning-law cadence).
+  `albireo.population` draws double-lined binaries from the field or from real catalogues.
+  `scripts/gaia_rvs_benchmark.py` runs them through the pipeline at several levels of
+  prior knowledge, from a known orbit to a blind period search, and reports how well the
+  orbits, velocities, spectra and labels are recovered.
 
-The scientific background and the literature each method rests on are summarized in
+The scientific background and the literature behind each method are summarized in
 [`docs/science.md`](docs/science.md).
 
 ## Command line
@@ -110,11 +113,11 @@ albireo init                      # writes an annotated albireo.toml
 albireo run albireo.toml --jobs 4
 ```
 
-Each star receives a directory with `summary.txt`, `result.json`, the velocity table, the
-disentangled spectra with their uncertainty bands, the orbit, the labels and the figures;
-the batch receives `results.csv` with one row per star. Light fractions and the wavelength
-medium are required in the configuration file rather than defaulted. See
-[`docs/tutorials/pipeline.md`](docs/tutorials/pipeline.md).
+Each star's output directory contains `summary.txt`, `result.json`, the velocity table,
+the disentangled spectra with their uncertainty bands, the orbit, the labels and the
+figures. The batch directory contains `results.csv` with one row per star. Light fractions
+and the wavelength medium have no defaults and must be given in the configuration file.
+See [`docs/tutorials/pipeline.md`](docs/tutorials/pipeline.md).
 
 ## Installation
 
@@ -129,8 +132,8 @@ pip install -e ".[dev]"
 Python 3.12 or newer is required. JAX 64-bit mode is enabled when the package is imported;
 all computation is done in float64.
 
-Two optional extras exist. The core never imports either, so a fit on a headless node
-needs neither:
+Two optional extras exist. The core package imports neither, so a fit on a headless node
+does not need them:
 
 - `pip install -e ".[io]"` installs astropy for reading and writing FITS (`albireo.io`);
 - `pip install -e ".[plots]"` installs matplotlib and ArviZ for `albireo.plotting` and
@@ -139,15 +142,15 @@ needs neither:
 Every install command in the documentation takes this editable form until the first PyPI
 release, when each becomes `pip install "albireo[...]"`.
 
-For a GPU build, install the `jax[cuda]` wheel for your platform following the
+For a GPU build, install the `jax[cuda]` wheel for the platform, following the
 [JAX installation guide](https://docs.jax.dev/en/latest/installation.html).
 
 ## Low-level interface
 
-`Disentangler` is a declarative front end that derives the solver's velocity budget, the
-model grid margins, the conjunction phase and the smoothness hyperparameters from the
-declaration, and `dis.expert()` returns the `(model, priors, init)` triple it built. The
-underlying classes and functions are the supported interface:
+`Disentangler` is a declarative front end. From the declaration it derives the solver's
+velocity budget, the model grid margins, the conjunction phase and the smoothness
+hyperparameters, and `dis.expert()` returns the `(model, priors, init)` triple it built.
+The underlying classes and functions are the supported interface:
 
 ```python
 import albireo as ab
@@ -205,7 +208,7 @@ complete analysis of archival FEROS spectra.
 - [`docs/quickstart.md`](docs/quickstart.md): the first fit, on packaged data.
 - [`docs/science.md`](docs/science.md): scientific background and references.
 - [`examples/`](examples/): executable tutorials, each ending in assertions against the
-  injected truth; narrative versions in [`docs/tutorials/`](docs/tutorials/).
+  injected values. The same material is written out in [`docs/tutorials/`](docs/tutorials/).
 - [`docs/math.md`](docs/math.md): the forward model, the marginal likelihood, the
   degeneracy analysis, and the estimators for labels and epoch velocities.
 - [`docs/benchmarks.md`](docs/benchmarks.md): the validation and performance record.
@@ -218,11 +221,11 @@ pip install -e ".[docs]"
 mkdocs serve
 ```
 
-[`internal/`](internal/) holds the working notes that are not part of that site: the
-decision ledger and architecture ([`internal/design.md`](internal/design.md)), the plan
+[`internal/`](internal/) holds maintainers' notes that are not part of that site: the
+design decisions and architecture ([`internal/design.md`](internal/design.md)), the plan
 and the stated non-goals ([`internal/roadmap.md`](internal/roadmap.md)), and the release
 procedure ([`internal/releasing.md`](internal/releasing.md)). They are kept in the
-repository because the code and the tests cite them, but are addressed to maintainers.
+repository because the code and the tests cite them.
 
 ## Citation
 

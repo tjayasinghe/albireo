@@ -1,13 +1,14 @@
 name: Full
 
-# Everything `ci.yml` leaves out: the platform/version matrix, the acceptance gates with
-# coverage, and the example scripts. Run it on demand (the Actions tab, "Full", "Run
-# workflow") rather than on every push, because on a private repository it is expensive and
-# most commits do not need it. Order-of-magnitude, from the suite times measured locally and
-# not yet from a real run: the matrix is four jobs at ~15 min each but Windows bills at 2x,
-# so ~95 billed minutes; the gates job is the ~37-minute full suite plus coverage; the
-# examples job ~15. That is 150+ billed minutes a go, i.e. under fifteen runs a month on the
-# free tier, and none of it charged once the repo is public.
+# The checks that `ci.yml` omits: the platform/version matrix, the acceptance tests with
+# coverage, and the example scripts. It is run on demand (the Actions tab, "Full", "Run
+# workflow") and not on every push, because on a private repository it is expensive and
+# most commits do not need it. The estimates below are orders of magnitude from suite times
+# measured locally, not from a real run. The matrix is four jobs at ~15 min each with
+# Windows billed at 2x, so ~95 billed minutes. The acceptance job is the ~37-minute full
+# suite plus coverage. The examples job is ~15 minutes. The total is 150+ billed minutes
+# per run, i.e. under fifteen runs a month on the free tier, and none of it is charged once
+# the repository is public.
 #
 # There is no `schedule:` here. A weekly run would spend a quarter of the free tier's
 # monthly minutes re-testing commits that have not changed, and GitHub disables scheduled
@@ -134,10 +135,10 @@ jobs:
           uv venv --python 3.13
           uv pip install -e ".[dev]"
 
-      # Each script ends in assertions, so these are gates rather than smoke tests; the
-      # name is historical. ALBIREO_EXAMPLE_FAST cuts the trial counts and grid sizes,
-      # leaving every conclusion intact. 03_hr6819 is absent because it needs 153 MB of
-      # archival FEROS spectra, and 06_bloem because it queries the ESO archive.
+      # Each script ends in assertions, so this job is an acceptance test despite its name.
+      # ALBIREO_EXAMPLE_FAST reduces the trial counts and grid sizes without changing any
+      # assertion. 03_hr6819 is absent because it needs 153 MB of archival FEROS spectra,
+      # and 06_bloem because it queries the ESO archive.
       - name: Run examples
         env:
           ALBIREO_EXAMPLE_FAST: "1"

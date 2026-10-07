@@ -9,7 +9,7 @@ The eccentric-anomaly solver is a fixed-count Newton iteration wrapped in
 gradients are exact at the converged solution regardless of the iteration count.
 
 Angle convention: ``omega`` is the argument of periastron of the component whose radial
-velocity is being computed, in radians; component 2 of a binary uses ``omega + pi``.
+velocity is being computed, in radians. Component 2 of a binary uses ``omega + pi``.
 """
 
 from __future__ import annotations
@@ -104,7 +104,7 @@ def radial_velocity(t, *, period, t_peri, ecc, omega, k, gamma=0.0):
     period, t_peri, ecc, omega, k, gamma
         Orbital period, time of periastron passage, eccentricity, argument of
         periastron [rad], RV semi-amplitude, and systemic velocity. ``k`` and ``gamma``
-        set the output unit (km/s in practice). For component 2 of a binary pass
+        set the output unit (km/s in practice). Component 2 of a binary takes
         ``omega + pi`` and ``K_2``.
 
     Returns

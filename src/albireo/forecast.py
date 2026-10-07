@@ -12,19 +12,19 @@ and the prior enter it, and each of these is known for an observation that has n
 taken. ``Sigma`` can therefore be evaluated for planned epochs (``docs/math.md`` §5.5). The
 precision is assembled with :func:`albireo.assembly.band_block_tridiagonal`, which reads
 weights, response, shifts, light fractions and kernels and never reads
-:attr:`albireo.forward.EpochGroup.z`; the right-hand side ``b = A^T W z``, the only place
+:attr:`albireo.forward.EpochGroup.z`. The right-hand side ``b = A^T W z``, the only place
 fluxes enter the marginal likelihood, is never formed. ``tests/test_forecast.py`` checks
 this by overwriting every flux with unused values and requiring a bit-identical forecast.
 
 :func:`sensitivity_forecast` summarizes ``Sigma`` in three quantities, each quoted against
-the prior alone so that a band that has relaxed onto the prior is not mistaken for one the
-data determined. The pointwise band (:attr:`SensitivityForecast.component_std`) is
-one standard deviation per component per model pixel. The worst-determined modes are the
-top eigenpairs of ``Sigma``, by subspace iteration on the banded factor; they are the exact
-form of the low-frequency degeneracy that ``docs/math.md`` §5.1 derives asymptotically, and
-the eigenvector states which spectral pattern the design cannot constrain. The constrained
-degrees of freedom ``p_eff = tr[(Lambda_p + A^T W A)^{-1} A^T W A]`` count how many of the
-``n_comp * n_pix`` spectral parameters the data determine rather than the prior; this is
+the prior alone so that a band with the prior's width is not mistaken for one the data
+determined. The pointwise band (:attr:`SensitivityForecast.component_std`) is one standard
+deviation per component per model pixel. The worst-determined modes are the top eigenpairs
+of ``Sigma``, found by subspace iteration on the banded factor. They are the exact form of
+the low-frequency degeneracy that ``docs/math.md`` §5.1 derives asymptotically, and each
+eigenvector is the spectral pattern the design cannot constrain. The constrained degrees
+of freedom ``p_eff = tr[(Lambda_p + A^T W A)^{-1} A^T W A]`` count how many of the
+``n_comp * n_pix`` spectral parameters the data determine rather than the prior. This is
 the ``p_eff`` that :func:`albireo.forward.with_jitter` profiles against, obtained exactly
 as a directional derivative of ``log det`` in the noise scale.
 
@@ -33,21 +33,21 @@ information gain ``0.5 (log det Lambda_post - log det Lambda_prior)``, the Bayes
 D-optimality criterion (Chaloner & Verdinelli 1995). The closed-form two-component
 diagnostic of §5.1, the spread ``Var_j(Delta_j)`` of the differential shift over epochs and
 the per-scale noise amplification of the difference mode, is reported beside the exact
-numbers as a screening tool; :func:`_separation_diagnostics` records why the variance alone
+numbers as a screening tool. :func:`_separation_diagnostics` records why the variance alone
 should not be maximized.
 
-The orbit is not forecast. The Fisher information for a velocity runs through
+The orbit is not forecast. The Fisher information for a velocity depends on
 ``d(model)/dv ~ ell_i d_i'``, the derivative of the component spectrum, so an error bar on
 ``K_2`` requires the component line depths, which are not known before the data exist.
 
 Every reported quantity is conditional on the assumptions the analysis makes: the orbit
 that sets the shifts, the light fractions (the observable is ``ell_i d_i``), the LSF
 widths, the response, the weights and noise model, and the prior hyperparameters
-``(tau, eta)``. For a star already observed these come from a fit; for a proposal on a star
+``(tau, eta)``. For a star already observed these come from a fit. For a proposal on a star
 with no spectra they are assumptions, and the forecast is then a comparison between
 candidate designs under one set of assumptions rather than an absolute number. The
 forecast scales with the weights, and exposure-time-calculator inverse variances are
-typically optimistic.
+typically too large.
 
 References
 ----------
@@ -97,9 +97,9 @@ def plan_epochs(
 
     A planned epoch is a :class:`~albireo.data.EpochData` in every respect the forecast
     reads (native wavelength grid, inverse variances, time, barycentric velocity,
-    instrument) and carries a placeholder flux of exactly 1.0, the continuum. The
-    forecast never reads the flux (see the module docstring). A planned dataset passed
-    to a fit by mistake therefore returns featureless spectra, which are visibly wrong,
+    instrument) and has a placeholder flux of exactly 1.0, the continuum. The
+    forecast never reads the flux (see the module docstring). A fit given a planned
+    dataset by mistake therefore returns featureless spectra, which are visibly wrong,
     rather than a plausible-looking result.
 
     Parameters
@@ -120,12 +120,12 @@ def plan_epochs(
         with the template's inverse variances.
     v_bary
         Barycentric correction [km/s], a scalar or ``(n_new,)``. It matters whenever a
-        telluric or nebular component is enabled: those sit in the opposite frame from
+        telluric or nebular component is enabled: those are in the opposite frame from
         the stars, so the barycentric motion is part of the separation the design
-        provides. The default 0 is a convention, not a measurement: real epochs months
-        apart differ by up to about 60 km/s, and a zero value understates a telluric
-        model's separation. Compute the real values (astropy's
-        ``radial_velocity_correction``) when the target and dates are known.
+        provides. The default 0 is a convention. Real epochs months apart differ by up
+        to about 60 km/s, and a zero value understates a telluric model's separation.
+        Compute the real values (astropy's ``radial_velocity_correction``) when the
+        target and dates are known.
     instrument
         Instrument key; default is the template's (``"default"`` for an
         :class:`~albireo.simulate.InstrumentSpec`, whose specs are not named).
@@ -198,30 +198,30 @@ def _top_eigenpairs(
 
     The worst-determined directions of the fit are the largest eigenvalues of the
     covariance, i.e. the smallest of the precision, which a factorization does not
-    provide directly. Subspace iteration on ``Sigma`` reaches them with one banded solve
-    per vector per step; no dense matrix is formed.
+    provide directly. Subspace iteration on ``Sigma`` finds them with one banded solve
+    per vector per step. No dense matrix is formed.
 
     ``keep`` is a boolean mask over the padded coordinates. Iterating on ``P Sigma P``
     with ``P = diag(keep)`` converges to the eigenpairs of the submatrix
     ``Sigma[keep, keep]``, the covariance of the retained coordinates with the rest
-    marginalized out (not conditioned on). It excludes two coordinate sets.
+    marginalized out (not conditioned on). The mask excludes two coordinate sets.
 
     The pad coordinates: the pad block of an assembled
     :class:`~albireo.solver.BlockTridiagonal` is the identity and is decoupled from the
-    real block, so they are eigenvectors of ``Sigma`` with eigenvalue 1, a value that
-    would fall in the middle of a real spectrum and could outrank real modes.
+    real block, so they are eigenvectors of ``Sigma`` with eigenvalue 1. That value
+    would lie inside a real eigenvalue spectrum and could outrank real modes.
 
     The grid margin: a model grid is built wider than the data (shifts plus kernel
     radius, :meth:`albireo.grids.LogGrid.covering`), and the margin pixels are
-    constrained by the prior alone. They carry the largest eigenvalue of ``Sigma`` on
-    essentially every real problem, so reporting them would measure the grid margin
-    rather than the observing design. Restricting to the pixels some epoch weights makes
-    the answer a property of the epochs.
+    constrained by the prior alone. They have the largest eigenvalue of ``Sigma`` on
+    almost every real problem, so reporting them would measure the grid margin rather
+    than the observing design. Restricting to the pixels that some epoch weights makes
+    the result a property of the epochs.
 
     Returns ``(values, vectors, residual)`` with ``vectors`` of shape ``(n_modes, n)``
     (rows, unpadded) and ``residual`` the largest relative Rayleigh residual
     ``||Sigma y - theta y|| / theta`` over the returned modes. The residual should be
-    reported: eigenvalues converge much faster than eigenvectors, and a cluster of
+    reported. Eigenvalues converge much faster than eigenvectors, and a cluster of
     near-degenerate low-frequency modes (the normal situation here) leaves the
     individual vectors far less determined than the subspace they span.
     """
@@ -254,7 +254,7 @@ def _top_eigenpairs(
     vecs = u[:, order].T @ v
     resid = sigma(vecs) - vals[:, None] * vecs
     rel = jnp.max(jnp.linalg.norm(resid, axis=1) / jnp.maximum(jnp.abs(vals), 1e-300))
-    # The sign of an eigenvector is arbitrary; pin it so repeated runs and plots agree.
+    # The sign of an eigenvector is arbitrary; fix it so repeated runs and plots agree.
     lead = jnp.take_along_axis(vecs, jnp.argmax(jnp.abs(vecs), axis=1)[:, None], axis=1)
     vecs = vecs * jnp.sign(jnp.where(lead == 0.0, 1.0, lead))
     # Re-mask: Householder QR leaves ~1e-33 residuals on the excluded rows rather than
@@ -272,16 +272,16 @@ def _effective_parameters(problem, prior, alpha, b_nat, block_size) -> float:
         ``d/dt log det(Lambda_p + e^{-2t} A^T W A)|_{t=0} = -2 tr[Sigma A^T W A]``
 
     (``docs/math.md`` §5.5). One derivative of the log-determinant gives the effective
-    parameter count with no stochastic trace estimator and no selected inverse. The
-    jitter swap (:func:`albireo.forward.with_jitter`) is exactly this one-parameter
-    family, and the assembly is differentiable through it.
+    parameter count with no stochastic trace estimator and no selected inverse.
+    :func:`albireo.forward.with_jitter` implements exactly this one-parameter family,
+    and the assembly is differentiable through it.
 
     ``t`` and the log-determinant are both scalars, so forward and reverse mode return
-    the same number; reverse mode is used because the band assembly's accumulate carries
-    a ``custom_vjp`` (D49; reverse mode otherwise rebuilds the whole band tensor), and
-    ``custom_vjp`` rejects ``jax.jvp`` (the same trade as D28 at ``_solve_stage``). The
-    cost is acceptable: this function runs once per forecast, the rule it enables once
-    per leapfrog step.
+    the same number. Reverse mode is used because the accumulation step of the band
+    assembly has a ``custom_vjp`` (D49; reverse mode otherwise rebuilds the whole band
+    tensor), and ``custom_vjp`` rejects ``jax.jvp`` (the same trade-off as D28 at
+    ``_solve_stage``). The cost is acceptable: this function runs once per forecast, and
+    the rule it enables runs once per leapfrog step.
     """
 
     def logdet_at(t):
@@ -292,12 +292,11 @@ def _effective_parameters(problem, prior, alpha, b_nat, block_size) -> float:
 
 
 def _prior_std(prior: SmoothnessPrior, n_pix: int, n_comp: int) -> np.ndarray:
-    """Pointwise sigma under the prior alone, the reference for a design that learns nothing.
+    """Pointwise sigma under the prior alone, the reference for a design that determines nothing.
 
     ``Lambda_p`` is block diagonal over components and pentadiagonal within each, so
     the computation is cheap. Every posterior number is quoted against this reference:
-    a band that sits at the prior's width has relaxed onto the prior and reports the
-    prior's width rather than anything the design determines (D42).
+    a band with the prior's width is determined by the prior and not by the design (D42).
     """
     chol = block_cholesky(prior_block_tridiagonal(prior, n_pix, n_comp, max(2 * n_comp, 64)))
     return np.asarray(jnp.sqrt(selected_inverse_diag(chol))).reshape(n_pix, n_comp).T
@@ -308,10 +307,10 @@ def _prior_mode_std(
 ) -> np.ndarray:
     """Worst-determined modes under the prior alone, on the same subspace.
 
-    Quoted next to the posterior modes, so it must be the same eigenproblem with the
-    data term removed: same coordinates, same restriction. Comparing a posterior mode
-    over the observed pixels against a prior mode over the whole grid would make every
-    design appear to have learned something.
+    These are quoted next to the posterior modes, so the eigenproblem must be the same
+    with the data term removed: same coordinates, same restriction. Comparing a
+    posterior mode over the observed pixels against a prior mode over the whole grid
+    would make every design appear to improve on the prior.
     """
     if n_modes <= 0:
         return np.zeros(0)
@@ -329,10 +328,10 @@ def _data_diagonal(precision, prior: SmoothnessPrior, n_pix: int, n_comp: int) -
     band assembly, so its precision entry is the prior's own float and the difference
     is exactly ``0.0``.
 
-    The result is per component, not per pixel, for two reasons: a telluric or nebular
-    component sits in a different frame from the stars and is therefore observable at a
-    different set of pixels, and a faint companion's whole row is scaled by
-    ``ell_2**2``, four orders of magnitude below the primary's at a 1% light fraction.
+    The result is per component, not per pixel, for two reasons. A telluric or nebular
+    component is in a different frame from the stars and is therefore observable at a
+    different set of pixels. A faint companion's whole row is scaled by ``ell_2**2``,
+    four orders of magnitude below the primary's at a 1% light fraction.
     """
     diag = np.asarray(jnp.diagonal(precision.diag, axis1=-2, axis2=-1)).reshape(-1)[
         : n_comp * n_pix
@@ -342,22 +341,22 @@ def _data_diagonal(precision, prior: SmoothnessPrior, n_pix: int, n_comp: int) -
 
 
 def _auto_region(data_diag: np.ndarray, floor: float) -> np.ndarray:
-    """The pixels the design covers, as opposed to those it reaches only marginally.
+    """The pixels the design covers, excluding those it reaches only marginally.
 
     A model grid is built wider than the data, by the largest component shift plus the
-    LSF kernel radius (:meth:`albireo.grids.LogGrid.covering`), so its margin pixels
-    are reachable only at the most extreme shifts and then only through the tail of the
-    kernel. Their weight is not zero but a ramp down to zero, and they are the
-    worst-determined directions of the covariance on essentially every real problem.
+    LSF kernel radius (:meth:`albireo.grids.LogGrid.covering`). Its margin pixels are
+    therefore reachable only at the most extreme shifts, and then only through the tail
+    of the kernel. Their weight is nonzero and ramps down to zero, and they are the
+    worst-determined directions of the covariance on almost every real problem.
     Reporting one of them as the worst-determined mode would measure the grid margin
     rather than the observing design.
 
-    The cut is placed in that ramp: a coordinate is kept when it carries at least
-    ``floor`` times the median weight of the coordinates this component is weighted at.
-    The interior of a design is flat in this quantity and the margin ramps through it,
-    so any value well inside ``(0, 1)`` separates them and the exact choice has little
+    The cut is placed in that ramp: a coordinate is kept when its weight is at least
+    ``floor`` times the median weight of this component's weighted coordinates. The
+    interior of a design is flat in this quantity and the margin ramps through it, so
+    any value well inside ``(0, 1)`` separates them and the exact choice has little
     effect. The median is taken per component because of the ``ell_2**2`` scaling noted
-    in :func:`_data_diagonal`; a global median would remove a faint companion entirely.
+    in :func:`_data_diagonal`. A global median would remove a faint companion entirely.
 
     The floor is a convention, so it is exposed as a named argument.
     """
@@ -373,7 +372,7 @@ def _resolve_region(region, observed: np.ndarray, grid: LogGrid) -> np.ndarray:
     """Intersect a user's region of interest with the pixels the design covers.
 
     The result is always an intersection: a window the data do not cover cannot be
-    forecast, and including it would return the grid margin to the answer.
+    forecast, and including it would bring the grid margin back into the result.
     """
     if region is None:
         return observed
@@ -418,20 +417,20 @@ def _separation_diagnostics(delta_pix: np.ndarray, grid: LogGrid, scales_kms, th
     scales at which the penalty exceeds ``threshold``.
 
     This is the idealized problem (two components, unit weights, one grid, no LSF, no
-    prior): a screening tool and an explanation, not the answer, which comes from the
+    prior). It is a screening tool and an explanation. The exact numbers come from the
     assembled covariance. The distribution of ``Delta_j`` is the only quantity here that
     a proposal chooses.
 
     ``Var_j(Delta_j)`` alone is the wrong quantity to maximize. The §5.1 expansion keeps
-    only the second moment, but ``|g(k)|`` depends on the whole distribution: a cadence
-    aliased to the orbital period visits the two extreme values of ``Delta`` repeatedly,
-    which maximizes the variance but leaves ``|g|`` returning to ``J`` at a comb of
-    scales. Measured in ``examples/08_forecast.py`` (a 13.7 d circular SB2, eight epochs
-    in hand and twelve to plan; ``docs/math.md`` §5.5): twelve more at ``P/2`` keep the
-    RMS differential velocity at 117.8 km/s and stay blind over 58% of the sampled scale
-    range, while the same twelve spread over phase lower the RMS to 99.3 km/s and the
-    blind fraction to 33%. The exact calculation prefers the second design, by 375 nats
-    against 243.
+    only the second moment, but ``|g(k)|`` depends on the whole distribution. A cadence
+    aliased to the orbital period samples the two extreme values of ``Delta``
+    repeatedly, which maximizes the variance, but ``|g|`` then returns to ``J`` at a
+    comb of scales. In ``examples/08_forecast.py`` (a 13.7 d circular SB2, eight epochs
+    in hand and twelve to plan; ``docs/math.md`` §5.5), twelve more at ``P/2`` keep the
+    RMS differential velocity at 117.8 km/s and leave the design blind over 58% of the
+    sampled scale range. The same twelve spread over phase lower the RMS to 99.3 km/s
+    and the blind fraction to 33%. The exact calculation ranks the second design higher,
+    by 375 nats against 243.
     """
     j = delta_pix.size
     scales = np.asarray(scales_kms, dtype=np.float64)
@@ -439,20 +438,20 @@ def _separation_diagnostics(delta_pix: np.ndarray, grid: LogGrid, scales_kms, th
     k = 2.0 * np.pi / (scales / grid.dv_kms)
     g = np.abs(np.exp(1j * k[:, None] * delta_pix[None, :]).sum(axis=1))
     # |g| <= J with equality at k = 0 (and, for an aliased design, at a comb of other k),
-    # so the denominator is floored where the difference mode carries a rounding error's
-    # worth of the sum mode's information. The resulting penalty is ~7e7, far above any
-    # threshold and finite, which an unfloored division is not.
+    # so the denominator is floored at the rounding error of the sum mode's information.
+    # The resulting penalty is ~7e7, far above any threshold and finite, which an
+    # unfloored division is not.
     penalty = np.sqrt((j + g) / np.maximum(j - g, j * np.finfo(np.float64).eps))
 
     # The summary statistic is the fraction of the sampled range over which the design is
-    # blind, not a "clean down to X km/s" crossing, because the penalty is not monotone
+    # blind, not the scale of a threshold crossing, because the penalty is not monotone
     # and a crossing is therefore not a meaningful number. |g(k)| decays with k only when
-    # the Delta values are well spread; a cadence aliased to the period gives two values
-    # of Delta and |g(k)| = J |cos(k Delta_sep / 2)|, which returns to J periodically, a
-    # comb of blind spots at narrow scales. Measured on an 8-epoch aliased design, the
-    # same curve puts its first upcrossing at 8.8 km/s and its last at 802 km/s. The
-    # blind fraction survives the comb and orders the designs as the exact calculation
-    # does (58% aliased against 33% spread, in examples/08_forecast.py).
+    # the Delta values are well spread. A cadence aliased to the period gives two values
+    # of Delta and |g(k)| = J |cos(k Delta_sep / 2)|, which returns to J periodically, so
+    # the design is blind at a comb of narrow scales. Measured on an 8-epoch aliased
+    # design, the penalty has its first upcrossing at 8.8 km/s and its last at 802 km/s.
+    # The blind fraction remains meaningful for a comb and orders the designs as the
+    # exact calculation does (58% aliased against 33% spread, in examples/08_forecast.py).
     return k, penalty, float(np.mean(penalty > threshold))
 
 
@@ -536,11 +535,11 @@ class SensitivityForecast:
     def median_std(self) -> np.ndarray:
         """Median posterior sigma per component over :attr:`region`, ``(n_comp,)``.
 
-        Taken over the region rather than the whole grid: a model grid carries a margin
-        of pixels no epoch reaches (:meth:`albireo.grids.LogGrid.covering`), and those
-        sit at the prior's width, so a median over everything measures the size of the
-        margin. :attr:`component_std` covers the full grid for plotting, where the band
-        widening outside the data is informative.
+        The median is taken over the region rather than the whole grid. A model grid has
+        a margin of pixels no epoch reaches (:meth:`albireo.grids.LogGrid.covering`),
+        and those have the prior's width, so a median over the whole grid measures the
+        size of the margin. :attr:`component_std` covers the full grid for plotting,
+        where the band widening outside the data is informative.
         """
         return np.array(
             [
@@ -573,16 +572,16 @@ class SensitivityForecast:
     def worst_mode_gain(self) -> float:
         """Ratio of the prior to the posterior standard deviation of the worst mode.
 
-        A value near 1 is expected. For a two-component fit the
-        leading mode is the ``k = 0`` exchange (a constant added to one star's spectrum
-        and subtracted from the other's), which ``docs/math.md`` §5.1 shows is exactly
-        singular for every design: the difference-mode information
-        ``lambda_-(k) ~ J k^2 Var_j(Delta)/2`` vanishes at ``k = 0``. No phase sampling
-        removes it; only the ridge ``eta`` makes it proper, and only an external
-        constraint (a light ratio, a template) measures it.
+        A value near 1 is expected. For a two-component fit the leading mode is the
+        ``k = 0`` exchange (a constant added to one star's spectrum and subtracted from
+        the other's), which ``docs/math.md`` §5.1 shows is exactly singular for every
+        design: the difference-mode information ``lambda_-(k) ~ J k^2 Var_j(Delta)/2``
+        vanishes at ``k = 0``. No phase sampling removes it. Only the ridge ``eta``
+        makes it proper, and only an external constraint (a light ratio, a template)
+        measures it.
 
-        This number checks that the leading mode is the one theory predicts.
-        :attr:`mode_std` as a whole (how fast the ladder falls away from the leading
+        This number is a check that the leading mode is the one theory predicts.
+        :attr:`mode_std` as a whole (how quickly the values decrease after the leading
         mode) distinguishes designs, and :attr:`p_eff` is the scalar that ranks them.
         """
         if not self.mode_std.size or self.worst_mode_std <= 0.0:
@@ -739,8 +738,8 @@ def sensitivity_forecast(
     """Forecast what a set of epochs determines about the component spectra.
 
     Computes the posterior covariance ``(Lambda_p + A^T W A)^{-1}`` of the stacked
-    deviation spectra for ``dataset``, which needs no fluxes, so the epochs may be
-    planned rather than observed (:func:`plan_epochs`), and summarizes it as the
+    deviation spectra for ``dataset``. The covariance needs no fluxes, so the epochs
+    may be planned rather than observed (:func:`plan_epochs`). It is summarized as the
     pointwise band, the worst-determined modes and the constrained degree-of-freedom
     count, each quoted against the prior-only value (``docs/math.md`` §5.5).
 
@@ -756,10 +755,10 @@ def sensitivity_forecast(
         The :class:`~albireo.priors.SmoothnessPrior` the fit will use, with one
         ``(tau, eta)`` pair per component in the order stellar, telluric, nebular. The
         prior is part of the forecast: ``eta`` sets the scale of the low-frequency
-        directions the design must constrain, so a prior looser than the fit's reports a
-        degeneracy the fit will not have, and a tighter one reports a design that works
-        because the prior does the work.
-        Take ``(tau, eta)`` from an ML-II fit to comparable data where one exists.
+        directions the design must constrain. A prior looser than the fit's gives a
+        degeneracy the fit will not have, and a tighter one gives constraints that come
+        from the prior and not from the design. Take ``(tau, eta)`` from an ML-II fit to
+        comparable data where one exists.
     orbit, velocities
         Exactly one must be given. ``orbit`` is either a ``theta`` mapping (``period``,
         ``t_conj``, ``secosw``, ``sesinw``, ``k``, as returned by a fit via
@@ -770,33 +769,33 @@ def sensitivity_forecast(
         wide pair, a moving group, a fixed set of assumed offsets.
     baseline
         Optional epoch indices into ``dataset`` naming the observations already in
-        hand; the remaining epochs of the design are the planned ones. The result then
-        carries a full :attr:`~SensitivityForecast.baseline` forecast for that subset
+        hand. The remaining epochs of the design are the planned ones. The result then
+        includes a full :attr:`~SensitivityForecast.baseline` forecast for that subset
         and reports the difference. The two are computed by the same code on the same
-        inputs, so the comparison cannot drift. ``None`` (default) forecasts the design
-        on its own.
+        inputs, so the comparison never mixes two code paths. ``None`` (default)
+        forecasts the design alone.
     jitter
         Optional noise-inflation factor ``alpha`` (scalar or per-epoch), as in
-        :func:`albireo.forward.with_jitter`. It expresses doubt about the quoted inverse
+        :func:`albireo.forward.with_jitter`. It accounts for error in the quoted inverse
         variances, which for a design built from an exposure-time calculator are usually
-        optimistic. The whole forecast scales with the weights.
+        too large. The whole forecast scales with the weights.
     ar1_phi
         Optional AR(1) correlation of the pixel noise (:func:`albireo.forward.with_ar1`).
-        Correlated noise carries less information per pixel than white noise of the
-        same variance, so a forecast that assumes white noise for a pipeline that
+        The information per pixel is lower for correlated noise than for white noise of
+        the same variance, so a forecast that assumes white noise for a pipeline that
         resamples is optimistic in a way that exposure time does not correct.
     region
         Model pixels over which the mode and median summaries are taken: ``None``
         (default) for every pixel the design puts weight on, a ``(wave_min, wave_max)``
         pair, or a boolean mask of shape ``(n_pixels,)`` or ``(n_components, n_pixels)``.
-        The region given is intersected with the covered set: the model grid is always
+        The region given is intersected with the covered set. The model grid is always
         wider than the data (shift plus kernel margin,
-        :meth:`albireo.grids.LogGrid.covering`), and the margin pixels sit at the prior
-        by construction, so left in they would be the worst-determined mode of
-        essentially every real problem and the forecast would report the grid margin
-        instead of the observing design. A region narrowed to a line window asks what a
-        design does for the feature the science depends on, usually a sharper question
-        than the average over the grid.
+        :meth:`albireo.grids.LogGrid.covering`), and the margin pixels have the prior's
+        width by construction. If kept, they would be the worst-determined mode of
+        almost every real problem and the forecast would report the grid margin
+        instead of the observing design. A region narrowed to a line window restricts
+        the summaries to the feature the science depends on, which is usually more
+        specific than the average over the grid.
     region_floor
         Where the automatic region cuts through the grid margin: a coordinate is kept
         when the design weights it at least this fraction of the median weight over
@@ -809,10 +808,10 @@ def sensitivity_forecast(
         default 4 shows whether the leading mode is isolated or one of a cluster.
     mode_iterations, mode_seed
         Subspace-iteration steps and the seed for the starting block. The default is
-        generous because the steps are cheap: each is a few banded solves against an
-        assembly and a Cholesky that dominate the call, and a run measured at 2.2 s
-        took the same 2.2 s at 40 steps and at 320. Eigenvalues converge long before
-        eigenvectors (seven significant figures by step 20 in that run, against a
+        large because the steps are cheap. Each is a few banded solves, and the
+        assembly and the Cholesky factorization dominate the call: a run measured at
+        2.2 s took the same 2.2 s at 40 steps and at 320. Eigenvalues converge long
+        before eigenvectors (seven significant figures by step 20 in that run, against a
         vector residual still at 2e-3), so raise this only when
         :attr:`~SensitivityForecast.mode_residual` matters, i.e. when the mode is to be
         plotted rather than its width read.
@@ -944,12 +943,12 @@ def sensitivity_forecast(
     def forecast(indices: tuple[int, ...], mask=None) -> SensitivityForecast:
         """One design, from the shared inputs restricted to ``indices``.
 
-        The design and its baseline both pass through here (same construction, same
-        assembly, same summaries), so the comparison never mixes two routes.
+        The design and its baseline are both computed here (same construction, same
+        assembly, same summaries), so the comparison never mixes two code paths.
 
         ``mask`` is the coordinate subspace over which the mode and median summaries
         are taken. It is derived from the full design and passed to the baseline, so the
-        two are compared on the same coordinates; the baseline's own region would be
+        two are compared on the same coordinates. The baseline's own region would be
         strictly smaller (fewer epochs reach fewer pixels).
         """
         idx = list(indices)

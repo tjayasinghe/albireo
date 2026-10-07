@@ -1,8 +1,8 @@
 """Observed spectra: the :class:`EpochData` and :class:`Dataset` containers and their validation.
 
-This module is pure NumPy: it is the boundary at which user data enter albireo, importable
-and inspectable without JAX. Everything downstream consumes the arrays validated here.
-It enforces the following conventions.
+This module is pure NumPy, so it can be imported and inspected without JAX. It is the
+boundary at which user data enter albireo, and everything downstream uses the arrays
+validated here. It enforces the following conventions.
 
 Masking is ``ivar == 0``. Chip gaps, cosmic rays, interstellar lines, saturated pixels and
 deep tellurics are all zero-weight pixels, so no operator or solve downstream needs a special
@@ -11,23 +11,22 @@ cosmic-ray spike, or a NaN from a reduction pipeline). ``flux`` must be finite w
 ``ivar > 0``.
 
 ``mask`` is optional, and ``True`` means good. It keeps a boolean quality flag alongside the
-inverse variances instead of zeroing them destructively. It is folded into the weights only
-in :attr:`EpochData.effective_ivar`, which is what downstream code consumes; nothing else
-reads ``mask``. The finite-``flux`` requirement is keyed on ``ivar > 0`` alone, so a pixel
-holding non-finite values requires ``ivar = 0``, not merely ``mask = False``.
+inverse variances instead of zeroing them destructively. It is applied to the weights only
+in :attr:`EpochData.effective_ivar`, which downstream code uses; nothing else reads
+``mask``. The finite-``flux`` requirement depends on ``ivar > 0`` alone, so a pixel with
+non-finite values requires ``ivar = 0``; ``mask = False`` is not sufficient.
 
 Data are never resampled (``docs/math.md`` §1.1): interpolating observations onto a common
 grid correlates the noise and invalidates the diagonal ``ivar`` model. Each epoch keeps its
-own native, strictly increasing ``wave`` array, and the model is projected onto it by a
-static rebin operator, so mixed instruments, resolutions and samplings are supported
-directly.
+native, strictly increasing ``wave`` array, and the model is projected onto it by a static
+rebin operator, so mixed instruments, resolutions and samplings are supported directly.
 
 A :class:`Dataset` declares the frame its wavelengths are in: ``"topocentric"`` (as observed,
 the default) or ``"barycentric"`` (already corrected). The declaration is not a
 transformation; the barycentric correction ``v_bary`` is composed inside the forward model
 (``docs/math.md`` §1.2). In the topocentric frame a stellar component is shifted by
 ``xi(v_ij) - xi(v_bary_j)`` and the tellurics are static; in the barycentric frame the star
-is shifted by ``xi(v_ij)`` and the tellurics carry ``+xi(v_bary_j)``. Both frames are exact,
+is shifted by ``xi(v_ij)`` and the tellurics by ``+xi(v_bary_j)``. Both frames are exact,
 since log-shifts compose by addition. Declaring the wrong frame offsets every velocity without
 raising an error.
 
@@ -73,7 +72,7 @@ def _as_finite_float(value: object, name: str) -> float:
 
 @dataclasses.dataclass(frozen=True)
 class EpochData:
-    """One observed spectrum, on its own native wavelength grid.
+    """One observed spectrum, on its native wavelength grid.
 
     Inputs are coerced (``wave``/``flux``/``ivar`` to 1-D float64 arrays, ``mask`` to bool)
     and validated on construction, so every downstream operator can use an
@@ -98,32 +97,32 @@ class EpochData:
     instrument : str, optional
         Key into the per-instrument LSF and response tables. Default ``"default"``.
     mask : array_like of bool or None, optional
-        Optional quality flag, shape ``(n,)``, where ``True`` means GOOD. Folded into the
+        Optional quality flag, shape ``(n,)``, where ``True`` means good. Applied to the
         weights by :attr:`effective_ivar` and nowhere else. Default ``None``.
     medium : {"air", "vacuum"} or None, optional
         Which wavelength scale ``wave`` is on. Default ``None``, meaning undeclared, which
-        is accepted but is not equivalent to ``"air"``: nothing may assume a value for it.
+        is accepted but is not equivalent to ``"air"``: no value is assumed for it.
 
         Air and vacuum wavelengths differ by a nearly constant 83 km/s across the optical
         (0.87 Angstrom at 3000 A, 2.74 A at 10000 A), the same order as the semi-amplitudes
         albireo measures, and archives mix the two. ESO Phase 3 spectra declare the scale
         per file in ``TUCD1`` (``em.wl;obs.atmos`` is air, ``em.wl`` is vacuum): FEROS,
         HARPS, UVES and GIRAFFE deliver air, while ESPRESSO and XQ-100 deliver vacuum.
-        Combined without conversion, the same physical line would land at two different
+        Combined without conversion, the same physical line would fall on two different
         model pixels. :class:`Dataset` therefore requires every epoch to agree and raises on
         a mixture (:func:`albireo.air_to_vacuum` and :func:`albireo.vacuum_to_air` convert).
-        Undeclared epochs may be combined only with other undeclared epochs, since
-        "unknown" cannot be checked against "air".
+        Undeclared epochs may be combined only with other undeclared epochs, since an
+        undeclared scale cannot be checked against a declared one.
     lsf_sigma_kms : float or None, optional
         Gaussian line-spread width this exposure was taken at, in km/s, as its file
         declared it (the reader converts a header resolving power; see
         :attr:`albireo.io.RawSpectrum.lsf_sigma_kms`). Default ``None``, undeclared.
 
-        This is a property of the exposure, not of the instrument name: HARPS observes at
+        This is a property of the exposure, not of the instrument name. HARPS observes at
         R = 115,000 in its high-accuracy mode and at R = 80,000 in its high-efficiency
         mode under the same ``INSTRUME``, and FEROS, UVES and X-shooter settings differ
         between programmes on one target. It enters the model only where the instrument's
-        width is declared as :data:`albireo.forward.PER_EPOCH`; a per-instrument width is
+        width is declared as :data:`albireo.forward.PER_EPOCH`. A per-instrument width is
         used as given, and pooling epochs that declare different widths under one such key
         emits a warning naming them.
 
@@ -275,9 +274,9 @@ class EpochData:
 
     @property
     def effective_ivar(self) -> np.ndarray:
-        """Inverse variances with the mask folded in: the weights downstream code consumes.
+        """Inverse variances with the mask applied: the weights used downstream.
 
-        The only place ``mask`` has any effect. The result is ``ivar`` with zeros wherever
+        ``mask`` has an effect only here. The result is ``ivar`` with zeros wherever
         :attr:`good` is ``False``, so a masked pixel is a zero-weight pixel.
 
         Returns
@@ -346,8 +345,7 @@ class Dataset:
         # nearly constant 83 km/s across the optical, the same order as the orbits albireo
         # measures, so a mixture puts one physical line at two model pixels and biases every
         # velocity that depends on the offending epochs. Archives mix them (ESO delivers air
-        # from FEROS/HARPS/UVES/GIRAFFE and vacuum from ESPRESSO), so the agreement is
-        # checked rather than assumed.
+        # from FEROS/HARPS/UVES/GIRAFFE and vacuum from ESPRESSO), so the agreement is checked.
         media = {epoch.medium for epoch in epochs}
         if len(media) > 1:
             where: dict[str | None, list[object]] = {}
@@ -480,7 +478,7 @@ def _lsf_note(epochs: Sequence[EpochData]) -> str:
     """The declared LSF widths of a group of epochs, for :meth:`Dataset.summary`.
 
     Distinct widths are listed with their epoch counts, so that two instrument modes
-    filed under one key (HARPS HAM and EGGS, for instance) are visible at a glance.
+    filed under one key (HARPS HAM and EGGS, for instance) are visible.
     """
     declared = [e.lsf_sigma_kms for e in epochs if e.lsf_sigma_kms is not None]
     if not declared:

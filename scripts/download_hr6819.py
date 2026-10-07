@@ -2,17 +2,18 @@
 
 Fetches the 51 Phase-3 (``SCIENCE.SPECTRUM``) 1-D spectra of HR 6819 taken under ESO
 programme 073.D-0274(A) (PI Rivinius) with FEROS on the MPG/ESO 2.2 m. These are the
-spectra behind Rivinius et al. (2020) and the reanalyses that followed; they are public,
+spectra used by Rivinius et al. (2020) and the reanalyses that followed. They are public,
 so no ESO login is required.
 
-The files land in ``data/hr6819/`` as ``ADP.<id>.fits`` (~3 MB each, ~153 MB total) with a
-``manifest.json`` recording the archive metadata and each download's outcome. Re-running
-skips files already present at the expected size, so an interrupted download resumes.
+The files are written to ``data/hr6819/`` as ``ADP.<id>.fits`` (~3 MB each, ~153 MB total)
+with a ``manifest.json`` recording the archive metadata and each download's outcome.
+Re-running skips files already present at the expected size, so an interrupted download
+resumes.
 
 This script is a thin wrapper over :mod:`albireo.archive`, the same client generalized to
 any ESO programme, instrument or sky position (``docs/api/archive.md``). It is kept because
-the HR 6819 dataset is the one the benchmark record and
-``examples/03_hr6819_real_data.py`` are built on, and as a worked invocation.
+the benchmark record and ``examples/03_hr6819_real_data.py`` use the HR 6819 dataset, and
+as a worked invocation.
 
 Usage
 -----

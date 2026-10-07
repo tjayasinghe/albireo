@@ -1,20 +1,19 @@
-"""Tests for the LSF asymmetry lever: per-anchor Gauss-Hermite h3 (D38).
+"""Tests for the LSF asymmetry parameter: per-anchor Gauss-Hermite h3 (D38).
 
-D37 opened the tabulated-LSF seam and its record narrowed the surviving LSF suspect
-to profile *asymmetry* — the first-order centroid channel a symmetric width can
-never produce. The operator already takes arbitrary asymmetric banks; D38 adds the
-θ-parameterization: per-anchor Gauss-Hermite ``h3``. What is pinned here: ``h3 = 0``
-must reproduce the pure Gaussian machinery exactly (bit-for-bit, so D37 problems are
-untouched); the kernel's centroid must move as the series says (``~ sqrt(3) h3
-sigma``, the physical content of the site); the marginal must agree between band
-assembly, probing, and dense LAPACK on h3-anchored problems under diagonal and AR(1)
-noise, and under gradients in h3; injected asymmetry must be seen by the
-fixed-spectra data term; and a joint fit with the site free must leave the orbit
-unbiased. The injected profile's *recovery* is deliberately not asserted — the free
-spectra absorb even the wavelength-varying part of an asymmetry (a static
-centroid-warp field is representable by a free spectrum outright), so fitted h3
-profiles are diagnostics more thoroughly than fitted widths; see the closed-loop
-test's docstring for the measured numbers.
+D37 implements the tabulated LSF, and its record leaves profile asymmetry as the only
+LSF effect not ruled out. Asymmetry shifts the centroid at first order, which a
+symmetric width cannot. The operator already takes arbitrary asymmetric banks, and D38
+adds the θ-parameterization: per-anchor Gauss-Hermite ``h3``. The tests assert five
+properties. ``h3 = 0`` must reproduce the pure Gaussian code path bit-for-bit, so that
+D37 problems are unchanged. The kernel's centroid must shift as the series predicts
+(``~ sqrt(3) h3 sigma``, the physical content of the site). The marginal must agree
+between band assembly, probing, and dense LAPACK on h3-anchored problems under diagonal
+and AR(1) noise, and under gradients in h3. Injected asymmetry must be detectable in
+the fixed-spectra data term. A joint fit with the site free must leave the orbit
+unbiased. Recovery of the injected profile is not asserted. The free spectra absorb
+even the wavelength-varying part of an asymmetry (a free spectrum can represent a
+static centroid-warp field), so fitted h3 profiles are diagnostics, more so than fitted
+widths. The closed-loop test's docstring gives the measured numbers.
 """
 
 from __future__ import annotations
@@ -223,7 +222,7 @@ def h3_gate_dataset():
 
 
 def test_data_term_prefers_the_injected_h3_profile_at_fixed_spectra():
-    """The injected asymmetry gradient is in the data and the forward model sees it."""
+    """The injected asymmetry gradient is in the data and the forward model reproduces it."""
     from albireo.forward import data_residual_zscores
 
     ds, truth = h3_gate_dataset()
@@ -249,20 +248,20 @@ def test_data_term_prefers_the_injected_h3_profile_at_fixed_spectra():
 
 @pytest.mark.slow
 def test_closed_loop_h3_joint_fit_leaves_orbit_unbiased():
-    """The D38 gate: h3 anchors free against injected asymmetry — the orbit holds.
+    """The D38 acceptance test: the orbit is unbiased with h3 anchors free and asymmetry injected.
 
-    Asserted: the orbit, and the fitted h3 staying interior to its bound. The
-    injected profile's recovery is deliberately NOT asserted — measured here, the
-    free spectra absorb the injected gradient entirely (fitted h3 came back at the
-    [-0.03, +0.03] level against an injected [-0.12, 0, +0.12] ramp, with the orbit
-    unharmed). This is *stronger* absorption than D37's widths: an asymmetry
-    profile imprints a static centroid-warp field c(lambda) ~ sqrt(3) h3 sigma,
-    and a free spectrum can represent any static warp outright — the data-identified
-    remainder is the epoch-coupled sampling term ~ c'(lambda) * lambda * (v - v_b)/c,
-    tens of m/s at this scale, far below the noise. Fitted h3 profiles are therefore
-    diagnostics even more thoroughly than fitted widths; the orbit's response is the
-    only readout that matters (the fixed-spectra data-term test above pins that the
-    injection itself is real and seen).
+    The test asserts the orbit and that the fitted h3 stays interior to its bound.
+    Recovery of the injected profile is not asserted. Measured here, the free spectra
+    absorb the injected gradient entirely (fitted h3 at the [-0.03, +0.03] level
+    against an injected [-0.12, 0, +0.12] ramp, with the orbit unaffected). This
+    absorption is stronger than for D37's widths. An asymmetry profile produces a
+    static centroid-warp field c(lambda) ~ sqrt(3) h3 sigma, and a free spectrum can
+    represent any static warp. The data-identified remainder is the epoch-coupled
+    sampling term ~ c'(lambda) * lambda * (v - v_b)/c, tens of m/s at this scale and
+    far below the noise. Fitted h3 profiles are therefore diagnostics, more so than
+    fitted widths, and the orbit's response is the only informative readout. The
+    fixed-spectra data-term test above asserts that the injection is in the data and
+    detectable.
     """
     import numpyro.distributions as dist
 

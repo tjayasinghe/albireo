@@ -1,41 +1,41 @@
-"""Gaia RVS: the instrument as a simulator, and the products it delivers.
+"""Gaia RVS: a simulator of the instrument and of the products it delivers.
 
 **Experimental.** The names and the product presets may change when the DR4 reader is
 written against the released data model.
 
 The Radial Velocity Spectrometer records 846-870 nm at a nominal resolving power of 11,500
-(the resolution element is three pixels; the resolving power measured per CCD in flight runs
-from 10,983 to 12,587, Cropper et al. 2018 Table 6) on a detector that disperses at
-0.02453 nm per pixel. The archive does not publish the detector pixels: DR3's mean spectra
-are resampled onto a 0.01 nm grid (2401 samples in the rest frame of the source, one mean
-per source over its epochs and so unusable for disentangling), and DR4's epoch spectra onto
-a 0.025 nm grid (961 samples, barycentric frame, one per field-of-view transit with its
-three CCDs combined). The resampling correlates the noise, and the published per-pixel
-errors do not carry the correlation. This module reproduces that chain so that a synthetic
-RVS dataset carries the same defects the real product will:
+on a detector that disperses at 0.02453 nm per pixel. The resolution element is three
+pixels, and the resolving power measured per CCD in flight ranges from 10,983 to 12,587
+(Cropper et al. 2018 Table 6). The archive does not publish the detector pixels. DR3's mean
+spectra are resampled onto a 0.01 nm grid (2401 samples in the rest frame of the source, one
+mean per source over its epochs and so unusable for disentangling). DR4's epoch spectra are
+resampled onto a 0.025 nm grid (961 samples, barycentric frame, one per field-of-view
+transit with its three CCDs combined). The resampling correlates the noise, and the
+published per-pixel errors do not include the correlation. This module reproduces that
+chain so that a synthetic RVS dataset has the same defects as the real product will:
 
 1. the component spectra are combined and observed on the detector grid through the
    operator stack of :func:`albireo.simulate.simulate_dataset`, with the noise added
-   *there*, per detector pixel, as photon counting at the S/N that follows from G_RVS
+   there, per detector pixel, as photon counting at the S/N that follows from G_RVS
    (:func:`rvs_snr_per_pixel`);
-2. :func:`deliver` then interpolates each epoch onto the delivered grid exactly as the
-   archive does, propagates the variance through the interpolation weights, and records
-   the lag-one correlation that the diagonal errors cannot express.
+2. :func:`deliver` then interpolates each epoch onto the delivered grid as the archive
+   does, propagates the variance through the interpolation weights, and records the
+   lag-one correlation that the diagonal errors cannot express.
 
 The model is that of Rowan's ``SyntheticSB2`` with the ``GAIA_RVS`` preset
 (``binaryspectra/notebooks/synthetic_rvs_spectra.ipynb``), with two differences. The
-component spectra come from a published grid through
-:mod:`albireo.library` rather than from a synthesis code, because albireo synthesises
-nothing; and the wavelength scale is vacuum, as Gaia's is. Every constant of the S/N
-model is a field of :class:`RVSConstants` with its source in the docstring.
+component spectra come from a published grid through :mod:`albireo.library` rather than
+from a synthesis code, because albireo does not synthesise spectra. The wavelength scale is
+vacuum, as Gaia's is. Every constant of the S/N model is a field of :class:`RVSConstants`
+with its source in the docstring.
 
 The transit cadence (:func:`rvs_transit_count`, :func:`rvs_transit_times`) reproduces the
-measured structure of the scanning law, the count distribution and its latitude dependence,
-the visibility periods and the 106.5-minute field-of-view pairs, but not its phase. Real
+measured structure of the scanning law (the count distribution and its latitude dependence,
+the visibility periods and the 106.5-minute field-of-view pairs) but not its phase. Real
 transit times for a sky position come from the Gaia Observation Forecast Tool over its IVOA
-endpoint (:func:`gost_transits`), which forecasts the nominal law for the whole mission;
-:func:`rvs_transit_times_from_gost` cuts them to a release, to the CCD rows the RVS covers
-and to the fraction that reaches the ground, and either list is passed as ``bjd``.
+endpoint (:func:`gost_transits`), which forecasts the nominal law for the whole mission.
+:func:`rvs_transit_times_from_gost` restricts them to a release, to the CCD rows the RVS
+covers and to the fraction that reaches the ground. Either list is passed as ``bjd``.
 
 References
 ----------
@@ -108,7 +108,7 @@ RVS_BAND: tuple[float, float] = (8460.0, 8700.0)
 RVS_RESOLVING_POWER: float = 11_500.0
 """Nominal resolving power ``lambda / FWHM`` of the RVS: a resolution element of three
 pixels (Sartoretti et al. 2018 §5.4), the value the Gaia pipelines convolve their templates
-with. The in-flight measurements run from 10,983 to 12,587 per CCD
+with. The in-flight measurements range from 10,983 to 12,587 per CCD
 (:data:`RVS_CCD_RESOLVING_POWERS`)."""
 
 RVS_CCD_RESOLVING_POWERS: dict[tuple[int, int], tuple[float, float, float]] = {
@@ -125,7 +125,8 @@ RVS_CCD_RESOLVING_POWERS: dict[tuple[int, int], tuple[float, float, float]] = {
 15, 16 and 17 (Cropper et al. 2018, Table 6; from the cross-correlation of Fe lines with a
 binary mask). A transit crosses one row of one telescope and its epoch spectrum combines
 the three strips, so the effective resolving power of a transit is the row's mean, from
-11,146 to 12,396: a spread of about 7% about the nominal 11,500 that the pipelines adopt."""
+11,146 to 12,396. This is a spread of about 7% about the nominal 11,500 that the pipelines
+adopt."""
 
 RVS_DETECTOR_STEP: float = 0.245
 """Along-scan dispersion at the detector, 0.02453 nm per pixel, in Angstrom."""
@@ -166,8 +167,8 @@ class RVSConstants:
         Number of RVS CCD crossings in one field-of-view transit: three, strips 15-17.
     pixel_nm, band_nm
         Along-scan pixel width (0.0244 nm at 847 nm to 0.0246 at 873, Cropper et al.
-        2018 Table 5; 0.02453 is the band mean) and the width of the band, in nm; their
-        ratio is the fraction of the band's electrons that lands in one pixel.
+        2018 Table 5; 0.02453 is the band mean) and the width of the band, in nm. Their
+        ratio is the fraction of the band's electrons collected in one pixel.
     background_e
         Median background per pixel per CCD crossing, in electrons: ESA's mission median,
         after the stray light decreased from December 2015. Individual exposures range
@@ -175,15 +176,15 @@ class RVSConstants:
     ac_pixels
         Across-scan extent of a window, 10 pixels (Sartoretti et al. 2023).
     read_noise_e
-        Read-out noise per sample, in electrons: ESA adopts 3.2; the commissioning mean
+        Read-out noise per sample, in electrons. ESA adopts 3.2; the commissioning mean
         over the twelve detectors is 3.1 with a range of 2.9-3.4 (Cropper et al. 2018,
         Table 7). Immaterial below the window-class limit, where the background
         dominates.
     window_class_limit
         Sources brighter than this G_RVS keep two-dimensional windows (window class 0,
         Cropper et al. 2018 §7.1), so every across-scan pixel is read separately and
-        contributes its own read noise; fainter sources are binned across scan on board
-        and pay one read noise per column.
+        contributes its own read noise. Fainter sources are binned across scan on board
+        and have one read noise per column.
     """
 
     zero_point: float = 21.317
@@ -288,8 +289,8 @@ def rvs_transit_resolving_powers(n_transits: int, *, seed: int = 0) -> np.ndarra
     Each transit crosses one of the eight (telescope, row) combinations of
     :data:`RVS_CCD_RESOLVING_POWERS`, drawn uniformly, and its epoch spectrum combines
     the row's three strips, so the transit takes the row's mean resolving power. The
-    result spans 11,146 to 12,396 and is the realism knob for a line-spread width that an
-    analysis declares as the nominal 11,500 (``simulate_rvs_dataset(resolving_power=...)``).
+    result spans 11,146 to 12,396. Passed as ``simulate_rvs_dataset(resolving_power=...)``,
+    it sets realistic line-spread widths, which an analysis declares as the nominal 11,500.
     """
     if n_transits < 1:
         raise ValueError("n_transits must be positive")
@@ -301,10 +302,10 @@ def rvs_transit_resolving_powers(n_transits: int, *, seed: int = 0) -> np.ndarra
 def quadrature_sigma_kms(
     library_resolving_power: float | None, resolving_power: float = RVS_RESOLVING_POWER
 ) -> float:
-    """The Gaussian width that takes a library at its own resolving power to the RVS's.
+    """The Gaussian width that broadens a library from its own resolving power to the RVS's.
 
     A published grid is already broadened to its resolving power, so the simulator applies
-    only the difference in quadrature, ``sqrt(sigma_RVS^2 - sigma_lib^2)``; a fit that
+    only the difference in quadrature, ``sqrt(sigma_RVS^2 - sigma_lib^2)``. A fit that
     declares the library's resolving power on its templates makes the same correction
     (:meth:`albireo.todcor.Template.from_library`). ``None`` means an intrinsic-resolution
     grid, and the whole RVS width is returned.
@@ -354,7 +355,7 @@ class RVSProduct:
         The window over which the reference flux of the S/N is averaged (a 50 Angstrom
         window centred on the band, as in the reference implementation).
     instrument
-        The instrument key the delivered epochs carry.
+        The instrument key of the delivered epochs.
     description
         One line for the reports.
     """
@@ -400,9 +401,9 @@ RVS_DR4_EPOCH = RVSProduct(
 )
 """The DR4 ``rvs_epoch_spectrum`` grid from ESA's draft data model of 2026-06-26: 961
 samples, 846.0 to 870.0 nm inclusive, step 0.025 nm, barycentric frame and normalised, one
-spectrum per field-of-view transit with its three CCDs combined (the ESA DR4 content page
-states the last three; the grid is from the draft, which warns that the table is still
-under development, so it is to be re-checked against the release)."""
+spectrum per field-of-view transit with its three CCDs combined. The ESA DR4 content page
+states the last three. The grid is from the draft, which warns that the table is still
+under development, so it is to be re-checked against the release."""
 
 
 def rvs_model_grid(
@@ -418,7 +419,7 @@ def rvs_model_grid(
 
     The margin is the largest shift any component takes (``v_max_kms``, a semi-amplitude
     plus the systemic velocity plus headroom), the rotational half-width, and four
-    line-spread sigmas, so that a component shifted to the edge of its range still covers
+    line-spread sigmas. A component shifted to the edge of its range then still covers
     the detector grid without zero-fill.
 
     Parameters
@@ -530,7 +531,7 @@ RVS_SPANS: dict[str, tuple[float, float]] = {
     "dr3": (_DR3_START_BJD, _DR3_SPAN_DAYS),
     "dr4": (_DR4_START_BJD, _DR4_SPAN_DAYS),
 }
-"""``(start BJD, span in days)`` of the data behind each release: 34 months for DR3 and 66
+"""``(start BJD, span in days)`` of the data in each release: 34 months for DR3 and 66
 for DR4, both from 25 July 2014 (Katz et al. 2023 §3.8; the ESA DR4 content page)."""
 
 _DR3_TRANSITS_MEDIAN = 18.0
@@ -550,12 +551,12 @@ def rvs_transit_count(
     DR3's ``rv_nb_transits`` over 34 months has a median of 18 and 10th and 90th
     percentiles of 8 and 30 (Katz et al. 2023 §5.2 for the median; the percentiles from a
     uniform subsample of the archive), which a split log-normal reproduces. The count
-    scales with the data span, so the DR4 draw is the DR3 one times 66/34, and it depends
-    on ecliptic latitude through the scanning law: the mean runs from 12.5 on the ecliptic
-    to about 25 at 40-50 degrees and 26 at the poles (the archive's own means in 10-degree
-    bins, the pole excess being the first month's ecliptic-pole scanning). Given a
-    latitude, the draw is scaled by that mean over the sky average of 18.7. Crowding losses
-    in the bulge and the disc are not modelled.
+    scales with the data span, so the DR4 draw is the DR3 one times 66/34. It depends on
+    ecliptic latitude through the scanning law: the mean is 12.5 on the ecliptic, about 25
+    at 40-50 degrees and 26 at the poles (the archive's own means in 10-degree bins, the
+    pole excess being the first month's ecliptic-pole scanning). Given a latitude, the draw
+    is scaled by that mean over the sky average of 18.7. Crowding losses in the bulge and
+    the disc are not modelled.
 
     Parameters
     ----------
@@ -600,19 +601,20 @@ def rvs_transit_times(
     """Transit times with the structure of the Gaia scanning law, without its phase.
 
     Gaia spins once in six hours with its two fields of view 106.5 degrees apart, so a
-    source crossing the scanned band is seen 106.5 minutes apart by the two fields, then
-    4.23 hours later on the next spin; the precession of the spin axis (63 days) carries the
+    source crossing the scanned band is observed 106.5 minutes apart by the two fields, then
+    4.23 hours later on the next spin. The precession of the spin axis (63 days) moves the
     scanned band away and back, so the transits of one source come in visibility periods
     separated by at least four days. The archive records 1.48 RVS transits per visibility
-    period on average (13 periods for a median of 18 transits in DR3), so the independent
-    orbital phases a binary is seen at track the periods, not the transits.
+    period on average (13 periods for a median of 18 transits in DR3), so the number of
+    independent orbital phases sampled for a binary scales with the periods, not the
+    transits.
 
     The function draws that structure: ``n_transits / transits_per_period`` visibility
     periods placed uniformly at random over the span and at least four days apart, each
-    holding one, two or three transits on the 106.5-minute / 4.23-hour ladder, with the
+    with one, two or three transits on the 106.5-minute / 4.23-hour ladder, with the
     total adjusted to exactly ``n_transits``. It is an approximation: the phase of the
-    scanning law is not reproduced, so the epochs are statistically right and
-    individually wrong, and the latitude dependence enters only through the count
+    scanning law is not reproduced, so the epochs are correct statistically but not
+    individually, and the latitude dependence enters only through the count
     (:func:`rvs_transit_count`). Real transit times for a sky position come from the Gaia
     Observation Forecast Tool through :func:`gost_transits` and
     :func:`rvs_transit_times_from_gost`.
@@ -646,7 +648,7 @@ def rvs_transit_times(
             f"{n_periods} visibility periods do not fit in {span_days:g} days at four days apart"
         )
     # Uniform placement subject to the minimum separation: draw the starts uniformly in
-    # the span shortened by the gaps, then push each one out by the gaps before it.
+    # the span shortened by the gaps, then shift each one by the gaps before it.
     starts = np.sort(rng.uniform(0.0, free, size=n_periods))
     starts = starts + _VISIBILITY_GAP_DAYS * np.arange(n_periods)
     # One, two or three transits per period, mean transits_per_period; the ladder is the
@@ -694,7 +696,7 @@ GOST_ENDPOINT = "https://gaia.esac.esa.int/gost/ObjVisSAP/gaiaobjvisap"
 """The anonymous programmatic interface of the Gaia Observation Forecast Tool
 (https://gaia.esac.esa.int/gost/): ESA's implementation of the IVOA Object Visibility
 Simple Access Protocol, queried as ``?s_ra=<deg>&s_dec=<deg>`` with the optional
-``t_min``, ``t_max`` (both MJD), ``MAXREC`` and ``RESPONSEFORMAT``. It answers with a
+``t_min``, ``t_max`` (both MJD), ``MAXREC`` and ``RESPONSEFORMAT``. It returns a
 VOTable of one row per field-of-view crossing (GOST user manual GAIA-CU1-UG-ESAC-JFH-005,
 issue 08, 2022-08-23)."""
 
@@ -702,22 +704,22 @@ RVS_CCD_ROWS: tuple[int, ...] = (4, 5, 6, 7)
 """The CCD rows of the focal plane the Radial Velocity Spectrometer occupies, of the seven
 the astrometric field spans. The RVS is twelve CCDs in three strips over four rows
 (Cropper et al. 2018 §3.3.7), so a transit is recorded only when its across-scan position
-falls on one of these four, and the Gaia DR3 documentation states the consequence:
-the spectroscopic instrument "is only served by 4 of the 7 Video Processing Units", which
-reduces the transit count by a factor 4/7 against the astrometric one."""
+falls on one of these four. The Gaia DR3 documentation states that the spectroscopic
+instrument "is only served by 4 of the 7 Video Processing Units", which reduces the
+transit count by a factor 4/7 against the astrometric one."""
 
 GOST_USABLE_FRACTION: float = 0.78
 """Fraction of the RVS transits GOST predicts that yield a usable epoch spectrum.
 
-Three independent numbers converge on it: GOST's own statement that "the probability of
-the data of the target being received on the ground at the indicated time is about 80%";
-Katz et al. (2023) §2, that dead time and the processing filters reduce the effective
-number of transits by about 25%; and the arithmetic of the published counts, 8 RVS
-transits per star per year (Katz et al. 2023 §2) over the 34 months of DR3 predicting 22.7
-against the published median of 18, a ratio of 0.79. It describes a bright, isolated star.
-For G_RVS fainter than 14, in fields denser than about 35,000 sources per square degree,
-or during Galactic Plane Scanning, the fraction falls further and is set by onboard window
-allocation rather than by dead time; none of that is modelled here."""
+Three independent numbers are consistent with it. GOST states that "the probability of
+the data of the target being received on the ground at the indicated time is about 80%".
+Katz et al. (2023) §2 state that dead time and the processing filters reduce the effective
+number of transits by about 25%. The published counts, 8 RVS transits per star per year
+(Katz et al. 2023 §2) over the 34 months of DR3, predict 22.7 against the published median
+of 18, a ratio of 0.79. The fraction applies to a bright, isolated star. For G_RVS fainter
+than 14, in fields denser than about 35,000 sources per square degree, or during Galactic
+Plane Scanning, the fraction is lower and is set by onboard window allocation rather than
+by dead time. None of that is modelled here."""
 
 _MJD_TO_JD = 2400000.5
 
@@ -757,7 +759,7 @@ class GostTransits:
     ``t_start_gaia_timestamp``, ``t_stop``, ``t_stop_gaia_timestamp`` and ``t_visibility``,
     one row per field-of-view crossing. The three are in the CSV the interactive GOST form
     exports (columns ``Fov[FovP/FovF]``, ``CcdRow[1-7]`` and ``scanAngle[rad]``), so they
-    are fields here for a caller who has such a file; :func:`rvs_transit_times_from_gost`
+    are fields here for a caller who has such a file. :func:`rvs_transit_times_from_gost`
     draws the CCD row when it is absent.
     """
 
@@ -806,13 +808,13 @@ def _gost_query(ra_deg, dec_deg, t_min_mjd, t_max_mjd, max_records) -> str:
 
 
 def _gost_cache_name(ra_deg, dec_deg, t_min_mjd, t_max_mjd, max_records) -> str:
-    """The cache file name of one query: every parameter that changes the answer, in it."""
+    """The cache file name of one query, built from every parameter that changes the response."""
 
     def number(value, sign: str = "") -> str:
         if value is None:
             return "none"
-        # The fixed format always writes a point, which guards the integer's own zeros
-        # from the strip: 60800.0000 becomes 60800, not 608.
+        # The fixed format always writes a point, so the strip does not remove the zeros
+        # of the integer part: 60800.0000 becomes 60800, not 608.
         return f"{float(value):{sign}.4f}".rstrip("0").rstrip(".")
 
     return (
@@ -829,9 +831,10 @@ def _strip_namespace(tag: str) -> str:
 def _votable_table(payload: bytes):
     """Field names, field units and rows of the first VOTable table that has fields.
 
-    ``xml.etree`` rather than astropy: the reader must work in an installation whose only
-    dependencies are numpy and jax. The service's second RESOURCE describes the protocol
-    and carries no FIELD, so the first table with fields is the results table.
+    ``xml.etree`` is used rather than astropy, because the reader must work in an
+    installation whose only dependencies are numpy and jax. The service's second RESOURCE
+    describes the protocol and has no FIELD, so the first table with fields is the results
+    table.
     """
     try:
         root = ElementTree.fromstring(payload)
@@ -882,8 +885,8 @@ def _votable_column(names, rows, keys) -> np.ndarray | None:
 def _votable_fov(names, rows) -> np.ndarray | None:
     """The field of view as 1 (preceding) or 2 (following), numeric or named.
 
-    A table that spells it 1 and 2 is read as a number; one that spells it the way the
-    GOST web form does, ``FovP`` and ``FovF``, is read by name.
+    A table that gives it as 1 and 2 is read as a number; one that gives it as the GOST
+    web form does, ``FovP`` and ``FovF``, is read by name.
     """
     if "fov" not in names:
         return None
@@ -908,7 +911,7 @@ def _parse_gost(payload: bytes, *, ra_deg: float, dec_deg: float, source: str) -
         raise ValueError(f"the response has no t_start column; its columns are {', '.join(names)}")
     stop = _votable_column(names, rows, ("t_stop",))
     # The transit time is the middle of the field-of-view crossing, which t_start and
-    # t_stop bracket; without t_stop the start is all there is.
+    # t_stop bracket; without t_stop the start is used.
     mjd = start if stop is None else 0.5 * (start + stop)
     bjd = mjd + _MJD_TO_JD
     fov = _votable_fov(names, rows)
@@ -945,25 +948,26 @@ def gost_transits(
 
     One GET against :data:`GOST_ENDPOINT` with :mod:`urllib`, parsed with
     :mod:`xml.etree`, cached raw under ``cache_dir() / "gost"`` under a name built from
-    every parameter that changes the answer. The cache is read before the network, so a
+    every parameter that changes the response. The cache is read before the network, so a
     repeated position is fetched once.
 
-    The forecast is the routine **nominal** scanning law, not the attitude as flown: the
-    manual (§7) says GOST "will compute the transit crossing the FoVs based on the routine
-    nominal scanning law" and that "this is not a full guarantee of getting the transits
-    observed", and the service returns predictions past the end of science operations on
-    15 January 2025. It does not say whether a transit was received on the ground
-    (:data:`GOST_USABLE_FRACTION`), nor which CCD row the source crossed, which decides
-    whether the RVS saw it at all (:func:`rvs_transit_times_from_gost` applies both).
+    The forecast uses the routine nominal scanning law, not the attitude as flown. The
+    manual (§7) states that GOST "will compute the transit crossing the FoVs based on the
+    routine nominal scanning law" and that "this is not a full guarantee of getting the
+    transits observed". The service returns predictions past the end of science operations
+    on 15 January 2025. The forecast does not state whether a transit was received on the
+    ground (:data:`GOST_USABLE_FRACTION`), nor which CCD row the source crossed, which
+    determines whether the RVS recorded it (:func:`rvs_transit_times_from_gost` applies
+    both).
 
-    Times. The service publishes ``t_start`` and ``t_stop``, the bounds of the
-    field-of-view crossing, as "Barycentric MJD in TCB"; this returns their mid-point plus
+    The service publishes ``t_start`` and ``t_stop``, the bounds of the field-of-view
+    crossing, as "Barycentric MJD in TCB". This function returns their mid-point plus
     2400000.5, the barycentric Julian date on the same TCB scale that Gaia's archive uses
-    for its own epochs. Precision: the MJD to JD offset is a definition and exact, but a
-    double near 2.46e6 resolves 4e-5 s; the crossing lasts
-    40.5 s, so the mid-point is that far from either bound; and TCB runs ahead of TDB by
-    about 20 s in this era, growing by 0.49 s per year, which is not corrected for. All
-    three are far below the accuracy the nominal law itself has.
+    for its epochs. Three effects limit the precision. The MJD to JD offset is a
+    definition and exact, but a double near 2.46e6 resolves 4e-5 s. The crossing lasts
+    40.5 s, so the mid-point is that far from either bound. TCB runs ahead of TDB by about
+    20 s in this era, growing by 0.49 s per year, which is not corrected for. All three are
+    far below the accuracy of the nominal law.
 
     Parameters
     ----------
@@ -1041,18 +1045,18 @@ def rvs_transit_times_from_gost(
        years after a release's cut-off.
     2. Keep the transits the RVS records. The instrument covers four of the seven CCD rows
        (:data:`RVS_CCD_ROWS`), so 4/7 of the field-of-view transits reach it. When
-       ``transits.ccd_row`` is given the row decides; the anonymous GOST endpoint does not
+       ``transits.ccd_row`` is given it is used. The anonymous GOST endpoint does not
        publish it, and then the row is drawn uniformly from 1 to 7 for each transit. The
        draw is an approximation: the across-scan position that sets the row drifts slowly
        with the scanning law and is correlated within a visibility period, so an
-       independent draw per transit gets the number of RVS epochs right but their
-       clumping wrong.
+       independent draw per transit reproduces the number of RVS epochs but not their
+       clumping.
     3. Thin what is left to ``usable_fraction`` (:data:`GOST_USABLE_FRACTION`), the
-       fraction of predicted transits that reach the ground and survive the processing
+       fraction of predicted transits that reach the ground and pass the processing
        filters.
 
     The result is the epoch list of one realisation, not a forecast of which nights Gaia
-    observed: steps 2 and 3 are random, and step 1's input is the nominal law rather than
+    observed. Steps 2 and 3 are random, and step 1's input is the nominal law rather than
     the attitude as flown.
 
     Parameters
@@ -1096,7 +1100,7 @@ def rvs_transit_times_from_gost(
 
 @dataclasses.dataclass(frozen=True)
 class DeliveryRecord:
-    """What :func:`deliver` did to the noise, for the truth and the reports.
+    """The effect of :func:`deliver` on the noise, for the truth record and the reports.
 
     Attributes
     ----------
@@ -1136,16 +1140,16 @@ def _interpolation_weights(x_out: np.ndarray, x_in: np.ndarray):
 def deliver(dataset: Dataset, product: RVSProduct, *, lsf_sigma_kms=None):
     """Resample detector-grid epochs onto a product's grid the way the archive does.
 
-    Linear interpolation of the flux (``np.interp``), the variance propagated through the
-    same weights, ``(1 - t)^2 v_i + t^2 v_{i+1}``, and the lag-one correlation recorded.
-    A delivered pixel outside the detector grid is masked (``ivar = 0``, flux 1) rather
-    than filled. A detector pixel with ``ivar = 0`` masks every delivered pixel that
-    would read it. The reference implementation assumes linear interpolation; the DR3
-    documentation says only "interpolated to a common wavelength array". The
-    interpolation also smooths every line, by a variance of
-    ``Delta_det^2 / 6`` on average, and the delivered samples carry the detector pixel's
-    width rather than their own; the width declared on the delivered epochs includes
-    neither, and :func:`rvs_delivered_sigma_kms` gives the width they carry.
+    The flux is interpolated linearly (``np.interp``), the variance is propagated through
+    the same weights, ``(1 - t)^2 v_i + t^2 v_{i+1}``, and the lag-one correlation is
+    recorded. A delivered pixel outside the detector grid is masked (``ivar = 0``, flux 1)
+    rather than filled. A detector pixel with ``ivar = 0`` masks every delivered pixel that
+    is interpolated from it. The reference implementation assumes linear interpolation; the
+    DR3 documentation states only "interpolated to a common wavelength array". The
+    interpolation also smooths every line, by a variance of ``Delta_det^2 / 6`` on average,
+    and the delivered samples have the detector pixel's width rather than their own. The
+    width declared on the delivered epochs includes neither, and
+    :func:`rvs_delivered_sigma_kms` gives the width of a delivered line.
 
     Parameters
     ----------
@@ -1185,7 +1189,7 @@ def deliver(dataset: Dataset, product: RVSProduct, *, lsf_sigma_kms=None):
         w0, w1 = 1.0 - t, t
         flux_out = w0 * flux_in[idx] + w1 * flux_in[idx + 1]
         var_out = w0**2 * var_in[idx] + w1**2 * var_in[idx + 1]
-        # A weight of exactly zero on a masked neighbour must not poison the pixel.
+        # A weight of exactly zero on a masked neighbour must not mask the pixel.
         var_out = np.where(w1 == 0.0, var_in[idx], var_out)
         var_out = np.where(w0 == 0.0, var_in[idx + 1], var_out)
         flux_out = np.where(w1 == 0.0, flux_in[idx], flux_out)
@@ -1201,7 +1205,7 @@ def deliver(dataset: Dataset, product: RVSProduct, *, lsf_sigma_kms=None):
         same = idx[1:] == idx[:-1]
         step = idx[1:] == idx[:-1] + 1
         pair_ok = ok[:-1] & ok[1:]
-        # Masked detector pixels carry an infinite variance; their products are discarded
+        # Masked detector pixels have an infinite variance; their products are discarded
         # through pair_ok, so the arithmetic on them is silenced rather than guarded.
         with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
             cov[same] = (
@@ -1240,9 +1244,9 @@ def deliver(dataset: Dataset, product: RVSProduct, *, lsf_sigma_kms=None):
 SIMULATION_VARIANCE_FACTOR: float = 5.0 / 12.0
 """The variance :func:`simulate_rvs_dataset` adds to every line, per squared model pixel.
 
-Four discrete steps on the model grid (:func:`rvs_delivered_sigma_kms` derives each). The
-epoch comparison of the label fit takes the same steps and one more, its frame shift, and
-compensates ``7/12`` (:meth:`albireo.Fit.epoch_statistics`)."""
+Four discrete steps on the model grid contribute (:func:`rvs_delivered_sigma_kms` derives
+each). The epoch comparison of the label fit takes the same steps and one more, its frame
+shift, and compensates ``7/12`` (:meth:`albireo.Fit.epoch_statistics`)."""
 
 
 def rvs_delivered_sigma_kms(
@@ -1251,7 +1255,7 @@ def rvs_delivered_sigma_kms(
     *,
     simulation_dv_kms: float | None = None,
 ) -> float:
-    """The Gaussian width in km/s that a line carries once :func:`deliver` has resampled it.
+    """The Gaussian width in km/s of a line after :func:`deliver` has resampled it.
 
     Declare this width, not the nominal one, to an analysis whose operator integrates over
     the delivered pixels. It is the line-spread width with the variances of the delivery,
@@ -1263,19 +1267,19 @@ def rvs_delivered_sigma_kms(
     with ``sigma_R`` the line-spread width at ``resolving_power``
     (:func:`rvs_lsf_sigma_kms`), ``Delta_det`` the detector step and ``Delta_prod`` the
     delivered step, both in km/s at the centre of the product's band, and ``dv_sim`` the
-    model-grid pixel the epochs were simulated on (``simulation_dv_kms``; the last term is
-    left out when it is ``None``, as it is for archive data).
+    model-grid pixel the epochs were simulated on (``simulation_dv_kms``). The last term is
+    left out when that argument is ``None``, as it is for archive data.
 
     **The interpolation.** ``deliver`` reads each delivered sample from the detector grid by
-    linear interpolation, which smooths. A sample at a fraction ``t`` of the
-    way from detector pixel ``k`` (at ``x_k``) to pixel ``k + 1``, with the detector step
-    ``Delta``, is ``(1 - t) f(x_k) + t f(x_k + Delta)``: a kernel of two taps, at
-    ``-t Delta`` and ``(1 - t) Delta`` from the sample, with weights ``1 - t`` and ``t``. Its
-    mean is ``(1 - t)(-t Delta) + t (1 - t) Delta = 0`` and its variance is
+    linear interpolation, which smooths. A sample at a fraction ``t`` of the way from
+    detector pixel ``k`` (at ``x_k``) to pixel ``k + 1``, with the detector step ``Delta``,
+    is ``(1 - t) f(x_k) + t f(x_k + Delta)``. This is a kernel of two taps, at ``-t Delta``
+    and ``(1 - t) Delta`` from the sample, with weights ``1 - t`` and ``t``. Its mean is
+    ``(1 - t)(-t Delta) + t (1 - t) Delta = 0`` and its variance is
     ``(1 - t) t^2 Delta^2 + t (1 - t)^2 Delta^2 = t (1 - t) Delta^2``. For a line that is
     smooth on the scale of ``Delta`` a Taylor expansion to second order gives the sample as
-    ``f + t (1 - t) Delta^2 f'' / 2``, which is what a convolution with a kernel of that
-    variance does, so the variances of the line and of the interpolation add. The fraction
+    ``f + t (1 - t) Delta^2 f'' / 2``. This is the effect of a convolution with a kernel of
+    that variance, so the variances of the line and of the interpolation add. The fraction
     ``t`` runs through every value across the band on the shipped products: the DR4 grid's
     0.25 Å steps against the 0.245 Å detector with a beat period of 49 samples (12.25 Å), and
     the DR3 grid's 0.1 Å steps through ``t = 20 k / 49`` modulo one. The mean of
@@ -1284,9 +1288,9 @@ def rvs_delivered_sigma_kms(
     **The pixel widths.** A delivered sample interpolates detector samples, each of which
     integrated the line over a detector pixel (a box of variance ``Delta_det^2 / 12``),
     while an analysis's operator integrates its model over the delivered pixel
-    (``Delta_prod^2 / 12``). The data therefore carry ``(Delta_det^2 - Delta_prod^2) / 12``
-    that the operator does not: -0.25 km^2/s^2 on the DR4 grid, whose pixel is the wider,
-    and +5.09 km^2/s^2 on the DR3 grid.
+    (``Delta_prod^2 / 12``). The data therefore have a variance
+    ``(Delta_det^2 - Delta_prod^2) / 12`` that the operator does not: -0.25 km^2/s^2 on the
+    DR4 grid, whose pixel is the wider, and +5.09 km^2/s^2 on the DR3 grid.
 
     **The simulation.** :func:`simulate_rvs_dataset` renders the epochs on a model grid of
     pixel ``dv_sim`` through four discrete steps, each of which adds a variance that a
@@ -1296,36 +1300,37 @@ def rvs_delivered_sigma_kms(
     box average onto the model grid (:meth:`albireo.SpectralLibrary.resampled_to`,
     ``dv^2 / 12``), the pixel-integrated rotation kernel (``dv^2 / 12``), the shift of each
     component to its epoch velocity (``dv^2 / 6``), and the model pixel held constant across
-    the rebin onto the detector pixels (``dv^2 / 12``), which sum to
-    ``(5/12) dv^2`` (:data:`SIMULATION_VARIANCE_FACTOR`), 1.67 km^2/s^2 on the 2 km/s grid
-    of :func:`rvs_model_grid`. It differs from the ``(7/12) dv^2`` of the label fit's epoch
+    the rebin onto the detector pixels (``dv^2 / 12``). They sum to ``(5/12) dv^2``
+    (:data:`SIMULATION_VARIANCE_FACTOR`), 1.67 km^2/s^2 on the 2 km/s grid of
+    :func:`rvs_model_grid`. The sum differs from the ``(7/12) dv^2`` of the label fit's epoch
     comparison by the frame shift, which the simulation does not take.
 
-    **Measured.** Through the shipped chain (:func:`rvs_components`,
-    :func:`simulate_rvs_dataset`, :func:`deliver`), narrow Gaussian lines rendered from a
-    0.005 Å library at 26 positions and 96 epoch velocities, against the continuous line
-    convolved with the applied width and averaged over the same pixels (WP-AL,
-    ``sim_moment.py``): on the 2 km/s grid the detector epochs carried 1.287 km^2/s^2 without
-    rotation, which is ``(4/12) dv^2`` less the 0.050 by which the Gaussian kernel truncated at
-    four sigma falls short of ``sigma^2``, and 1.52, 1.56 and 1.58 at ``v sin i`` = 5, 11 and
-    25 km/s, where the rotation kernel's pixel term averages 0.70 to 0.89 of ``dv^2 / 12``; on
-    a 3 km/s grid 2.95 and 3.51. The per-epoch excess rose with ``f (1 - f)`` at a slope of
-    0.998 ``dv^2``. Delivery added a further 12.09 +- 0.11 km^2/s^2 on the DR4 grid (predicted
-    11.96) and 17.314 on the DR3 grid (predicted 17.303).
+    **Measured.** Narrow Gaussian lines were rendered from a 0.005 Å library at 26 positions
+    and 96 epoch velocities through the shipped chain (:func:`rvs_components`,
+    :func:`simulate_rvs_dataset`, :func:`deliver`). They were compared with the continuous
+    line convolved with the applied width and averaged over the same pixels (WP-AL,
+    ``sim_moment.py``). On the 2 km/s grid the detector epochs had an excess of
+    1.287 km^2/s^2 without rotation, which is ``(4/12) dv^2`` less the 0.050 by which the
+    Gaussian kernel truncated at four sigma is below ``sigma^2``. The excess was 1.52, 1.56
+    and 1.58 at ``v sin i`` = 5, 11 and 25 km/s, where the rotation kernel's pixel term
+    averages 0.70 to 0.89 of ``dv^2 / 12``. On a 3 km/s grid the values were 2.95 and 3.51.
+    The per-epoch excess rose with ``f (1 - f)`` at a slope of 0.998 ``dv^2``. Delivery added
+    a further 12.09 +- 0.11 km^2/s^2 on the DR4 grid (predicted 11.96) and 17.314 on the DR3
+    grid (predicted 17.303).
 
     For both shipped products at the nominal 11,500, ``Delta_det = 8.56`` km/s at 8580 Å, and
     ``sigma_eff`` is 11.60 km/s on the DR4 grid and 11.83 km/s on the DR3 grid against the
-    nominal 11.07; simulated on the 2 km/s grid, 11.67 and 11.90 km/s.
+    nominal 11.07. Simulated on the 2 km/s grid, the values are 11.67 and 11.90 km/s.
 
     The width is a mean. A line placed where ``t`` is near 0 or 1 is not smoothed by the
-    interpolation and one placed where ``t = 1/2`` is smoothed by ``Delta_det^2 / 4``, so on
-    the DR4 grid the line widths vary with a period of 12.25 Å, which no stationary profile
-    represents; the simulation's shift and rotation terms vary with each epoch's phase and
-    each star's rotation in the same way. An analysis's own model-grid smoothing belongs to
-    the model and not to the data, and is not counted here: the label fit removes it from its
-    operator (:meth:`albireo.Fit.epoch_statistics`). On the D65 benchmark products, where the
-    nominal width was declared, the converged label fit had absorbed the difference into
-    ``v sin i`` (``docs/math.md`` §9.2a).
+    interpolation and one placed where ``t = 1/2`` is smoothed by ``Delta_det^2 / 4``. On
+    the DR4 grid the line widths therefore vary with a period of 12.25 Å, which no
+    stationary profile represents. The simulation's shift and rotation terms vary in the
+    same way with each epoch's phase and each star's rotation. An analysis's own model-grid
+    smoothing is part of the model and not of the data, and is not counted here: the label
+    fit removes it from its operator (:meth:`albireo.Fit.epoch_statistics`). On the D65
+    benchmark products, where the nominal width was declared, the converged label fit had
+    absorbed the difference into ``v sin i`` (``docs/math.md`` §9.2a).
 
     Parameters
     ----------
@@ -1368,7 +1373,7 @@ def rvs_delivered_sigma_kms(
 
 @dataclasses.dataclass(frozen=True)
 class RVSTruth:
-    """Everything :func:`simulate_rvs_dataset` injected and did.
+    """The quantities :func:`simulate_rvs_dataset` injected and applied.
 
     Attributes
     ----------
@@ -1384,13 +1389,13 @@ class RVSTruth:
     grvs
         The G_RVS the S/N was derived from, or ``None`` when ``snr`` was given.
     resolving_power
-        Per-epoch resolving power actually applied, ``(n_epochs,)``.
+        Per-epoch resolving power applied, ``(n_epochs,)``.
     lsf_sigma_kms, quadrature_sigma_kms
         Per-epoch line-spread sigma applied (from ``resolving_power``), and the width
-        actually convolved on top of the library's own broadening.
+        convolved on top of the library's own broadening.
     declared_lsf_sigma_kms
         Per-epoch width declared on the delivered epochs (the nominal one unless
-        ``declare_lsf="truth"``), which is what an analysis reads.
+        ``declare_lsf="truth"``), which is the width an analysis reads.
     library_resolving_power
         The library's resolving power the quadrature was computed from.
     """
@@ -1441,12 +1446,12 @@ def simulate_rvs_dataset(
 ) -> tuple[Dataset, RVSTruth]:
     """Gaia RVS epoch spectra of a binary: the reference implementation's chain in one call.
 
-    The steps, in order: the components are shifted to their velocities and summed with
-    the light fractions; the sum is broadened by the quadrature width that takes the
-    library's resolving power to the RVS's; it is rebinned onto the detector grid; noise
-    is added per detector pixel as photon counting at the S/N of the band's mean flux;
-    and each epoch is interpolated onto the delivered grid with its variance propagated.
-    The result is declared barycentric and vacuum, with the RVS width on every epoch.
+    The components are shifted to their velocities and summed with the light fractions.
+    The sum is broadened from the library's resolving power to the RVS's by the quadrature
+    width, then rebinned onto the detector grid. Noise is then added per detector pixel as
+    photon counting at the S/N of the band's mean flux, and each epoch is interpolated onto
+    the delivered grid with its variance propagated. The result is declared barycentric and
+    vacuum, with the RVS width on every epoch.
 
     Parameters
     ----------
@@ -1479,7 +1484,7 @@ def simulate_rvs_dataset(
         ``library_resolving_power``: 20,000 for the BOSZ registry entries, ``None`` (an
         intrinsic grid, which takes the whole RVS width) for a library that declares none.
     library_resolving_power
-        The resolving power the components already carry, or ``None`` for
+        The resolving power the components already have, or ``None`` for
         intrinsic-resolution components. Default: the library's own declaration. One of
         ``library`` and ``library_resolving_power`` must be given: assuming a published
         grid would broaden an intrinsic library to 9.06 km/s where the RVS gives 11.07.
@@ -1489,8 +1494,8 @@ def simulate_rvs_dataset(
         Default the nominal :data:`RVS_RESOLVING_POWER` for every epoch.
     declare_lsf
         What the delivered epochs declare as their line-spread width: ``"nominal"``
-        (default) puts the nominal width on every epoch, as an analysis of the real
-        product knows it; ``"truth"`` puts each epoch's own width on it.
+        (default) puts the nominal width on every epoch, which is the width an analysis
+        of the real product has; ``"truth"`` puts each epoch's own width on it.
     shot_noise
         Photon-counting noise (default) or a uniform sigma.
     seed
@@ -1543,7 +1548,7 @@ def simulate_rvs_dataset(
             f"detector grid ({detector_wave[0]:.2f}-{detector_wave[-1]:.2f} A); build it "
             "with rvs_model_grid()"
         )
-    # One detector "instrument" per distinct resolving power: the simulator keys the
+    # One detector instrument per distinct resolving power: the simulator keys the
     # line-spread kernel on the instrument, and every transit shares the detector grid.
     instruments: dict[str, InstrumentSpec] = {}
     epoch_instruments = []

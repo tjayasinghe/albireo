@@ -1,15 +1,16 @@
 """Closed-loop tests for the SB1 + faint-companion K2 scan (M4).
 
 The detection statistic D(K2) = 2 [log p(y | K2) - log p(y | null)] is calibrated
-empirically (docs/math.md §6) — these tests assert its *behavior*: a sharp peak at
-the injected K2 with the companion spectrum recovered, and (crucially) D < 0
-everywhere when no companion exists, because the marginal likelihood's Occam term
-charges for the extra marginalized component and no coherent signal pays for it.
+empirically (docs/math.md §6). These tests assert two properties of it. With a
+companion injected, D has a sharp peak at the injected K2 and the companion
+spectrum is recovered. With no companion, D < 0 at every K2, because the Occam
+term of the marginal likelihood penalizes the additional marginalized component
+and no coherent signal offsets the penalty.
 
 The companion's smooth envelope (mean blanketing) is prior-dominated at small
-ell_2 — the ell_1/ell_2-amplified low-frequency degeneracy (math.md §5.1-5.2) —
-so spectrum asserts are offset-removed; the line *pattern* is what the scan
-recovers.
+ell_2. This is the ell_1/ell_2-amplified low-frequency degeneracy (math.md
+§5.1-5.2). The spectrum assertions are therefore offset-removed, and the line
+pattern is what the scan recovers.
 """
 
 import jax.numpy as jnp
@@ -21,7 +22,7 @@ import albireo as ab
 GRID = ab.LogGrid.from_wavelength_range(5000.0, 5045.0, dv_kms=5.5)
 P, ECC, OMEGA, K1, K2_TRUE = 6.31, 0.15, 0.7, 12.0, 38.0
 ELL = (0.9, 0.1)
-K2_GRID = np.arange(10.0, 70.0, 4.0)  # K2_TRUE = 38.0 lands exactly on the grid
+K2_GRID = np.arange(10.0, 70.0, 4.0)  # K2_TRUE = 38.0 is exactly on the grid
 PRIOR = ab.SmoothnessPrior(jnp.asarray([300.0, 30.0]), jnp.asarray([5.0, 5.0]))
 
 
@@ -110,7 +111,7 @@ def test_companion_spectrum_recovered_at_peak(injected_scan):
 def test_null_dataset_yields_negative_detection():
     ds, _ = _simulate(with_companion=False)
     result = _scan(ds)
-    # No companion: the Occam term makes every trial K2 lose to the null model.
+    # No companion: the Occam term places every trial K2 below the null model.
     assert result.detection.max() < 0.0
 
 

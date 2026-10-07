@@ -109,12 +109,12 @@ markdown_extensions:
   - pymdownx.details
 
 hooks:
-  # The pages spell math the way GitHub renders it faithfully -- $`x`$ inline and a
-  # ```math fence for display -- and the hook turns both back into the $x$ and $$...$$
-  # that arithmatex reads. Doing the fence here rather than through a superfences
-  # custom_fence keeps this file free of a !!python/object/apply tag, which the
-  # check-yaml pre-commit hook cannot load. Kept outside docs/ so mkdocs does not
-  # publish it.
+  # The pages write math in the form GitHub renders correctly ($`x`$ inline and a
+  # ```math fence for display), and the hook converts both into the $x$ and $$...$$ that
+  # arithmatex reads. Converting the fence in the hook, not through a superfences
+  # custom_fence, keeps this file free of a !!python/object/apply tag, which the
+  # check-yaml pre-commit hook cannot load. The hook is kept outside docs/ so that mkdocs
+  # does not publish it.
   - scripts/mkdocs_math_hook.py
 
 extra_javascript:

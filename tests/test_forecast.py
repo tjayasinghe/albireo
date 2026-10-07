@@ -1,19 +1,18 @@
-"""Tests for :mod:`albireo.forecast` — the observing-strategy forecast (D47).
+"""Tests for :mod:`albireo.forecast`, the observing-strategy forecast (D47).
 
-Two things carry the module and both are pinned here against independent oracles.
+The module depends on two properties, and both are tested here against independent
+oracles.
 
-The **linear algebra** is checked against dense NumPy on a small problem: the
+The linear algebra is checked against dense NumPy on a small problem: the
 log-determinants, the pointwise band, the effective parameter count (which the module
 gets from one directional derivative of ``log det`` rather than a trace estimator), and
 the worst-determined modes (which it gets from subspace iteration on the banded factor).
-Each has a two-line dense equivalent, so there is no reason for any of them to be taken
-on trust.
+Each has a two-line dense equivalent, so each can be verified directly.
 
-The **claim that makes the feature possible** — that the posterior covariance of the
-component spectra does not depend on the observed fluxes — is pinned by overwriting every
-flux with garbage and requiring the forecast back bit-identical. That is the whole
-license for forecasting epochs that have not been taken, so it is asserted with ``==``
-rather than a tolerance.
+The posterior covariance of the component spectra does not depend on the observed
+fluxes. This is tested by overwriting every flux with random values and requiring a
+bit-identical forecast. The property is what permits forecasting epochs that have not
+been taken, so it is asserted with ``==`` rather than a tolerance.
 """
 
 from __future__ import annotations
@@ -87,18 +86,17 @@ def dense_posterior(grid, dataset, prior):
 
 
 # ---------------------------------------------------------------------------
-# The load-bearing claim
+# Independence from the fluxes
 # ---------------------------------------------------------------------------
 
 
 def test_forecast_does_not_depend_on_the_fluxes(grid, dataset, prior, rng):
     """The posterior covariance has no flux in it, so the forecast must be identical.
 
-    Not "close": identical. ``Lambda_p + A^T W A`` is assembled from weights, response,
-    shifts, light fractions and kernels, and the right-hand side ``A^T W z`` is never
-    formed — so replacing every flux with noise a hundred times the continuum may not
-    move a single bit. This is what licenses forecasting an observation that has not
-    happened.
+    ``Lambda_p + A^T W A`` is assembled from weights, response, shifts, light fractions
+    and kernels, and the right-hand side ``A^T W z`` is never formed. Replacing every
+    flux with noise a hundred times the continuum must therefore change no bit of the
+    result. This property permits forecasting an observation that has not been made.
     """
     garbage = Dataset(
         [
@@ -133,7 +131,7 @@ def test_logdets_match_dense(grid, dataset, prior):
     _, lam_p, lam = dense_posterior(grid, dataset, prior)
     assert fc.logdet_posterior == pytest.approx(np.linalg.slogdet(lam)[1], rel=1e-10)
     assert fc.logdet_prior == pytest.approx(np.linalg.slogdet(lam_p)[1], rel=1e-10)
-    # The expected KL from prior to posterior, which is what information_nats means.
+    # information_nats is the expected KL from prior to posterior.
     assert fc.information_nats == pytest.approx(
         0.5 * (np.linalg.slogdet(lam)[1] - np.linalg.slogdet(lam_p)[1]), rel=1e-10
     )
@@ -171,11 +169,11 @@ def test_modes_match_dense_submatrix(grid, dataset, prior):
 
 
 def test_leading_mode_is_the_component_exchange(grid, dataset, prior):
-    """The worst direction is a delocalized see-saw across components, not one pixel.
+    """The worst direction is a delocalized exchange between components, not one pixel.
 
-    This is ``docs/math.md`` §5.1's ``k = 0`` mode, and it is what the region
-    restriction exists to expose: without it the answer is a grid-margin pixel, which
-    reports how much margin the grid was given rather than anything about the epochs.
+    This is ``docs/math.md`` §5.1's ``k = 0`` mode, and the region restriction exists
+    to expose it. Without the restriction the leading mode is a grid-margin pixel, which
+    reflects the margin the grid was given rather than anything about the epochs.
     """
     fc = forecast(grid, dataset, prior, n_modes=1)
     mode = fc.mode_vectors[0]
@@ -184,23 +182,23 @@ def test_leading_mode_is_the_component_exchange(grid, dataset, prior):
     # Inverse participation ratio: 1 for a single-pixel mode, ~n for a delocalized one.
     participation = 1.0 / float((mode**4).sum())
     assert participation > 0.1 * fc.n_covered, "the mode should be spread, not one edge pixel"
-    # And it should be barely better determined than the prior, per §5.1.
+    # It should be barely better determined than the prior, per §5.1.
     assert 0.8 < fc.worst_mode_gain < 3.0
 
 
 # ---------------------------------------------------------------------------
-# Behaviour a forecast has to have
+# Required behaviour of a forecast
 # ---------------------------------------------------------------------------
 
 
 def test_more_epochs_never_hurt(grid, dataset, prior):
-    """Adding data can only add information — every summary must move the right way.
+    """Adding data can only add information, so every summary must change in that direction.
 
-    Run through the baseline mechanism, so the modes of the two designs are eigenvalues
-    of submatrices of the *same* coordinates: extra epochs add a positive-semidefinite
-    term to the precision, which orders the covariances, which orders the eigenvalues of
-    any common submatrix. Compared over two independently derived regions there would be
-    no such guarantee, and the assertion would be a coincidence rather than a theorem.
+    The comparison uses the baseline mechanism, so the modes of the two designs are
+    eigenvalues of submatrices of the same coordinates. Extra epochs add a
+    positive-semidefinite term to the precision, which orders the covariances, which
+    orders the eigenvalues of any common submatrix. Over two independently derived
+    regions there would be no such guarantee, and the assertion would hold only by chance.
     """
     design = Dataset(
         [*dataset, *ab.plan_epochs(dataset[0], bjd=[1.4, 3.6, 5.2])], frame=dataset.frame
@@ -215,7 +213,7 @@ def test_more_epochs_never_hurt(grid, dataset, prior):
 
 
 def test_prior_is_the_ceiling(grid, dataset, prior):
-    """A design with essentially no weight recovers the prior and says so."""
+    """A design with negligible weight recovers the prior, and the summaries show it."""
     faint = Dataset(
         [
             EpochData(
@@ -293,7 +291,7 @@ def test_baseline_shares_the_region_and_reports_the_difference(grid, dataset, pr
     assert fc.baseline.baseline is None
     assert fc.n_planned == 3
     assert fc.baseline.n_epochs == dataset.n_epochs
-    # The comparison is only meaningful on one subspace, and the design derives it.
+    # The comparison is meaningful only on one subspace, which is derived from the design.
     assert np.array_equal(fc.region, fc.baseline.region)
     assert fc.gain_nats == pytest.approx(fc.information_nats - fc.baseline.information_nats)
     assert fc.gain_nats > 0.0
@@ -304,13 +302,13 @@ def test_baseline_shares_the_region_and_reports_the_difference(grid, dataset, pr
 
 
 def test_a_spread_cadence_beats_one_aliased_to_the_period(prior):
-    """The result the module exists to produce, and the one Var(Delta) alone gets wrong.
+    """The main result of the module, which Var(Delta) alone gets wrong.
 
-    Epochs at half-period intervals visit the two extreme differential velocities over
-    and over: the *largest* RMS differential velocity of any design, and a poor one.
-    Spreading the same number over phase lowers that RMS and is nevertheless worth far
-    more, which is why ``blind_fraction`` and the exact numbers are reported rather than
-    ``rms_delta_kms`` alone.
+    Epochs at half-period intervals sample the two extreme differential velocities
+    repeatedly. This is the largest RMS differential velocity of any design, and a poor
+    design. Spreading the same number over phase lowers that RMS and nevertheless yields
+    far more information, so ``blind_fraction`` and the exact numbers are reported rather
+    than ``rms_delta_kms`` alone.
     """
     grid = LogGrid.from_wavelength_range(4490.0, 4530.0, dv_kms=5.0)
     inst = InstrumentSpec(wave=np.arange(4498.0, 4522.0, 0.06), sigma_v_lsf=6.0, snr=70.0)
@@ -362,8 +360,8 @@ def test_region_excludes_the_grid_margin(grid, dataset, prior):
     assert fc.region.shape == (2, grid.n)
     assert 0 < fc.n_covered < fc.region.size
     covered = grid.wave[fc.region[0]]
-    # The data span 4502-4510; the region may spill by the shift-plus-kernel reach but
-    # must not run to the ends of a grid built out to 4500 and 4512.
+    # The data span 4502-4510; the region may extend by the shift-plus-kernel reach but
+    # must not reach the ends of a grid built out to 4500 and 4512.
     assert covered.min() < 4502.5 and covered.max() > 4509.5
     assert covered.min() > grid.wave[0] and covered.max() < grid.wave[-1]
 
@@ -374,7 +372,7 @@ def test_region_window_narrows_the_summary(grid, dataset, prior):
     assert narrow.n_covered < wide.n_covered
     assert np.all(grid.wave[narrow.region[0]] >= 4504.0)
     assert np.all(grid.wave[narrow.region[0]] <= 4506.0)
-    # A boolean mask spelling the same window is the same region.
+    # A boolean mask of the same window gives the same region.
     mask = (grid.wave >= 4504.0) & (grid.wave <= 4506.0)
     by_mask = forecast(grid, dataset, prior, n_modes=0, region=mask)
     assert np.array_equal(narrow.region, by_mask.region)
@@ -440,7 +438,7 @@ def test_plan_epochs_rejects_nonsense(dataset):
 
 
 def test_planned_epochs_combine_with_real_ones(grid, dataset, prior):
-    """The whole workflow: a Dataset of observed plus planned epochs forecasts fine."""
+    """The whole workflow: a Dataset of observed plus planned epochs can be forecast."""
     design = Dataset([*dataset, *ab.plan_epochs(dataset[0], bjd=[8.0, 9.3])], frame=dataset.frame)
     fc = forecast(grid, design, prior, n_modes=2, baseline=range(dataset.n_epochs))
     assert fc.n_epochs == dataset.n_epochs + 2
@@ -501,11 +499,11 @@ def test_validation(grid, dataset, prior, kwargs, match):
 
 
 def test_arguments_are_checked_before_any_work_is_done(grid, dataset, prior):
-    """A survey-scale forecast is minutes; a bad epoch index must not cost them.
+    """A survey-scale forecast takes minutes; a bad epoch index must fail before that work.
 
     Both arguments here are wrong. If the baseline check ran after the design was built,
-    the LSF failure from ``build_problem`` would surface first — so the message tells us
-    the ordering, not just that something was rejected.
+    the LSF failure from ``build_problem`` would be raised first, so the message shows
+    the order of the checks, not only that an argument was rejected.
     """
     with pytest.raises(ValueError, match="baseline indices must lie"):
         forecast(grid, dataset, prior, n_modes=0, baseline=[0, 99], lsf_sigma_v={})
@@ -526,7 +524,7 @@ def test_prior_profile_grid_is_checked(grid, dataset):
 
 
 # ---------------------------------------------------------------------------
-# The idealized diagnostic on its own
+# The idealized diagnostic in isolation
 # ---------------------------------------------------------------------------
 
 
@@ -551,7 +549,7 @@ def test_two_valued_delta_combs_the_penalty(grid):
     _, _, blind_s = _separation_diagnostics(spread, grid, scales, 2.0)
     assert np.std(aliased) > np.std(spread), "the aliased design has the larger Var(Delta)"
     assert blind_a > blind_s, "and is nevertheless blind over more of the range"
-    assert pen_a.max() > 10.0  # a genuine pole, not a slow rise
+    assert pen_a.max() > 10.0  # a pole, not a slow rise
 
 
 def test_summary_is_readable(grid, dataset, prior):

@@ -1,20 +1,20 @@
 """The free per-epoch radial-velocity table (D42).
 
-No Keplerian: every epoch's velocity is its own parameter. Three things have to hold.
+No Keplerian is fitted: every epoch's velocity is its own parameter. Three properties must
+hold.
 
-1. **The zero point is gone, exactly.** Each component's spectrum can absorb a constant
-   added to that component's shifts, so a free table has one arbitrary zero point *per
-   component*. albireo removes them in pixel space, where the removal is exact — in
-   velocity space it would only be first-order, and the residual would be pinned by
+1. **The zero point is removed exactly.** Each component's spectrum can absorb a constant
+   added to that component's shifts, so a free table has one arbitrary zero point per
+   component. albireo removes them in pixel space, where the removal is exact. In velocity
+   space it would only be first-order, and the residual would be set by
    shift-interpolation error rather than by data. These tests assert the invariance to
    float64 round-off, not to a tolerance.
-2. **The table recovers the velocities.** Warm-started from a Keplerian, the fit has to
-   land on the injected per-epoch velocities and reproduce the Wilson slope, which is the
-   mass ratio and is invariant to both zero points.
-3. **The mode is honest about its failure.** From a cold start the problem is genuinely
-   multimodal — with every epoch at the same velocity the components are indistinguishable
-   — and the test pins that the failure is *detectable* in the potential rather than
-   silent.
+2. **The table recovers the velocities.** Warm-started from a Keplerian, the fit must
+   converge to the injected per-epoch velocities and reproduce the Wilson slope, which is
+   the mass ratio and is invariant to both zero points.
+3. **The cold-start failure is detectable.** From a cold start the problem is multimodal,
+   because with every epoch at the same velocity the components are indistinguishable. The
+   test asserts that the failure is detectable in the potential.
 """
 
 import jax
@@ -37,7 +37,7 @@ LSF = {"a": 7.0}
 
 
 def _relativistic_add(v, c):
-    """The exact group operation: a constant *pixel* offset is this, not v + c."""
+    """The exact group operation: a constant pixel offset is this, not v + c."""
     b1, b2 = np.asarray(v) / ab.C_KMS, c / ab.C_KMS
     return ab.C_KMS * (b1 + b2) / (1.0 + b1 * b2)
 
@@ -70,7 +70,7 @@ def sb2():
 
 
 def test_each_component_has_its_own_exactly_flat_zero_point(sb2):
-    """Not one flat direction in total (that would be gamma) — one per component."""
+    """There is one flat direction per component, not one in total (which would be gamma)."""
     model, v_true, _ = sb2
     ref = float(model.log_likelihood({"velocity": jnp.asarray(v_true)}))
     assert np.isfinite(ref)
@@ -87,17 +87,17 @@ def test_each_component_has_its_own_exactly_flat_zero_point(sb2):
 
 
 def test_centering_in_velocity_space_would_not_have_been_exact(sb2):
-    """Why the centering lives in pixel space: the naive version leaves a residual.
+    """Centering in velocity space leaves a residual, so the centering is done in pixel space.
 
-    ``xi = artanh(v/c)`` makes a constant *pixel* offset a relativistic velocity
-    addition, not an ordinary one. Subtracting a mean velocity is right only to first
-    order in v/c, and this pins the size of the error that would have been left behind.
+    ``xi = artanh(v/c)`` makes a constant pixel offset a relativistic velocity addition,
+    not an ordinary one. Subtracting a mean velocity is correct only to first order in v/c,
+    and this test checks the size of the error that would remain.
     """
     model, v_true, _ = sb2
     ref = float(model.log_likelihood({"velocity": jnp.asarray(v_true)}))
 
     naive = np.array(v_true, dtype=float)
-    naive[0] = naive[0] + 50.0  # ordinary addition, NOT the group operation
+    naive[0] = naive[0] + 50.0  # ordinary addition, not the group operation
     exact = np.array(v_true, dtype=float)
     exact[0] = _relativistic_add(exact[0], 50.0)
 
@@ -117,13 +117,13 @@ def test_centered_shifts_have_zero_row_mean_in_pixel_space(sb2):
 
 
 def test_relative_velocities_preserve_the_variation(sb2):
-    """Centering removes a zero point, not the signal the table is for."""
+    """Centering removes a zero point and preserves the variation the table measures."""
     _, v_true, _ = sb2
     rel = np.asarray(ab.relative_velocities(v_true, GRID))
     for i in range(2):
         assert np.ptp(rel[i]) == pytest.approx(np.ptp(v_true[i]), rel=1e-6)
-    # Rows sum to zero in *pixel* space, so not exactly in km/s — the nonlinearity is
-    # handled rather than approximated away.
+    # Rows sum to zero in pixel space and so not exactly in km/s, because the nonlinearity
+    # is kept rather than approximated.
     assert np.max(np.abs(rel.mean(axis=1))) < 0.05
 
 
@@ -161,8 +161,8 @@ def test_the_free_velocity_likelihood_is_differentiable(sb2):
     grad = jax.grad(lambda v: model._marginal({"velocity": v}).log_likelihood)(jnp.asarray(v_true))
     assert grad.shape == v_true.shape
     assert np.all(np.isfinite(np.asarray(grad)))
-    # At the truth the gradient is small but not zero (noise); a finite-difference check
-    # on one entry pins that it is the right derivative.
+    # At the injected velocities the gradient is small but not zero (noise). A
+    # finite-difference check on one entry confirms that it is the right derivative.
     i, j = 1, 4
     step = 1e-3
     plus = np.array(v_true, dtype=float)
@@ -204,7 +204,7 @@ def test_with_shifts_is_the_pixel_space_core_of_with_velocities(sb2):
 
 
 def test_keplerian_residuals_vanish_for_the_orbit_that_generated_the_table(sb2):
-    """A table built *from* a Keplerian must residual to zero against it."""
+    """A table built from a Keplerian must have zero residuals against it."""
     _, v_true, bjd = sb2
     theta = _kepler_theta()
     resid = np.asarray(ab.keplerian_residuals(v_true, theta, bjd, GRID))
@@ -225,7 +225,7 @@ def test_keplerian_residuals_ignore_both_arbitrary_zero_points(sb2):
 
 
 def test_keplerian_residuals_expose_a_wrong_period(sb2):
-    """The point of the check: a period error is structured, not noise-like."""
+    """The check exists because a period error is structured, not noise-like."""
     _, v_true, bjd = sb2
     good = np.asarray(ab.keplerian_residuals(v_true, _kepler_theta(), bjd, GRID))
     bad = np.asarray(ab.keplerian_residuals(v_true, _kepler_theta(period=P * 1.01), bjd, GRID))
@@ -280,7 +280,7 @@ def _fit(model, init_v, bjd, max_steps=250):
 
 @pytest.fixture(scope="module")
 def warm_fit(sb2):
-    """Warm-started from a badly wrong Keplerian — 30% off in both semi-amplitudes."""
+    """A fit warm-started from a Keplerian that is 30% off in both semi-amplitudes."""
     model, v_true, bjd = sb2
     start = np.stack([v_true[0] * 1.3, v_true[1] * 0.7])
     return _fit(model, start, bjd)
@@ -316,13 +316,12 @@ def test_the_recovered_table_threads_the_keplerian_that_made_it(sb2, warm_fit):
 
 @pytest.mark.slow
 def test_the_raw_laplace_diagonal_returns_the_prior_not_an_error_bar(sb2, warm_fit):
-    """The trap the projection exists to close, pinned as a measurement.
+    """The raw Laplace diagonal is the prior width, which the projection removes.
 
-    Each component's zero point is exactly flat, so its posterior width *is* the prior
-    width, and every epoch's marginal variance inherits it. With a Normal(0, 120) prior
-    over 10 epochs the raw sigma must come out at 120/sqrt(10) on every entry — the same
-    number for a good dataset and a useless one, which is what makes reading it so
-    dangerous.
+    Each component's zero point is exactly flat, so its posterior width is the prior width,
+    and every epoch's marginal variance includes it. With a Normal(0, 120) prior over 10
+    epochs the raw sigma must be 120/sqrt(10) on every entry. The number is the same for a
+    good dataset and a useless one, so reading it as an error bar is misleading.
     """
     model, _, bjd = sb2
     cov = ab.laplace_inverse_mass(
@@ -352,7 +351,7 @@ def test_the_raw_laplace_diagonal_returns_the_prior_not_an_error_bar(sb2, warm_f
 
 @pytest.mark.slow
 def test_projected_errors_are_consistent_with_the_realized_ones(sb2, warm_fit):
-    """Honest bars, within the slack a MAP-fixed Laplace approximation earns."""
+    """The error bars are realistic, within the tolerance of a MAP-fixed Laplace approximation."""
     model, v_true, bjd = sb2
     cov = ab.laplace_inverse_mass(
         model.model(_PRIORS(bjd.size)), warm_fit.params, model_args=(model.problem,)
@@ -363,7 +362,7 @@ def test_projected_errors_are_consistent_with_the_realized_ones(sb2, warm_fit):
     )
     ratio = float(np.sqrt(np.mean((err / sigma) ** 2)))
     # Laplace holds the hyperparameters at their MAP values, so the bars are expected to
-    # run slightly optimistic; an order of magnitude either way would be a defect.
+    # be slightly too small. An order of magnitude either way would be a defect.
     assert 0.3 < ratio < 3.0, f"error/sigma rms {ratio:.3f}"
 
 
@@ -380,7 +379,7 @@ def test_relative_velocity_errors_validates_its_inputs(sb2):
 
 
 def test_relative_velocity_errors_kills_exactly_one_direction_per_component(sb2):
-    """The count is the claim: n_stellar flat directions, not one and not n_epochs."""
+    """There are n_stellar flat directions, not one and not n_epochs."""
     _, v_true, _ = sb2
     n_stellar, n_epochs = v_true.shape
     unconstrained = {"velocity": jnp.asarray(v_true)}
@@ -398,9 +397,9 @@ def test_relative_velocity_errors_kills_exactly_one_direction_per_component(sb2)
 def test_a_cold_start_fails_loudly_rather_than_quietly(sb2, warm_fit):
     """Every epoch at one velocity makes the components indistinguishable.
 
-    This is a real limitation of the free-velocity mode, and the test exists to pin that
-    it is *detectable*: the cold start ends at a potential enormously worse than the warm
-    one, so a user comparing them cannot mistake the failure for a fit.
+    This is a limitation of the free-velocity mode, and the test asserts that it is
+    detectable. The cold start ends at a potential much worse than the warm one, so a user
+    comparing them cannot mistake the failure for a fit.
     """
     model, _, bjd = sb2
     cold = _fit(model, np.zeros((2, bjd.size)), bjd)

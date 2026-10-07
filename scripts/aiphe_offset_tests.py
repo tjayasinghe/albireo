@@ -1,15 +1,15 @@
 """AI Phoenicis: the tests that decompose the semi-amplitude offset.
 
-``aiphe_bench.py`` recovers K1 and K2 from 36 archival HARPS spectra and finds them 1.4 per
+The K1 and K2 that ``aiphe_bench.py`` recovers from 36 archival HARPS spectra are 1.4 per
 cent low and 0.8 per cent high against Maxted et al. (2020), the same in two disjoint
-windows. Written in the model's own coordinates that is a component-common velocity error
-of -0.55 km/s, which carries the whole mass-ratio offset, and a component-antisymmetric one
-of -0.16 km/s, which does not. The two-window agreement to 0.01 per cent means the driver
-is deterministic, so the candidates are model errors shared by every window. This script
-runs the tests that rank them, each a MAP fit of the orbit under one change to the model:
+windows. In the model's own coordinates that is a component-common velocity error of
+-0.55 km/s, which accounts for the whole mass-ratio offset, and a component-antisymmetric
+one of -0.16 km/s, which does not. The two windows agree to 0.01 per cent, so the cause is
+deterministic and the candidates are model errors shared by every window. This script runs
+the tests that rank them, each a MAP fit of the orbit under one change to the model:
 
     eggs_keyed     the six HARPS EGGS exposures (R = 80,000, modelled at R = 115,000 by
-                   ``aiphe_bench.py`` because every file says ``INSTRUME = 'HARPS'``) get
+                   ``aiphe_bench.py`` because every file has ``INSTRUME = 'HARPS'``) get
                    their own instrument key and their own line-spread width
     eggs_dropped   the same six exposures removed, which is closer to the 33 spectra
                    Gallenne et al. (2019) measured their velocities from
@@ -23,7 +23,7 @@ runs the tests that rank them, each a MAP fit of the orbit under one change to t
     jitter         a shared noise-inflation site fitted alongside the orbit
 
 Every fit reports the fitted period and time of conjunction, and the argument of periastron
-from the signs of ``secosw`` and ``sesinw``, which a bare eccentricity cannot see.
+from the signs of ``secosw`` and ``sesinw``, which the eccentricity alone does not determine.
 
 ``--nuts CONFIG`` samples the orbit of one configuration with NUTS, the hyperparameters
 held at their MAP values, and writes the posterior summary.
@@ -127,7 +127,7 @@ def orbit_init(n_stellar: int) -> dict:
     return {
         "period": P_PUB,
         "t_conj": T0_PUB,
-        # Away from the published solution, so agreement is not an echo of the init.
+        # Away from the published solution, so that agreement is not due to the init.
         "secosw": float(np.sqrt(ECC_PUB) * np.cos(omega)) * 0.85,
         "sesinw": float(np.sqrt(ECC_PUB) * np.sin(omega)) * 0.85,
         "k": jnp.array([K1_PUB * 0.92, K2_PUB * 1.08] + [0.0] * (n_stellar - 2)),
@@ -412,7 +412,7 @@ def run_posterior(
     else:
         raise SystemExit(f"unknown configuration {config!r}")
     lsf = lsf_for(ds)
-    jitter = True  # the posterior must carry the measured noise scale, not the estimate
+    jitter = True  # the posterior must use the measured noise scale, not the estimate
     print(f"MAP first ({config}, {ds.n_epochs} epochs, jitter site on) ...")
     rec = fit_orbit(f"{config}+jitter", ds, ell=ell, lsf=lsf, jitter=jitter, max_steps=steps)
 

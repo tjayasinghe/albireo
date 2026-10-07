@@ -1,11 +1,11 @@
-"""Synthetic spectroscopic-binary datasets, the test harness for the inference code.
+"""Synthetic spectroscopic-binary datasets for testing the inference code.
 
 :func:`simulate_dataset` generates composite epochs through the same operator stack the
 inference code uses: shift, LSF convolution, rebin to the native grid, then multiplicative
-response. Closed-loop tests therefore exercise the forward model itself, under the
-pathologies the model claims to handle: chip gaps, cosmic hits, mixed instruments and
-resolutions, tellurics, nebular emission with a per-epoch amplitude, barycentric frames,
-per-epoch light fractions, and photon-counting noise whose signal-to-noise is defined at a
+response. Closed-loop tests therefore exercise the forward model under the conditions it
+is intended to handle: chip gaps, cosmic-ray hits, mixed instruments and resolutions,
+tellurics, nebular emission with a per-epoch amplitude, barycentric frames, per-epoch
+light fractions, and photon-counting noise whose signal-to-noise is defined at a
 reference flux (:class:`InstrumentSpec`).
 
 Component spectra are deviation spectra ``d = s - 1`` on the model
@@ -74,7 +74,7 @@ class InstrumentSpec:
     sigma_v_lsf
         Gaussian LSF width in km/s: a scalar for a stationary LSF, or, together with
         ``lsf_anchors_angstrom``, one width per anchor for a wavelength-dependent LSF,
-        linearly interpolated across the grid exactly as the forward model realizes it
+        linearly interpolated across the grid as in the forward model
         (:func:`albireo.operators.gaussian_lsf_profiles`).
     snr
         Per-pixel continuum signal-to-noise (noise sigma = 1/snr on normalized flux).
@@ -85,9 +85,9 @@ class InstrumentSpec:
         Optional Gauss-Hermite skewness: a scalar or one value per anchor,
         anchored instruments only; None keeps pure Gaussian profiles.
     shot_noise
-        If True, the noise scales with the flux as photon counting does:
-        ``sigma_p = (F_ref / snr) * sqrt(F_p / F_ref)``, so that line cores are quieter
-        than the continuum and ``snr`` is the signal-to-noise at the reference flux
+        If True, the noise scales with the flux as in photon counting:
+        ``sigma_p = (F_ref / snr) * sqrt(F_p / F_ref)``. Line cores then have lower noise
+        than the continuum, and ``snr`` is the signal-to-noise at the reference flux
         ``F_ref``, the mean noiseless flux inside ``snr_window``. This is the noise model
         of a detector that delivers an S/N per pixel, such as Gaia RVS. Default False:
         one ``sigma = 1 / snr`` at every pixel, the continuum convention. The flux ratio
@@ -160,8 +160,8 @@ class SimulationTruth:
     """Everything :func:`simulate_dataset` injected: the reference for closed-loop tests.
 
     Component, telluric and nebular spectra are deviation spectra on the model grid, and
-    the stellar velocities are recorded in the barycentric frame whatever frame the
-    returned :class:`~albireo.data.Dataset` declares.
+    the stellar velocities are recorded in the barycentric frame whatever the frame of the
+    returned :class:`~albireo.data.Dataset`.
     """
 
     grid: LogGrid
@@ -359,12 +359,12 @@ def simulate_dataset(
 ) -> tuple[Dataset, SimulationTruth]:
     """Generate a synthetic multi-epoch dataset plus the injected truth.
 
-    Each epoch is built through the operator stack of ``docs/math.md`` §1: the component
+    Each epoch is built through the operator stack of ``docs/math.md`` §1. The component
     deviation spectra are shifted to their velocities and summed with the light fractions
-    of that epoch, the telluric and nebular spectra are added at their own shifts, the sum
-    is convolved with the instrument LSF, rebinned onto the instrument's native
-    wavelength grid, multiplied by the epoch's Chebyshev response, and finally given
-    white or AR(1) noise. Chip gaps and cosmic hits are then applied by zeroing ``ivar``.
+    of that epoch, and the telluric and nebular spectra are added at their own shifts. The
+    sum is convolved with the instrument LSF, rebinned onto the instrument's native
+    wavelength grid, multiplied by the epoch's Chebyshev response, and given white or
+    AR(1) noise. Chip gaps and cosmic-ray hits are then applied by zeroing ``ivar``.
 
     Parameters
     ----------
@@ -399,8 +399,8 @@ def simulate_dataset(
         and scaled per epoch by ``nebular_amplitudes``.
     nebular_amplitudes
         Per-epoch amplitude of the nebular component, ``(n_ep,)`` or a scalar
-        (default 1), representing the seeing and slit-loss variation the component
-        absorbs. Recovered amplitudes match these only up to one overall scale (see
+        (default 1), representing the seeing and slit-loss variation. Recovered
+        amplitudes match these only up to one overall scale (see
         :func:`albireo.forward.with_nebular_amplitudes`).
     nebular_v_kms
         Velocity of the nebula [km/s] in the model grid's frame, matching
@@ -409,24 +409,24 @@ def simulate_dataset(
         Per-epoch multiplicative Chebyshev response ``1 + sum_{m<=order} c_m T_m`` with
         ``c_m ~ N(0, response_amplitude^2)``. Amplitude 0 disables it (r = 1).
     ar1_phi
-        AR(1) correlation of the pixel noise (``|phi| < 1``): the noise is a stationary
+        AR(1) correlation of the pixel noise (``|phi| < 1``). The noise is a stationary
         AR(1) process over the native pixel index with marginal standard deviation
         ``1/snr``, the model of :func:`albireo.forward.with_ar1`, so closed-loop tests can
         inject and recover it. The process runs over all pixels, masked ones included, so
-        the observed subset carries ``phi**gap`` correlations across masked gaps. 0 =
-        white noise (default).
+        the observed subset has ``phi**gap`` correlations across masked gaps. 0 = white
+        noise (default).
     gap_fraction
         Fraction of each epoch's pixels lost to one contiguous chip gap. The gap is given
         ivar = 0 and its flux is overwritten with unusable values, so downstream code must
-        honor the mask.
+        apply the mask.
     cosmic_fraction
-        Fraction of pixels hit by cosmics (large positive spikes, ivar = 0).
+        Fraction of pixels hit by cosmic rays (large positive spikes, ivar = 0).
     epoch_snr
         Optional per-epoch signal-to-noise, ``(n_ep,)``, overriding the instrument's
         ``snr`` epoch by epoch. A survey whose transits differ in exposure or in the
         number of co-added CCDs delivers a different S/N per visit under one instrument.
     seed
-        Seed for all randomness (noise, v_bary, response, gaps, cosmics).
+        Seed for all randomness (noise, v_bary, response, gaps, cosmic rays).
 
     Returns
     -------
@@ -599,7 +599,7 @@ def simulate_dataset(
             start = rng.integers(0, n_native - width + 1)
             gap = slice(start, start + width)
             ivar[gap] = 0.0
-            flux[gap] = rng.normal(0.0, 10.0, size=width)  # unusable: mask must be honored
+            flux[gap] = rng.normal(0.0, 10.0, size=width)  # unusable: mask must be applied
         if cosmic_fraction > 0:
             n_hit = max(1, round(cosmic_fraction * n_native))
             hits = rng.choice(n_native, size=n_hit, replace=False)
@@ -615,8 +615,8 @@ def simulate_dataset(
                 v_bary=float(v_bary[j]),
                 instrument=epoch_instruments[j],
                 # A scalar width is recorded on the epoch, as a reader would record the
-                # header's resolving power; an anchored (per-wavelength) LSF has no
-                # single number to declare.
+                # header's resolving power. An anchored (per-wavelength) LSF has no
+                # single width to record.
                 lsf_sigma_kms=(
                     float(spec.sigma_v_lsf) if isinstance(spec.sigma_v_lsf, (int, float)) else None
                 ),
@@ -676,7 +676,7 @@ def _model_applier():
     """Jitted :func:`albireo.forward.apply_model`, built once and reused.
 
     :func:`resimulate` is called once per bootstrap trial with the same problem structure,
-    so the forward apply is one compiled graph rather than a few hundred eagerly
+    so the forward model is one compiled graph rather than a few hundred eagerly
     dispatched operations per call. The cache is at module level because a fresh
     ``jax.jit`` wrapper per call would recompile on every trial. The import is local; see
     the ``TYPE_CHECKING`` note at the top of this module.
@@ -704,28 +704,28 @@ def resimulate(problem: Problem, d_stack, *, seed: int = 0) -> Problem:
 
     The observed dataset fixes structure that a from-scratch simulation would have to
     assume: which epochs exist and when, each one's barycentric velocity and
-    signal-to-noise, where the chip gaps and cosmics fell, the native wavelength
-    solutions, and the response. All of that already lives in ``problem``, so a matched
-    trial dataset is one forward apply plus a noise draw:
+    signal-to-noise, the positions of the chip gaps and cosmic-ray hits, the native
+    wavelength solutions, and the response. All of that is already in ``problem``, so a
+    matched trial dataset is one forward-model evaluation plus a noise draw:
 
         ``z' = r (R B sum_i l_ij T(delta_ij) d_i) + n,   n ~ N(0, W^-1)``
 
-    with the same weights, masks and operators; only the noise and the injected spectra
-    differ. :mod:`albireo.calibrate` runs this in its inner loop, which is why an
-    injection-recovery calibration on real data costs scan time rather than build time
+    with the same weights, masks and operators. Only the noise and the injected spectra
+    differ. :mod:`albireo.calibrate` runs this in its inner loop, so an injection-recovery
+    calibration on real data costs scan time rather than build time
     (:func:`albireo.forward.with_data`).
 
     The velocities, light fractions, LSF and response are read from ``problem`` as passed,
-    so injecting at the truth requires a problem already evaluated there
+    so injecting at the true parameter values requires a problem already evaluated there
     (:meth:`albireo.inference.MarginalOrbitModel.problem_at`). The returned problem keeps
-    those velocities; moving the data onto whatever base problem the analysis then uses is
-    left to the caller.
+    those velocities. Moving the data onto the base problem the analysis then uses is left
+    to the caller.
 
     Noise follows the problem's own model: standard deviation ``1/sqrt(w/alpha^2)`` per
-    good pixel, so a fitted jitter is honored, and, where ``ar_phi`` is nonzero, an AR(1)
+    good pixel, so a fitted jitter is included, and, where ``ar_phi`` is nonzero, an AR(1)
     process on the standardized noise. That is the model of
     :func:`albireo.forward.with_ar1`, run over all native pixels so that the observed
-    subset carries ``phi**gap`` correlations across masked gaps. Masked pixels come back
+    subset has ``phi**gap`` correlations across masked gaps. Masked pixels are returned as
     exactly zero.
 
     Parameters
@@ -788,8 +788,8 @@ def _library_line_depths(teff, logg, mh, n_lines: int) -> list[float]:
     Two labels that moved the same lines in the same way would be interchangeable, and a
     fit would then drive the chi-square to zero along a curve through label space without
     recovering the injected values. Teff, log g and [M/H] each drive lines the others do
-    not, so the map from labels to spectrum is invertible and a recovery test measures the
-    code rather than the fixture.
+    not, so the map from labels to spectrum is invertible and a recovery test is a test of
+    the code.
     """
     t = (teff - 4800.0) / 600.0
     g = logg - 4.0
@@ -823,17 +823,17 @@ def synthetic_library(
 ):
     """A small, complete-box spectral library standing in for BOSZ or POLLUX.
 
-    The stand-in exercises every part of the synthetic-grid machinery above the grid
+    The stand-in exercises every part of the synthetic-grid code other than the grid
     itself: interpolation, broadening, the dilution model, the additive nuisance, the
     label optimizer, and the templates :mod:`albireo.todcor` correlates against. The label
-    mode and the pipeline can therefore be tested and demonstrated offline; the published
-    grids run to hundreds of megabytes (:func:`albireo.fetch_library`).
+    mode and the pipeline can therefore be tested and demonstrated offline. The published
+    grids are hundreds of megabytes (:func:`albireo.fetch_library`).
 
     Each node is a set of Gaussian absorption lines at fixed wavelengths whose depths
-    depend on the labels, each label driving lines of its own so that the map from labels
-    to spectrum is invertible (see :func:`_library_line_depths`), plus a continuum that
-    falls with Teff across the window. That wavelength dependence makes a light ratio
-    measurable.
+    depend on the labels. Each label drives lines of its own, so the map from labels to
+    spectrum is invertible (see :func:`_library_line_depths`). Each node also has a
+    continuum that falls with Teff across the window. That wavelength dependence makes a
+    light ratio measurable.
 
     Parameters
     ----------
@@ -848,10 +848,10 @@ def synthetic_library(
         [dex]. The default box matches the BOSZ FGK spacing (250 K, 0.5 dex).
     medium
         The wavelength scale to declare, ``"air"`` or ``"vacuum"``. Required by the
-        container; the published grids carry no default either.
+        container; the published grids have no default either.
     line_width_angstrom
         Intrinsic Gaussian sigma of every line [Å]. Rotational broadening is applied by a
-        kernel afterwards, never here.
+        kernel afterwards.
     seed
         Seeds the jitter of the line positions.
 

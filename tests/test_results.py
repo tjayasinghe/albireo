@@ -1,9 +1,9 @@
 """Round-tripping fits to disk, and exporting the disentangled spectra.
 
-The point of these tests is that a saved fit reads back *equal*, not merely readable: the
-numbers a user quotes in a paper have to survive the trip. The export tests additionally
+These tests assert that a saved fit reads back equal to the original, because the numbers
+a user quotes in a paper must be unchanged by saving and loading. The export tests also
 check that what is written is the normalized component spectrum ``1 + d``, since writing
-the deviation ``d`` instead would be a silently wrong file rather than a failure.
+the deviation ``d`` instead would produce a wrong file without an error.
 """
 
 from __future__ import annotations
@@ -90,13 +90,13 @@ def test_k2_result_round_trips_without_its_model(k2_result, tmp_path):
     loaded = load_fit(save_fit(k2_result, tmp_path / "scan.npz"))
 
     assert type(loaded) is type(k2_result)
-    # The model holds the dataset and the traced structure; it is deliberately not saved.
+    # The model holds the dataset and the traced structure and is not saved.
     assert loaded.model is None
     assert loaded.k2_peak == pytest.approx(k2_result.k2_peak)
     assert loaded.log_likelihood_null == pytest.approx(k2_result.log_likelihood_null)
     for name in ("k2_grid", "detection", "primary", "companion_std"):
         np.testing.assert_allclose(getattr(loaded, name), getattr(k2_result, name))
-    # The derived properties still work, which is what a user actually reads off a scan.
+    # The derived properties, which are what a user reads from a scan, still work.
     assert loaded.peak_index == k2_result.peak_index
     assert loaded.detection_peak == pytest.approx(k2_result.detection_peak)
 
@@ -108,8 +108,8 @@ def test_marginal_result_saves_spectra_and_uncertainty_by_default(marginal_resul
     assert loaded.log_likelihood == pytest.approx(float(marginal_result.log_likelihood))
     assert loaded.n_components == marginal_result.n_components
     assert loaded.n_pixels == marginal_result.n_pixels
-    # The precision is the big object and is not stored, but the uncertainty band derived
-    # from it is — otherwise the default save silently drops the differentiator.
+    # The precision is the large object and is not stored, but the uncertainty band derived
+    # from it is. Otherwise the default save would drop the uncertainties without warning.
     assert loaded.precision is None
     np.testing.assert_allclose(loaded.d_std, np.asarray(spectra_std(marginal_result)), rtol=1e-10)
 
@@ -117,9 +117,9 @@ def test_marginal_result_saves_spectra_and_uncertainty_by_default(marginal_resul
 def test_a_precision_free_result_explains_itself_rather_than_crashing(marginal_result, tmp_path):
     loaded = load_fit(save_fit(marginal_result, tmp_path / "marginal.npz"))
 
-    # Reaching for the factor of a precision that was never saved is a legitimate mistake;
-    # it should say what happened and where the numbers went, not raise from inside the
-    # block Cholesky on a None.
+    # Requesting the factor of a precision that was not saved is an understandable mistake.
+    # The error should state the cause and where the saved values are, not be raised from
+    # inside the block Cholesky on a None.
     with pytest.raises(ValueError, match="precision=True"):
         _ = loaded.chol
 
@@ -128,8 +128,8 @@ def test_marginal_result_can_keep_its_precision(marginal_result, tmp_path):
     loaded = load_fit(save_fit(marginal_result, tmp_path / "full.npz", precision=True))
 
     assert loaded.precision is not None
-    # A precision that round-tripped is a precision that can still be factorized, which is
-    # what makes draws and Takahashi variances possible after a reload.
+    # A round-tripped precision can still be factorized, which makes draws and Takahashi
+    # variances possible after a reload.
     np.testing.assert_allclose(
         np.asarray(spectra_std(loaded)), np.asarray(spectra_std(marginal_result)), rtol=1e-10
     )
@@ -171,10 +171,9 @@ def test_save_rejects_an_unknown_type(tmp_path):
 def toy_mcmc():
     """A tiny NUTS run over albireo-shaped site names.
 
-    Deliberately not a real albireo fit: what is being tested is the conversion, and the
-    part of it that can actually be wrong is the component labelling of the vector-valued
-    ``k`` site. A genuine marginal-likelihood fit would take minutes and exercise the same
-    three lines.
+    This is not an albireo fit. The test is of the conversion, and the part of it that
+    can be wrong is the component labelling of the vector-valued ``k`` site. A
+    marginal-likelihood fit would take minutes and exercise the same three lines.
     """
     import jax
     import numpyro
@@ -196,10 +195,10 @@ def test_to_inference_data_labels_components_rather_than_indices(toy_mcmc):
     idata = ab.to_inference_data(toy_mcmc)
 
     # Checked by shape rather than by class: arviz 1.x moved from its own InferenceData
-    # to xarray's DataTree, and `arviz.InferenceData` now warns. What the caller needs is
-    # a `.posterior` group with the right groups and coordinates, in every version.
+    # to xarray's DataTree, and `arviz.InferenceData` now warns. The caller needs a
+    # `.posterior` group with the right groups and coordinates, in every version.
     assert "period" in idata.posterior
-    # The whole point: `k` reads as k[K_1], k[K_2] in a summary table, not k[0], k[1].
+    # `k` appears as k[K_1], k[K_2] in a summary table, not as k[0], k[1].
     assert list(idata.posterior["k"].coords["component"].values) == ["K_1", "K_2"]
     assert idata.posterior["period"].shape == (1, 100)
 
@@ -216,7 +215,7 @@ def test_to_inference_data_ignores_wrongly_sized_component_names(toy_mcmc):
     pytest.importorskip("arviz")
 
     # Three names for two components is a user error that should not raise in the middle
-    # of a conversion; fall back to the defaults.
+    # of a conversion. The default names are used instead.
     idata = ab.to_inference_data(toy_mcmc, component_names=["a", "b", "c"])
 
     assert list(idata.posterior["k"].coords["component"].values) == ["K_1", "K_2"]
@@ -245,7 +244,7 @@ def test_write_ascii_writes_normalized_flux(small_grid, tmp_path):
     table = np.loadtxt(path)
     assert table.shape == (small_grid.n, 2)
     np.testing.assert_allclose(table[:, 0], small_grid.wave)
-    # 1 + d, not d: an atmosphere code expects a spectrum, not a deviation.
+    # 1 + d is written, since an atmosphere code expects a spectrum, not a deviation.
     np.testing.assert_allclose(table[:, 1], 1.0 + d, rtol=1e-9)
 
 

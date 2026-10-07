@@ -1,23 +1,24 @@
 """Tests for the TODCOR mode: per-epoch velocities by N-dimensional correlation.
 
-Four kinds of claim are pinned here.
+Four kinds of claim are tested here.
 
 1. **The estimator is Zucker & Mazeh's.** On a uniform grid with uniform weights the
-   weighted-least-squares surface albireo evaluates *is* the two-dimensional correlation
-   ``R(s_1, s_2)`` — the symmetric expression with the light ratio maximized out, and the
-   original one with the ratio held — to 1e-10, against an independent NumPy transcription
-   of the published formulae.
+   weighted-least-squares surface that albireo evaluates equals the two-dimensional
+   correlation ``R(s_1, s_2)`` to 1e-10. This is tested for the symmetric expression with
+   the light ratio maximized out and for the original one with the ratio held, against an
+   independent NumPy transcription of the published formulae.
 2. **The closed loop recovers the injected velocities with calibrated errors.** Simulated
-   SB2s through the real operator stack (LSF, rebin, cosmics, gaps, barycentric motion),
-   in both frames, with mixed instruments, one to three components.
-3. **The diagnostics fire when they should**: blending, the search edge, the unidentified
-   zero point of a disentangled template, the continuum offset the nuisance absorbs.
-4. **The search window bounds what is reported.** No shift outside it is evaluated, a
-   component whose minimum the window never brackets comes back NaN rather than pinned to
-   the edge, and the shift reported is one the chi-square was evaluated at, checked
-   against a brute-force scan of every integer shift.
+   SB2s pass through the real operator stack (LSF, rebin, cosmic-ray hits, gaps,
+   barycentric motion), in both frames, with mixed instruments and one to three components.
+3. **The diagnostics are triggered when they should be**: blending, the search edge, the
+   unidentified zero point of a disentangled template, the continuum offset the nuisance
+   absorbs.
+4. **The search window bounds what is reported.** No shift outside it is evaluated. A
+   component whose minimum the window does not bracket is returned as NaN rather than as
+   the edge value. The reported shift is one at which the chi-square was evaluated, which
+   is checked against a brute-force scan of every integer shift.
 
-Everything is offline and generated in-test.
+All data are generated in the tests. Nothing is downloaded.
 """
 
 from __future__ import annotations
@@ -86,7 +87,7 @@ def fixed_table(sb2):
 
 
 def _shifted(t, n):
-    """``out[p] = t[p - n]`` with zero fill — the integer shift operator."""
+    """The integer shift operator: ``out[p] = t[p - n]`` with zero fill."""
     out = np.zeros_like(t)
     if n >= 0:
         out[n:] = t[: t.size - n]
@@ -160,7 +161,7 @@ def test_fixed_ratio_free_scale_surface_is_the_original_todcor_expression():
 
 
 def test_fixed_light_surface_is_the_least_squares_with_the_scale_pinned():
-    """With the fractions held exactly, chi2 = |z|^2 - 2 l.b + l.G.l — no scale freedom."""
+    """With the fractions held exactly, chi2 = |z|^2 - 2 l.b + l.G.l, with no scale freedom."""
     c1, c2 = components()
     dataset = _grid_epoch(c1, c2, 17, -23)
     templates = [Template("A", GRID, c1), Template("B", GRID, c2)]
@@ -236,7 +237,7 @@ def test_global_light_is_a_median_of_the_free_pass_and_is_then_held(sb2):
 def test_free_scale_reports_the_normalization_and_the_same_velocities(sb2, fixed_table):
     dataset, _, templates = sb2
     table = todcor(dataset, templates, light=LIGHT, scale="free", **COMMON)
-    # The composite's scale comes back as the sum of the light row, close to one.
+    # The composite's scale is returned as the sum of the light row, close to one.
     np.testing.assert_allclose(table.light.sum(axis=0), 1.0, atol=0.02)
     np.testing.assert_allclose(table.light[1] / table.light[0], LIGHT[1] / LIGHT[0], rtol=1e-12)
     assert np.all(np.abs(table.velocity - fixed_table.velocity) < 3.0 * fixed_table.sigma)
@@ -293,10 +294,10 @@ def test_a_vanishing_noise_correlation_reproduces_the_curvature_errors(sb2):
 
 
 def test_correlated_noise_widens_the_errors_and_calibrates_the_pulls():
-    """AR(1) noise in the pixels leaves the estimator alone and inflates its error.
+    """AR(1) noise in the pixels does not change the estimator and inflates its error.
 
-    Declared, the correlation brings the pull rms back to one; ignored, the diagonal
-    curvature error is optimistic by the factor the sandwich measures.
+    With the correlation declared, the pull rms returns to one. With it ignored, the
+    diagonal curvature error is too small by the factor the sandwich measures.
     """
     phi = 0.6
     dataset, truth, templates = _correlated_sb2(phi)
@@ -368,7 +369,7 @@ def test_mixed_instruments_get_their_own_lsf_and_light_fractions():
     )
     assert set(table.settings["global_light"]) == {"a", "b"}
     assert np.all(np.abs(table.velocity - truth.velocities) < 5.0 * table.sigma)
-    # The lower-resolution, noisier instrument must carry larger errors.
+    # The lower-resolution, noisier instrument must have larger errors.
     is_b = np.array([i == "b" for i in table.instrument])
     assert np.median(table.sigma[:, is_b]) > np.median(table.sigma[:, ~is_b])
 
@@ -443,7 +444,7 @@ def test_a_continuum_offset_is_absorbed_by_the_nuisance_and_biases_the_light_wit
     without = todcor(shifted, templates, light="free", nuisance_order=None, **COMMON)
     np.testing.assert_allclose(with_nuisance.light, _col(LIGHT, with_nuisance), atol=0.01)
     assert np.max(np.abs(without.light - np.array(LIGHT)[:, None])) > 0.02
-    # The constant is what the nuisance absorbs, so the velocities are unaffected.
+    # The nuisance absorbs the constant, so the velocities are unaffected.
     clean = todcor(dataset, templates, light="free", nuisance_order=0, **COMMON)
     assert np.all(np.abs(with_nuisance.velocity - clean.velocity) < 1.0 * clean.sigma)
 
@@ -506,7 +507,8 @@ def test_twin_stars_at_the_same_velocity_are_flagged_blended_and_separated_ones_
 
 def test_a_minimum_at_the_search_edge_is_flagged(sb2):
     dataset, truth, templates = sb2
-    # Star A never goes below -20 km/s in this orbit, so cutting the range there hits an edge.
+    # Star A never goes below -20 km/s in this orbit, so a range cut there has its minimum
+    # at the edge.
     table = todcor(
         dataset,
         templates,
@@ -524,9 +526,9 @@ def test_a_search_window_may_be_declared_per_template(sb2, fixed_table):
     """One ``(lo, hi)`` per template, each in that template's own frame.
 
     Two components at different zero points cover different intervals of reported
-    velocity, so the search window is per template rather than shared; the façade builds
-    them that way, and a window narrowed around each component's own velocities has to
-    give the answer the shared one gave.
+    velocity, so the search window is per template rather than shared. The Disentangler
+    interface builds the windows that way, and a window narrowed around each component's
+    own velocities must give the same velocities as the shared one.
     """
     dataset, truth, templates = sb2
     repeated = todcor(
@@ -596,14 +598,14 @@ def test_write_to_dict_and_summary(sb2, fixed_table, tmp_path):
 #
 # These epochs are built on the model grid itself, so the rebin is the identity and the
 # weights uniform, and they are correlated against a single unbroadened template with no
-# nuisance term: the chi-square albireo minimizes is then exactly the sum `_brute_chi2`
+# nuisance term. The chi-square albireo minimizes is then exactly the sum `_brute_chi2`
 # evaluates, and the shift it reports can be checked against a scan of every integer
-# shift in the range. The copies are placed by hand, so that the surface has the minima
-# the test wants rather than the ones a simulated orbit happens to produce.
+# shift in the range. The copies are placed manually, so that the surface has the minima
+# the test requires rather than the ones a simulated orbit produces.
 # ---------------------------------------------------------------------------
 
 NARROW = ab.synthetic_deviation_spectrum(GRID, seed=31, sigma_v_range=(1.6, 2.2), margin=0.12)
-EDGE_MARGIN = 100  # template pixels kept free at each end, so no shift runs off the grid
+EDGE_MARGIN = 100  # template pixels kept free at each end, so no shift extends past the grid
 EDGE_NOISE = 0.004
 ONE_TEMPLATE = {"light": [1.0], "lsf_sigma_v": None, "nuisance_order": None}
 
@@ -628,7 +630,7 @@ def _copies_epochs(per_epoch, seed):
 
 
 def _brute_chi2(dataset, j, shifts):
-    """The chi-square of one unit-amplitude template at each integer shift, by hand."""
+    """The chi-square of one unit-amplitude template at each integer shift, by direct summation."""
     keep = slice(EDGE_MARGIN, GRID.n - EDGE_MARGIN)
     z = dataset[j].flux - 1.0
     w = dataset[j].ivar
@@ -642,10 +644,10 @@ def _pixels(velocity):
 def test_a_shift_beyond_the_requested_range_is_not_measured(tmp_path):
     """Nothing is measured where the chi-square is still falling as the range ends.
 
-    The last point evaluated is not the minimum of anything, and writing it out would put
-    a number in the table that reads as a measurement. The component is flagged and left
-    NaN instead, with the diagnostics of that point kept, since they are what says the
-    epoch sat at the edge rather than at a peak.
+    The last point evaluated is not a minimum, and writing it out would put a number in the
+    table that reads as a measurement. The component is flagged and left NaN instead. The
+    diagnostics of that point are kept, because they show that the epoch was at the edge
+    rather than at a peak.
     """
     lo_pix = int(np.ceil(_pixels(-90.0)))
     top = float(GRID.pixels_to_velocity(20))
@@ -677,12 +679,12 @@ def test_a_shift_beyond_the_requested_range_is_not_measured(tmp_path):
 
 
 def test_an_advancing_fine_window_reports_a_shift_it_evaluated():
-    """The refinement window walks when its minimum lies on its edge.
+    """The refinement window advances when its minimum is on its edge.
 
     The velocity and the diagnostics beside it must describe the same point, so the shift
-    reported has to come from the window the chi-square was last evaluated in. Here the
-    coarse pass lands on the weaker of two copies and the deeper one lies exactly one
-    window away, so the window has to move before anything is refined.
+    reported must come from the window in which the chi-square was last evaluated. Here the
+    coarse pass selects the weaker of two copies and the deeper one is exactly one window
+    away, so the window must move before anything is refined.
     """
     step = 6
     radius = step + 2
@@ -741,12 +743,11 @@ def test_a_label_template_records_the_width_it_already_carries(compare, monkeypa
     """TODCOR broadens a label template only by what it lacks of the instrument profile.
 
     A ``"native"`` (or ``"epochs"``) match renders its template from the library at the
-    library's own resolving power, so the template carries ``sigma_lib``; a ``"matched"``
-    match convolves it further with ``sqrt(sigma_inst^2 - sigma_lib^2)``, so it carries the
-    declared instrument width. Before D65 ``from_labels`` recorded neither (it read a key the
-    match's config never has), and TODCOR applied the whole instrument profile again. The
-    optimiser and the Laplace step are replaced by the scan's own start, since what is
-    pinned is the bookkeeping, not the fit.
+    library's own resolving power, so the template has the width ``sigma_lib``. A
+    ``"matched"`` match convolves it further with ``sqrt(sigma_inst^2 - sigma_lib^2)``, so
+    it has the declared instrument width. If ``from_labels`` records neither, TODCOR applies
+    the whole instrument profile again (D65). The optimiser and the Laplace step are
+    replaced by the scan's start, because the test checks the recorded width, not the fit.
     """
     from test_library import build_library
 
@@ -796,7 +797,7 @@ def test_a_label_template_records_the_width_it_already_carries(compare, monkeypa
         assert template.meta["compare"] == compare
         assert template.meta["library_resolving_power"] == resolving_power
 
-        # What TODCOR then applies: the quadrature remainder, which is nothing for matched.
+        # TODCOR then applies the quadrature remainder, which is zero for matched.
         remainder = _effective_sigma("a", sigma_inst, template)
         np.testing.assert_allclose(remainder, [np.sqrt(sigma_inst**2 - expected**2)], atol=1e-6)
         rows, _ = _convolved_templates([template], grid, "a", {"a": sigma_inst}, None)
@@ -895,7 +896,7 @@ def test_velocity_table_is_a_plain_dataclass_of_arrays(fixed_table):
 
 
 # ---------------------------------------------------------------------------
-# the loop through the façade: disentangle, then measure against the components
+# the loop through the Disentangler interface: disentangle, then measure against the components
 # ---------------------------------------------------------------------------
 
 

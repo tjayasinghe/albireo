@@ -1,16 +1,16 @@
 """Detector gaps are not measurements of zero flux.
 
-Found on real HARPS spectra of AI Phoenicis. The instrument's two CCDs leave a 32.9 A hole
-at 5304.67-5337.61 A which the pipeline fills with exact zeros. Nothing marks them: the
-pixels are finite, the quality column is absent, and because HARPS ships no error array the
-inverse variance is estimated from the local scatter — which across a flat run of zeros is
-*small*, so the gap arrived weighted like good data. A 100 A analysis window placed across
-it was 33% zeros at full weight, and disentangling it produced component spectra with
-negative flux.
+The case occurs in HARPS spectra of AI Phoenicis. The instrument's two CCDs leave a 32.9 A
+gap at 5304.67-5337.61 A, which the pipeline fills with exact zeros. Nothing marks them: the
+pixels are finite, the quality column is absent, and because HARPS provides no error array
+the inverse variance is estimated from the local scatter. Across a flat run of zeros that
+scatter is small, so the gap had the weight of good data. A 100 A analysis window placed
+across it was 33% zeros at full weight, and disentangling it produced component spectra
+with negative flux.
 
-The rule is deliberately about *runs*, not about any non-positive pixel:
-`RawSpectrum.bad_pixels` declines to treat zero flux as missing, and that is right, because
-a single zero can be a saturated core or a clipped cosmic ray. Eight in a row cannot.
+The rule applies to runs, not to any non-positive pixel. `RawSpectrum.bad_pixels` does not
+treat zero flux as missing, because a single zero can be a saturated core or a clipped
+cosmic ray. Eight consecutive zeros cannot.
 """
 
 from __future__ import annotations
@@ -74,7 +74,7 @@ def test_several_gaps_are_all_caught():
 
 
 def test_it_warns_and_names_the_wavelengths():
-    """Losing a third of a window must never be silent."""
+    """Losing a third of a window must issue a warning."""
     flux = np.ones(200)
     flux[100:150] = 0.0
     wave = np.linspace(5300.0, 5400.0, 200)

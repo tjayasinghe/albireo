@@ -164,8 +164,8 @@ def probe_block_tridiagonal(
         Rematerialize probe batches in the backward pass. Saves gradient memory
         proportional to the probe count at about 1.5-2x the backward probing cost.
         Default: size-adaptive, off for small problems (a measured 2x NUTS slowdown at
-        the gate scale with no memory benefit) and on at scale, where storing every
-        batch would need hundreds of GB.
+        acceptance-test scale with no memory benefit) and on for large ones, where
+        storing every batch would need hundreds of GB.
 
     Returns
     -------
@@ -186,8 +186,8 @@ def probe_block_tridiagonal(
     stride = 2 * p + 1
     small = stride * n_pad * 8 <= _SMALL_PROBE_BYTES
     if probe_chunk is None:
-        # Small problems: one batch holds all probes and runs in parallel across cores;
-        # the serialization that bounds memory at scale would cost wall time here.
+        # Small problems: one batch holds all probes and runs in parallel across cores.
+        # The serialization that bounds memory at large scale would cost wall time here.
         probe_chunk = stride if small else 8
     if remat is None:
         remat = not small
@@ -219,7 +219,7 @@ def probe_block_tridiagonal(
     _, batched = jax.lax.scan(scan_body, None, all_offsets)
     outputs = batched.reshape(n_batches * probe_chunk, n_pad)[:stride]
 
-    # Per-block readout: within the band, probe c % stride carries column c exactly
+    # Per-block readout: within the band, probe c % stride contains column c exactly
     # (the nearest comb alias c +- (2p + 1) is outside the band); entries beyond the
     # band are masked, which also reproduces the identity pad block.
     row = jnp.arange(b)[:, None]
@@ -394,7 +394,7 @@ def selected_inverse_cotangent(chol: BlockCholesky, d_blocks, u_blocks, g_logdet
     ``2K - 1`` blocks of live storage and the outer-product temporaries, 3.1 GB at the
     design target, with identical arithmetic.
 
-    The subdiagonal blocks carry a factor 2 because ``BlockTridiagonal.lower[k]`` is the
+    The subdiagonal blocks have a factor 2 because ``BlockTridiagonal.lower[k]`` is the
     sole storage for both ``Lambda[k+1, k]`` and ``Lambda[k, k+1]`` (see
     :meth:`BlockTridiagonal.matvec`, which applies it and its transpose).
 

@@ -25,8 +25,8 @@ Cite the repository and state the version (or the exact commit):
 ```
 
 `albireo.__version__` returns the version string, and
-[`CITATION.cff`](https://github.com/tjayasinghe/albireo/blob/main/CITATION.cff) carries the
-same metadata in machine-readable form; GitHub renders it as a "Cite this repository"
+[`CITATION.cff`](https://github.com/tjayasinghe/albireo/blob/main/CITATION.cff) contains the
+same metadata in machine-readable form. GitHub renders it as a "Cite this repository"
 button, and most reference managers import it directly.
 
 ## In an AAS journal
@@ -70,5 +70,5 @@ out in [Mathematical foundations](math.md). The epoch-velocity mode implements t
 two-dimensional correlation of Zucker & Mazeh (1994) with the maximum-likelihood errors of
 Zucker (2003). The label-fitting mode follows the binary mode of GSSP (Tkachenko 2015)
 and reads the BOSZ (Bohlin et al. 2017; Mészáros et al. 2024) and POLLUX (Palacios et al.
-2010) grids, each of which carries its own citation requirement recorded in
+2010) grids. Each grid has its own citation requirement, recorded in
 `albireo.library_info`. See the [scientific background](science.md) for the complete list.

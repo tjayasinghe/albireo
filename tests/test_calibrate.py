@@ -1,18 +1,18 @@
 """Calibrated faint-companion detection: the vectorized scan, K1 marginalization, limits.
 
-Three layers, in the order they depend on each other.
+Three layers are tested, in the order in which they depend on each other.
 
 1. **Exactness.** The vectorized sweep must agree with the Python loop it replaces, and a
-   fixed-K1 scan must agree with the pre-marginalization one. Neither is bit-identical —
-   batching trials into one ``lax.map`` re-associates the linear algebra — so the bar is
-   float64 round-off on a log-likelihood of order 1e5, not equality.
+   fixed-K1 scan must agree with the pre-marginalization one. Neither is bit-identical,
+   because batching trials into one ``lax.map`` re-associates the linear algebra, so the
+   tolerance is float64 round-off on a log-likelihood of order 1e5.
 2. **The bootstrap.** ``resimulate`` draws from the problem's own forward model, so its
    mean must converge to the noiseless model and its scatter to ``1/sqrt(w)``. If that is
-   wrong, every calibrated threshold downstream is wrong by the same factor and nothing
-   else in the suite would notice.
-3. **The statistic.** A null distribution that a real detection sits far above, a
+   wrong, every calibrated threshold downstream is wrong by the same factor and no other
+   test in the suite would detect it.
+3. **The statistic.** A null distribution that a real detection far exceeds, a
    completeness curve that rises with the injected light fraction, and a false-alarm
-   probability that never claims more resolution than the trial count supports.
+   probability that is never finer than the trial count resolves.
 """
 
 import time
@@ -30,7 +30,7 @@ from albireo.scan import _k1_quadrature, _logsumexp
 GRID = ab.LogGrid.from_wavelength_range(5000.0, 5040.0, dv_kms=6.0)
 P, ECC, OMEGA, K1, K2_TRUE = 6.31, 0.15, 0.7, 12.0, 38.0
 ELL = (0.9, 0.1)
-K2_GRID = np.arange(14.0, 62.0, 6.0)  # K2_TRUE = 38.0 lands on the grid
+K2_GRID = np.arange(14.0, 62.0, 6.0)  # K2_TRUE = 38.0 is on the grid
 PRIOR = ab.SmoothnessPrior(jnp.asarray([300.0, 30.0]), jnp.asarray([5.0, 5.0]))
 V_REL_MAX = 105.0
 LSF = {"a": 7.0}
@@ -120,7 +120,7 @@ def test_sweep_matches_the_python_loop_it_replaces(sb2):
 
 
 def test_sweep_batching_does_not_change_the_answer(sb2):
-    """batch_size is a memory-vs-speed knob, not a numerical one."""
+    """batch_size trades memory against speed and does not change the result."""
     model = _model(sb2[0])
     theta = {name: jnp.asarray(v) for name, v in _orbit().items()}
     pairs = jnp.asarray(np.stack([np.full(K2_GRID.size, K1), K2_GRID], axis=1))
@@ -131,7 +131,7 @@ def test_sweep_batching_does_not_change_the_answer(sb2):
 
 
 def test_sweep_can_vary_more_than_one_site(sb2):
-    """The trial axis is a pytree axis, so several sites move together."""
+    """The trial axis is a pytree axis, so several sites vary together."""
     model = _model(sb2[0])
     theta = {name: jnp.asarray(v) for name, v in _orbit().items()}
     n = 4
@@ -212,7 +212,7 @@ def test_with_data_swaps_only_the_data_term(sb2):
 
 
 def test_with_data_zeroes_nan_under_the_mask():
-    """A masked pixel may hold anything; 0 * nan is nan, so it must not survive."""
+    """A masked pixel may hold any value; 0 * nan is nan, so a NaN there must be zeroed."""
     ds = _simulate(with_companion=False, gaps=0.05)[0]
     model = _model(
         ds, ell=(1.0,), prior=ab.SmoothnessPrior(jnp.asarray([300.0]), jnp.asarray([5.0]))
@@ -263,7 +263,7 @@ def test_resimulate_is_reproducible_and_checked(sb1):
 
 
 def test_resimulated_data_recovers_the_injected_companion(sb1):
-    """The loop closes through the bootstrap: inject, redraw, scan, find it."""
+    """Closed-loop test through the bootstrap: inject, redraw, scan, recover the companion."""
     ds, _, primary, companion = sb1
     model = _model(ds)
     orbit = {n: jnp.asarray(v) for n, v in _orbit().items()}
@@ -349,20 +349,20 @@ def test_marginal_scan_finds_the_companion(sb2):
     assert result.k1_grid.size == 7
     assert np.isclose(float(np.exp(_logsumexp(result.k1_log_weights, axis=0))), 1.0)
     assert result.k1_peak in result.k1_grid
-    # The marginal is bounded by the grid it averages: a weighted mean of the rows sits
+    # The marginal is bounded by the grid it averages: a weighted mean of the rows lies
     # between the smallest and the largest of them.
     assert np.all(result.log_likelihood <= result.log_likelihood_grid.max(axis=0) + 1e-8)
     assert np.all(result.log_likelihood >= result.log_likelihood_grid.min(axis=0) - 1e-8)
 
 
 def test_marginalizing_k1_beats_assuming_a_wrong_one(sb2):
-    """The failure mode the literature reports, and the fix.
+    """Marginalizing K1 corrects the failure mode that the literature reports.
 
-    With K1 mis-set, the companion's recovered spectrum picks up structure that is not
+    With K1 mis-set, the companion's recovered spectrum acquires structure that is not
     the companion. Integrating K1 out lets the scan profile over it instead, and the
-    recovered line pattern goes back to matching the injected one. The comparison is on
-    the *offset-removed* correlation: the smooth envelope is prior-dominated at
-    ell_2 = 0.1 (math.md 5.1-5.2), so the line pattern is what carries the information.
+    recovered line pattern again matches the injected one. The comparison is on the
+    offset-removed correlation: the smooth envelope is prior-dominated at
+    ell_2 = 0.1 (math.md 5.1-5.2), so the information is in the line pattern.
     """
     ds, _, _, companion = sb2
     truth = np.asarray(companion) - np.mean(companion)
@@ -434,19 +434,19 @@ def test_detection_limit_shapes_and_bookkeeping(limit):
 def test_the_threshold_never_exceeds_the_requested_false_alarm_rate(limit):
     """Conservative by construction, in both of the two ways that must agree.
 
-    An interpolating sample quantile satisfies neither: it lands between order
+    An interpolating sample quantile satisfies neither: it falls between order
     statistics and can leave more of the null distribution above the threshold than the
-    budget allows, which would sell an 8% false-alarm rate as 5%.
+    requested rate allows, which would report an 8% false-alarm rate as 5%.
     """
     assert np.mean(limit.null_peaks > limit.threshold) <= limit.false_alarm + 1e-12
-    # Anything the calibration calls a detection reports a FAP within budget.
+    # Any value the calibration classifies as a detection has a FAP within the requested rate.
     eps = 1e-9 * max(abs(limit.threshold), 1.0)
     assert limit.false_alarm_probability(limit.threshold + eps) <= limit.false_alarm + 1e-12
     assert limit.threshold <= limit.null_peaks.max()
 
 
 def test_threshold_degrades_to_beating_every_trial_below_the_resolution_floor():
-    """Asking for a FAP finer than the trials resolve must not invent precision."""
+    """A requested FAP finer than the trials resolve must not produce spurious precision."""
     from albireo.calibrate import _threshold_at
 
     peaks = np.arange(20.0)  # 20 trials: floor = 1/21 = 0.048
@@ -461,7 +461,7 @@ def test_threshold_degrades_to_beating_every_trial_below_the_resolution_floor():
 
 
 def test_detection_grows_with_the_injected_light_fraction(limit):
-    """More companion, larger statistic — the completeness curve's whole premise."""
+    """A brighter companion gives a larger statistic, which the completeness curve assumes."""
     medians = np.median(limit.signal_peaks, axis=1)
     assert np.all(np.diff(medians) > 0)
     assert np.all(np.diff(limit.completeness) >= 0)
@@ -500,17 +500,17 @@ def test_summary_states_the_limit_and_its_caveats(limit):
 
 
 def test_a_real_companion_lands_far_above_the_null(limit, sb2):
-    """The calibration's point: the observed peak has to be read against the null."""
+    """The observed peak must be compared with the null distribution."""
     observed = _scan(sb2[0]).detection_peak
     assert observed > limit.null_peaks.max()
     assert limit.false_alarm_probability(observed) == pytest.approx(limit.fap_floor)
 
 
 def test_null_trials_carry_the_occam_penalty(limit):
-    """D < 0 with no companion: the marginal likelihood charges for the free spectrum.
+    """D < 0 with no companion: the marginal likelihood penalizes the free spectrum.
 
-    Documented in tests/test_scan.py and worth pinning here too, because it is why the
-    threshold is calibrated rather than set at zero — 'D > 0' would be a *conservative*
+    This is documented in tests/test_scan.py and asserted here too, because it is why the
+    threshold is calibrated rather than set at zero. 'D > 0' would be a conservative
     test here, and on another dataset it might not be.
     """
     assert np.all(limit.null_peaks < 0.0)
@@ -555,7 +555,7 @@ def test_detection_limit_rejects_malformed_input(sb1):
     with pytest.raises(ValueError, match="companion_template must have shape"):
         ab.detection_limit(GRID, ds, **{**kwargs, "companion_template": np.zeros(3)})
     # A calibration and the scan it calibrates take the same arguments, so they must
-    # reject the same mistakes in the same words (scan._check_search).
+    # reject the same mistakes with the same messages (scan._check_search).
     with pytest.raises(ValueError, match="orbit is missing sites"):
         ab.detection_limit(
             GRID, ds, **{**kwargs, "orbit": {k: v for k, v in _orbit().items() if k != "period"}}
@@ -626,17 +626,17 @@ def test_a_ladder_that_never_straddles_the_crossing_is_flagged():
     assert "Extend ell2_grid downward" in text
 
 
-# -- 5. the speedup the vectorization exists for -----------------------------
+# -- 5. the speedup from vectorization ---------------------------------------
 
 
 @pytest.mark.slow
 def test_the_sweep_is_much_faster_than_the_loop(sb2):
-    """The scan's cost is why K1 marginalization and calibration are affordable at all.
+    """The scan's cost is why K1 marginalization and calibration are affordable.
 
-    Timing assertions are usually a bad idea; this one is worth its flakiness risk
-    because the whole point of the change is the constant factor, and a regression that
-    silently reinstates the per-point device synchronization would otherwise show up
-    only as a calibration that takes an hour.
+    Timing assertions are usually avoided. This one is kept despite the risk of
+    intermittent failure because the purpose of the vectorization is the constant factor,
+    and a regression that silently reinstates the per-point device synchronization would
+    otherwise appear only as a calibration that takes an hour.
     """
     model = _model(sb2[0])
     theta = {name: jnp.asarray(v) for name, v in _orbit().items()}
@@ -647,7 +647,7 @@ def test_the_sweep_is_much_faster_than_the_loop(sb2):
     np.asarray(model.log_likelihood_sweep(theta, {"k": pairs}))
 
     def best_of(fn, repeats=3):
-        """Minimum, not mean: this machine is shared, and interference only ever adds."""
+        """Minimum, not mean: this machine is shared, and interference only adds time."""
         times = []
         for _ in range(repeats):
             t0 = time.perf_counter()
@@ -660,7 +660,8 @@ def test_the_sweep_is_much_faster_than_the_loop(sb2):
     )
     swept = best_of(lambda: np.asarray(model.log_likelihood_sweep(theta, {"k": pairs})))
 
-    # Measured 2.0-2.8x across 201 to 2,652 model pixels (docs/benchmarks.md D41). The
-    # bar sits below that range on purpose: the point is to catch a reinstated per-point
-    # device synchronization, which would put the ratio at ~1, not to police the factor.
+    # Measured 2.0-2.8x across 201 to 2,652 model pixels (docs/benchmarks.md, "Calibrated
+    # faint-companion detection"; D41). The threshold is below that range because the test
+    # only has to detect a reinstated per-point device synchronization, which would put
+    # the ratio at ~1.
     assert swept < loop / 1.5, f"sweep {swept * 1e3:.0f} ms vs loop {loop * 1e3:.0f} ms"

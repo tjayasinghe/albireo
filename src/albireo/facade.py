@@ -1,25 +1,25 @@
-"""Declarative interface to a disentangling fit: describe the system, obtain the model.
+"""Declarative interface to a disentangling fit.
 
-**Experimental.** The vocabulary defined here may change;
+**Experimental.** The names defined here may change.
 :class:`~albireo.inference.MarginalOrbitModel` and the functions around it are the
-supported surface, and :meth:`Disentangler.expert` returns that surface directly.
+supported interface, and :meth:`Disentangler.expert` gives direct access to it.
 
 A declaration names the components (one :class:`Star` per stellar component, optionally a
 :class:`Telluric` column and a :class:`Nebular` component), either an :class:`Orbit` of
 priors or a measured per-epoch velocity table, the line-spread function of each
 instrument, and the dataset. From that declaration the module derives what the low-level
-path otherwise requires: the velocity budget, the model grid and its margins, the
+interface otherwise requires: the velocity budget, the model grid and its margins, the
 conjunction-phase scan, the matched ``priors``/``init`` pair, the empirical-Bayes (ML-II)
 smoothness step, and the Laplace mass matrix. :meth:`Disentangler.explain` prints every
 derivation, and :meth:`Disentangler.expert` returns the ``(model, priors, init)`` triple
 that the declaration compiles to.
 
-Quantities that are scientific claims are not defaulted. Light fractions are required:
+Quantities that are scientific claims have no defaults. Light fractions are required:
 with constant light fractions the likelihood depends only on the products ``l_i * d_i``
-(``docs/math.md`` §5.2), so every recovered line depth scales as ``1 / l_i`` and no part
-of the fit can contradict the assumed value. The same applies to the period prior, to the
+(``docs/math.md`` §5.2), so every recovered line depth scales as ``1 / l_i`` and the fit
+does not constrain the assumed value. The same applies to the period prior, to the
 wavelength medium wherever absolute line positions matter, and to the nebular velocity.
-Each of these is either required, refused, or listed in the ``Assumed, not measured``
+Each of these is either required, rejected, or listed in the ``Assumed, not measured``
 block printed by :meth:`Fit.summary`.
 """
 
@@ -71,27 +71,27 @@ __all__ = [
     "Telluric",
 ]
 
-# Barycentric motion, one way, in km/s. Reserved in the velocity budget whenever the model
-# carries a component whose velocity law includes v_bary: a telluric column, or
+# Barycentric motion, one way, in km/s. It is reserved in the velocity budget whenever the
+# model has a component whose velocity law includes v_bary: a telluric column, or
 # topocentric data.
 _V_BARY_MAX = 30.0
 
 # Numerical headroom. The terms it multiplies are already a worst case (the sum of the
-# priors' own upper bounds at the largest eccentricity they allow), so a larger slack would
-# double count, and it has a cost: the solver bandwidth grows with the budget and the solve
-# cost grows with the bandwidth.
+# priors' upper bounds at the largest eccentricity they allow), so a larger slack would
+# double count. Slack also has a cost: the solver bandwidth grows with the budget and the
+# solve cost grows with the bandwidth.
 _BUDGET_SLACK = 1.05
-# Room a `velocities=` declaration leaves the free table to move. A convention, not a
-# measurement: the declared velocities are a starting point, and the fit must be able to
-# travel without reaching the bandwidth guard. Reported as its own budget term.
+# Headroom factor for the free table of a `velocities=` declaration. It is a convention,
+# not a measurement: the declared velocities are a starting point, and the fit must be able
+# to move without reaching the bandwidth guard. It is reported as its own budget term.
 _FREE_VELOCITY_HEADROOM = 2.0
 
 
 # -- parameter specifications -------------------------------------------------
 #
-# Each specification is a (distribution, starting value) pair rather than a distribution
-# alone, so that the prior and the initial value are declared together. This makes
-# `set(priors) == set(init)` hold by construction.
+# Each specification is a (distribution, starting value) pair, so that the prior and the
+# initial value are declared together. This makes `set(priors) == set(init)` hold by
+# construction.
 
 
 class Spec:
@@ -102,7 +102,7 @@ class Spec:
         raise NotImplementedError
 
     def start(self):
-        """The constrained starting value handed to :func:`albireo.run_map`."""
+        """The constrained starting value passed to :func:`albireo.run_map`."""
         raise NotImplementedError
 
     def upper(self) -> float:
@@ -136,10 +136,10 @@ class Fixed(Spec):
 class Known(Spec):
     """A measurement with an uncertainty: ``Normal(value, sigma)``, started at ``value``.
 
-    Appropriate for a literature period or a semi-amplitude from a cross-correlation
-    study. In :meth:`Disentangler.scan` a ``Known`` primary semi-amplitude is marginalized
-    over rather than held fixed, which prevents a 10% error in K₁ from inflating the
-    detection statistic.
+    It suits a literature period or a semi-amplitude from a cross-correlation study. In
+    :meth:`Disentangler.scan` a ``Known`` primary semi-amplitude is marginalized over
+    rather than held fixed, which prevents a 10% error in K₁ from inflating the detection
+    statistic.
 
     Parameters
     ----------
@@ -206,7 +206,7 @@ class Scanned(Spec):
     """A grid of trial values, not a prior. Meaningful only for the companion's ``k``.
 
     The grid is the axis of the faint-companion search run by
-    :meth:`Disentangler.scan` and :meth:`Disentangler.detection_limit`; there is no
+    :meth:`Disentangler.scan` and :meth:`Disentangler.detection_limit`. There is no
     posterior over it.
 
     Parameters
@@ -232,11 +232,11 @@ class Scanned(Spec):
 class Sampled(Spec):
     """Any numpyro distribution, with a starting value and a declared upper bound.
 
-    The one specification that cannot derive its own bound: a distribution object need not
-    have finite support, and the starting value is not a bound. The velocity budget is
-    derived from the reach of the semi-amplitude priors, so ``upper_bound`` is required
-    wherever the specification is used for a quantity that must be bounded. Without it, a
-    ``Sampled`` ``k`` would size the solver from the optimizer's starting point.
+    This is the only specification that cannot derive its own bound: a distribution object
+    need not have finite support, and the starting value is not a bound. The velocity
+    budget is derived from the upper bounds of the semi-amplitude priors, so ``upper_bound``
+    is required wherever the specification is used for a quantity that must be bounded.
+    Without it, the solver would be sized from the starting value of a ``Sampled`` ``k``.
 
     Parameters
     ----------
@@ -308,7 +308,7 @@ class Smoothness:
     tau0
         Centre of the curvature-penalty hyperprior. Larger values impose more smoothing.
     eta0
-        Centre of the ridge hyperprior, which pulls the component toward its continuum.
+        Centre of the ridge hyperprior, which shrinks the component toward its continuum.
     sigma
         Width of both hyperpriors, in natural logarithms.
     """
@@ -326,9 +326,9 @@ class LSF:
     ----------
     sigma_kms
         Gaussian sigma in km/s. A sequence gives one width per entry of
-        ``anchors_angstrom``, which is how a wavelength-dependent LSF is declared.
-        :data:`albireo.PER_EPOCH` (see :meth:`per_epoch`) reads the width from each
-        epoch's own file instead.
+        ``anchors_angstrom`` and declares a wavelength-dependent LSF. With
+        :data:`albireo.PER_EPOCH` (see :meth:`per_epoch`) the width is read from each
+        epoch's file instead.
     anchors_angstrom
         Wavelengths in angstrom at which ``sigma_kms`` is specified. The width is
         interpolated between them.
@@ -336,8 +336,8 @@ class LSF:
     Notes
     -----
     This width also fixes the radius of the convolution kernel, so it is an upper bound as
-    well as a value: a fit that later infers a wider LSF is rejected rather than silently
-    truncated. A width to be inferred through the low-level API needs some margin.
+    well as a value: a fit that later infers a wider LSF is rejected. A width to be
+    inferred through the low-level API needs some margin.
 
     Gauss-Hermite skewness (``h3``) has no field here. It reaches the kernel only
     through :func:`albireo.build_problem`, not through the model class built by this
@@ -384,15 +384,15 @@ class LSF:
 
     @classmethod
     def per_epoch(cls) -> LSF:
-        """Take the width from each epoch's own file rather than from one number.
+        """Take the width from each epoch's own file.
 
         The reader records a file's resolving power on the epoch
         (:attr:`albireo.EpochData.lsf_sigma_kms`), and this declaration models every
-        epoch at that width, so exposures at two resolving powers filed under one
+        epoch at that width. Exposures at two resolving powers filed under one
         instrument name (HARPS's high-accuracy and high-efficiency modes, for instance)
-        each get their own kernel. Every epoch of the instrument must carry a width;
-        otherwise the declaration is refused, naming the epochs. The string
-        ``"per-epoch"`` (the TOML form) is accepted in its place.
+        then each get their own kernel. Every epoch of the instrument must have a width;
+        otherwise the declaration raises, naming the epochs. The string ``"per-epoch"``
+        (the TOML form) is accepted in its place.
 
         Returns
         -------
@@ -402,7 +402,7 @@ class LSF:
 
     @property
     def is_per_epoch(self) -> bool:
-        """Whether this declaration defers to the epochs' own widths."""
+        """Whether this declaration takes its widths from the epochs."""
         return isinstance(self.sigma_kms, str) and self.sigma_kms == PER_EPOCH
 
     @property
@@ -412,8 +412,8 @@ class LSF:
         Raises
         ------
         ValueError
-            For a per-epoch declaration, whose widths live on the dataset; use
-            :meth:`Disentangler._widest_lsf`, which resolves them.
+            For a per-epoch declaration, whose widths are stored on the dataset.
+            :meth:`Disentangler._widest_lsf` resolves them.
         """
         if self.is_per_epoch:
             raise ValueError(
@@ -423,7 +423,7 @@ class LSF:
         return float(np.max(np.atleast_1d(np.asarray(self.sigma_kms, dtype=float))))
 
     def widths(self, dataset, key: str) -> np.ndarray:
-        """Every width this declaration puts on ``dataset``'s epochs of instrument ``key``.
+        """Every width this declaration assigns to ``dataset``'s epochs of instrument ``key``.
 
         Parameters
         ----------
@@ -468,13 +468,13 @@ class Star:
     name
         Identifier used wherever the component would otherwise be a row index:
         ``fit.star("Be")``, plot legends, FITS headers, and the ML-II report. Component
-        order is a convention that the data cannot check, so the name is the only guard
-        against reading row 0 as the wrong star.
+        order is a convention that the data do not determine, so the name is the only
+        guard against reading row 0 as the wrong star.
     light
-        Fraction of the total light contributed by this star. Required, and an
+        Fraction of the total light contributed by this star. It is required and is an
         assumption: with constant light fractions only the products ``l_i * d_i`` are
         observable (``docs/math.md`` §5.2), so every recovered depth scales as ``1 / l_i``
-        and no part of the fit constrains this value. It should be quoted beside any
+        and the fit does not constrain this value. It should be quoted beside any
         result derived from the spectra. The star light fractions must sum to 1.
     smoothness
         Starting point of this component's ML-II hyperparameters. A rotationally
@@ -508,7 +508,7 @@ class Telluric:
 class Nebular:
     """A nebular emission component: static in the barycentric frame, free amplitude.
 
-    The counterpart of :class:`Telluric`. Nebular flux is added on top of the total
+    This is the counterpart of :class:`Telluric`. Nebular flux is added on top of the total
     continuum and takes no light from the stars, so its per-epoch amplitude is a free
     parameter rather than a light fraction.
 
@@ -516,22 +516,22 @@ class Nebular:
     ``log_nebular_amp`` site with its prior and starting value, the per-pixel
     ``eta_profile`` that confines the component to its lines, the agreement between that
     profile's velocity and ``nebular_v_kms``, the smoothness prior object passed at
-    construction so that the profile survives ML-II, and the additional velocity budget.
-    Omitting the profile costs 250 nats and 2.6% in K₂; omitting the component entirely
-    costs 11.5% of the Hβ equivalent width and 59% of K₂.
+    construction so that ML-II keeps the profile, and the additional velocity budget.
+    Omitting the profile makes the fit 250 nats worse and gives a 2.6% error in K₂.
+    Omitting the component gives errors of 11.5% in the Hβ equivalent width and 59% in K₂.
 
     Parameters
     ----------
     v_kms
-        Velocity of the nebula in km/s, in the model grid's frame. Not identified: it sets
-        only where the component's lines fall on the grid, which the window profile must
-        match. It is a placement convention and is reported as one.
+        Velocity of the nebula in km/s, in the model grid's frame. It is not identified:
+        it sets only where the component's lines fall on the grid, which the window
+        profile must match, and is reported as a placement convention.
     lines
         Rest wavelengths in air angstrom. Default :data:`albireo.NEBULAR_LINES`.
     halfwidth_kms
-        Half-width of each window in km/s. A generous value is preferable: too narrow a
-        window pushes real emission back into the stellar components, while too wide a
-        window only restores some of the freedom the profile removes.
+        Half-width of each window in km/s. A generous value is preferable: with too
+        narrow a window real emission is absorbed into the stellar components, while too
+        wide a window only restores some of the freedom the profile removes.
     smoothness
         Starting point of this component's ML-II hyperparameters. The default ``tau0`` is
         8, appropriate for narrow emission lines.
@@ -556,7 +556,7 @@ class Orbit:
     Parameters
     ----------
     period
-        Orbital period in days. Required. This declaration does not search in period: it
+        Orbital period in days (required). This declaration does not search in period: it
         scans conjunction phase at a single period, so the prior must be narrow enough for
         a phase scan to be meaningful (or a periodogram run first).
     k
@@ -566,18 +566,18 @@ class Orbit:
         Time of conjunction in the dataset's time system. The default ``"scan"`` locates
         it by scanning one period before optimization. The marginal likelihood is sharply
         multimodal in phase, and L-BFGS started in the wrong trough converges to the
-        wrong solution without any indication of failure.
+        wrong solution without indication of failure.
     ecc
         Eccentricity. ``Between(lo, hi)`` samples it through the
-        ``(sqrt(e) cos w, sqrt(e) sin w)`` parameterization; ``Fixed(0.0)`` declares a
-        circular orbit and is handled exactly, by not sampling those sites at all. The
+        ``(sqrt(e) cos w, sqrt(e) sin w)`` parameterization. ``Fixed(0.0)`` declares a
+        circular orbit and is handled exactly, by not sampling those sites. The
         parameterization is singular at ``e = 0``, where the gradient is NaN and numpyro
         reports only "Cannot find valid initial parameters".
     omega
         Argument of periastron in radians. Required when ``ecc`` is ``Fixed`` and
         nonzero. With a free eccentricity, a value given here (and a ``start_at`` on the
-        eccentricity's range) is where the fit starts, as a velocity table's orbit
-        supplies it; the default start is ``e = 0.05`` at 0.5 rad.
+        eccentricity's range) sets the start of the fit, for instance from a velocity
+        table's orbit. The default start is ``e = 0.05`` at 0.5 rad.
     outer
         Outer orbit of a hierarchical triple. Its ``k`` must have two entries, for the
         inner pair and the tertiary.
@@ -598,10 +598,10 @@ class Orbit:
 class VelocityBudget:
     """An itemized bound, in km/s, on the largest relative velocity between components.
 
-    The solver bandwidth is built from this total. A bound that is too small makes the
-    sampler stall against a guard, and, when the model is reached through
-    :meth:`albireo.inference.MarginalOrbitModel.log_likelihood` directly, returns a wrong
-    answer without raising. It is derived from the support of the semi-amplitude priors.
+    The solver bandwidth is built from this total. With too small a bound the sampler
+    stalls at the bandwidth guard, and a direct call to
+    :meth:`albireo.inference.MarginalOrbitModel.log_likelihood` returns a wrong value
+    without raising. The bound is derived from the support of the semi-amplitude priors.
 
     Attributes
     ----------
@@ -609,7 +609,7 @@ class VelocityBudget:
         ``(name, value)`` pairs, one per contribution, in the order they are applied.
         Values are in km/s and the multiplicative terms report the running total.
     total
-        The bound handed to the model as ``v_rel_max_kms``, in km/s.
+        The bound passed to the model as ``v_rel_max_kms``, in km/s.
     """
 
     terms: tuple[tuple[str, float], ...]
@@ -624,13 +624,13 @@ def _velocity_budget(orbit: Orbit | None, velocities, components, frame: str, ex
     """Bound the relative velocity from the declaration, itemizing every term.
 
     The total must bound the largest relative velocity between any two model components
-    at any epoch, over everything the prior allows, not over the fitted solution.
+    at any epoch, over the support of the prior, not over the fitted solution.
 
     From an :class:`Orbit` the bound is the support of the semi-amplitude priors. From a
-    ``velocities=`` declaration it is the measured table centred per component (see
-    :func:`_centred_velocities`: the absolute level is unidentified and must not consume
-    bandwidth), with a factor of two of headroom because the fit is free to move the
-    table.
+    ``velocities=`` declaration it is the measured table centred per component, with a
+    factor of two of headroom because the table is free. The table is centred because the
+    absolute level is unidentified and must not add to the bandwidth (see
+    :func:`_centred_velocities`).
     """
     n_stellar = sum(isinstance(c, Star) for c in components)
     terms: list[tuple[str, float]] = []
@@ -689,23 +689,23 @@ def _velocity_budget(orbit: Orbit | None, velocities, components, frame: str, ex
 def _centred_velocities(velocities) -> np.ndarray:
     """Declared velocities with each component's own mean removed, ``(n_stellar, n_ep)``.
 
-    Only the centred table is identified, and only the centred table reaches the model:
+    Only the centred table is identified and enters the model:
     :func:`albireo.inference.relative_velocities` removes one zero point per component,
-    because with no orbit tying the stars together each free spectrum absorbs a constant
-    added to its own shifts. The declared absolute level, such as a systemic velocity of
-    +150 km/s for the SMC, costs the solver nothing and is not charged to the bandwidth.
+    because with no orbit coupling the stars each free spectrum absorbs a constant added
+    to its own shifts. The declared absolute level, such as a systemic velocity of
+    +150 km/s for the SMC, has no solver cost and does not add to the bandwidth.
 
     The centring is done here in velocity space. The model does it exactly, in pixels,
     where ``xi = artanh(v/c)`` makes the offset a translation. This function computes only
     a bound, and the two differ by ``O(v^2/c^2)``, of order 1e-8 at stellar velocities,
-    against the factor-of-two headroom the budget adds on top.
+    compared with the factor-of-two headroom in the budget.
     """
     v = np.asarray(velocities, dtype=float)
     return v - v.mean(axis=1, keepdims=True)
 
 
 def _place_hyperparameters(dis, priors: dict, init: dict) -> None:
-    """Place the sites every declaration carries, whichever velocity model it uses.
+    """Place the sites common to every declaration, whichever velocity model it uses.
 
     Smoothness is always fitted by ML-II. A fixed ``(tau, eta)`` pair is not used
     anywhere in this package on real data, and defensible centres span five orders of
@@ -732,7 +732,7 @@ def _range_bounds(spec) -> tuple[float, float] | None:
     """The ``(lo, hi)`` of a semi-amplitude declared as a range, or ``None``.
 
     A range is a :class:`Between`, either one per star or one component of a vector
-    :class:`Between` (``k=Between([10, 10], [90, 90])``), which :func:`_k_specs` hands out
+    :class:`Between` (``k=Between([10, 10], [90, 90])``), which :func:`_k_specs` returns
     as a :class:`_ScalarView`.
     """
     index = 0
@@ -746,7 +746,7 @@ def _range_bounds(spec) -> tuple[float, float] | None:
 
 
 def _check_noise_correlation(dis) -> None:
-    """Refuse a noise correlation that misses an instrument or is not a correlation."""
+    """Reject a noise correlation that omits an instrument or is not a correlation."""
     declared = dis.noise_correlation
     if declared is None:
         return
@@ -790,7 +790,7 @@ def _place_noise_correlation(dis, priors: dict, init: dict, fixed: dict) -> None
 
 
 def _check_velocities(dis, stars) -> np.ndarray:
-    """Validate a ``velocities=`` declaration, refusing a table that cannot warm-start."""
+    """Validate a ``velocities=`` declaration, rejecting a table that cannot warm-start."""
     v = np.atleast_2d(np.asarray(dis.velocities, dtype=float))
     want = (len(stars), dis.dataset.n_epochs)
     if v.shape != want:
@@ -801,9 +801,9 @@ def _check_velocities(dis, stars) -> np.ndarray:
     if not np.all(np.isfinite(v)):
         raise ValueError("velocities must all be finite")
 
-    # A cold start is refused here rather than left to be discovered. With every component
-    # at the same velocity at every epoch the stars are indistinguishable, and the fit
-    # lands 122,000 nats worse rather than merely converging slowly (D42).
+    # A cold start raises an error. With every component at the same velocity at every
+    # epoch the stars are indistinguishable, and the fit converges to a solution
+    # 122,000 nats below the warm-started one (D42).
     separation = float(np.max(np.ptp(v, axis=0))) if v.shape[0] > 1 else float(np.ptp(v))
     if separation <= 0.0:
         raise ValueError(
@@ -886,8 +886,8 @@ class _ScalarView(Spec):
 class Disentangler:
     """A declared disentangling problem: components, orbit, instrument, and data.
 
-    Construction derives the quantities the low-level path otherwise requires, including
-    the model grid and its margins, the solver's velocity budget, and the matched
+    Construction derives the quantities the low-level interface otherwise requires,
+    including the model grid and its margins, the solver's velocity budget, and the matched
     ``priors`` and ``init`` dictionaries. Quantities that are scientific claims are not
     derived. :meth:`explain` prints every derivation and :meth:`expert` returns the
     ``(model, priors, init)`` triple for direct use.
@@ -895,30 +895,30 @@ class Disentangler:
     Parameters
     ----------
     dataset
-        From :func:`albireo.read_dataset`, :func:`albireo.load_example`, or built by hand.
+        From :func:`albireo.read_dataset`, :func:`albireo.load_example`, or built manually.
     components
         One :class:`Star` per stellar component, optionally a :class:`Telluric` and a
-        :class:`Nebular`. The declared order is the model's component order, and the
-        names are how results are retrieved afterwards.
+        :class:`Nebular`. The declared order is the model's component order, and results
+        are retrieved by name afterwards.
     orbit
         An :class:`Orbit`. Exactly one of ``orbit`` and ``velocities`` is required.
     velocities
         The alternative declaration, for a binary whose orbit is not known: measured
         per-epoch velocities, ``(n_stellar, n_epochs)`` in km/s, from cross-correlation, a
-        shift-and-add pipeline, or line splitting measured by hand. The fit is then the
+        shift-and-add pipeline, or line splitting measured manually. The fit is then the
         free per-epoch RV table (``docs/math.md`` §7.6) rather than a Keplerian. No
         orbital elements are sampled, and :meth:`fit` returns a velocity-mode
         :class:`Fit` whose table can be searched for a period.
 
-        The free table requires a warm start (a cold one was measured at 122,000 nats
+        The free table requires a warm start (a cold start was measured 122,000 nats
         worse), and the other warm start, :meth:`Fit.free_velocities`, requires a
         Keplerian fit and hence a period. For a system with no published period the
         sequence is: declare the measured velocities, obtain the table, derive the period,
         then declare an :class:`Orbit`.
 
         The declared velocities are a starting point, not a constraint. The per-component
-        zero point is unidentified in either mode, so they must be right about the
-        epoch-to-epoch pattern, not the absolute scale.
+        zero point is unidentified in either mode, so only their epoch-to-epoch pattern
+        must be correct, not their absolute scale.
     lsf
         Per-instrument :class:`LSF`, or a bare sigma in km/s. Every instrument in the
         dataset must appear.
@@ -934,15 +934,15 @@ class Disentangler:
         Solver block size, passed through to
         :class:`~albireo.inference.MarginalOrbitModel`.
     noise_correlation
-        Lag-one correlation of each epoch's noise along its pixel index, the signature of
-        a pipeline that resampled the spectra onto a common step (Gaia's RVS grids carry
+        Lag-one correlation of each epoch's noise along its pixel index, produced by a
+        pipeline that resampled the spectra onto a common step (Gaia's RVS grids have
         0.27 and 0.81; :mod:`albireo.gaia` measures it). ``None`` (default) is the
         diagonal noise model. A number, or ``{instrument: number}`` covering every
         instrument, declares the correlation and the noise model becomes AR(1) along the
         pixel index (:func:`albireo.forward.with_ar1`, ``docs/math.md`` §1.4a) with those
-        values held; a :class:`Between` or :class:`Known` fits one shared value instead.
-        The declared value is an assumption and is listed as one. It also reaches
-        :meth:`Fit.measure_velocities`, whose errors carry it.
+        values held. A :class:`Between` or :class:`Known` fits one shared value instead.
+        The declared value is an assumption and is listed as one. It also enters
+        :meth:`Fit.measure_velocities`, whose errors include it.
 
     Raises
     ------
@@ -952,7 +952,7 @@ class Disentangler:
         and ``velocities`` are given, if more than one :class:`Telluric` or
         :class:`Nebular` component is declared, if an instrument in the dataset has no
         LSF, if a :class:`Telluric` or :class:`Nebular` component is declared for a
-        dataset whose wavelength medium is undeclared, or if a noise correlation misses
+        dataset whose wavelength medium is undeclared, or if a noise correlation omits
         an instrument or lies outside ``(-1, 1)``.
     NotImplementedError
         If ``orbit.outer`` is set. Hierarchical triples are supported by
@@ -992,7 +992,7 @@ class Disentangler:
     block_size: int | None = None
     noise_correlation: Any = None
 
-    # init=False so that dataclasses.replace() cannot carry a stale grid, budget or model
+    # init=False so that dataclasses.replace() cannot copy a stale grid, budget or model
     # into a new declaration: replace() copies declared fields, and a cache is not one.
     _built: dict = field(default_factory=dict, repr=False, compare=False, init=False)
 
@@ -1054,10 +1054,10 @@ class Disentangler:
             )
         for key in self.dataset.instruments:
             if _coerce_lsf(self.lsf[key], key).is_per_epoch:
-                declared_lsf_widths(self.dataset, key)  # refuses, naming undeclared epochs
+                declared_lsf_widths(self.dataset, key)  # raises, naming undeclared epochs
         _check_noise_correlation(self)
-        # A telluric or nebular component is keyed to absolute line positions, so an
-        # undeclared wavelength medium is worth a nearly constant 83 km/s.
+        # A telluric or nebular component depends on absolute line positions, which an
+        # undeclared wavelength medium leaves uncertain by a nearly constant 83 km/s.
         needs_medium = any(isinstance(c, Telluric | Nebular) for c in self.components)
         if needs_medium and self.dataset.epochs[0].medium is None:
             raise ValueError(
@@ -1076,19 +1076,19 @@ class Disentangler:
 
     @property
     def n_stellar(self) -> int:
-        """How many stellar components the model carries."""
+        """The number of stellar components in the model."""
         return len(self.stars)
 
     @property
     def ordered_components(self) -> tuple[Component, ...]:
         """The components in model row order: stars, then telluric, then nebular.
 
-        The model fixes this order whatever the order of the declaration, so every
-        per-component array (the smoothness rows, the hyperprior centres, the assumptions
-        report) is assembled through this property. Iterating the declaration instead
-        misassigns rows without raising: the vectors still have the correct length, so the
-        length check in :func:`albireo.marginal_loglikelihood` passes, and a rotationally
-        broadened star is regularized with a sharp-lined star's curvature penalty.
+        The model fixes this order regardless of the declaration, so every per-component
+        array (the smoothness rows, the hyperprior centres, the assumptions report) is
+        assembled through this property. Iterating the declaration instead misassigns rows
+        without raising: the vectors have the correct length, so the length check in
+        :func:`albireo.marginal_loglikelihood` passes, and a rotationally broadened star
+        is regularized with a sharp-lined star's curvature penalty.
         """
         return (
             *self.stars,
@@ -1106,7 +1106,7 @@ class Disentangler:
         fit can return an eccentricity above the declared bound.
         """
         declared = self.ecc_max
-        if self.orbit is None:  # a free-velocity declaration has no eccentricity at all
+        if self.orbit is None:  # a free-velocity declaration has no eccentricity
             return float(declared)
         if isinstance(self.orbit.ecc, Between):
             declared = min(declared, float(np.asarray(self.orbit.ecc.hi, dtype=float)))
@@ -1134,7 +1134,7 @@ class Disentangler:
 
     @property
     def smoothness_prior(self) -> SmoothnessPrior:
-        """The smoothness prior, carrying any per-pixel confinement profile."""
+        """The smoothness prior, including any per-pixel confinement profile."""
         return self._cached("prior", self._make_prior)
 
     @property
@@ -1172,7 +1172,7 @@ class Disentangler:
         )
 
     def _lsf_widths(self) -> dict[str, np.ndarray]:
-        """Every LSF width in play, per instrument of the dataset, resolved."""
+        """Every LSF width in use, per instrument of the dataset, resolved."""
         return {
             key: _coerce_lsf(self.lsf[key], key).widths(self.dataset, key)
             for key in self.dataset.instruments
@@ -1185,7 +1185,7 @@ class Disentangler:
         return min(float(np.min(w)) for w in self._lsf_widths().values())
 
     def _lsf_lines(self) -> list[str]:
-        """One line per instrument for :meth:`explain`, saying where its width came from."""
+        """One line per instrument for :meth:`explain`, giving the source of its width."""
         lines = []
         for key in self.dataset.instruments:
             spec = _coerce_lsf(self.lsf[key], key)
@@ -1206,7 +1206,7 @@ class Disentangler:
         return lines
 
     def _noise_line(self) -> str:
-        """One line for :meth:`explain`: the noise model and where its correlation came from."""
+        """One line for :meth:`explain`: the noise model and the source of its correlation."""
         declared = self.noise_correlation
         if declared is None:
             return "  noise      diagonal: independent pixels"
@@ -1225,10 +1225,10 @@ class Disentangler:
     def _native_dv_kms(self) -> float:
         """The finest native pixel size across the dataset, in km/s.
 
-        The finest rather than the median: a model grid coarser than any contributing
-        epoch discards that epoch's resolution, and on a mixed-instrument dataset the
-        median follows whichever instrument contributed more epochs rather than whichever
-        resolves more.
+        The finest is used rather than the median: a model grid coarser than any
+        contributing epoch discards that epoch's resolution, and on a mixed-instrument
+        dataset the median follows the instrument with more epochs rather than the one
+        that resolves more.
         """
         steps = []
         for epoch in self.dataset:
@@ -1254,9 +1254,9 @@ class Disentangler:
             wave = np.asarray(self.grid.wave)
             # nebular_windows takes rest wavelengths in air. On a vacuum grid the lines lie
             # 0.87-2.74 A redward of those values, so an unconverted window is offset by a
-            # nearly constant 83 km/s, enough to clip the line it is meant to contain and
-            # push the emission back into the stellar components. This is why the medium is
-            # required before a Nebular component is accepted.
+            # nearly constant 83 km/s. That is enough to clip the line it is meant to
+            # contain, and the emission is absorbed into the stellar components. The
+            # medium is therefore required before a Nebular component is accepted.
             lines = nebular.lines
             if self.dataset.epochs[0].medium == "vacuum":
                 from albireo.grids import air_to_vacuum
@@ -1313,8 +1313,7 @@ class Disentangler:
     def noise_correlation_per_epoch(self) -> np.ndarray | None:
         """The declared lag-one noise correlation of every epoch, ``(n_epochs,)``.
 
-        ``None`` when no correlation is declared, or when it is a fitted site rather than
-        a declared value.
+        Returns ``None`` when no correlation is declared, or when it is a fitted site.
         """
         declared = self.noise_correlation
         if declared is None or isinstance(declared, Spec):
@@ -1338,9 +1337,9 @@ class Disentangler:
                 init[name] = spec.start()
 
         if self.orbit is None:
-            # No orbital sites: `velocity` replaces them, and the model refuses the two
-            # together. The prior is centred on zero rather than on the declared table
-            # because the absolute level is unidentified either way; the declaration
+            # There are no orbital sites: `velocity` replaces them, and the model rejects the
+            # two together. The prior is centred on zero rather than on the declared table
+            # because the absolute level is unidentified in either case. The declaration
             # supplies the starting value.
             sigma = self.velocity_budget.total / 2.0
             priors["velocity"] = (
@@ -1353,12 +1352,11 @@ class Disentangler:
 
         place("period", _coerce_spec(self.orbit.period, "orbit.period"))
         if self.orbit.t_conj == "scan":
-            # Replaced by the scan result in fit(); the site is always sampled, so the
-            # narrow prior around the located phase is set there rather than here. The
-            # prior is anchored on the data rather than on zero: real epochs lie near BJD
-            # 2.46e6, and a prior centred on the origin excludes every conjunction the data
-            # can have. fit() narrows this around the scan result; expert() returns it
-            # unchanged.
+            # The site is always sampled, so fit() replaces this start with the scan result
+            # and narrows the prior around it. expert() returns both unchanged. The prior
+            # here starts at the first epoch rather than at zero: real epochs lie near BJD
+            # 2.46e6, and a prior centred on the origin excludes every conjunction in the
+            # span of the data.
             period = float(np.max(np.atleast_1d(np.asarray(_start_of(self.orbit.period)))))
             first = float(np.min(np.asarray(self.dataset.bjd)))
             priors["t_conj"] = dist.Uniform(first, first + period)
@@ -1466,7 +1464,7 @@ class Disentangler:
         return lines
 
     def _refuse_anchored_lsf(self, what: str) -> None:
-        """Refuse a wavelength-dependent LSF: ``k2_scan`` takes one width per instrument."""
+        """Reject a wavelength-dependent LSF: ``k2_scan`` takes one width per instrument."""
         anchored = [
             key for key, value in self.lsf.items() if _coerce_lsf(value, key).anchors_angstrom
         ]
@@ -1547,21 +1545,21 @@ class Disentangler:
     ) -> Fit:
         """Locate the orbit and fit it: phase scan, semi-amplitude scan, then MAP with ML-II.
 
-        Runs, in order, a conjunction-phase scan over one period (unless ``t_conj`` was
-        declared), a coarse scan over every semi-amplitude declared as a range (see
-        ``k_scan``), a profile of each star's prior amplitude at the orbit located with the
-        scan repeated where that moved a start by a factor of two or more, the phase scan
-        again at the chosen semi-amplitudes, and then :func:`albireo.run_map` over the
-        orbital sites and the smoothness hyperparameters. With the spectra already
-        marginalized out, optimizing the hyperparameters is the ML-II step. The fitted
-        hyperparameters are returned on :attr:`Fit.hyper`, keyed by component name, and
-        :meth:`Fit.sample` holds them fixed.
+        The fit starts with a conjunction-phase scan over one period (unless ``t_conj`` was
+        declared) and a coarse scan over every semi-amplitude declared as a range (see
+        ``k_scan``). Each star's prior amplitude is then profiled at the located orbit, and
+        the semi-amplitude scan is repeated where the profile moved a start by a factor of
+        two or more. The phase scan is repeated at the chosen semi-amplitudes, and
+        :func:`albireo.run_map` then runs over the orbital sites and the smoothness
+        hyperparameters. With the spectra marginalized out, optimizing the hyperparameters
+        is the ML-II step. The fitted hyperparameters are returned on :attr:`Fit.hyper`,
+        keyed by component name, and :meth:`Fit.sample` holds them fixed.
 
-        A ``velocities=`` declaration has no orbit and no phase to locate: the scan is
+        A ``velocities=`` declaration has no orbit and no phase to locate. The scan is
         skipped and the free per-epoch table is fitted directly, warm-started from the
-        declared velocities, returning a :class:`Fit` in ``"velocity"`` mode, read with
+        declared velocities. The result is a :class:`Fit` in ``"velocity"`` mode, read with
         :meth:`Fit.velocities` and :meth:`Fit.velocity_errors`. The implied period can
-        then be used in a second declaration carrying an :class:`Orbit`.
+        then be used in a second declaration with an :class:`Orbit`.
 
         Parameters
         ----------
@@ -1577,18 +1575,19 @@ class Disentangler:
         k_scan
             ``"auto"`` (default) scans the marginal likelihood over a geometric grid of
             every semi-amplitude declared as a :class:`Between` range before optimizing,
-            holding the others at their starting values, and starts L-BFGS from the best
-            trial when it beats the declared start; ``False`` skips the scan. The
-            marginal likelihood is multimodal in the semi-amplitudes as it is in phase
-            (a start at half the true value settles at half, and a start far above it in
-            the static-component minimum), and L-BFGS does not cross between the basins.
-            The grid is crossed with a grid of conjunction phases when the conjunction
-            is being scanned, since the two are coupled, and refined around the best trial
-            twice at half the spacing; among trials within a few nats of the best the one
-            honouring the declared order (the first star moving least) is taken. The
-            scans run on a copy of the declaration with the model grid at twice the pixel
-            (:meth:`_scan_declaration`), which makes the joint search affordable; the fit
-            itself runs on the full grid. The scan is retained on :attr:`Fit.k_scan`.
+            holding the others at their starting values. L-BFGS starts from the best trial
+            when its likelihood exceeds that of the declared start. ``False`` skips the
+            scan. The marginal likelihood is multimodal in the semi-amplitudes as it is in
+            phase (a start at half the true value converges at half, and a start far above
+            it in the static-component minimum), and L-BFGS does not cross between the
+            basins. The grid is crossed with a grid of conjunction phases when the
+            conjunction is being scanned, since the two are coupled, and refined around
+            the best trial twice at half the spacing. Among trials within a few nats of
+            the best, the one in the declared order (the first star moving least) is
+            taken. The scans run on a copy of the declaration with the model grid at twice
+            the pixel size (:meth:`_scan_declaration`), which makes the joint search
+            affordable. The fit runs on the full grid. The scan is retained on
+            :attr:`Fit.k_scan`.
 
         Returns
         -------
@@ -1612,8 +1611,8 @@ class Disentangler:
         if self.orbit is not None:
             self._warn_if_the_period_prior_is_a_search()
             # With a semi-amplitude to scan, every scan runs on a coarser copy of this
-            # declaration: the basin is the question, and the coarse grid answers it at a
-            # fraction of the cost. L-BFGS then runs on the full model.
+            # declaration. The scans only select the basin, which the coarse grid does at
+            # a fraction of the cost. L-BFGS then runs on the full model.
             ranged = bool(k_scan) and self._has_ranged_k()
             scanner = self._scan_declaration() if ranged else self
             if self.orbit.t_conj == "scan":
@@ -1625,11 +1624,11 @@ class Disentangler:
                     init["k"] = jnp.asarray(amplitude_scan.best)
                     if self.orbit.t_conj == "scan":
                         init["t_conj"] = amplitude_scan.best_t_conj
-                # The prior amplitude each component's spectrum is allowed, profiled at
-                # the orbit located so far: where the data want a factor of two or more
-                # from the declared start, the hyperparameter starts are moved and the
-                # scan is repeated, because a scan at the wrong amplitude prefers a
-                # static companion (see _profile_prior_amplitudes).
+                # The prior amplitude of each component's spectrum is profiled at the
+                # orbit located so far. Where the profile maximum is a factor of two or
+                # more from the declared start, the hyperparameter starts are moved and
+                # the scan is repeated, because a scan at the wrong amplitude has its
+                # maximum at a static companion (see _profile_prior_amplitudes).
                 if amplitude_scan is not None:
                     profile = scanner._profile_prior_amplitudes(init)
                     adapted = {
@@ -1675,16 +1674,16 @@ class Disentangler:
                                     init["t_conj"] = second.best_t_conj
                 if amplitude_scan is not None and amplitude_scan.gain > 0.0:
                     if self.orbit.t_conj == "scan":
-                        # The joint scan located the phase coarsely; the fine phase scan
-                        # at the chosen semi-amplitudes settles it.
+                        # The joint scan located the phase coarsely. The fine phase scan
+                        # at the chosen semi-amplitudes refines it.
                         scan = scanner._scan_phase(init)
                         init["t_conj"] = scan.best
             if scan is not None:
-                # One period wide, centred on the conjunction the fit starts from rather than
-                # on the phase scan's best: the semi-amplitude scan may have moved the start
-                # half a period on, at semi-amplitudes the phase scan did not have, without
-                # the fine phase scan running after it, and a start on the window's edge has
-                # an infinite unconstrained coordinate (D63).
+                # The prior is one period wide and centred on the conjunction the fit starts
+                # from, not on the phase scan's best. The semi-amplitude scan may have moved
+                # the start by half a period, at semi-amplitudes the phase scan did not use,
+                # with no fine phase scan after it. A start on the edge of the window has an
+                # infinite unconstrained coordinate (D63).
                 centre = float(np.asarray(init["t_conj"], dtype=float))
                 priors["t_conj"] = dist.Uniform(
                     centre - 0.5 * scan.period, centre + 0.5 * scan.period
@@ -1717,12 +1716,12 @@ class Disentangler:
     def _warn_if_the_period_prior_is_a_search(self) -> None:
         """Warn when the period prior is wide enough to constitute a period search.
 
-        The conjunction scan resolves phase at one period, the period prior's midpoint. A
-        prior wide enough to be a search locates a phase for a period that may be badly
-        wrong, leaving L-BFGS to cross the multimodal structure the scan exists to avoid.
-        The degradation is gradual, so this warns rather than raises.
+        The conjunction scan resolves phase at one period, the period prior's midpoint.
+        With a prior that wide, the scan locates a phase for a period that may be far from
+        the true one, leaving L-BFGS to cross the multimodal structure the scan is meant to
+        avoid. The degradation is gradual, so this warns rather than raises.
         """
-        if self.orbit is None:  # no period prior at all, so nothing here can be a search
+        if self.orbit is None:  # no period prior, so nothing here can be a search
             return
         spec = _coerce_spec(self.orbit.period, "orbit.period")
         if not isinstance(spec, Between):
@@ -1746,22 +1745,22 @@ class Disentangler:
         """Profile the marginal likelihood over each star's light-equivalent amplitude.
 
         The observed spectrum depends on a component only through the product of its
-        light fraction and its deviation spectrum, and the deviation carries a Gaussian
-        prior of precision ``tau C + eta I``, so the marginal likelihood is exactly
+        light fraction and its deviation spectrum, and the deviation has a Gaussian
+        prior of precision ``tau C + eta I``. The marginal likelihood is therefore exactly
         invariant under scaling the light by ``c`` and both hyperparameters by ``c``
         squared (D63: to 5e-10 nats). A profile over the light at fixed hyperparameters
-        is therefore a profile over the prior amplitude the data want for that component,
-        not a measurement of its flux fraction (on four benchmark systems it sat at 0.3 to
-        0.7 of the injected fraction). It is what a scan needs: a companion
-        declared at six times its light, with the hyperparameters at their starts, made
-        the coarse scan prefer a static secondary by 43 nats, and the profile rejected the
-        declared amplitude by 150 nats at that very orbit.
+        is thus a profile over that component's prior amplitude, not a measurement of its
+        flux fraction (on four benchmark systems its maximum was at 0.3 to 0.7 of the
+        injected fraction). A scan requires this profile. With a companion declared at
+        six times its light and the hyperparameters at their starts, a static secondary
+        was 43 nats higher in the coarse scan, and at the same orbit the declared
+        amplitude was 150 nats below the profile maximum.
 
         For each star in turn the light in ``theta`` is scaled by ``c`` over a geometric
         grid from ``1/span`` to ``span`` at ``ratio`` between neighbours (the scaled
-        fraction kept below 0.98), the other stars and every other site where ``init``
-        puts them, and the ``c`` with the highest marginal log-likelihood is returned.
-        Nine evaluations per star through the compiled marginal.
+        fraction kept below 0.98), with the other stars and every other site at their
+        ``init`` values. The ``c`` with the highest marginal log-likelihood is returned.
+        This takes nine evaluations per star through the compiled marginal.
         """
         theta = {k: jnp.asarray(v) for k, v in init.items()}
         theta.update({k: jnp.asarray(v) for k, v in self.fixed.items()})
@@ -1790,12 +1789,12 @@ class Disentangler:
         """Locate conjunction on a 42-point grid over one period, before optimizing.
 
         The trials are ``min(bjd) + linspace(0, P, 42, endpoint=False)``, one period long
-        and equally spaced. The count is even so that the grid holds the antipode of every
-        trial it samples: trial ``i`` and trial ``i + 21`` are half a period apart. For a
+        and equally spaced. The count is even so that the grid contains the antipode of
+        every trial: trial ``i`` and trial ``i + 21`` are half a period apart. For a
         near-equal pair the marginal likelihood in phase is near-mirror-symmetric under a
-        shift of half a period, so the scan can only choose between the two mirrors if both
+        shift of half a period, so the scan distinguishes the two mirrors only if both
         are on the grid. An odd count leaves every antipode midway between two trials, and
-        on one benchmark star the unsampled antipode was better by 672 nats (D63).
+        on one benchmark star the unsampled antipode was higher by 672 nats (D63).
 
         The marginal likelihood is sharply multimodal in phase, and L-BFGS does not cross
         between the troughs.
@@ -1805,10 +1804,10 @@ class Disentangler:
         trials = float(np.min(self.dataset.bjd)) + np.linspace(0.0, period, 42, endpoint=False)
         theta = {k: jnp.asarray(v) for k, v in init.items()}
         theta.update({k: jnp.asarray(v) for k, v in self.fixed.items()})
-        # One evaluation per trial through the already-compiled marginal rather than a
-        # batched sweep: a 42-wide sweep is one more large XLA compile per model shape,
-        # and on Windows a long session of compiles has ended in a heap corruption inside
-        # the compiler (D62); the loop compiles nothing new.
+        # The trials are evaluated one at a time through the already-compiled marginal
+        # rather than in a batched sweep. A 42-wide sweep is one more large XLA compile
+        # per model shape, and on Windows a long session of compiles has ended in a heap
+        # corruption inside the compiler (D62). The loop compiles nothing new.
         values = []
         for t in trials:
             theta["t_conj"] = jnp.asarray(float(t))
@@ -1819,9 +1818,9 @@ class Disentangler:
     def _scan_declaration(self) -> Disentangler:
         """This declaration on a model grid twice as coarse, for the scans that precede a fit.
 
-        A scan asks which basin holds the maximum, not where within it. The grid at twice
-        the pixel halves the pixel count and the solver bandwidth, and a marginal solve
-        costs a quarter to an eighth of the full model's, which makes a joint scan over the
+        A scan only selects the basin that contains the maximum. A grid at twice the pixel
+        size halves the pixel count and the solver bandwidth, and a marginal solve costs a
+        quarter to an eighth of the full model's, which makes a joint scan over the
         semi-amplitudes and the phase affordable.
         """
         return replace(self, dv_kms=2.0 * float(self.grid.dv_kms))
@@ -1846,42 +1845,44 @@ class Disentangler:
         """Scan the marginal likelihood over the ranged semi-amplitudes, and the phase.
 
         The axes are scanned one at a time rather than as a product. The first ranged
-        component (declared first, so the brighter or heavier star) crosses a geometric
-        grid over its range (2 percent inside either bound, ``ratio`` between neighbours,
-        coarsened until the level fits ``max_trials``) with ``n_phases`` conjunctions over
-        one period, or with the single conjunction ``init`` carries when it was declared,
-        the other components held at their starting values; each further ranged
-        component then crosses its own grid at the semi-amplitudes and conjunction located
-        so far. Each of ``levels`` refinements halves the spacings around the best trial,
-        three values per axis, jointly over the ranged components and the phase. A final
-        pass takes each component once more over its whole grid at the refined best, and
-        two more refinements follow if that moved anything. Among the trials within
-        ``tie_nats`` of the best, the one honouring the declared order (semi-amplitudes
-        non-decreasing) is taken, and with two ranged components the exchange-symmetric
-        twin of the best (the semi-amplitudes swapped, the conjunction half a period on)
-        is tried for the same reason. ``None`` when no semi-amplitude is a range.
+        component (declared first, so the brighter or heavier star) is scanned on a
+        geometric grid over its range (2 percent inside either bound, ``ratio`` between
+        neighbours, coarsened until the level fits ``max_trials``). The grid is crossed
+        with ``n_phases`` conjunctions over one period (or the single declared conjunction
+        in ``init``), with the other components at their starting values. Each further
+        ranged component is then scanned over its own grid at the semi-amplitudes and
+        conjunction located so far. Each of ``levels`` refinements halves the spacings
+        around the best trial, three values per axis, jointly over the ranged components
+        and the phase. A final pass scans each component once more over its whole grid at
+        the refined best, and two more refinements follow if the best trial moved. Among
+        the trials within ``tie_nats`` of the best, the one in the declared order
+        (semi-amplitudes non-decreasing) is taken. With two ranged components the
+        exchange-symmetric twin of the best (the semi-amplitudes swapped, the conjunction
+        half a period later) is tried for the same reason. Returns ``None`` when no
+        semi-amplitude is a range.
 
-        The sequence follows from a measurement (D63). A companion of a few percent of the
-        light commands some 25 nats over its whole range and prefers its true
-        semi-amplitude only while the primary's is within about 10 percent of the truth,
-        whereas the primary's own peak falls by 50 nats within 20 percent: on a product
-        grid at ratio 2 no trial holds the primary close enough for the companion's
-        evidence to point the right way, and a local refinement cannot carry the companion
-        out of the basin it was placed in. The phase is scanned with the first component
-        because the two are coupled: a phase located at a semi-amplitude a factor of three
-        off can sit a quarter of a period from the truth.
+        The order follows from a measurement (D63). A companion with a few percent of the
+        light changes the log-likelihood by about 25 nats over its whole semi-amplitude
+        range, and its maximum is at the true semi-amplitude only when the primary's
+        semi-amplitude is within about 10 percent of the true value. The primary's own
+        maximum drops by 50 nats within 20 percent. On a product grid with a ratio of 2
+        between trials, no trial places the primary close enough for the companion's
+        likelihood to peak at the true value, and a local refinement does not move the
+        companion out of the basin in which it starts. The phase is scanned with the first
+        component because the two are coupled: a phase located at a semi-amplitude wrong
+        by a factor of three can be a quarter of a period from the true phase.
 
-        Two guards keep a scan on a coarse model of the wrong shape (a free eccentricity
-        starts near circular, the grid is twice the pixel) from doing harm. A best trial
-        with every ranged semi-amplitude at the floor of its grid is the static-component
-        minimum, which a wrong phase or eccentricity makes preferable to any moving pair;
-        it is not a start, and the declared start is kept. And the start moves only when
-        the best trial beats it by more than ``hold_nats`` jointly, because the moves are
-        joint: the same companion's move, tested one component at a time, decomposed into
-        two holds of 15 nats each and was refused. A component whose own move is worth
-        less than ``indifferent_nats``, with the others at the scan's best, returns to its
-        start, the data being indifferent and a template table the better guess. The hold
-        losses are recorded either way.
+        Two checks limit the harm of scanning a coarse model of the wrong shape (a free
+        eccentricity starts near circular, the grid has twice the pixel size). A best
+        trial with every ranged semi-amplitude at the floor of its grid is the
+        static-component minimum, which a wrong phase or eccentricity makes more likely
+        than any moving pair. It is not a start, and the declared start is kept. The start
+        also moves only when the best trial exceeds it by more than ``hold_nats`` jointly,
+        because the moves are joint: tested one component at a time, the same companion's
+        move separated into two holds of 15 nats each and was rejected. A component whose
+        own move gains less than ``indifferent_nats``, with the others at the scan's best,
+        returns to its start, since the data do not distinguish the two and a template
+        table is the better guess. The hold losses are recorded in either case.
         """
         specs = _k_specs(self._require_orbit(), self.n_stellar)
         ranges = {i: _range_bounds(s) for i, s in enumerate(specs)}
@@ -1904,7 +1905,7 @@ class Disentangler:
         history: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
 
         def evaluate(k_trials, t_trials):
-            # Batches of sixteen keep the compiled sweep small; the trials are hundreds.
+            # Batches of sixteen keep the compiled sweep small. There are hundreds of trials.
             sweep = {"k": jnp.asarray(k_trials), "t_conj": jnp.asarray(t_trials)}
             values = self.model.log_likelihood_sweep(theta, sweep, batch_size=16)
             return np.asarray(values, dtype=float)
@@ -1915,11 +1916,11 @@ class Disentangler:
 
         def ordered(k_trials):
             # Components are declared in order of decreasing mass, so the first moves
-            # least; a trial honours that order when its semi-amplitudes do not decrease.
+            # least. A trial follows that order when its semi-amplitudes do not decrease.
             return np.all(np.diff(k_trials, axis=1) >= 0.0, axis=1)
 
         def choose(k_trials, values):
-            # Among the trials the data cannot tell apart, the one honouring the order.
+            # Among the trials within tie_nats of the best, take the one in the declared order.
             finite = np.isfinite(values)
             top = float(np.max(values[finite]))
             near = finite & (values >= top - tie_nats)
@@ -1946,7 +1947,7 @@ class Disentangler:
             ratio *= 1.2
 
         def sweep(i, at_k, phases):
-            # One component over its whole grid, the others where they stand.
+            # One component is scanned over its whole grid, the others at their current values.
             k_grid = np.repeat(at_k[None, :], len(axes[i]), axis=0)
             k_grid[:, i] = axes[i]
             k_all, t_all = trials(k_grid, phases)
@@ -1957,8 +1958,8 @@ class Disentangler:
         def argmax(values):
             return int(np.argmax(np.where(np.isfinite(values), values, -np.inf)))
 
-        # Level 0: the first ranged component with the phase, then each further one at
-        # what has been located so far.
+        # Level 0: the first ranged component is scanned with the phase, then each further
+        # one at the values located so far.
         best_k, best_t, best_value = start.copy(), t_conj, -math.inf
         for n, i in enumerate(ranged):
             phases = (
@@ -2009,8 +2010,8 @@ class Disentangler:
             refine(k_step, t_step)
 
         # The full-axis pass: a component placed in the wrong basin at level 0, while
-        # another was still far from its value, gets its whole grid once more at the
-        # refined best; a move is followed by two refinements of its own.
+        # another was still far from its value, is scanned over its whole grid once more
+        # at the refined best. A move is followed by two further refinements.
         moved = False
         for i in ranged:
             k_all, _, values = sweep(i, best_k, np.array([best_t]))
@@ -2024,9 +2025,9 @@ class Disentangler:
             refine(math.log(ratio) / 4.0, t_step)
 
         if len(ranged) == 2 and scanning_phase:
-            # The exchange-symmetric twin of the best: the two semi-amplitudes swapped and
-            # the conjunction half a period on fit alike components equally well, and the
-            # tie goes to the declared order.
+            # The exchange-symmetric twin of the best: with the two semi-amplitudes swapped
+            # and the conjunction half a period later, similar components are fitted
+            # equally well, and the declared order breaks the tie.
             a, b = ranged
             swapped = best_k.copy()
             swapped[a], swapped[b] = best_k[b], best_k[a]
@@ -2058,8 +2059,8 @@ class Disentangler:
             )
             best_k, best_t, best_value = start.copy(), t_conj, start_value
         else:
-            # The move is taken jointly; a component the data are indifferent to, with the
-            # others at the scan's best, goes back to its start.
+            # The move is taken jointly. A component whose own move gains less than
+            # indifferent_nats, with the others at the scan's best, returns to its start.
             held_theta = {**theta, "t_conj": jnp.asarray(best_t)}
             for i in ranged:
                 if np.isclose(best_k[i], start[i]) or not (
@@ -2123,10 +2124,10 @@ class Disentangler:
         return values
 
     def _require_orbit(self) -> Orbit:
-        """The declared :class:`Orbit`, or a refusal, for the paths that require one.
+        """The declared :class:`Orbit`, or an error, for the paths that require one.
 
-        Shared by the scan entry points so that the message is written once and the type
-        narrowing is explicit rather than implied by call order.
+        It is shared by the scan entry points so that the message is written once and the
+        type narrowing is explicit.
         """
         if self.orbit is None:
             raise ValueError(
@@ -2141,8 +2142,8 @@ class Disentangler:
     def _scan_k(self):
         """``(k1_spec, k2_spec)`` from a two-star declaration, checked for shape and kind.
 
-        Shared by :meth:`scan` and :meth:`detection_limit`, so the no-orbit refusal is
-        raised here rather than in each of them.
+        It is shared by :meth:`scan` and :meth:`detection_limit`, so the no-orbit error is
+        raised here.
         """
         specs = _k_specs(self._require_orbit(), self.n_stellar)
         if self.n_stellar != 2:
@@ -2165,12 +2166,12 @@ class Disentangler:
     def scan(self, *, block_size: int | None = None, sweep_batch: int | None = None):
         """Scan trial companion semi-amplitudes against the no-companion model.
 
-        The SB1 faint-companion search: the marginal likelihood is profiled over the
+        This SB1 faint-companion search profiles the marginal likelihood over the
         companion's velocity semi-amplitude, which detects a companion that never appears
         as a second set of lines. Declaring the primary's ``k`` as :class:`Known` rather
         than :class:`Fixed` marginalizes over it. A K₁ 10% high reduces the correlation of
-        the recovered companion with the truth from 0.96 to 0.49 while tripling the
-        detection statistic, so the artifact presents as a stronger detection that no
+        the recovered companion with the injected one from 0.96 to 0.49 while tripling the
+        detection statistic, so the artifact appears as a stronger detection that no
         calibrated threshold identifies.
 
         Parameters
@@ -2302,8 +2303,8 @@ class SemiAmplitudeScan:
     ----------
     k
         Trial semi-amplitudes, ``(n_trials, n_stellar)`` km/s: each component declared as
-        a range over its geometric grid in turn, the others where they stood, then the
-        joint refinements, the full-axis pass and the exchange check, in that order.
+        a range over its geometric grid in turn, the others at their current values, then
+        the joint refinements, the full-axis pass and the exchange check, in that order.
     t_conj
         The conjunction each trial was evaluated at, ``(n_trials,)``.
     values
@@ -2315,20 +2316,20 @@ class SemiAmplitudeScan:
         The semi-amplitudes the declaration started from, and the log-likelihood there at
         the located conjunction.
     dv_kms
-        The model-grid pixel of the declaration the scan ran on, which is coarser than
-        the fit's.
+        The model-grid pixel size of the declaration the scan ran on, which is coarser
+        than the fit's.
     hold_losses
         Per ranged component (by index), the nats lost by holding it at its start with the
-        others at the scan's best: the evidence each component's own move rests on, once
+        others at the scan's best. This is the gain of each component's own move, once
         the joint move has been taken.
     prior_scales
         Per star (by name), the factor applied to the starting precision of its smoothness
         prior (``tau`` and ``eta``) before the scan was repeated, when the profile over the
-        light-equivalent amplitude asked for a factor of two or more; empty otherwise.
+        light-equivalent amplitude gave a factor of two or more; empty otherwise.
     notes
-        What the guards did: a best trial at the static minimum refused, a joint gain too
-        small to move the start, a component the data are indifferent to kept at its start;
-        and, first, the prior amplitude adaptation when the scan was repeated.
+        Outcomes of the checks: a best trial at the static minimum rejected, a joint gain
+        too small to move the start, a component with too small a gain kept at its start.
+        If the scan was repeated, the first note is the prior amplitude adaptation.
     """
 
     k: np.ndarray
@@ -2346,7 +2347,7 @@ class SemiAmplitudeScan:
 
     @property
     def n_trials(self) -> int:
-        """How many trials were evaluated."""
+        """The number of trials evaluated."""
         return int(self.values.size)
 
     @property
@@ -2365,19 +2366,19 @@ def _default_v_range(fitted: np.ndarray, templates, margin: float = 40.0):
     """One correlation search window per template, all covering the same velocities.
 
     :func:`albireo.todcor` searches the shift of each template's own rest frame and
-    reports it composed with that template's ``v_zero_kms``, so a single ``(lo, hi)``
-    pair searches a different interval of *reported* velocity for every component whose
+    reports it composed with that template's ``v_zero_kms``. A single ``(lo, hi)`` pair
+    therefore searches a different interval of reported velocity for every component whose
     zero point differs. The windows are offset by each template's zero point relative to
     their median, which leaves one common interval of reported velocity: the span of the
     fitted velocities widened by ``margin`` at each end, moved to the median zero point.
-    Templates whose zero point is unknown are placed at zero, the frame the fitted
-    velocities are already in.
+    Templates whose zero point is unknown are placed at zero, the frame of the fitted
+    velocities.
 
     The zero points come from a label match, which measures each component's frame
     separately (``docs/math.md`` §9). When two disagree by more than the fitted velocities
-    span, no interval of reported velocity holds every component's own velocities, and a
-    search measures nothing. That is refused here rather than reported as a table of
-    velocities pinned to the edge of the search.
+    span, no interval of reported velocity contains every component's own velocities, and
+    a search would return a table of velocities pinned to the edge of the search. This
+    case raises an error.
     """
     fitted = np.asarray(fitted, dtype=np.float64)
     zeros = np.array([0.0 if t.v_zero_kms is None else float(t.v_zero_kms) for t in templates])
@@ -2414,9 +2415,9 @@ def _default_v_range(fitted: np.ndarray, templates, margin: float = 40.0):
 class Fit:
     """A MAP fit, its ML-II hyperparameters, and the quantities derived from them.
 
-    The fitted smoothness hyperparameters must accompany the parameters into every
-    downstream call, so :meth:`spectra`, :meth:`std`, :meth:`composite` and
-    :meth:`sample` supply them automatically.
+    Every downstream call requires the fitted smoothness hyperparameters with the
+    parameters, so :meth:`spectra`, :meth:`std`, :meth:`composite` and :meth:`sample`
+    supply them automatically.
 
     Attributes
     ----------
@@ -2435,7 +2436,7 @@ class Fit:
     priors_used
         The priors the fit was run under. Retained because they are not recoverable from
         the declaration once the Keplerian is replaced by a free velocity table, and a
-        Laplace covariance is meaningful only against the model it came from.
+        Laplace covariance is meaningful only for the model that produced it.
     k_scan
         The :class:`SemiAmplitudeScan` run before optimization, or ``None`` when no
         semi-amplitude was a range, the scan was switched off, or the fit is in
@@ -2457,13 +2458,13 @@ class Fit:
 
     @property
     def theta(self) -> dict:
-        """Site values together with any fixed sites, as the forward model consumes them."""
+        """Site values together with any fixed sites, as the forward model takes them."""
         theta = {k: jnp.asarray(v) for k, v in self.result.params.items()}
         theta.update({k: jnp.asarray(v) for k, v in self.dis.fixed.items()})
         return theta
 
     def star(self, name: str) -> dict:
-        """Everything fitted for one named star, so that no row index is read by hand.
+        """Everything fitted for one named star, so that no row index is read manually.
 
         Parameters
         ----------
@@ -2517,10 +2518,10 @@ class Fit:
     def velocities(self) -> np.ndarray:
         """Per-epoch velocities in km/s, ``(n_stellar, n_epochs)``, zero point removed.
 
-        A free table carries one arbitrary zero point per component, not one in total:
-        with no orbit tying the stars together, each free spectrum absorbs a constant
-        added to its own shifts. The removal is performed in pixel space, where a constant
-        offset is exact rather than first order.
+        A free table has one arbitrary zero point per component, not one in total: with no
+        orbit coupling the stars, each free spectrum absorbs a constant added to its own
+        shifts. The removal is performed in pixel space, where a constant offset is exact
+        rather than first order.
         """
         if self.mode == "keplerian":
             return np.asarray(
@@ -2533,9 +2534,9 @@ class Fit:
     def velocity_errors(self) -> np.ndarray:
         """Per-epoch velocity uncertainties, projected as in :meth:`velocities`.
 
-        Not the raw Laplace diagonal, which returns the prior width: 37.95 km/s on every
-        entry against an actual 0.059 km/s in the reference case, and identical on a good
-        dataset and an uninformative one.
+        These are not the raw Laplace diagonal, which returns the prior width: 37.95 km/s
+        on every entry against an actual 0.059 km/s in the reference case, and identical
+        on a good dataset and an uninformative one.
 
         Returns
         -------
@@ -2553,8 +2554,8 @@ class Fit:
                 "on this fit first."
             )
         # The covariance must come from the model this fit was run against, with the same
-        # sampled sites in the same order, or the projection reads the wrong block. This is
-        # why the priors are carried on the Fit.
+        # sampled sites in the same order, or the projection reads the wrong block. The
+        # priors are stored on the Fit for this reason.
         keplerian = {"period", "t_conj", "secosw", "sesinw", "k"}
         fixed = {k: v for k, v in self.dis.fixed.items() if k not in keplerian}
         model = self.dis.model.model(self.priors_used, fixed=fixed or None)
@@ -2566,8 +2567,8 @@ class Fit:
     def noise_correlation(self) -> dict[str, float] | None:
         """The lag-one noise correlation per instrument, as declared or as fitted.
 
-        ``None`` under the diagonal noise model. A fitted correlation is the MAP value of
-        the ``ar1_phi`` site, shared by every instrument.
+        Returns ``None`` under the diagonal noise model. A fitted correlation is the MAP
+        value of the ``ar1_phi`` site, shared by every instrument.
         """
         declared = self.dis.noise_correlation
         if declared is None:
@@ -2610,7 +2611,7 @@ class Fit:
         return np.tensordot(lights, d, axes=(0, 0))
 
     def residual_zscores(self) -> np.ndarray:
-        """Whitened data residuals. Their RMS is close to 1 when the noise model holds."""
+        """Whitened data residuals. Their RMS is close to 1 when the noise model is correct."""
         return np.asarray(
             data_residual_zscores(self.dis.model.problem_at(self.theta), self.marginal().d_hat)
         )
@@ -2631,7 +2632,7 @@ class Fit:
         """
         # The convergence flag is an absolute threshold on a potential whose scale grows
         # with the number of good pixels, so on real data it is routinely False at a good
-        # optimum. Report the outcome rather than grading it.
+        # optimum. The outcome is reported without a pass/fail label.
         stopped = "converged" if self.result.converged else "stopped at the step cap"
         lines = [
             f"{'MAP' if self.mode == 'keplerian' else 'free-velocity'} fit: potential "
@@ -2691,7 +2692,7 @@ class Fit:
         return "\n".join(lines)
 
     def _hyper_report(self) -> str:
-        """The ML-II table, flagging any hyperparameter the data did not move."""
+        """The ML-II table, flagging any hyperparameter left at its start."""
         rows = ["ML-II smoothness (empirical Bayes: fitted here, then frozen for sampling)"]
         stale = []
         for name, component in zip(
@@ -2734,8 +2735,8 @@ class Fit:
     ) -> Posterior:
         """Sample the orbital sites with NUTS, holding the ML-II hyperparameters fixed.
 
-        Rebuilds the model with ``log_tau`` and ``log_eta`` injected as constants, takes
-        the Laplace covariance at the MAP as the starting mass matrix, and samples.
+        The method rebuilds the model with ``log_tau`` and ``log_eta`` injected as constants,
+        takes the Laplace covariance at the MAP as the starting mass matrix, and samples.
 
         Fixing the hyperparameters is a plug-in approximation: the orbital credible
         intervals do not include smoothness uncertainty. Marginalizing over them instead
@@ -2773,8 +2774,8 @@ class Fit:
         fixed = self._fixed_hyper()
         priors = {k: v for k, v in self.dis.priors.items() if k not in fixed}
         if self.phase_scan is not None:
-            # One period wide, centred on the fitted conjunction (the MAP may sit half a
-            # period from the phase scan's best when the semi-amplitude scan moved it).
+            # The prior is one period wide, centred on the fitted conjunction (the MAP may be
+            # half a period from the phase scan's best when the semi-amplitude scan moved it).
             centre = float(np.asarray(self.result.params["t_conj"], dtype=float))
             period = self.phase_scan.period
             priors["t_conj"] = dist.Uniform(centre - 0.5 * period, centre + 0.5 * period)
@@ -2804,7 +2805,7 @@ class Fit:
         sigma = sigma_kms if sigma_kms is not None else self.dis.velocity_budget.total / 2.0
         priors = {"velocity": dist.Normal(0.0, float(sigma)).expand(list(start.shape)).to_event(2)}
         init = {"velocity": jnp.asarray(start)}
-        # Everything that is not the orbit carries over unchanged: the smoothness
+        # Every site that is not part of the orbit is kept unchanged: the smoothness
         # hyperparameters, and the per-epoch nebular amplitudes where the declaration has a
         # nebular component. Dropping the latter would hold the component static at
         # amplitude 1 without reporting it.
@@ -2817,21 +2818,20 @@ class Fit:
     def free_velocities(
         self, *, sigma_kms: float | None = None, max_steps: int = 300, progress=None
     ) -> Fit:
-        """Refit with one free velocity per component per epoch, warm-started from here.
+        """Refit with one free velocity per component per epoch, warm-started from this fit.
 
         The per-epoch radial-velocity table is the customary product of a spectroscopic
         binary analysis, and the model check for the Keplerian mode: free velocities are
-        fitted, then tested for whether a Keplerian threads them
-        (:meth:`keplerian_residuals`).
+        fitted, then tested against a Keplerian (:meth:`keplerian_residuals`).
 
-        The method is defined on :class:`Fit`, not constructible on its own, because a
-        cold start is measured at 122,000 nats worse than the warm-started solution;
-        warm-starting is the only mode shown to succeed.
+        The method is defined on :class:`Fit` because a cold start was measured 122,000
+        nats worse than the warm-started solution. Warm-starting is the only mode shown to
+        succeed.
 
-        This is the entry point when a Keplerian fit already exists and the table is
-        wanted as a model check. For an unsolved system, where the table yields the
-        period, ``Disentangler(velocities=...)`` and :meth:`Disentangler.fit` warm-start
-        from measured velocities instead.
+        This is the entry point when a Keplerian fit exists and the table is wanted as a
+        model check. For an unsolved system, where the table yields the period,
+        ``Disentangler(velocities=...)`` and :meth:`Disentangler.fit` warm-start from
+        measured velocities instead.
 
         Parameters
         ----------
@@ -2911,63 +2911,63 @@ class Fit:
     ):
         """The sufficient statistics of the epoch comparison, at this fit's MAP.
 
-        Evaluates the model problem at the fitted parameters and returns ``h = A^T W z``,
-        ``z^T W z`` and the band of ``G = A^T W A`` for the stellar rows, so that the epoch
-        chi-square of any template composite ``m`` costs one band product
-        (:class:`albireo.EpochStatistics`, ``docs/math.md`` §9.2a). The result goes to
-        :func:`albireo.match_labels` with ``compare="epochs"``; :meth:`match_labels` builds
+        The method evaluates the model problem at the fitted parameters and returns
+        ``h = A^T W z``, ``z^T W z`` and the band of ``G = A^T W A`` for the stellar rows.
+        The epoch chi-square of any template composite ``m`` then costs one band product
+        (:class:`albireo.EpochStatistics`, ``docs/math.md`` §9.2a). The result is passed to
+        :func:`albireo.match_labels` with ``compare="epochs"``. :meth:`match_labels` builds
         it itself.
 
-        Three things differ from the disentangling's own problem. First, every
-        instrument's LSF in the stellar operator is replaced by the width the library does
-        not already carry, ``sigma_q = sqrt(sigma_inst^2 - sigma_lib^2)`` per declared width
-        (per anchor, or per epoch for a per-epoch declaration), through
-        :func:`albireo.forward.with_lsf`, because a template drawn from a library at its own
+        Three things differ from the disentangling problem. First, every instrument's LSF
+        in the stellar operator is replaced by the width not already present in the
+        library, ``sigma_q = sqrt(sigma_inst^2 - sigma_lib^2)`` per declared width (per
+        anchor, or per epoch for a per-epoch declaration), through
+        :func:`albireo.forward.with_lsf`. A template drawn from a library at its own
         resolving power would otherwise be broadened twice. Second, with
-        ``grid_compensation`` (the default) that width is reduced once more by the
-        smoothing the model grid itself adds (below). Third, a telluric or nebular
+        ``grid_compensation`` (the default) that width is reduced further by the
+        smoothing that the model grid adds (see below). Third, a telluric or nebular
         component is held at its posterior mean: its predicted contribution, through the
         declared LSF under which that mean was solved, is subtracted from the data, so the
         chi-square is ``||z - A_e d_hat_e - A_s m||_W^2``. The noise model (weights,
         jitter, AR(1) correlation) and the orbit are this fit's, unchanged.
 
         **The grid compensation.** Between a library spectrum and the epoch pixels a
-        template passes five discrete steps on the model grid of pixel ``dv``, and each adds
-        a variance that a continuous spectrum does not have. A box average of width ``dv``
-        has variance ``dv^2 / 12``; a linear-interpolation shift by a fraction ``f`` of a
-        pixel is the two-tap kernel with weights ``1 - f`` at ``-f dv`` and ``f`` at
-        ``(1 - f) dv``, of mean zero and variance ``f (1 - f) dv^2``, which averages to
-        ``dv^2 / 6`` over ``f``. The steps are the library's box average onto the model grid
-        (``dv^2 / 12``), the pixel integration of the rotation kernel (``dv^2 / 12``), the
-        label rows' shift by the frame velocity (``dv^2 / 6``), the operator's shift of each
-        epoch (``dv^2 / 6``), and the model pixel held constant across the rebin onto the
-        native pixels (``dv^2 / 12``), so that
+        template passes through five discrete steps on the model grid of pixel ``dv``, and
+        each adds a variance that a continuous spectrum does not have. A box average of
+        width ``dv`` has variance ``dv^2 / 12``. A linear-interpolation shift by a fraction
+        ``f`` of a pixel is the two-tap kernel with weights ``1 - f`` at ``-f dv`` and
+        ``f`` at ``(1 - f) dv``, of mean zero and variance ``f (1 - f) dv^2``, which
+        averages to ``dv^2 / 6`` over ``f``. The steps are the library's box average onto
+        the model grid (``dv^2 / 12``), the pixel integration of the rotation kernel
+        (``dv^2 / 12``), the label rows' shift by the frame velocity (``dv^2 / 6``), the
+        operator's shift of each epoch (``dv^2 / 6``), and the model pixel held constant
+        across the rebin onto the native pixels (``dv^2 / 12``), so that
 
             sigma_grid^2 = (1/12 + 1/12 + 1/6 + 1/6 + 1/12) dv^2 = (7/12) dv^2,
 
-        independent of the line width. The epoch data carry none of it, and ``v sin i``,
-        whose limb-darkened profile has variance ``0.225 (v sin i)^2``, gives it back:
-        uncompensated, ``v_fit^2 = v^2 - (7/12) dv^2 / 0.225``. The stellar operator
-        therefore applies
+        independent of the line width. The epoch data have none of this variance, and
+        ``v sin i``, whose limb-darkened profile has variance ``0.225 (v sin i)^2``,
+        absorbs the difference: uncompensated, ``v_fit^2 = v^2 - (7/12) dv^2 / 0.225``.
+        The stellar operator therefore applies
 
             sigma_op^2 = sigma_inst^2 - sigma_lib^2 - (7/12) dv^2.
 
         On the closed-loop fixture of ``tests/test_pipeline.py`` (native pixel 4.63 km/s,
         LSF sigma 5.5 km/s, ``v sin i`` injected at 11 km/s) the uncompensated comparison
-        returned 7.37 km/s with the orbit fixed at the truth and the compensated one 10.08;
-        over five noise draws the mean error was -3.02 km/s uncompensated and -0.24
-        compensated (``docs/math.md`` §9.2a). Temperatures, gravities, metallicities and
-        light fractions did not move. The formula is a mean: the frame shift's phase is a
-        fitted parameter, the rotation kernel's pixel term oscillates for ``v sin i`` near
-        ``dv``, and computing the epoch shifts' own phases changed ``v sin i`` by at most
-        0.12 km/s.
+        returned 7.37 km/s with the orbit fixed at the injected values, and the compensated
+        one 10.08. Over five noise draws the mean error was -3.02 km/s uncompensated and
+        -0.24 compensated (``docs/math.md`` §9.2a). Temperatures, gravities, metallicities
+        and light fractions did not change. The formula is a mean: the frame shift's phase
+        is a fitted parameter, the rotation kernel's pixel term oscillates for ``v sin i``
+        near ``dv``, and computing the epoch shifts' own phases changed ``v sin i`` by at
+        most 0.12 km/s.
 
         Where ``sigma_op`` would fall below half a model pixel, which happens when
         ``dv > sqrt(6/5) sigma_q``, about ``1.10 sigma_q``, it is floored there (or at
-        ``sigma_q``, when that is narrower), only part of the bias is removed, and a
-        ``UserWarning`` names the grid spacing that avoids the floor; when
-        ``sigma_q < dv`` without a floor the compensated kernel is below 0.65 pixel and a
-        warning says so. Both are recorded in :attr:`albireo.EpochStatistics.notes`. A
+        ``sigma_q``, when that is narrower). Only part of the bias is then removed, and a
+        ``UserWarning`` names the grid spacing that avoids the floor. When
+        ``sigma_q < dv`` without a floor, the compensated kernel is below 0.65 pixel and a
+        warning reports it. Both are recorded in :attr:`albireo.EpochStatistics.notes`. A
         finer model grid is not a substitute for the compensation: uncompensated, a 1.5
         km/s grid still returned 10.28 km/s for 11 on that fixture.
 
@@ -2992,8 +2992,8 @@ class Fit:
         Raises
         ------
         ValueError
-            If the library is at or below an instrument's resolving power, which no
-            convolution can undo; if the dataset does not declare its wavelength medium; or
+            If the library is at or below an instrument's resolving power (which no
+            convolution can undo), if the dataset does not declare its wavelength medium, or
             if the fit's light fractions vary between epochs.
 
         Warns
@@ -3096,26 +3096,26 @@ class Fit:
     def match_labels(self, stars, **kwargs):
         """Fit Teff, log g, [M/H] and v sin i to the stellar components of this fit.
 
-        The declarative route to :func:`albireo.match_labels`. The grid, the recovered
+        This declarative form of :func:`albireo.match_labels` takes the grid, the recovered
         spectra, their uncertainty band, the assumed light fractions, the instrument width
-        and the dataset's wavelength medium are taken from this fit, so they cannot
-        disagree with what was solved.
+        and the dataset's wavelength medium from this fit, so they are consistent with
+        what was solved.
 
         The comparison defaults to ``compare="epochs"``: the template composite is compared
-        with the epoch spectra through :meth:`epoch_statistics`, built here at the
-        resolving power the stars' libraries declare and with the model grid's own
-        smoothing, ``(7/12) dv^2``, removed from the operator width;
-        ``statistics=fit.epoch_statistics(..., grid_compensation=False)`` leaves it in. It
-        is exact for the fit's noise model, does not depend on the declared light
-        fractions, and on simulated Gaia RVS binaries returned temperatures twice as close
-        to the truth as the diagonal comparison against ``d_hat`` converged the same way
-        (``docs/math.md`` §9.2a). ``compare="native"`` and ``compare="matched"`` compare
-        with the disentangled components instead.
+        with the epoch spectra through :meth:`epoch_statistics`. The statistics are built
+        here at the resolving power the stars' libraries declare, with the model grid's
+        smoothing, ``(7/12) dv^2``, removed from the operator width.
+        ``statistics=fit.epoch_statistics(..., grid_compensation=False)`` leaves it in.
+        The epoch comparison is exact for the fit's noise model and does not depend on the
+        declared light fractions. On simulated Gaia RVS binaries it returned temperatures
+        twice as close to the injected values as the diagonal comparison against ``d_hat``
+        converged the same way (``docs/math.md`` §9.2a). ``compare="native"`` and
+        ``compare="matched"`` compare with the disentangled components instead.
 
         Only the stellar rows are passed on: a telluric or nebular component has no
         atmospheric parameters, and the epoch comparison holds it at its posterior mean.
-        The light fractions travel with the stars because the label fit's dilution model is
-        defined in terms of what was assumed.
+        The light fractions are passed with the stars because the label fit's dilution
+        model is defined in terms of the assumed fractions.
 
         Parameters
         ----------
@@ -3220,24 +3220,24 @@ class Fit:
         """The stellar components of this fit as :class:`albireo.todcor.Template` objects.
 
         A system's own disentangled components are the closest templates available for
-        it: measured from these epochs, they carry the correct lines, depths and rotational
-        broadening. They do not carry an absolute rest frame, since each
-        component has its own unidentified zero point (``docs/math.md`` §5.3, §7.6), so
-        every template returned here has ``v_zero_kms=None`` and the velocities measured
-        against it are differential. A label match (:meth:`match_labels`, then
+        it: measured from these epochs, they have the correct lines, depths and rotational
+        broadening. They have no absolute rest frame, since each component has its own
+        unidentified zero point (``docs/math.md`` §5.3, §7.6). Every template returned
+        here therefore has ``v_zero_kms=None``, and the velocities measured against it are
+        differential. A label match (:meth:`match_labels`, then
         :meth:`albireo.Template.from_labels`) fixes the zero point.
 
         Telluric and nebular components are not stars and are not returned. The templates
         are intrinsic (``sigma_kms=0``): the fit solved for the spectra under the declared
         LSF, which :meth:`measure_velocities` applies again per instrument.
 
-        The fit's grid samples the native pixel at about two points, which suits the
-        solver but is too coarse for a correlation template: the pixel-locking ripple of
+        The fit's grid samples the native pixel at about two points. This is adequate for
+        the solver but too coarse for a correlation template: the pixel-locking ripple of
         the linear shift operator is ``~0.1 / sigma_px^2`` pixels (``docs/math.md``
         §10.3). The components are linearly upsampled by an integer factor onto a grid
-        carrying at least ``pixels_per_sigma`` pixels per narrowest declared LSF sigma.
-        The smoothness prior has already band-limited them well above that scale, so the
-        upsampling adds no information and removes the ripple.
+        with at least ``pixels_per_sigma`` pixels per narrowest declared LSF sigma. The
+        smoothness prior has band-limited them well above that scale, so the upsampling
+        adds no information and removes the ripple.
 
         Parameters
         ----------
@@ -3287,12 +3287,12 @@ class Fit:
     def measure_velocities(self, *, templates=None, light=None, v_range=None, **kwargs):
         """Per-epoch velocities of every star by TODCOR against this fit's own components.
 
-        The disentangling yields the component spectra; correlating the epochs against
+        The disentangling yields the component spectra. Correlating the epochs against
         them yields one velocity per star per epoch (:func:`albireo.todcor`), which the
         joint fit does not produce. The declared light fractions are held fixed by default
         because the components were solved against them (``docs/math.md`` §9.1: what is
         recovered is ``(w/l0) t``, so ``l0`` is the only amplitude consistent with those
-        spectra), and the declared LSF is applied per instrument as the fit applied it.
+        spectra). The declared LSF is applied per instrument as the fit applied it.
 
         Parameters
         ----------
@@ -3305,12 +3305,12 @@ class Fit:
         v_range
             Search range in km/s, one ``(lo, hi)`` pair or one per template. Defaults to
             the span of the fitted velocities widened by 40 km/s at each end, offset per
-            template by that template's zero point relative to their median, so that every
-            component searches the same interval of *reported* velocity: the range is in
-            each template's own frame, and a template carrying a zero point reports its
-            velocities composed with it. Templates whose zero points disagree by more than
-            the fitted velocities span admit no such interval, which raises rather than
-            being searched.
+            template by that template's zero point relative to their median. Every
+            component then searches the same interval of reported velocity: the range is in
+            each template's own frame, and a template with a zero point reports its
+            velocities composed with it. When the templates' zero points disagree by more
+            than the fitted velocities span, no such interval exists and an error is
+            raised.
 
         **kwargs
             Passed to :func:`albireo.todcor`.
@@ -3322,8 +3322,8 @@ class Fit:
         Raises
         ------
         ValueError
-            If ``v_range`` is left to the default and the templates' zero points put the
-            implied window off one component's own fitted velocities.
+            If ``v_range`` is left to the default and the templates' zero points make the
+            implied window miss one component's own fitted velocities.
 
         References
         ----------
@@ -3358,7 +3358,7 @@ class Fit:
 
 @dataclass(frozen=True)
 class Posterior:
-    """A NUTS posterior over the orbit, carrying the fit it was started from.
+    """A NUTS posterior over the orbit, with the fit it was started from.
 
     Attributes
     ----------
@@ -3414,8 +3414,8 @@ class Posterior:
     def spectra(self, *, num_draws: int = 32, seed: int = 0) -> np.ndarray:
         """Spectra drawn from the joint posterior, ``(num_draws, n_comp, n_pix)``.
 
-        The scatter across draws includes both the conditional spectral uncertainty and
-        the orbital uncertainty. The ML-II hyperparameters are injected automatically;
+        The scatter across draws includes the conditional spectral uncertainty and the
+        orbital uncertainty. The ML-II hyperparameters are injected automatically;
         omitting them fails silently, because those sites are absent from the chain.
 
         Parameters
@@ -3537,7 +3537,7 @@ def _hyper_of(params: Mapping, names: Sequence[str]) -> dict[str, dict[str, floa
 
 
 def _has_scanned(value) -> bool:
-    """Whether a declared semi-amplitude carries a scan axis rather than a prior."""
+    """Whether a declared semi-amplitude includes a scan axis."""
     if isinstance(value, Scanned):
         return True
     if isinstance(value, Spec):
@@ -3556,10 +3556,10 @@ def _vector_spec(value, n: int, what: str) -> Spec:
     if kinds == {Fixed}:
         return Fixed(jnp.stack([jnp.asarray(s.value, dtype=jnp.float64) for s in specs]))
     if kinds == {Between}:
-        # Each entry's own starting value travels with it. A declaration such as
-        # k=[Between(10, 90, start_at=30), Between(10, 90, start_at=60)] is how the
-        # component-swap degeneracy of a symmetric prior is broken: the conjunction scan
-        # runs at these starting values, and equal starts do not distinguish the stars.
+        # Each entry's starting value is kept. A declaration such as
+        # k=[Between(10, 90, start_at=30), Between(10, 90, start_at=60)] breaks the
+        # component-swap degeneracy of a symmetric prior: the conjunction scan runs at
+        # these starting values, and equal starts do not distinguish the stars.
         return Between(
             jnp.stack([jnp.asarray(s.lo, dtype=jnp.float64) for s in specs]),
             jnp.stack([jnp.asarray(s.hi, dtype=jnp.float64) for s in specs]),
@@ -3582,8 +3582,8 @@ def _ecc_sites(orbit: Orbit, ecc_max: float, suffix: str = "") -> list[tuple[str
 
     The parameterization is singular at ``e = 0``, where the gradient is NaN and numpyro
     reports only "Cannot find valid initial parameters". A free eccentricity is therefore
-    never started at the origin, and a declared circular orbit does not sample these sites
-    at all, so no gradient is taken at the singular point.
+    never started at the origin, and a declared circular orbit does not sample these sites,
+    so no gradient is taken at the singular point.
     """
     ecc = orbit.ecc
     if isinstance(ecc, Fixed):
@@ -3611,7 +3611,7 @@ def _ecc_sites(orbit: Orbit, ecc_max: float, suffix: str = "") -> list[tuple[str
             # e is not a coordinate here: the sampled pair is (sqrt(e)cos w, sqrt(e)sin w),
             # in which a lower bound on e is an annulus that a box prior cannot express.
             # Dropping the bound without notice would return an eccentricity below the
-            # declared one, measured at half of it, so it is refused instead.
+            # declared one, measured at half of it, so the declaration is rejected.
             raise ValueError(
                 f"orbit.ecc lower bound must be 0; got {lo}. The sampled parameters are "
                 "(sqrt(e)cos w, sqrt(e)sin w), in which a lower bound on e is an annulus "
@@ -3620,12 +3620,12 @@ def _ecc_sites(orbit: Orbit, ecc_max: float, suffix: str = "") -> list[tuple[str
                 "omega to hold it."
             )
         # The two sites are bounded independently, so the box corner reaches e = 2 * hi.
-        # The declared bound is enforced by the model's disk factor instead, which is what
-        # effective_ecc_max provides: without it, ecc=Between(0, 0.08) admits e = 0.16.
+        # The declared bound is enforced by the model's disk factor instead, through
+        # effective_ecc_max: without it, ecc=Between(0, 0.08) allows e = 0.16.
         limit = math.sqrt(hi)
-        # Started at e = 0.05, omega = 0.5 rad unless the declaration says where: small,
-        # but not the singular origin. A start from a velocity table's orbit spares the
-        # scans a circular model of an eccentric orbit.
+        # The start is e = 0.05, omega = 0.5 rad unless the declaration gives one: small,
+        # but not at the singular origin. Starting from a velocity table's orbit avoids
+        # scanning an eccentric orbit with a circular model.
         e_start = 0.05 if ecc.start_at is None else float(np.asarray(ecc.start_at, dtype=float))
         e_start = min(max(e_start, 0.01), 0.95 * hi) if hi > 0.0 else 0.0
         omega = 0.5

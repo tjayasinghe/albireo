@@ -1,25 +1,25 @@
 """Regenerate the executed showcase notebook, ``docs/tutorials/showcase.ipynb``.
 
-The docs build renders the notebook with ``execute: false`` (see ``mkdocs.yml``): the
-committed outputs are what the site shows, so the docs build requires neither JAX nor a
-sampling run. The outputs therefore go stale when the API or the packaged example changes,
-and this script refreshes them:
+The docs build renders the notebook with ``execute: false`` (see ``mkdocs.yml``), so the
+site shows the committed outputs and the build requires neither JAX nor a sampling run.
+The outputs therefore become outdated when the API or the packaged example changes, and
+this script refreshes them:
 
     python scripts/build_showcase_notebook.py
 
-Wall time is roughly ten minutes, nearly all of it the NUTS cell. The notebook is seeded,
-so a rebuild reproduces the results apart from the printed timings.
+A run takes roughly ten minutes, nearly all of it in the NUTS cell. The notebook is
+seeded, so a rebuild reproduces the results apart from the printed timings.
 
-Two post-processing passes run after execution; ``--postprocess-only`` applies them to the
-existing file without re-executing:
+Two post-processing passes run after execution (``--postprocess-only`` applies them to the
+existing file without re-executing):
 
 * Environment noise is stripped. A kernel without ipywidgets emits a TqdmWarning
   ("IProgress not found") on stderr at import time, which describes the executing
   environment rather than albireo.
-* Figures are palette-quantized. Matplotlib's inline PNGs are 32-bit RGBA; flattened onto
-  white and quantized to a 256-color palette they are visually identical for line plots and
-  roughly a third the size. This keeps the notebook under the 500 kB pre-commit file-size
-  limit, which the gate at the end of this script enforces.
+* Figures are palette-quantized. Matplotlib's inline PNGs are 32-bit RGBA. Flattened onto
+  white and quantized to a 256-color palette, they are visually identical for line plots
+  and roughly a third the size. This keeps the notebook under the 500 kB pre-commit
+  file-size limit, which the check at the end of this script enforces.
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ CELLS: list[tuple[str, str]] = [
 # albireo end to end: a tour of the outputs
 
 This notebook runs the example dataset packaged with albireo (no download, no network
-access) through the `Disentangler` façade and shows the output of each stage: the
+access) through the `Disentangler` interface. It shows the output of each stage: the
 derivations implied by the declaration, the MAP plus ML-II fit summary, the disentangled
 spectra with their uncertainty band, the residual diagnostics, the NUTS posterior over the
 orbit, spectra drawn from the joint posterior, and a sensitivity forecast for epochs not
@@ -61,18 +61,18 @@ Install with the plotting extra:
 pip install -e ".[plots]"
 ```
 
-Two limitations, also stated in the package's own summaries:
+Two limitations apply, as the package's summaries also state:
 
 - The continuum light fractions are assumed, not measured. With constant light the data
   constrain only the products `l_i * d_i`, so the fractions are an input the fit cannot
-  contradict.
+  test.
 - Each component's smooth envelope is set by the prior rather than by the data (the
   `k = 0` degeneracy). The uncertainty band, not the posterior mean, indicates where the
   data constrain the spectrum.
 
-The saved outputs and timings come from a single run on a 16-core desktop. Absolute times
-differ between machines, and every first call includes JAX compilation. All steps are
-seeded, so the numbers reproduce.""",
+The saved outputs and timings are from one run on a 16-core desktop. Absolute times differ
+between machines, and every first call includes JAX compilation. All steps are seeded, so
+the numbers reproduce.""",
     ),
     (
         PY,
@@ -97,11 +97,12 @@ print(f"\\ninjected truth: P = {truth['period']} d, e = {truth['ecc']}, K = {tru
         """\
 ## Declare the system
 
-The façade takes a declaration of the system (components, orbit priors, instrument LSF)
-and derives the quantities the expert path requires as explicit arguments: the velocity
-budget from the support of the priors, the grid margin, the conjunction phase (scanned
-before any optimization), and the smoothness hyperparameters by ML-II. `explain()` prints
-every derivation and `expert()` returns the corresponding `(model, priors, init)` triple.""",
+The `Disentangler` interface takes a declaration of the system (components, orbit priors,
+instrument LSF) and derives the quantities the expert path requires as explicit arguments:
+the velocity budget from the support of the priors, the grid margin, the conjunction phase
+(scanned before any optimization), and the smoothness hyperparameters by ML-II.
+`explain()` prints every derivation and `expert()` returns the corresponding
+`(model, priors, init)` triple.""",
     ),
     (
         PY,
@@ -129,9 +130,9 @@ print(dis.explain())""",
         """\
 ## Fit: MAP and ML-II in one call
 
-The summary reports the optimizer's own diagnostics, the conjunction scan contrast, the
-orbit, the ML-II smoothness table (with a flag on any hyperparameter the data did not
-move), the residual z-score RMS (near 1 when the noise model describes the data) and the
+The summary reports the optimizer's diagnostics, the conjunction scan contrast, the orbit,
+the ML-II smoothness table (flagging any hyperparameter that remained at its starting
+value), the residual z-score RMS (near 1 when the noise model describes the data) and the
 assumptions block.""",
     ),
     (
@@ -148,13 +149,14 @@ print(fit.summary())""",
 ## The disentangled spectra and their uncertainty band
 
 The component spectra are recovered as deviations from a unit continuum, conditional on
-the MAP orbit, with a pointwise uncertainty band. Where the epochs give little leverage
-the band widens toward the prior, marking pixels the data do not constrain. The model grid
-extends beyond the data by a margin set by the velocity budget and the LSF (derived by the
-façade above), so the band also widens in the wings, where the pixels are prior-only.
+the MAP orbit, with a pointwise uncertainty band. Where the epochs constrain the spectrum
+weakly the band widens toward the prior, marking pixels the data do not constrain. The
+model grid extends beyond the data by a margin set by the velocity budget and the LSF
+(derived by the `Disentangler` interface above), so the band also widens in the wings,
+where the pixels are prior-only.
 
-The injected truth, defined on the grid the example was generated on, is resampled onto
-the model grid for the overlay. Its deviation is zero outside that window.""",
+The injected spectra, defined on the grid the example was generated on, are resampled onto
+the model grid for the overlay. Their deviation is zero outside that grid.""",
     ),
     (
         PY,
@@ -176,10 +178,10 @@ fig.set_layout_engine("constrained")""",
         """\
 ## Residual diagnostics
 
-Whitened residuals in three views: their distribution against a unit normal, the
-per-epoch RMS, and the lag-1 autocorrelation within each exposure. A z-RMS near 1 with
-flat per-epoch structure passes the model check; phase-dependent structure would indicate
-that the model is absorbing signal it should describe.""",
+The whitened residuals are shown in three views: their distribution against a unit
+normal, the per-epoch RMS, and the lag-1 autocorrelation within each exposure. A z-RMS
+near 1 with flat per-epoch structure passes the model check. Phase-dependent structure
+would indicate that the model is absorbing signal it should describe.""",
     ),
     (
         PY,
@@ -196,9 +198,9 @@ fig.set_layout_engine("constrained")""",
 
 The component spectra are marginalized analytically, so NUTS samples only the orbital
 sites. `fit.sample()` freezes the smoothness hyperparameters at their ML-II values, a
-plug-in approximation that the summary records, and uses the Laplace covariance at the
-MAP as the mass matrix, so warmup only tunes the step size. Two chains run sequentially
-on a CPU.""",
+plug-in approximation that the summary records. It uses the Laplace covariance at the MAP
+as the mass matrix, so warmup only tunes the step size. Two chains run sequentially on a
+CPU.""",
     ),
     (
         PY,
@@ -213,11 +215,11 @@ print(post.summary())""",
         """\
 ## The posterior orbit curve
 
-albireo measures no per-epoch radial velocity: the orbit is inferred from the spectra
+albireo measures no per-epoch radial velocity. The orbit is inferred from the spectra
 directly, so the figure shows the posterior curve rather than a fit through RV points.
 The open circles are the injected component velocities at the observed epochs, which the
-draws thread. The ticks along the bottom mark the phase coverage of the epochs, which
-sets how well the orbit is constrained.""",
+draws pass through. The ticks along the bottom mark the phase coverage of the epochs,
+which sets how well the orbit is constrained.""",
     ),
     (
         PY,
@@ -261,10 +263,10 @@ _ = ab.plot_corner(idata, var_names=["period", "ecc", "k"])""",
 ## Spectra from the joint posterior
 
 Each draw takes a posterior orbit and then draws once from the conditional Gaussian over
-the spectra, so the scatter carries the orbital and the spectral uncertainty together.
-These draws are the object to propagate downstream: equivalent widths measured on them
-inherit the `k = 0` exchange between the components, which independent per-pixel error
-bars do not represent.""",
+the spectra, so the scatter includes the orbital and the spectral uncertainty. These draws
+are the object to propagate downstream. Equivalent widths measured on them inherit the
+`k = 0` exchange between the components, which independent per-pixel error bars do not
+represent.""",
     ),
     (
         PY,
@@ -279,12 +281,12 @@ fig.set_layout_engine("constrained")""",
         """\
 ## Forecast: the effect of six further nights
 
-The posterior covariance of the spectra contains no flux. It depends only on the epochs,
+The posterior covariance of the spectra does not depend on the flux, only on the epochs,
 their phases, weights and the prior, so it can be computed for observations not yet taken.
-Planned epochs carry a placeholder flux of exactly 1.0, so a planned dataset passed to a
+Planned epochs have a placeholder flux of exactly 1.0, so a planned dataset passed to a
 fit by mistake returns featureless spectra rather than plausible ones. The forecast below
-uses the twelve epochs in hand plus six more spread over one period, with the fitted orbit
-and ML-II smoothness.""",
+uses the twelve observed epochs plus six more spread over one period, with the fitted
+orbit and ML-II smoothness.""",
     ),
     (
         PY,
@@ -317,12 +319,13 @@ fig, _ = ab.plot_forecast(fc)""",
         """\
 ## Not shown here
 
-Omitted to keep the notebook small, each with a runnable example in the repository:
+The following are omitted to keep the notebook small. Each has a runnable example in the
+repository:
 
 - the SB1 faint-companion scan and its calibrated detection limit
   ([`examples/02_k2_scan.py`](https://github.com/tjayasinghe/albireo/blob/main/examples/02_k2_scan.py),
   [`examples/05_detection_limit.py`](https://github.com/tjayasinghe/albireo/blob/main/examples/05_detection_limit.py));
-- the nebular component, where unmodelled contamination reaches the masses and not only
+- the nebular component, where unmodelled contamination affects the masses and not only
   the line depths
   ([`examples/04_nebular.py`](https://github.com/tjayasinghe/albireo/blob/main/examples/04_nebular.py));
 - the free per-epoch RV table for systems with no known period
@@ -337,7 +340,7 @@ the design reasoning is in `internal/design.md` and `docs/math.md`.""",
 ]
 
 # stderr fragments that describe the executing kernel rather than albireo. Anything
-# matching is dropped from the saved outputs; everything else on stderr is kept, so that
+# matching is dropped from the saved outputs. Everything else on stderr is kept, so that
 # a warning raised by the package appears on the rendered page.
 ENVIRONMENT_NOISE = (
     "IProgress not found",
@@ -380,8 +383,8 @@ def strip_environment_noise(nb: nbformat.NotebookNode) -> int:
 def quantize_pngs(nb: nbformat.NotebookNode) -> int:
     """Flatten inline PNGs onto white and quantize to a 256-color palette.
 
-    The result is visually identical for line plots and roughly a third the bytes. The
-    flattening onto white matters because matplotlib's inline figures have a transparent
+    The result is visually identical for line plots and roughly a third the size.
+    Flattening onto white is needed because matplotlib's inline figures have a transparent
     background, on which the default black text is unreadable in a dark-themed viewer.
     """
     try:

@@ -1,12 +1,12 @@
-"""The line-spread width belongs to the exposure, not to the instrument name.
+"""The line-spread width is a property of the exposure, not of the instrument name.
 
 HARPS observes at R = 115,000 in its high-accuracy mode and at R = 80,000 in its
-high-efficiency mode, and both say ``INSTRUME = 'HARPS'``. On AI Phe six of 36 archival
-spectra were the second kind and were modelled at the first width for a month, because
-the reader read the right resolving power into ``RawSpectrum.resolving_power`` and
-``to_epoch`` then dropped it. These tests pin the repair: the width travels with the epoch,
-an instrument may be declared ``PER_EPOCH`` and is then modelled at each epoch's own width,
-and pooling two widths under one number is reported rather than silent.
+high-efficiency mode, and both record ``INSTRUME = 'HARPS'``. Six of the 36 archival
+spectra of AI Phe are of the second kind. They are modelled at the first width if
+``to_epoch`` drops the resolving power that the reader stores in
+``RawSpectrum.resolving_power``. These tests assert that the width is stored with the
+epoch, that an instrument may be declared ``PER_EPOCH`` and is then modelled at each
+epoch's own width, and that pooling two widths under one number emits a warning.
 """
 
 from __future__ import annotations
@@ -35,8 +35,8 @@ def two_modes(*, keyed: bool):
     """Four epochs of one spectrograph in two modes: widths 5 and 9 km/s.
 
     ``keyed=True`` files the modes under two instrument keys, which is the explicit
-    declaration; ``keyed=False`` files all four under one key, as an archive does, with
-    each epoch carrying its own width, as the reader records it.
+    declaration. ``keyed=False`` files all four under one key, as an archive does, and
+    each epoch has its own width, as the reader records it.
     """
     comps = [synthetic_deviation_spectrum(GRID, seed=s, margin=0.1) for s in (1, 2)]
     ds, _ = simulate_dataset(

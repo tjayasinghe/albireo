@@ -22,7 +22,7 @@ every equation here is intended to be covered by a test.
 | $`s_i \in \mathbb{R}^P`$ | component $`i`$ spectrum on the model grid (continuum-normalized) |
 | $`d_i = s_i - \mathbf{1}`$ | *deviation* spectrum (0 in the continuum; lines are negative dips) |
 | $`\theta`$ | all nonlinear parameters (orbit, light fractions, LSF, response, noise, prior hypers) |
-| $`y_j \in \mathbb{R}^{N_j}`$ | observed flux at epoch $`j`$, on its **native** wavelength grid |
+| $`y_j \in \mathbb{R}^{N_j}`$ | observed flux at epoch $`j`$, on its native wavelength grid |
 | $`w_j`$ | inverse variances; $`w = 0`$ encodes a masked pixel |
 
 Conventions:
@@ -32,8 +32,8 @@ Conventions:
 - **Frames:** data may be supplied in the topocentric (observed) or barycentric frame; the model
   handles either (§1.2). Internally all shifts compose additively in $`x`$.
 - All flux vectors are continuum-normalized. The linear model is formulated in deviation space
-  $`d_i`$, so that "no signal" is exactly the zero vector and edge padding of shift operators is
-  zeros, not continuum.
+  $`d_i`$, so that the absence of signal is exactly the zero vector and edge padding of shift
+  operators is zeros, not continuum.
 
 ---
 
@@ -51,7 +51,7 @@ with $`\Delta = \ln(1 + \delta v/c)`$ for a chosen pixel velocity width $`\delta
 the finest instrument pixel).
 
 A Doppler shift with radial velocity $`v`$ maps emitted to observed wavelength as
-$`\lambda_{\rm obs} = \lambda_{\rm em}(1+z)`$, i.e. a **translation** in $`x`$ by
+$`\lambda_{\rm obs} = \lambda_{\rm em}(1+z)`$, i.e. a translation in $`x`$ by
 
 ```math
 \xi(v) \;=\; \ln(1+z) \;=\;
@@ -62,9 +62,9 @@ $`\lambda_{\rm obs} = \lambda_{\rm em}(1+z)`$, i.e. a **translation** in $`x`$ b
 ```
 
 The relativistic form follows from $`1+z = \sqrt{(1+\beta)/(1-\beta)}`$ for purely radial motion,
-whose logarithm is $`\mathrm{artanh}\,\beta`$. It is the default for two reasons:
-(i) at $`|v| \sim 600\ \mathrm{km\,s^{-1}}`$ the classical form is wrong by
-$`\sim 0.6\ \mathrm{km\,s^{-1}}`$, far above the RV error budget; (ii)
+whose logarithm is $`\mathrm{artanh}\,\beta`$. It is the default for two reasons.
+(i) At $`|v| \sim 600\ \mathrm{km\,s^{-1}}`$ the classical form is wrong by
+$`\sim 0.6\ \mathrm{km\,s^{-1}}`$, far above the RV error budget. (ii)
 $`\mathrm{artanh}`$ is exactly antisymmetric, so shifts compose and invert exactly:
 $`\xi(-v) = -\xi(v)`$, and a barycentric correction is exact additive composition in $`x`$
 (velocity composition is not additive, log-shifts are).
@@ -85,14 +85,14 @@ corresponding scatter-add. $`\mathbf{T}(\delta)d`$ is differentiable in $`\delta
 \frac{\partial\,[\mathbf{T}(\delta)d]_p}{\partial \delta} = -\left(d_{i_p+1} - d_{i_p}\right),
 ```
 
-which is piecewise constant in $`\delta`$ with kinks at integer crossings. The *summed* gradient
-used by HMC is a sum of $`\mathcal{O}(P)`$ such terms whose breakpoints are all distinct, so the
-total log-density gradient is effectively smooth at realistic $`P`$; a cubic (4-tap) interpolant
-with $`C^1`$ gradients is a planned option behind a flag if this ever limits sampler performance.
+which is piecewise constant in $`\delta`$ with kinks at integer crossings. The gradient used by
+HMC is a sum of $`\mathcal{O}(P)`$ such terms whose breakpoints are all distinct, so the total
+log-density gradient is effectively smooth at realistic $`P`$. A cubic (4-tap) interpolant with
+$`C^1`$ gradients is a planned option if this limits sampler performance.
 
-**Resampling operators.** Data are *never* interpolated onto the model grid (that would
+**Resampling operators.** Data are never interpolated onto the model grid (that would
 correlate their noise and invalidate the diagonal noise model). Instead the model is projected
-onto each epoch's native grid by a static sparse operator $`\mathbf{R}_j`$. Two flavors:
+onto each epoch's native grid by a static sparse operator $`\mathbf{R}_j`$. It has two forms:
 
 - *Point interpolation* $`\mathbf{R}^{\rm interp}`$: linear interpolation weights (2 nonzeros/row),
   for quick tests.
@@ -118,8 +118,8 @@ v_{ij} = \gamma + K_i\left[\cos(\nu_j + \omega_i) + e\cos\omega_i\right],
 
 with true anomaly $`\nu_j`$ from Kepler's equation for mean anomaly
 $`M_j = 2\pi (t_j - T_{\rm p})/P_{\rm orb}`$. Both the $`T_{\rm p}`$ (periastron) and the
-$`T_0`$ (conjunction) parameterization are supported, and sampling in
-$`(\sqrt{e}\cos\omega, \sqrt{e}\sin\omega)`$ is used to behave well at low eccentricity. For SB3, a
+$`T_0`$ (conjunction) parameterization are supported, and sampling uses
+$`(\sqrt{e}\cos\omega, \sqrt{e}\sin\omega)`$, which is well behaved at low eccentricity. For SB3, a
 hierarchical outer orbit adds its contribution to the inner pair. The Kepler solver is a
 JAX-differentiable Newton iteration with a fixed iteration count (gradients via implicit
 differentiation).
@@ -154,102 +154,103 @@ log-$`\lambda`$ grid this is a stationary discrete convolution $`\mathbf{B}_j`$ 
 kernel truncated at $`\pm 4\sigma`$), consistent with a constant-resolving-power spectrograph.
 Because $`\mathbf{B}_j`$ is stationary on the same uniform grid, it commutes with $`\mathbf{T}`$
 (up to edges); it is applied after shifting, matching the physical picture in which the
-instrument acts in the observed frame. The v2 seam is open: a wavelength-dependent LSF
-is the banded non-stationary matrix $`K[m, c] = P[m,\, m - c + r]`$, in which each model pixel
-applies its own kernel row, realized from per-anchor kernels by linear interpolation in
-log-$`\lambda`$ (`operators.convolve_varying`; per-anchor Gaussian widths are the built-in
+instrument acts in the observed frame. The v2 extension point is implemented: a
+wavelength-dependent LSF is the banded non-stationary matrix
+$`K[m, c] = P[m,\, m - c + r]`$, in which each model pixel applies its own kernel row,
+realized from per-anchor kernels by linear interpolation in log-$`\lambda`$
+(`operators.convolve_varying`). Per-anchor Gaussian widths are the built-in
 parameterization, but the operator accepts arbitrary profile banks, including asymmetric
-ones). Two consequences follow. *Identifiability:* the commutation argument runs in both
+ones. Two consequences follow. *Identifiability:* the commutation argument applies in both
 directions, since a stationary kernel change is absorbed exactly by the free component
-spectra (reparameterize $`d \to \mathbf{B}'\mathbf{B}^{-1} d`$), so the marginal identifies only
-the *wavelength variation* of the LSF, and only through the epoch-dependent shifts that
-sample $`\sigma(\lambda)`$ at different observed wavelengths. Measured at gate scale, the
-absolute width level is prior-dominated: the flat profile was preferred over an injected ramp
-by ~3 nats under ML-II-style freedom, so fitted anchor widths are diagnostics rather than
-measurements. *Orbit relevance:* by the same argument a stationary LSF error of any shape
-cannot bias the orbit; only wavelength dependence can, and symmetric width variation only at
-second order, since a symmetric kernel moves no centroid. The first-order channel is
-wavelength-dependent *asymmetry*, whose epoch-coupled part enters as an apparent velocity
-perturbation $`\propto \lambda\, c'(\lambda)\, v(t)/c`$.
+spectra (reparameterize $`d \to \mathbf{B}'\mathbf{B}^{-1} d`$). The marginal therefore
+identifies only the wavelength variation of the LSF, and only through the epoch-dependent
+shifts that sample $`\sigma(\lambda)`$ at different observed wavelengths. Measured at
+acceptance-test scale, the absolute width level is prior-dominated: the marginal for the flat
+profile exceeded that for an injected ramp by ~3 nats under ML-II-style freedom. Fitted
+anchor widths are therefore diagnostics rather than measurements. *Orbit relevance:* by the
+same argument a stationary LSF error of any shape cannot bias the orbit. Only wavelength
+dependence can, and symmetric width variation only at second order, since a symmetric kernel
+moves no centroid. The first-order channel is wavelength-dependent asymmetry, whose
+epoch-coupled part enters as an apparent velocity perturbation
+$`\propto \lambda\, c'(\lambda)\, v(t)/c`$.
 
-The asymmetry channel is parameterized: per-anchor Gauss–Hermite $`h_3`$
+The asymmetry channel is parameterized by a per-anchor Gauss–Hermite $`h_3`$
 (`operators.gauss_hermite_kernel_traced`; van der Marel & Franx (1993) truncated at the
-first asymmetric term, $`|h_3| \le 0.2`$), imprinting a centroid-warp field
+first asymmetric term, $`|h_3| \le 0.2`$), which produces a centroid-warp field
 $`c(\lambda) \approx \sqrt{3}\, h_3(\lambda)\, \sigma`$. Its identifiability is worse
-than the width's, and measurably so. A free spectrum can represent any static warp
-outright: the closed loop injected an $`h_3`$ ramp of $`\mp 0.12`$ and the joint fit
-returned it flat (fitted $`|h_3| \lesssim 0.03`$) with the orbit unbiased, so the
-data-identified remainder is only the epoch-coupled sampling of the warp's gradient,
-$`\Delta c \approx c'(\lambda)\,\lambda\,(v(t) - v_\mathrm{bary}(t))/c`$. Magnitude at
-the HR 6819 configuration: $`|h_3| \sim 0.1`$ varying on the echelle-order scale
+than that of the width. A free spectrum can represent any static warp: in the closed-loop
+test an injected $`h_3`$ ramp of $`\mp 0.12`$ was returned flat by the joint fit (fitted
+$`|h_3| \lesssim 0.03`$) with the orbit unbiased. The data-identified remainder is therefore
+only the epoch-coupled sampling of the warp's gradient,
+$`\Delta c \approx c'(\lambda)\,\lambda\,(v(t) - v_\mathrm{bary}(t))/c`$. At
+the HR 6819 configuration, $`|h_3| \sim 0.1`$ varying on the echelle-order scale
 (~40 Å) gives $`c' \sim 0.025`$ km/s/Å and shifts of $`\pm 1.3`$ Å, i.e. ~30 m/s of
-epoch-coupled apparent-velocity modulation, two orders below the ~4 km/s of
-accumulated RV signature a 0.04 d period offset represents over that baseline. The
-*instrument-frame per-epoch* kernel realization (the pipeline's barycentric correction
-makes the true kernel epoch-dependent in the analysis frame, which a shared bank cannot
-express) is therefore not built: the channel it would add is bounded at the tens-of-m/s
-level. Fitted $`h_3`$ profiles are diagnostics; the
-orbit's response is the readout.
+epoch-coupled apparent-velocity modulation. This is two orders of magnitude below the
+~4 km/s of accumulated RV signature that a 0.04 d period offset represents over that
+baseline. The instrument-frame per-epoch kernel realization (the pipeline's barycentric
+correction makes the true kernel epoch-dependent in the analysis frame, which a shared bank
+cannot express) is therefore not implemented: the channel it would add is bounded at the
+tens-of-m/s level. Fitted $`h_3`$ profiles are diagnostics; the result of interest is the
+orbit's response.
 
 **Light fractions.** $`\ell_{ij} \ge 0`$ with $`\sum_i \ell_{ij} = 1`$ over the stellar components
 (continuum-normalized data), telluric fixed at $`\ell = 1`$. Constant per component by default;
 a per-epoch (eclipse) mode is also supported (§5.2 gives the reason).
 
-**Nebular emission.** Massive stars are born in H II regions, so their spectra carry
+**Nebular emission.** Massive stars are born in H II regions, so their spectra contain
 emission lines that belong to neither star. Three properties set the structure. The lines do
-not move with either component: they are at rest in the *barycentric* frame, the mirror of
+not move with either component: they are at rest in the barycentric frame, the reverse of
 the telluric convention. Their strength varies from exposure to exposure with seeing, slit
-losses and sky subtraction, while their *shape* does not. And nebular flux is added on top
-of the total stellar continuum rather than taken out of it, so its amplitude does not
-belong on the light-fraction simplex: with $`F_\star`$ the (normalized) stellar
-composite and $`n(\lambda)`$ the nebular line profile, the observed normalized flux is
-$`F_\star + a_j n`$, not a convex combination.
+losses and sky subtraction, while their shape does not. Nebular flux is added on top
+of the total stellar continuum, so its amplitude does not belong on the light-fraction
+simplex. With $`F_\star`$ the (normalized) stellar composite and $`n(\lambda)`$ the nebular
+line profile, the observed normalized flux is $`F_\star + a_j n`$, not a convex combination.
 
-All three are expressible without leaving the affine family: the nebular component is one
+All three are expressible within the affine family: the nebular component is one
 more column of $`\mathbf{A}`$ with $`\delta_{\mathrm{neb},j} = \xi(v_\mathrm{neb})`$ (minus
 $`\xi(v_{\mathrm{bary},j})`$ for topocentric data) and $`\ell_{\mathrm{neb},j} = a_j`$ free. It
-is therefore rank-one time variation, a fixed shape with a free per-epoch scale, which
-is the same structure Tier 3's variable-disc component generalizes, and the reason that
-generalization stays inside the linear-Gaussian family.
+is therefore rank-one time variation, a fixed shape with a free per-epoch scale. Tier 3's
+variable-disc component generalizes this structure, which is why that generalization stays
+inside the linear-Gaussian family.
 
-Two exact degeneracies come with it, and both are resolved by convention rather than by data.
+The component introduces two exact degeneracies, both resolved by convention rather than by
+data.
 
 1. **Scale.** Only the products $`a_j d_\mathrm{neb}`$ are observable, so $`(c\,a_j,\,
    d_\mathrm{neb}/c)`$ is the same fit for every $`c > 0`$. The spectral prior breaks it only
    weakly, leaving a nearly flat, unbounded direction that is worse for sampling than an
-   unbroken one. albireo pins the geometric mean, $`\prod_j a_j = 1`$, by centering the
-   log-amplitude site (`inference.nebular_amplitudes`). What the data then constrain is the
-   epoch-to-epoch variation; the level lives in $`d_\mathrm{neb}`$.
+   unbroken one. albireo fixes the geometric mean, $`\prod_j a_j = 1`$, by centering the
+   log-amplitude site (`inference.nebular_amplitudes`). The data then constrain the
+   epoch-to-epoch variation, and the level is absorbed into $`d_\mathrm{neb}`$.
 2. **Velocity.** The nebular shift is the same at every epoch (barycentric data) or differs
-   only by $`\xi(v_\mathrm{bary})`$ (topocentric), and a constant shift of a *free* spectrum is
+   only by $`\xi(v_\mathrm{bary})`$ (topocentric). A constant shift of a free spectrum is
    the reparameterization $`d \to \mathbf{T}(\delta)d`$, so $`v_\mathrm{neb}`$ is not identified,
-   for the same reason $`\gamma`$ is not (§5.3). It survives as a parameter only because it
-   sets *where on the model grid* the component's lines land, which matters as soon as the
+   for the same reason $`\gamma`$ is not (§5.3). It is kept as a parameter only because it
+   sets the position of the component's lines on the model grid, which matters when the
    prior confines the component to windows (§2): the windows and the shift must agree.
 
-Omitting the component has a measured cost. In the closed loop of
-`tests/test_nebular.py`, an SB2 with $`K = (58, 41)`$ km/s whose H$`\beta`$ absorption carries a
-static nebular emission line of peak 0.45 varying $`\pm 30`$% per epoch, disentangling without
+The effect of omitting the component has been measured. The closed-loop test of
+`tests/test_nebular.py` uses an SB2 with $`K = (58, 41)`$ km/s whose H$`\beta`$ absorption contains
+a static nebular emission line of peak 0.45 varying $`\pm 30`$% per epoch. Disentangling without
 a nebular component raises the mean flux in the line core by $`+0.154`$ against a true depth of
-$`-0.506`$ (the recovered core bottoms out at $`-0.375`$, 26% shallower) and understates the
-H$`\beta`$ equivalent width by 11.5%. With the component the same
-numbers are $`+0.0015`$, $`-0.508`$, and 0.14%, and the marginal likelihood prefers it by
-$`8.1\times10^4`$ nats. An 11.5% error in a Balmer
-equivalent width is a large error in $`\log g`$, and it is systematic rather than random, so no
-reported uncertainty covers it.
+$`-0.506`$ (the recovered core reaches $`-0.375`$, 26% shallower) and underestimates the
+H$`\beta`$ equivalent width by 11.5%. With the component the same numbers are $`+0.0015`$,
+$`-0.508`$, and 0.14%, and the marginal likelihood is higher by $`8.1\times10^4`$ nats.
+An 11.5% error in a Balmer equivalent width is a large error in $`\log g`$, and it is
+systematic rather than random, so no reported uncertainty covers it.
 
 The orbit is affected more strongly. A static line is a component with $`K = 0`$, so a model
-with nowhere else to put it represents it with whichever star can be made to move least:
-fitting the same data jointly from a cold start without the component returns $`K_2 = 16.8`$
-against an injected 41.0 ($`-59`$%), a period long by 0.171 d, and a circular orbit reported at
-$`e = 0.95`$, which is the solver's clip rather than a fit, while $`K_1`$ survives at $`-1`$%
-because 70% of the light pins it. With the component:
-$`K_2 - 0.29`$%, $`\Delta P = -1.4\times10^{-4}`$ d, $`e = 0.0022`$. Nebular contamination therefore
-propagates into the dynamical answer (the masses) as well as the atmospheric one.
+with no such component represents it with whichever star can be made to move least.
+Fitting the same data jointly from a cold start without the component returns $`K_2 = 16.8`$
+against an injected 41.0 ($`-59`$%) and a period long by 0.171 d. The circular orbit is reported
+at $`e = 0.95`$, which is the solver's clipping limit rather than a fit. $`K_1`$ is recovered to
+$`-1`$% because 70% of the light constrains it. With the component the fit returns
+$`K_2 - 0.29`$%, $`\Delta P = -1.4\times10^{-4}`$ d, $`e = 0.0022`$. Nebular contamination
+therefore propagates into the dynamical results (the masses) as well as the atmospheric ones.
 
 **Response.** Per-epoch multiplicative Chebyshev polynomial on the native grid,
 $`r_j(\lambda) = \sum_{m=0}^{M} c_{jm}\,\phi_m(\lambda)`$ (default $`M=2`$), absorbing
-continuum-normalization errors. Coefficients live in $`\theta`$.
+continuum-normalization errors. The coefficients are part of $`\theta`$.
 
 ### 1.4 The stacked linear model
 
@@ -262,7 +263,7 @@ m_j(\theta, d) \;=\; \mathrm{diag}\big(r_j\big)\,
 \mathbf{R}_j \Big[\mathbf{1} + \sum_{i=1}^{N_c} \ell_{ij}\, \mathbf{B}_j\, \mathbf{T}(\delta_{ij})\, d_i \Big],
 ```
 
-and the property the rest of the document rests on is that, conditional on $`\theta`$, $`m_j`$ is
+and the rest of the document depends on the property that, conditional on $`\theta`$, $`m_j`$ is
 affine in the stacked deviation vector
 $`d = (d_1^\top,\dots,d_{N_c}^\top)^\top \in \mathbb{R}^{N_c P}`$:
 
@@ -276,7 +277,7 @@ $`\big[\ \mathrm{diag}(r_j)\mathbf{R}_j \mathbf{B}_j \mathbf{T}(\delta_{1j})\ \b
 \mathrm{diag}(r_j)\mathbf{R}_j \mathbf{B}_j \mathbf{T}(\delta_{N_c j})\ \big]`$ scaled by
 $`\ell_{ij}`$, and $`a_0 = \mathrm{diag}(r_j)\mathbf{R}_j \mathbf{1}`$ collects the continuum.
 Masked pixels have $`w=0`$ and drop out of every inner product below. An optional per-epoch
-noise-inflation ("jitter") factor $`\alpha_j`$ rescales $`w_j \to w_j/\alpha_j^2`$ and joins
+noise-inflation ("jitter") factor $`\alpha_j`$ rescales $`w_j \to w_j/\alpha_j^2`$ and is part of
 $`\theta`$ (`forward.with_jitter`, θ site `log_jitter`); §3.2a derives what profiling it
 estimates, and why it is not the same as rescaling by the residual scatter.
 
@@ -286,9 +287,9 @@ and segment-sums, each with an exact adjoint (tested against `jax.linear_transpo
 ### 1.4a Correlated noise: the AR(1) chain
 
 A pipeline that resamples spectra onto a common wavelength step correlates adjacent
-pixels. This is the mechanism the jitter site leaves standing: a rescaled diagonal model
-whitened the residual scale while relocating the orbit. The v1 correlated model keeps every
-term closed form: per epoch, the noise covariance of the standardized residual is AR(1)
+pixels. The jitter site does not address this mechanism: a rescaled diagonal model
+whitened the residual scale while shifting the orbit. The v1 correlated model keeps every
+term in closed form: per epoch, the noise covariance of the standardized residual is AR(1)
 in native-pixel index,
 
 ```math
@@ -302,45 +303,45 @@ correlates; $`\phi = 0`$ is exactly the diagonal model. Two facts make this exac
 cheap:
 
 1. **A subset of a Markov chain is Markov.** The observed (unmasked) pixels form a
-   chain whose consecutive pairs, an index distance $`g`$ apart, carry correlation
+   chain whose consecutive pairs, an index distance $`g`$ apart, have correlation
    $`\rho = \phi^{g}`$, so masking introduces no approximation. Links are capped at
    `ar1_max_gap` (short-range noise does not span a chip gap; the cap also bounds the
    bandwidth cost below), beyond which the chain restarts.
 2. **A chain's precision is tridiagonal in closed form.** With per-link
    $`a_k = \rho_k^2/(1-\rho_k^2)`$ and $`c_k = \rho_k/(1-\rho_k^2)`$, each link adds $`a_k`$
-   to *both* endpoints' diagonal and $`-c_k`$ to their off-diagonal pair, on top of the
-   identity; and
-   $`\log\det \mathbf{R}^{-1} = -\sum_{\rm links} \log(1-\rho_k^2)`$, so the marginal's
+   to both endpoints' diagonal and $`-c_k`$ to their off-diagonal pair, on top of the
+   identity. Since
+   $`\log\det \mathbf{R}^{-1} = -\sum_{\rm links} \log(1-\rho_k^2)`$, the marginal's
    noise-normalization term is
    $`\log\det \mathbf{W}_j = \sum_{\rm good}\log w - 2 n_j \log\alpha_j - \sum_{\rm links}\log(1-\rho_k^2)`$.
-   The determinant term is what makes $`\phi`$ identifiable rather than an unconstrained
+   The determinant term makes $`\phi`$ identifiable rather than an unconstrained
    scale factor, as it does for $`\alpha`$ (§3.2a).
 
 The whitener is the Markov factorization
 $`\tilde\varepsilon_k = (\varepsilon_k - \rho_k\,\varepsilon_{k-1})/\sqrt{1-\rho_k^2}`$
 (`data_residual_zscores` uses it when the problem is correlated). The discriminating
 diagnostic is the lag-1 autocorrelation rather than the residual scale: AR(1) noise has unit
-marginal variance, so a diagonal whitener still reports sd 1 while the residuals carry
+marginal variance, so a diagonal whitener still gives sd 1 while the residuals have
 autocorrelation $`\approx \phi`$.
 
 Two structural consequences follow, both static. $`\mathbf{A}^\top \mathbf{W} \mathbf{A}`$
 couples rebin rows up to `ar1_max_gap` apart, widening the half-bandwidth by the
 largest model-pixel offset between a stored link's row supports
-(`Problem.ar_bandwidth_extra`; `MarginalOrbitModel` reserves it behind its ``ar1``
-flag, the same declared-bandwidth convention used elsewhere). And the inner sandwich of
-the direct band assembly gains the chain's
-cross-row terms: each link contributes the symmetrized outer product
+(`Problem.ar_bandwidth_extra`; `MarginalOrbitModel` reserves it when its ``ar1``
+flag is set, the same declared-bandwidth convention used elsewhere). The inner sandwich of
+the direct band assembly also gains the chain's cross-row terms: each link contributes the
+symmetrized outer product
 $`-c_k \sqrt{w_n w_p}\, r_n r_p (\mathbf{R}_n^\top \mathbf{R}_p + \mathbf{R}_p^\top \mathbf{R}_n)`$
-of two *different* rebin rows, carried by static link pair tables (§4.5a), so the
-correlated marginal stays on the band path; comb probing remains the reference
+of two different rebin rows, evaluated through static link pair tables (§4.5a). The
+correlated marginal therefore stays on the band path, and comb probing remains the reference
 implementation.
 
 ---
 
 ## 2. Priors on the component spectra
 
-The deviation spectra carry independent Gaussian priors,
-$`d_i \sim \mathcal{N}(0, \boldsymbol\Lambda_i^{-1})`$, specified by **banded precision**
+The deviation spectra have independent Gaussian priors,
+$`d_i \sim \mathcal{N}(0, \boldsymbol\Lambda_i^{-1})`$, specified by banded precision
 matrices rather than by dense kernels. A dense covariance over $`P`$ model pixels does not scale
 to survey-sized grids, which is the limiting cost of the dense Gaussian-process formulation
 used by PSOAP (Czekala et al. 2017):
@@ -358,7 +359,7 @@ where $`\mathbf{D}_2`$ is the second-difference operator. Interpretation:
   These are the directions of the low-frequency separation degeneracy (§5.1), so they
   must be proper: the weak ridge $`\eta_i`$ anchors them to the continuum ($`d_i = 0`$) with a
   large but finite variance. The choice sets the scale of the low-frequency uncertainty
-  explicitly rather than leaving it implicit.
+  explicitly.
 
 Hyperparameters $`\tau_i, \eta_i`$ are part of $`\theta`$: they can be fixed, optimized (ML-II, at
 no extra cost, since the marginal likelihood is already computed), or sampled. The prior mean
@@ -366,7 +367,7 @@ is $`0`$ in deviation space; emission-line components need no special treatment.
 
 $`\log\det\boldsymbol\Lambda_i`$ is cheap (banded Cholesky, bandwidth 2).
 
-**Per-pixel strengths.** Both weights may carry a static per-pixel profile:
+**Per-pixel strengths.** Both weights may have a static per-pixel profile:
 
 ```math
 \boldsymbol\Lambda_i \;=\; \mathbf{D}_2^\top
@@ -375,12 +376,12 @@ $`\log\det\boldsymbol\Lambda_i`$ is cheap (banded Cholesky, bandwidth 2).
 ```
 
 with row $`k`$ of $`\mathbf{D}_2`$ (which spans pixels $`k, k{+}1, k{+}2`$) taking the profile
-value of its *center* pixel, so a profile is indexed like the spectrum it regularizes. The
-scalars stay separate from the profiles so that ML-II is unchanged: a profile says
-*where* a component may deviate from the continuum, the scalar says *how much*. An
+value of its center pixel, so a profile is indexed like the spectrum it regularizes. The
+scalars stay separate from the profiles so that ML-II is unchanged: a profile sets
+where a component may deviate from the continuum, and the scalar sets by how much. An
 inferred $`(\tau_i, \eta_i)`$ therefore replaces only the scalars and keeps the profiles the
-model was constructed with. The pentadiagonal entries generalize without new structure. Writing $`t_k`$ for the row
-weights and reading $`t`$ as zero outside $`[0, P{-}3]`$,
+model was constructed with. The pentadiagonal entries generalize without new structure.
+Writing $`t_k`$ for the row weights and reading $`t`$ as zero outside $`[0, P{-}3]`$,
 
 ```math
 \Lambda_{aa} = t_a + 4t_{a-1} + t_{a-2} + e_a, \qquad
@@ -389,24 +390,23 @@ weights and reading $`t`$ as zero outside $`[0, P{-}3]`$,
 ```
 
 which reduces to the Toeplitz form (6, $`-4`$, 1 with the usual boundary corrections) at
-uniform weight, and feeds the same $`O(P)`$ determinant recursion (§4.5) and the same band
+uniform weight, and is passed to the same $`O(P)`$ determinant recursion (§4.5) and the same band
 assembly.
 
 The motivating use is confinement. A nebular component (§1.3) has structure only at a
-handful of known lines, and $`p^\eta = 10^6`$ away from them states that: the prior standard
+few known lines, and $`p^\eta = 10^6`$ away from them imposes this. The prior standard
 deviation there is $`10^{-3}`$ of the in-window value, which is negligible against any line
-and leaves the precision better conditioned than before, not worse. The constraint is soft:
-a hard zero would require different linear algebra, and it would remove the model's ability
-to report a disagreement with the assumed windows. The mechanism is not
-nebular-specific; interstellar bands, or any component known a priori to be line-poor, take
-the same treatment.
+and leaves the precision better conditioned than before. The constraint is soft: a hard zero
+would require different linear algebra, and it would remove the model's ability to report a
+disagreement with the assumed windows. The mechanism is not nebular-specific; interstellar
+bands, or any component known a priori to be line-poor, take the same treatment.
 
 ---
 
 ## 3. Marginalizing the spectra analytically
 
 Conditional on $`\theta`$, the model is linear-Gaussian in $`d`$,
-so $`d`$ integrates out in closed form and the sampler sees only the low-dimensional
+so $`d`$ integrates out in closed form and the sampler evaluates only the low-dimensional
 $`p(y\,|\,\theta)`$.
 
 ### 3.1 Derivation
@@ -461,27 +461,26 @@ $`\tilde{\boldsymbol\Lambda} = \mathbf{L}\mathbf{L}^\top`$:
 $`b^\top\tilde{\boldsymbol\Lambda}^{-1}b = \|\mathbf{L}^{-1}b\|^2`$ and
 $`\log\det\tilde{\boldsymbol\Lambda} = 2\sum_k \log L_{kk}`$.
 
-Two guards keep this evaluation honest when the prior is far stiffer than the data term. By
+Two guards keep this evaluation valid when the prior is far stiffer than the data term. By
 the Woodbury identity the bracketed quadratic is
 $`\tilde y^\top(\mathbf{W}^{-1} + \mathbf{A}\boldsymbol\Lambda^{-1}\mathbf{A}^\top)^{-1}\tilde y`$,
 whose matrix is positive definite over the unmasked pixels, so the difference is nonnegative
-for any data and a negative value is a destroyed evaluation rather than a fit. It is destroyed
-by the same ratio in both terms of the marginal: the pivot of the pentadiagonal Cholesky
+for any data and a negative value is a numerical failure rather than a fit. The same ratio
+causes the failure in both terms of the marginal. The pivot of the pentadiagonal Cholesky
 recursion for $`\log\det\boldsymbol\Lambda`$ is a difference of like-sized quantities and
-rounds to zero below $`\eta_i/\tau_i \approx 10^{-13}`$, and past it the assembled
-$`\tilde{\boldsymbol\Lambda}`$ is prior-dominated as well: at the ratio
+rounds to zero below $`\eta_i/\tau_i \approx 10^{-13}`$. Past that ratio the assembled
+$`\tilde{\boldsymbol\Lambda}`$ is prior-dominated as well. At the ratio
 $`\eta_i/\tau_i \approx 10^{-17}`$ that an ML-II fit reached on a survey-scale benchmark, its
-largest Cholesky pivot stood five orders of magnitude above the data term, so the forward
-substitution $`\mathbf{L}^{-1}b`$ loses every significant digit and $`\|\mathbf{L}^{-1}b\|^2`$
-can come out above $`\tilde y^\top\mathbf{W}\tilde y`$. Unguarded,
-that reports itself as an arbitrarily large *improvement*, which a line search will accept;
-the ML-II fit of §7.3 reaches the region on its own, because the interior optimum in
-$`\tau_i`$ is broad and nothing bounds $`\eta_i`$ from below. The first guard returns
-$`\log p = -\infty`$ whenever the bracketed quadratic is negative or undefined, on the valid
-branch leaving the value and its gradient unchanged. The second keeps the optimizer and the
-sampler out of the region altogether: the model of §7.1 adds a $`-\infty`$ factor whenever
-$`\log\tau_i - \log\eta_i > 30`$ for any component, a ratio the defaults start about six
-hyperprior standard deviations inside.
+largest Cholesky pivot was five orders of magnitude above the data term. The forward
+substitution $`\mathbf{L}^{-1}b`$ then loses every significant digit, and
+$`\|\mathbf{L}^{-1}b\|^2`$ can exceed $`\tilde y^\top\mathbf{W}\tilde y`$. Without a guard
+this appears as an arbitrarily large improvement, which a line search accepts. The ML-II fit
+of §7.3 reaches the region because the interior optimum in $`\tau_i`$ is broad and nothing
+bounds $`\eta_i`$ from below. The first guard returns $`\log p = -\infty`$ whenever the
+bracketed quadratic is negative or undefined, and leaves the value and its gradient unchanged
+on the valid branch. The second keeps the optimizer and the sampler out of the region: the
+model of §7.1 adds a $`-\infty`$ factor whenever $`\log\tau_i - \log\eta_i > 30`$ for any
+component. The defaults start about six hyperprior standard deviations inside that limit.
 
 ### 3.2 Relation to profile likelihood + Laplace
 
@@ -495,7 +494,7 @@ $`\theta`$-dependence of the $`\log\det`$ biases the parameters that
 change the information geometry (light ratios, LSF widths, prior hyperparameters), so
 strategy C is used for quick looks only.
 
-### 3.2a What profiling the jitter estimates
+### 3.2a The estimator obtained by profiling the jitter
 
 The marginal gives the noise-inflation factor of §1.4 a different denominator from the one a
 direct residual calculation gives. Take one shared $`\alpha`$ for clarity, so
@@ -511,7 +510,7 @@ p_{\text{eff}} = \mathrm{tr}\big[\tilde{\boldsymbol\Lambda}^{-1}\mathbf{A}^\top\
 ```
 
 $`p_{\text{eff}}`$ being the usual effective number of parameters (prior-dominated directions
-carry no $`\alpha`$ dependence and drop out). With $`\chi^2_0 = \hat r^\top\mathbf{W}_0\hat r`$,
+have no $`\alpha`$ dependence and drop out). With $`\chi^2_0 = \hat r^\top\mathbf{W}_0\hat r`$,
 setting $`\partial_{\log\alpha} = 0`$ gives
 
 ```math
@@ -520,9 +519,9 @@ setting $`\partial_{\log\alpha} = 0`$ gives
 
 the degrees-of-freedom-corrected variance estimate. Whitening the residuals and reading off
 their standard deviation instead estimates $`\chi^2_0/N`$, low by $`\sqrt{1 - p_{\text{eff}}/N}`$.
-The Occam term is doing the same work here that it does for $`(\tau,\eta)`$ in §5.1.
+The Occam term has the same role here as for $`(\tau,\eta)`$ in §5.1.
 
-The size of the correction varies by run and is set by $`p_{\text{eff}}`$, *not* the
+The size of the correction varies by run and is set by $`p_{\text{eff}}`$, not the
 nominal parameter count $`N_c P`$. An oversampled model grid with a
 fitted smoothness prior has far fewer data-determined modes than pixels: on HR 6819,
 $`p_{\text{eff}} \approx 2900`$ against $`N_c P = 19{,}876`$, roughly the number of resolution
@@ -531,10 +530,10 @@ $`p_{\text{eff}}`$ at no extra cost, $`p_{\text{eff}} = N\,[1 - (\text{residual 
 a diagnostic of how much of the spectrum the data constrain that is otherwise awkward to
 obtain.
 
-What the jitter does not provide: $`\mathbf{W}`$ stays diagonal, so a jitter can only rescale a
-residual, never decorrelate one. Against systematics such as continuum errors, LSF mismatch or
+The jitter leaves $`\mathbf{W}`$ diagonal, so it can rescale a residual but cannot
+decorrelate one. Against systematics such as continuum errors, LSF mismatch or
 intrinsically variable line profiles, $`\hat\alpha`$ widens the intervals around an unchanged,
-still-biased point estimate, and it removes the residual-scale diagnostic while doing so.
+still-biased point estimate, and it removes the residual-scale diagnostic.
 
 ### 3.3 Recovering the spectra and their uncertainties
 
@@ -561,15 +560,15 @@ output.
 
 ### 3.4 Gradients
 
-NUTS needs $`\nabla_\theta \log p(y|\theta)`$. All terms are compositions of JAX primitives, so
+NUTS requires $`\nabla_\theta \log p(y|\theta)`$. All terms are compositions of JAX primitives, so
 reverse-mode AD applies end-to-end, including through the Cholesky factorization (the
 $`\log\det`$ gradient $`\tfrac12\,\mathrm{tr}(\tilde{\boldsymbol\Lambda}^{-1}\partial\tilde{\boldsymbol\Lambda})`$
-emerges automatically). Two engineering notes:
+is obtained automatically). Two engineering notes:
 
 - The banded/block factorization is a `lax.scan`; reverse-mode memory is controlled with
   checkpointing (`jax.checkpoint` per scan block).
-- If AD through the factorization ever dominates, a custom VJP using the Jacobi formula with
-  the Takahashi selected inverse computes the same gradient with one extra banded sweep.
+- If AD through the factorization dominates the cost, a custom VJP using the Jacobi formula
+  with the Takahashi selected inverse computes the same gradient with one extra banded sweep.
 
 ---
 
@@ -594,7 +593,7 @@ for banded $`\mathbf{M}`$ is banded around the offset diagonal $`\delta' - \delt
 - **Diagonal blocks** ($`i = i'`$): offset $`0`$ for every epoch → half-bandwidth $`\approx m`$.
 - **Off-diagonal blocks**: offsets range over the epoch-by-epoch relative shifts, so the union
   is a band of half-width $`b_{ii'} = \max_j |\delta_{ij} - \delta_{i'j}| + m`$, set by the
-  **relative RV excursion**: for an SB2, $`b \approx (K_1+K_2)(1+e)/\delta v + m`$ pixels.
+  relative RV excursion: for an SB2, $`b \approx (K_1+K_2)(1+e)/\delta v + m`$ pixels.
 
 Interleaving the component index gives a single banded matrix of dimension $`N_c P`$ and
 half-bandwidth $`p \approx N_c\,(\max_{ii'} b_{ii'} + 1)`$. It is near-block-Toeplitz: it would
@@ -628,11 +627,11 @@ solves and $`\log\det`$ from the same sweep. Cost $`\approx K \cdot \mathcal{O}(
 and much less for typical SB2s (at $`K_1+K_2 \lesssim 150\ \mathrm{km\,s^{-1}}`$ or
 $`\delta v = 2\ \mathrm{km\,s^{-1}}`$, cost drops by $`\sim 10\times`$). Assembling the band of
 $`\mathbf{A}^\top\mathbf{W}\mathbf{A}`$ is $`\mathcal{O}(J N_c^2 P (m + \text{taps}))`$ via
-shifted-product accumulation, which is subdominant. Two orthogonal levers batch this further:
+shifted-product accumulation, which is subdominant. Two independent forms of batching apply:
 `vmap` over independent wavelength chunks (echelle orders and natural mask gaps make chunks
 exactly independent; otherwise chunking is an explicit, benchmarked approximation) and
 `vmap` over systems (survey mode). NUTS with $`\sim 10^3`$–$`10^4`$ gradient evaluations then
-falls within the minutes-on-one-GPU budget of the definition of done.
+meets the design requirement of minutes on one GPU.
 
 ### 4.3 Strategy B: matrix-free CG + stochastic log-det
 
@@ -641,11 +640,12 @@ $`\mathcal{O}(J N_c P)`$ per matvec), solve $`\tilde{\boldsymbol\Lambda}\hat d =
 preconditioned CG (circulant/Toeplitz preconditioner from the epoch-averaged stationary
 operator, applied by FFT), and estimate $`\log\det`$ by stochastic Lanczos quadrature.
 Assessment: the matvec is cheap, but hundreds of CG iterations times the number of probes
-generally lose to Strategy A at the bandwidths of interest, and SLQ log-det estimates are
-biased and stochastic. They are usable inside MAP optimization, but they violate the
+generally cost more than Strategy A at the bandwidths of interest, and SLQ log-det estimates
+are biased and stochastic. They are usable inside MAP optimization, but they violate the
 exactness NUTS requires (a noisy log-density is not a valid target; pseudo-marginal MCMC needs
-unbiased *likelihood*, not log-likelihood, estimates). Role: fallback for pathological
-bandwidths (extreme $`K_1+K_2`$, very fine grids), and cross-validation of Strategy A.
+unbiased estimates of the likelihood, not of the log-likelihood). Role: fallback for
+pathological bandwidths (extreme $`K_1+K_2`$, very fine grids), and cross-validation of
+Strategy A.
 
 ### 4.4 Strategy C: profile likelihood with frozen log-det
 
@@ -654,15 +654,15 @@ $`\log\det\tilde{\boldsymbol\Lambda}`$ at a reference $`\theta_0`$ (or dropping 
 biases light ratios, LSF and hyperparameter inference. Role: fast MAP quick-look and
 initialization only, never final inference.
 
-**Decision:** implement A as the default engine; B behind the same interface for benchmarks;
-C powers `fit_map(quick=True)`. The A-vs-B crossover is measured on the design-target
+**Decision:** implement A as the default engine and B behind the same interface for benchmarks;
+C is used by `fit_map(quick=True)`. The A-vs-B crossover is measured on the design-target
 benchmark and recorded in `docs/benchmarks.md`.
 
 ### 4.5 Direct band assembly and the closed-form gradient
 
 The engine assembles the band of $`\tilde{\boldsymbol\Lambda}`$ directly from its analytic
 per-epoch structure (the shifted-product accumulation of §4.2). Comb probing ($`2p+1`$
-applications of the matrix-free operator, paying for the union of all epochs' band offsets)
+applications of the matrix-free operator, a count set by the union of all epochs' band offsets)
 is kept as the reference implementation and validation oracle.
 
 **Per-epoch band structure.** The data term is
@@ -677,7 +677,7 @@ $`\mathbf{W}'_j = \mathrm{diag}(w_j r_j^2)`$. Its $`(i,i')`$ component block for
 ```
 
 and $`\mathbf{G}_j`$ is a band of half-width $`(s-1) + 2r`$ (rebin row support $`s`$, kernel
-radius $`r`$) *independent of the velocities*: the T-sandwich only translates the band to
+radius $`r`$) independent of the velocities: the T-sandwich only translates the band to
 the offset $`\lfloor\delta_{ij}\rfloor - \lfloor\delta_{i'j}\rfloor`$ and mixes adjacent
 entries with the interpolation tent weights. Column $`q`$ of $`\mathbf{T}(\delta)`$
 has exactly two entries, at rows $`q + \lfloor\delta\rfloor`$ (weight $`1-\mathrm{frac}\,\delta`$)
@@ -688,27 +688,26 @@ static *pair tables* precomputed from the rebin sparsity; (ii) the kernel sandwi
 unrolled diagonal-shifted accumulations on the band image; (iii) translation + tent
 mixing + accumulation into a global band tensor. A wavelength-dependent kernel
 keeps stage (ii)'s structure with the scalar taps replaced by row-shifted profile
-columns, $`K[c+d,\,c] = P[c+d,\, r-d]`$. Only *left* applications $`\mathbf{K}^\top
+columns, $`K[c+d,\,c] = P[c+d,\, r-d]`$. Only left applications $`\mathbf{K}^\top
 \mathbf{M}`$ broadcast on a row-major band image, since a right application's taps vary along
-the columns, so the second application runs against the band-transpose of the first,
+the columns. The second application therefore runs against the band-transpose of the first,
 using the symmetry of $`\mathbf{G}`$:
 $`\mathbf{G} = \mathbf{K}^\top (\mathbf{K}^\top \mathbf{H})^\top`$. That costs one band
 transpose (a static column-slice shuffle) per epoch, at the same width and flop count. Cost
 per epoch is $`\mathcal{O}(P \cdot w)`$ with $`w = 2(s + 2r) + \mathcal{O}(1)`$, against probing's
 $`\mathcal{O}(p)`$ operator applications, an order of magnitude at survey bandwidths
-($`w \sim 50`$, $`2p+1 \sim 10^3`$), with identical results up to floating-point summation
+($`w \sim 50`$, $`2p+1 \sim 10^3`$). The results are identical up to floating-point summation
 order (regression-tested; the `validate` path checks the assembled matrix against the
 matrix-free operator directly).
 
 Because $`\mathbf{G}_j`$ does not depend on the velocities, stage (ii) is a pre-pass over
 epochs rather than part of the accumulation body. How many epochs it covers at once
-(`epoch_chunk`) is a memory choice only: `vmap` batches every intermediate of the
-chain, so covering all of them costs ~9 GB at the design target, while any partition
-costs exactly one extra $`\mathbf{G}`$ pass in the rematerialized backward regardless of
-its granularity. The default keeps the whole pre-pass live below a threshold and
-batches above it.
+(`epoch_chunk`) is a memory choice only. `vmap` batches every intermediate of the chain, so
+covering all of them costs ~9 GB at the design target. Any partition costs exactly one extra
+$`\mathbf{G}`$ pass in the rematerialized backward pass, regardless of its granularity. The
+default keeps the whole pre-pass in memory below a threshold and batches above it.
 
-The prior determinant needs no factorization at all: $`\boldsymbol\Lambda_p`$ is block
+The prior determinant needs no factorization: $`\boldsymbol\Lambda_p`$ is block
 diagonal over components and pentadiagonal within each, so
 $`\log\det\boldsymbol\Lambda_p = 2\sum_i \log c_i`$ from the three-term banded Cholesky
 recursion $`a_i = \alpha_i/c_{i-2}`$, $`b_i = (\beta_i - a_i b_{i-1})/c_{i-1}`$,
@@ -733,12 +732,12 @@ u = \tilde{\boldsymbol\Sigma}\,\bar g_{\hat d}.
 ```
 
 Because every perturbation of $`\tilde{\boldsymbol\Lambda}`$ is block-tridiagonal, only the
-banded part of $`\tilde{\boldsymbol\Sigma}`$ is ever contracted, which is what the block
-Takahashi recursion delivers ($`\Sigma_{k+1,k} = -\Sigma_{k+1,k+1}W_k`$,
+banded part of $`\tilde{\boldsymbol\Sigma}`$ is contracted, which is the part the block
+Takahashi recursion provides ($`\Sigma_{k+1,k} = -\Sigma_{k+1,k+1}W_k`$,
 $`\Sigma_{kk} = L_{kk}^{-\top}L_{kk}^{-1} + W_k^\top\Sigma_{k+1,k+1}W_k`$,
-$`W_k = L_{k+1,k}L_{kk}^{-1}`$). Cross-block cotangents carry a factor 2 (the stored lower
-block represents both triangles); the within-block cotangent is left *unsymmetrized*,
-which is exact end-to-end because `diag[k]` stores both triangles of a symmetric block
+$`W_k = L_{k+1,k}L_{kk}^{-1}`$). Cross-block cotangents have a factor 2 (the stored lower
+block represents both triangles). The within-block cotangent is left unsymmetrized. This
+is exact end-to-end because `diag[k]` stores both triangles of a symmetric block
 and the band packing reads each entry exactly once, so mirrored entries receive the two
 halves of $`u\hat d^\top + \hat d u^\top`$ separately and sum to the same parameter
 gradient. Each $`\Sigma`$ block is contracted at the step of the recursion that produces
@@ -746,44 +745,43 @@ it (`solver.selected_inverse_cotangent`), so the selected inverse is never mater
 ($`2K-1`$ blocks, 3.1 GB at the design target); `selected_inverse_blocks` remains as
 the reference form and test oracle. Gradient contract: gradients flow through the
 log-likelihood, the quadratic form, and $`\hat d`$. The Cholesky factor is not an output of the
-custom-VJP stage, because a cotangent on it cannot be honoured by this
-rule: propagating one is the reverse pass through the factorization that the
-rule exists to avoid. `MarginalResult` rebuilds it outside the boundary, where plain
-autodiff applies. Verified against plain autodiff to $`10^{-13}`$ relative and by finite
-differences.
+custom-VJP stage, because this rule cannot propagate a cotangent on it: doing so is the
+reverse pass through the factorization that the rule exists to avoid. `MarginalResult`
+rebuilds it outside the boundary, where plain autodiff applies. The gradient is verified
+against plain autodiff to $`10^{-13}`$ relative and by finite differences.
 
 **Grid boundaries.** $`\mathbf{G}`$ is a matrix on the model grid, so entry $`(x,y)`$ exists
 only for $`y \in [0, n)`$. $`\mathbf{H} = \mathbf{R}^\top\mathbf{W}'\mathbf{R}`$ is exactly
-zero outside the grid (no rebin pairs there), but the $`\mathbf{K}`$ convolutions smear
-in-grid mass *outward*, populating band-image entries at absolute columns that do not
+zero outside the grid (no rebin pairs there), but the $`\mathbf{K}`$ convolutions spread
+in-grid mass outward, populating band-image entries at absolute columns that do not
 correspond to grid pixels. The T-sandwich reads column $`c + \lfloor\delta_j\rfloor + b`$,
 which leaves the grid whenever an epoch's shift places a component's support against an
 edge; $`T(\delta_j)`$ has no row there, so the contribution is zero. Those columns
-are therefore masked once per group. (Left unmasked this cost $`6\times10^{-4}`$ relative
-in the assembled matrix and $`2\times10^{-7}`$ in $`\log p`$ for data spanning the grid;
-with any margin between data and grid edge the weights vanish there and the effect is
-absent.)
+are therefore masked once per group. (Left unmasked, they caused an error of
+$`6\times10^{-4}`$ relative in the assembled matrix and $`2\times10^{-7}`$ in $`\log p`$ for
+data spanning the grid; with any margin between data and grid edge the weights vanish there
+and the effect is absent.)
 
 **Second derivatives.** Hessians are taken reverse-over-reverse
-(`jacrev(jacrev(...))`), which is exact here *because* the forward rule recomputes its
-primal inline: the second reverse pass then walks plain graphs instead of re-entering
-the custom boundary, where the un-propagated Cholesky cotangent would silently lose the
-factor-mediated second-order terms (measured $`8\times10^{-3}`$ relative before that fix;
-equal to plain autodiff at $`10^{-15}`$ after). Forward mode applied directly to the
-marginal is not available, since JAX rejects `jvp` of a `custom_vjp` function, whereas
-`jax.hessian` is forward-over-*reverse* and does run, since the inner `jacrev` resolves
-the custom boundary first. It nonetheless produces an appreciably asymmetric Hessian
-on this stack, and does so on the plain-autodiff path too, so the cause is the solver
-scans rather than the custom rule; reverse-over-reverse matches central finite
+(`jacrev(jacrev(...))`), which is exact here because the forward rule recomputes its
+primal inline. The second reverse pass then traverses plain graphs instead of re-entering
+the custom boundary, where the un-propagated Cholesky cotangent would silently omit the
+factor-mediated second-order terms. The resulting error was measured at $`8\times10^{-3}`$
+relative; with the inline primal the result equals plain autodiff at $`10^{-15}`$. Forward
+mode applied directly to the marginal is not available, since JAX rejects `jvp` of a
+`custom_vjp` function. `jax.hessian` is forward-over-reverse and does run, since the inner
+`jacrev` resolves the custom boundary first. It nonetheless produces an appreciably
+asymmetric Hessian on this stack, and does so on the plain-autodiff path too, so the cause
+is the solver scans rather than the custom rule. Reverse-over-reverse matches central finite
 differences of the gradient to 8 digits where forward-over-reverse does not.
 `laplace_inverse_mass` uses reverse-over-reverse.
 
-There are two custom boundaries: the band accumulate of §4.5 carries its own `custom_vjp`
+There are two custom boundaries: the band accumulate of §4.5 has its own `custom_vjp`
 (`assembly._band_accumulate`), because reverse mode otherwise rebuilds the entire band
-tensor to reproduce its own input. Everything above still holds, since the forward rule
+tensor to reproduce its own input. The statements above still hold, since the forward rule
 recomputes its primal inline for the same reason and `jax.hessian` still runs because the
-inner `jacrev` resolves both boundaries, but the loss of forward mode is package-wide rather
-than confined to the solve stage. albireo therefore contains no `jax.jvp`:
+inner `jacrev` resolves both boundaries. The loss of forward mode, however, is package-wide
+rather than confined to the solve stage. albireo therefore contains no `jax.jvp`:
 `forecast._effective_parameters` is a `jax.grad` of the same scalar-to-scalar function,
 returning the identical `p_eff`.
 
@@ -802,23 +800,23 @@ so per epoch
 
 where $`d^{\rm chain} = 1 + \sum_{\text{links at pixel}} a_k`$ is the chain diagonal and
 $`(n, p)`$ are the link's endpoint rows. The diagonal part reuses the diagonal pair tables
-with a re-weighted per-pixel vector; the cross-row part gets its own static tables
+with a re-weighted per-pixel vector; the cross-row part has its own static tables
 (`operators.rebin_link_pair_tables`). For every realized link (the union over
 epochs of `ar_gap[e, n] == g`, since masks differ by epoch) and every ordered entry
-pair of the two rows, the product $`v_1 v_2`$ lands on the upper band entry
-$`(\min(c_1, c_2), |c_1 - c_2|)`$; the two orderings supply the two transposes, and
+pair of the two rows, the product $`v_1 v_2`$ is added to the upper band entry
+$`(\min(c_1, c_2), |c_1 - c_2|)`$. The two orderings supply the two transposes, and
 coincide on the diagonal, where the value is doubled instead. Per epoch the increment
-is one `segment_sum` whose traced weights carry $`\phi`$, $`\alpha`$, and $`r`$, and the gap
+is one `segment_sum` whose traced weights depend on $`\phi`$, $`\alpha`$, and $`r`$, and the gap
 test `ar_gap[e, link_row] == link_gap` selects each epoch's own links against the
 shared union tables. $`\mathbf{H}`$ widens by the group's static `ar_step` (the largest
 model-pixel offset between a realized link's row supports, the same quantity
-`Problem.ar_bandwidth_extra` reserves), and every downstream stage is untouched: the
+`Problem.ar_bandwidth_extra` reserves). Every downstream stage is unchanged: the
 $`\mathbf{K}`$ convolutions, the T-sandwich, the band accumulation, and the custom-VJP
-solve see only a slightly wider velocity-independent band image. This restores the full
+solve receive only a slightly wider velocity-independent band image. This restores the full
 band-path cost profile for correlated problems, measured at HR-window scale: eval
 $`7.2\times`$, gradient $`19\times`$ faster than probing, gradient peak memory
 $`23.7 \to 1.9`$ GiB (benchmarks.md). Comb probing remains the reference path and
-the `validate` oracle; band $`=`$ probe $`=`$ dense LAPACK is pinned in
+the `validate` oracle; band $`=`$ probe $`=`$ dense LAPACK is asserted in
 `tests/test_ar1.py`.
 
 ---
@@ -853,26 +851,26 @@ difference mode, expanding at small $`k`$:
 \lambda_-(k) \approx \tfrac{J k^2}{2}\,\mathrm{Var}_j(\Delta).
 ```
 
-So the noise amplification of the separation is
+The noise amplification of the separation is therefore
 
 ```math
 \sigma_-(k) \;\propto\; \frac{1}{k\,\sqrt{J\,\mathrm{Var}_j(\Delta)}} ,
 ```
 
-diverging as $`k\to0`$, with $`k=0`$ exactly singular. **Interpretation:** spectral features
-narrower than the RMS *differential* orbital shift separate cleanly; features broader than it
-cannot be attributed to either star from the data alone. This is the low-frequency
-"undulation" artifact familiar from the output of KOREL (Hadrava 1995) and fd3: not a
-numerical artifact of those codes, but the nullspace of the problem, excited by noise.
-Consequences for the design:
+diverging as $`k\to0`$, with $`k=0`$ exactly singular. Spectral features narrower than the
+RMS differential orbital shift separate cleanly; features broader than it cannot be
+attributed to either star from the data alone. This is the low-frequency "undulation"
+artifact familiar from the output of KOREL (Hadrava 1995) and fd3. It is the nullspace of
+the problem, excited by noise, and not a numerical artifact of those codes. Consequences for
+the design:
 
-1. The prior (§2) makes these directions proper and *sets their scale explicitly* ($`\eta_i`$).
-2. The posterior covariance of §3.3 *reports* the inflation instead of hiding it.
-3. $`\mathrm{Var}_j(\Delta)`$ is an **observing-strategy diagnostic**: albireo exposes
+1. The prior (§2) makes these directions proper and sets their scale explicitly ($`\eta_i`$).
+2. The posterior covariance of §3.3 reports the inflation.
+3. $`\mathrm{Var}_j(\Delta)`$ is an observing-strategy diagnostic: albireo exposes
    $`\lambda_-(k)`$ forecasts from planned epochs (`sensitivity_forecast`, §5.5), which show
-   which phase sampling improves separation quality. §5.5 also records
-   where $`\mathrm{Var}_j(\Delta)`$ on its own ranks designs incorrectly, which is why
-   the exact covariance is computed alongside it rather than in place of it.
+   which phase sampling improves separation quality. §5.5 also records where
+   $`\mathrm{Var}_j(\Delta)`$ alone ranks designs incorrectly, which is why the exact
+   covariance is computed alongside it.
 4. Per-epoch response polynomials absorb the per-epoch near-constant modes;
    their order is kept low (default 2) so that they cannot absorb real broad features, and the
    response–low-$`k`$ covariance is visible in the posterior.
@@ -880,9 +878,9 @@ Consequences for the design:
 ### 5.2 Light ratio ↔ line depth
 
 With constant light fractions the composite is $`1 + \sum_i \ell_i\,\mathbf{T}_{ij} d_i`$: the
-likelihood depends on the *products* $`\ell_i d_i`$ only. Therefore $`(\ell_i, d_i)`$ are exactly
+likelihood depends on the products $`\ell_i d_i`$ only. Therefore $`(\ell_i, d_i)`$ are exactly
 degenerate along $`\ell_i \to \ell_i/\alpha`$, $`d_i \to \alpha d_i`$: the data cannot measure the
-continuum light ratio, only each star's *contribution* to the composite lines. The degeneracy
+continuum light ratio, only each star's contribution to the composite lines. The degeneracy
 is broken only by:
 
 1. **Per-epoch light variation** (eclipses): $`\ell_{ij}`$ varying with known or parameterized
@@ -890,19 +888,19 @@ is broken only by:
    light fractions are supported directly.
 2. **External photometric priors** on $`\ell_i`$ (from light-curve solutions or SED fits).
 3. **Physicality floor**: $`s_i \ge 0 \Rightarrow \ell_i d_i \ge -\ell_i`$; a deep line in the
-   composite bounds $`\ell_i`$ from below by the depth of that star's own contribution. The
-   bound is real rather than nominal: over the 66 disentangled components of the D63
-   benchmark's oracle tier it is never violated and recovers a median 0.61 of the true
-   fraction, which brackets a near-equal pair to about a factor two. It is **not imposed**
-   anywhere in the package, and it is a bound to report beside a declared light rather than
-   a check on one, because a wrong declared $`\ell`$ is absorbed by reshaping $`d_i`$ within
-   the physical range rather than by driving it out (2 of 66 orbit-tier and blind-tier runs),
-   and it weakens on exactly the components whose lines the disentangling failed to recover.
+   composite bounds $`\ell_i`$ from below by the depth of that star's own contribution. Over
+   the 66 disentangled components of the D63 benchmark's oracle tier the bound is never
+   violated and recovers a median 0.61 of the true fraction, which brackets a near-equal pair
+   to about a factor two. It is not imposed anywhere in the package. It is a bound to report
+   beside a declared light fraction rather than a check on one, for two reasons. A wrong
+   declared $`\ell`$ is absorbed by reshaping $`d_i`$ within the physical range rather than by
+   driving it out (2 of 66 orbit-tier and blind-tier runs). The bound also weakens on the
+   components whose lines the disentangling failed to recover.
 4. **Fixing $`\ell`$** by assumption.
 
-The API requires an explicit choice rather than a default. The façade takes option 4:
-`Star(light=)` is required per star, the stellar fractions must sum to 1, and the value is
-repeated in an `Assumed, not measured` block on every summary. The low-level path also
+The API requires an explicit choice rather than a default. The `Disentangler` interface takes
+option 4: `Star(light=)` is required per star, the stellar fractions must sum to 1, and the
+value is repeated in an `Assumed, not measured` block on every summary. The low-level path also
 accepts option 1 directly, `light` being `(n_epochs, n_stellar)` rather than `(n_stellar,)`
 and inferrable under Dirichlet priors, which is how an eclipse or an external photometric
 prior (option 2) enters. There is no dedicated declaration for options 2 and 3.
@@ -911,41 +909,42 @@ prior (option 2) enters. There is no dedicated declaration for options 2 and 3.
 
 A change $`\gamma \to \gamma + \epsilon`$ composed with translating every $`d_i`$ by
 $`-\xi(\epsilon)`$ leaves the likelihood invariant (up to grid edges), and the stationary priors
-of §2 are translation-invariant too, so $`\gamma`$ is unidentified by disentangling itself
-(a property of all disentangling methods, inherited from the physics). Default:
-$`\gamma \equiv 0`$; recovered spectra live in the systemic frame, and $`\gamma`$ is measured
-afterwards by template cross-correlation *of the disentangled spectra*, outside the sampler.
+of §2 are translation-invariant too. Disentangling alone therefore does not identify $`\gamma`$
+(a property of all disentangling methods, inherited from the physics). The default is
+$`\gamma \equiv 0`$: recovered spectra are in the systemic frame, and $`\gamma`$ is measured
+afterwards by template cross-correlation of the disentangled spectra, outside the sampler.
 Rest-frame information from another source allows $`\gamma`$ to be freed with an informative
 prior. $`K_i`$, $`e`$, $`\omega`$, $`P_{\rm orb}`$, $`T_{\rm p}`$ are unaffected.
 
-### 5.4 Degeneracy ledger
+### 5.4 Summary of degeneracies
 
 | Degeneracy | Exact/approx | Broken by | albireo policy |
 |---|---|---|---|
-| low-$`k`$ mode exchange between components | exact at $`k=0`$, $`\propto 1/k`$ | phase coverage ($`\mathrm{Var}\,\Delta`$), priors | proper priors; covariance reported; forecast tool (§5.5) returns it as the leading eigenvector, at ~1× the prior for *every* design |
+| low-$`k`$ mode exchange between components | exact at $`k=0`$, $`\propto 1/k`$ | phase coverage ($`\mathrm{Var}\,\Delta`$), priors | proper priors; covariance reported; forecast tool (§5.5) returns it as the leading eigenvector, at ~1× the prior for every design |
 | $`\ell_i`$ vs. line depth | exact (constant $`\ell`$) | eclipses, photometry, saturation floor, assumption | `Star(light=)` required per star, fractions summing to 1; per-epoch `light` and Dirichlet priors on the low-level path; the saturation floor is not imposed |
 | $`\gamma`$ vs. common shift | exact up to edges | external rest-frame info | $`\gamma \equiv 0`$ default, post-hoc measurement |
 | per-epoch constants vs. response | approx | low poly order | order $`\le 2`$ default, covariance reported |
 | telluric constant vs. common stellar constant | exact up to edges | ridge anchors ($`\eta`$) on both | measured in the telluric closed loop: the two offsets cancel in the sum to $`\lesssim 10^{-3}`$; report both |
-| LSF width vs. intrinsic line widths | near-exact per instrument | cross-instrument spectrum sharing | absolute widths need a *reference instrument* anchor (tight prior); only relative widths are data-identified (benchmarks.md) |
-| nebular amplitude scale vs. nebular spectrum | exact ($`a_j \to c\,a_j`$, $`d \to d/c`$) | nothing; it is a convention | geometric mean pinned to 1 by centering `log_nebular_amp` (§1.3) |
-| nebular velocity vs. common shift of *its* spectrum | exact up to edges (the §5.3 argument, one component at a time) | nothing on barycentric data | `nebular_v_kms` is a *placement* choice; it must agree with the prior's line windows and is not a measurement |
+| LSF width vs. intrinsic line widths | near-exact per instrument | cross-instrument spectrum sharing | absolute widths need a reference instrument anchor (tight prior); only relative widths are data-identified (benchmarks.md) |
+| nebular amplitude scale vs. nebular spectrum | exact ($`a_j \to c\,a_j`$, $`d \to d/c`$) | nothing; it is a convention | geometric mean fixed to 1 by centering `log_nebular_amp` (§1.3) |
+| nebular velocity vs. common shift of its spectrum | exact up to edges (the §5.3 argument, one component at a time) | nothing on barycentric data | `nebular_v_kms` is a placement choice; it must agree with the prior's line windows and is not a measurement |
 
-**Telluric constant exchange:** with $`\sum_i \ell_i = 1`$
-and a telluric component of light fraction 1, adding a constant $`a`$ to the telluric
-deviation while subtracting $`a`$ from *every* stellar deviation changes no epoch's
-prediction (constants are shift-invariant away from the grid edges), giving a second exact
-$`k = 0`$ mode, split only by the $`\eta`$ ridges. **LSF ↔ intrinsic widths:** for one
-instrument a wider Gaussian kernel composed with intrinsically narrower lines is
-observationally near-identical (Gaussian widths add in quadrature), so a template-free
-model cannot measure an absolute LSF width; empirically, ML-II with all widths free
-inflates them by tens of percent while leaving the orbit untouched. Multiple
-instruments *sharing the same spectra* identify the width differences; the absolute
-scale must come from one instrument whose LSF is known.
+**Telluric constant exchange:** with $`\sum_i \ell_i = 1`$ and a telluric component of light
+fraction 1, adding a constant $`a`$ to the telluric deviation while subtracting $`a`$ from
+every stellar deviation changes no epoch's prediction (constants are shift-invariant away
+from the grid edges). This gives a second exact $`k = 0`$ mode, split only by the $`\eta`$
+ridges.
+
+**LSF ↔ intrinsic widths:** for one instrument a wider Gaussian kernel composed with
+intrinsically narrower lines is observationally near-identical (Gaussian widths add in
+quadrature), so a template-free model cannot measure an absolute LSF width. Empirically,
+ML-II with all widths free inflates them by tens of percent while leaving the orbit
+unchanged. Multiple instruments sharing the same spectra identify the width differences; the
+absolute scale must come from one instrument whose LSF is known.
 
 ### 5.5 Forecasting a design
 
-§5.1 is a statement about the *design*, not about the data, and that generalizes exactly.
+§5.1 is a statement about the design, not about the data, and it generalizes exactly.
 The posterior precision of the stacked spectra,
 
 ```math
@@ -955,35 +954,36 @@ The posterior precision of the stacked spectra,
 is built from the epoch times (through the velocities, hence the shifts $`\delta_{ij}`$), the
 per-pixel weights, the masks, the LSF kernels, the light fractions, the response and the
 prior. No flux appears in it. The fluxes enter the marginal likelihood only through
-$`b = \mathbf{A}^\top\mathbf{W}z`$ and $`z^\top\mathbf{W}z`$, which move the posterior *mean*
+$`b = \mathbf{A}^\top\mathbf{W}z`$ and $`z^\top\mathbf{W}z`$, which change the posterior mean
 and the evidence, not the covariance $`\boldsymbol\Sigma = \tilde{\boldsymbol\Lambda}^{-1}`$.
-So $`\boldsymbol\Sigma`$ is computable for observations that have not happened, given only
-their times, their instrument, and an assumed orbit. `albireo.forecast.sensitivity_forecast`
-is that computation; `plan_epochs` builds the epochs to hand it.
+$`\boldsymbol\Sigma`$ is therefore computable for observations that have not been made, given
+only their times, their instrument, and an assumed orbit.
+`albireo.forecast.sensitivity_forecast` performs that computation; `plan_epochs` builds the
+epochs passed to it.
 
 Three summaries follow, each an exact quantity rather than an estimate.
 
 **Pointwise band.** $`\sqrt{\mathrm{diag}\,\boldsymbol\Sigma}`$, by the same Takahashi
 selected-inversion sweep as §3.3, quoted against
 $`\sqrt{\mathrm{diag}\,\boldsymbol\Lambda_p^{-1}}`$. The second is reported because
-a band that has relaxed back onto the prior is otherwise indistinguishable from one the data
+a band that has reverted to the prior is otherwise indistinguishable from one the data
 constrained.
 
 **Worst-determined modes.** The largest eigenpairs of $`\boldsymbol\Sigma`$, by subspace
 iteration on the banded factor, which is the end of the spectrum a factorization does not
 provide directly. The leading eigenvector is §5.1's degeneracy in its exact, non-asymptotic
-form, and gives the shape of the error the disentangled spectra will carry. Two
-coordinate sets are projected out first. The solver's pad block is the
-identity, so its coordinates are eigenvectors with eigenvalue exactly 1. And the model grid
-is made wider than the data (§1.1, the shift-plus-kernel margin), so its margin
-pixels are prior-only and carry the largest eigenvalue on essentially every real problem;
-left in, the worst-determined mode would report how much margin the grid was given.
+form, and gives the shape of the error the disentangled spectra will have. Two coordinate
+sets are projected out first. The solver's pad block is the identity, so its coordinates are
+eigenvectors with eigenvalue exactly 1. The model grid is made wider than the data (§1.1,
+the shift-plus-kernel margin), so its margin pixels are prior-only and have the largest
+eigenvalue on essentially every real problem. If they were left in, the worst-determined
+mode would describe only the grid margin.
 
 **Constrained degrees of freedom.** $`p_{\rm eff} = \mathrm{tr}[\boldsymbol\Sigma\,
 \mathbf{A}^\top\mathbf{W}\mathbf{A}]`$, the same quantity §3.2a profiles the jitter against.
 It comes from one directional derivative rather than a stochastic trace estimator: scaling
 every epoch's noise by $`\alpha \to \alpha e^{t}`$ sends $`\mathbf{A}^\top\mathbf{W}\mathbf{A}
-\to e^{-2t}\mathbf{A}^\top\mathbf{W}\mathbf{A}`$ and leaves $`\boldsymbol\Lambda_p`$ alone, so
+\to e^{-2t}\mathbf{A}^\top\mathbf{W}\mathbf{A}`$ and leaves $`\boldsymbol\Lambda_p`$ unchanged, so
 
 ```math
 \left.\frac{\mathrm{d}}{\mathrm{d}t}\log\det\!\left(\boldsymbol\Lambda_p + e^{-2t}\mathbf{A}^\top\mathbf{W}\mathbf{A}\right)\right|_{t=0}
@@ -997,18 +997,18 @@ model the prior-predictive expectation of $`\mathrm{KL}(p(d|y)\,\|\,p(d))`$ is e
 \mathbb{E}\,\mathrm{KL} \;=\; \tfrac12\left(\log\det\tilde{\boldsymbol\Lambda} - \log\det\boldsymbol\Lambda_p\right),
 ```
 
-the data-free half of §3.1's marginal likelihood, and the Bayesian D-optimality criterion
+the data-free part of §3.1's marginal likelihood, and the Bayesian D-optimality criterion
 (Chaloner & Verdinelli 1995).
 
-**The idealized diagnostic, and how it misleads.** §5.1's closed form costs no linear algebra
-and is therefore what screens a hundred candidate cadences: with $`J`$ epochs and differential
+**Limits of the idealized diagnostic.** §5.1's closed form requires no linear algebra
+and can therefore screen a hundred candidate cadences. With $`J`$ epochs and differential
 log-shifts $`\Delta_j`$, separating the pair is noisier than measuring their sum by
 $`\sqrt{(J + |g(k)|)/(J - |g(k)|)}`$ with $`g(k) = \sum_j e^{\mathrm{i}k\Delta_j}`$. But
 $`\mathrm{Var}_j(\Delta)`$ is only the small-$`k`$ expansion of that, and maximizing it is
-not the same as optimizing the design. A cadence aliased to the orbital period visits the two
-*extreme* values of $`\Delta`$ repeatedly: it maximizes the variance, and it leaves
-$`|g(k)| = J|\cos(k\,\Delta_{\rm sep}/2)|`$, which returns to $`J`$ at a whole comb of scales.
-Measured in `examples/08_forecast.py` on a 13.7 d circular SB2 with eight epochs in hand and
+not the same as optimizing the design. A cadence aliased to the orbital period samples the two
+extreme values of $`\Delta`$ repeatedly: it maximizes the variance, and it leaves
+$`|g(k)| = J|\cos(k\,\Delta_{\rm sep}/2)|`$, which returns to $`J`$ at a comb of scales.
+`examples/08_forecast.py` measures this on a 13.7 d circular SB2 with eight epochs in hand and
 twelve to plan:
 
 | twelve planned nights | RMS $`\Delta v`$ | blind fraction | 2nd mode $`\sigma`$ | information gain |
@@ -1021,45 +1021,45 @@ The aliased plan is best in the column the §5.1 expansion would maximize and wo
 other one. The exact covariance gives the ranking; the closed form explains it and screens
 candidates.
 
-**What is not forecastable.** The covariance of the orbit is not. Its Fisher information runs
-through $`\partial(\text{model})/\partial v \propto \ell_i d_i'`$, the derivative of the
-component spectrum, so an error bar on $`K_2`$ requires the line depths, which are what has not
-been measured. albireo therefore forecasts the spectra and not the orbit, rather than
-forecasting the orbit against an assumed template.
+**What is not forecastable.** The covariance of the orbit cannot be forecast. Its Fisher
+information depends on $`\partial(\text{model})/\partial v \propto \ell_i d_i'`$, the derivative
+of the component spectrum, so an error bar on $`K_2`$ requires the line depths, which have not
+been measured. albireo therefore forecasts the spectra, and does not forecast the orbit against
+an assumed template.
 
 ---
 
 ## 6. SB1 + faint companion mode ($`K_2`$ scan)
 
 This is the dormant-compact-object workflow. Given an SB1 solution (fixed $`P_{\rm orb}, e, \omega,
-T_{\rm p}, K_1`$; primary spectrum either fixed from a single-component fit or left free), scan
-a grid of trial $`K_2`$ (optionally × light fraction $`\ell_2`$): for each trial, the secondary
-deviation spectrum $`d_2`$ is a linear component and marginalizes analytically, so the detection
+T_{\rm p}, K_1`$; primary spectrum either fixed from a single-component fit or left free), a grid
+of trial $`K_2`$ (optionally × light fraction $`\ell_2`$) is scanned. For each trial, the secondary
+deviation spectrum $`d_2`$ is a linear component and is marginalized analytically, so the detection
 statistic
 
 ```math
 D(K_2) = 2\left[\log p(y \,|\, K_2) - \log p(y \,|\, \text{no companion})\right]
 ```
 
-costs one linear solve per grid point. This is the matched
-filter *marginalized over the unknown companion spectrum*, more sensitive than a CCF
-grid search with an assumed template, and it returns the recovered companion spectrum
-$`\hat d_2`$ with its covariance at the peak. Because $`d_2`$'s prior scale enters, $`D`$ is calibrated
-empirically by injection–recovery (the same simulator) rather than by an asymptotic $`\chi^2`$
-claim; the null distribution is estimated, not assumed (§6.2).
+costs one linear solve per grid point. This is the matched filter marginalized over the unknown
+companion spectrum. It is more sensitive than a CCF grid search with an assumed template, and it
+returns the recovered companion spectrum $`\hat d_2`$ with its covariance at the peak. Because
+$`d_2`$'s prior scale enters, $`D`$ is calibrated empirically by injection–recovery (the same
+simulator) rather than by an asymptotic $`\chi^2`$ claim (§6.2).
 
 ### 6.1 Marginalizing $`K_1`$
 
-Holding $`K_1`$ at the SB1 value conditions the whole scan on a number that has an error bar,
-and the resulting bias does not stay in $`K_1`$: unremoved primary signal is *coherent* across
+Holding $`K_1`$ at the SB1 value conditions the scan on a number that has an error bar,
+and the resulting bias is not confined to $`K_1`$. Unremoved primary signal is coherent across
 epochs, and the companion's free spectrum is the only component that can absorb it. The
-symptom reported throughout the literature is spurious structure in the recovered secondary;
-the less often reported symptom is that $`D`$ increases while this happens, so the artifact
-reads as a stronger detection (measured in benchmarks.md: $`K_1`$ 10% high tripled $`D`$ and
-took the companion's recovered line pattern from 0.96 correlation with truth to 0.49).
+symptom reported throughout the literature is spurious structure in the recovered secondary.
+The less often reported symptom is that $`D`$ increases at the same time, so the artifact
+appears as a stronger detection. Measured in benchmarks.md, a $`K_1`$ 10% high tripled $`D`$
+and lowered the correlation of the companion's recovered line pattern with the injected one
+from 0.96 to 0.49.
 
 Integrating $`K_1`$ out removes the conditioning. With a Gaussian prior $`K_1 \sim
-\mathcal{N}(\mu_1, \sigma_1^2)`$, both models are marginalized over the *same* prior,
+\mathcal{N}(\mu_1, \sigma_1^2)`$, both models are marginalized over the same prior,
 
 ```math
 D(K_2) = 2\left[\log \sum_a w_a\, p(y \,|\, K_1^{(a)}, K_2)
@@ -1069,23 +1069,21 @@ D(K_2) = 2\left[\log \sum_a w_a\, p(y \,|\, K_1^{(a)}, K_2)
 with $`\{K_1^{(a)}, w_a\}`$ a Gauss–Hermite rule, $`K_1^{(a)} = \mu_1 + \sqrt2\,\sigma_1 x_a`$ and
 $`w_a = \tilde w_a/\sqrt\pi`$, exact for polynomials of degree $`\le 2n-1`$, and the same
 quadrature family the LSF's $`h_3`$ already uses (§1.3). Using the same prior in numerator and
-denominator keeps $`D`$ a ratio of two marginal likelihoods rather than a comparison of
-differently-conditioned ones. The cost is a factor $`n`$ in solves, so the scan is evaluated
-as one batched `lax.map` over the $`(K_1, K_2)`$ grid rather than a Python loop.
+denominator keeps $`D`$ a ratio of two marginal likelihoods. The cost is a factor $`n`$ in
+solves, so the scan is evaluated as one batched `lax.map` over the $`(K_1, K_2)`$ grid.
 
-The recovered spectra at the peak stay *conditional* on the best node
-($`\hat K_1 = \arg\max_a \log p(y | K_1^{(a)}, \hat K_2)`$), a profile rather than a marginal:
-there is no closed form for the $`K_1`$-marginalized spectrum, and averaging the nodes'
+The recovered spectra at the peak remain conditional on the best node
+($`\hat K_1 = \arg\max_a \log p(y | K_1^{(a)}, \hat K_2)`$), a profile rather than a marginal.
+There is no closed form for the $`K_1`$-marginalized spectrum, and averaging the nodes'
 spectra would blur the lines instead of widening their error bars.
 
 ### 6.2 Calibrating $`D`$
 
 $`D`$ has no closed-form null distribution. Wilks' theorem does not apply, because the companion
-is a boundary hypothesis whose nuisance parameter is a prior-regularized *function*, so the
+is a boundary hypothesis whose nuisance parameter is a prior-regularized function, so the
 effective degrees of freedom depend on $`(\tau_2, \eta_2)`$, on the epoch sampling, and on the
-masks. albireo therefore measures the distribution instead of assuming one, by parametric
-bootstrap through the observed data's own operators: with $`z = y - r(R\mathbf 1)`$ the only
-place the fluxes enter,
+masks. albireo therefore measures the distribution by parametric bootstrap through the observed
+data's own operators. The fluxes enter only through $`z = y - r(R\mathbf 1)`$, so the draw
 
 ```math
 z'_j = r_j \odot \big(R_j B_j \textstyle\sum_i \ell_{ij} T(\delta_{ij}) d_i\big) + n_j,
@@ -1100,27 +1098,27 @@ completeness, and the crossing at 95% is the quoted limit.
 
 Two properties are enforced. The threshold is the smallest $`D`$ whose
 estimated false-alarm probability $`(1 + \#\{{\rm null} \ge D\})/(N+1)`$ is within budget, so
-the realized null exceedance never exceeds the nominal rate; an interpolating sample
-quantile does not have that property and errs in the anti-conservative direction. And no FAP
-below $`1/(N+1)`$ is reported: with finitely many trials, an absence of comparable null values
-is evidence for a small rate rather than for a zero rate.
+the realized null exceedance never exceeds the nominal rate. An interpolating sample
+quantile does not have that property and errs in the anti-conservative direction. No FAP
+below $`1/(N+1)`$ is reported, because with finitely many trials an absence of comparable null
+values is evidence for a small rate rather than for a zero rate.
 
 The procedure does not check the model. The null trials are drawn at the same $`K_1`$,
 orbit and light fractions the scan assumes, so the threshold is self-consistent with those
-assumptions and insensitive to their being wrong, which is why §6.1 accompanies it.
+assumptions and insensitive to their being wrong. The procedure is therefore used with §6.1.
 
 Implementation notes (`albireo.scan.k2_scan`): the no-companion model is the
-single-component fit with $`\ell_1 = 1`$ and the primary's prior; the companion's light
+single-component fit with $`\ell_1 = 1`$ and the primary's prior, and the companion's light
 fraction $`\ell_2`$ must be chosen explicitly (§5.2: the observable is $`\ell_2 d_2`$).
-Because both log-marginals carry their $`\tfrac12\log\det`$ Occam terms, the extra
-marginalized component lowers the likelihood unless coherent signal compensates for it: on a
+Because both log-marginals include their $`\tfrac12\log\det`$ Occam terms, the extra
+marginalized component lowers the likelihood unless coherent signal compensates for it. On a
 companion-free dataset $`D(K_2)`$ is negative at every trial (measured in the closed-loop
 test), which is the expected baseline for the empirical calibration. One caveat is
-inherited from §5.1: at small $`\ell_2`$ the companion's smooth envelope (continuum level,
+inherited from §5.1. At small $`\ell_2`$ the companion's smooth envelope (continuum level,
 mean line blanketing) is prior-dominated, since an error $`\Delta`$ in the bright primary's
 envelope maps to $`-(\ell_1/\ell_2)\Delta`$ in the companion, an amplification of ~10 at
-$`\ell_2 = 0.1`$, so the recovered $`\hat d_2`$ carries its line *pattern* rather than a
-reliable absolute depth scale, unless eclipses or photometry pin the envelope.
+$`\ell_2 = 0.1`$. The recovered $`\hat d_2`$ therefore gives the companion's line pattern but
+not a reliable absolute depth scale, unless eclipses or photometry constrain the envelope.
 
 ---
 
@@ -1140,7 +1138,7 @@ b_{\rm bound} = \left\lceil \xi(v_{\rm rel}^{\max})/\Delta x \right\rceil + 1 + 
 ```
 
 with $`r_B`$ the LSF kernel radius and $`s_R`$ the rebin row support (§4.1). Probing with any
-$`b \ge b_{\rm true}`$ is exact, so the bound costs time rather than accuracy. The failure mode
+$`b \ge b_{\rm true}`$ is exact, so the bound affects run time and not accuracy. The failure mode
 is an underestimate: comb probing then aliases band entries and the likelihood is silently
 wrong. The sampler is therefore protected by a bandwidth guard: the numpyro model
 computes the realized $`\max_{j,i,i'} |\delta_{ij} - \delta_{i'j}|`$ and adds a $`-\infty`$
@@ -1149,33 +1147,33 @@ budget slows mixing near the boundary but cannot corrupt the posterior.
 
 ### 7.2 Parameterization
 
-Sampled sites: $`P`$, $`T_{\rm conj}`$, $`(\sqrt{e}\cos\omega, \sqrt{e}\sin\omega)`$, and
+The sampled sites are $`P`$, $`T_{\rm conj}`$, $`(\sqrt{e}\cos\omega, \sqrt{e}\sin\omega)`$, and
 $`K_i`$ (γ ≡ 0 by §5.3). The $`\sqrt{e}`$-pair is smooth through $`e = 0`$, where $`\omega`$
 and $`T_{\rm peri}`$ are undefined, and a uniform prior on the unit disk maps to
-$`e \sim \mathcal{U}(0,1)`$, $`\omega \sim \mathcal{U}(-\pi,\pi)`$; the disk constraint enters
+$`e \sim \mathcal{U}(0,1)`$, $`\omega \sim \mathcal{U}(-\pi,\pi)`$. The disk constraint enters
 as a $`-\infty`$ factor with $`e`$ clipped at $`e_{\max} = 0.95`$ (the Kepler solver's verified
 range) before the solve, so out-of-support proposals stay finite and rejectable. The single
 non-smooth point is the origin $`\sqrt{e}\cos\omega = \sqrt{e}\sin\omega = 0`$ (an
-`arctan2` branch point of measure zero); circular-orbit initializations should sit slightly
+`arctan2` branch point of measure zero). Circular-orbit initializations should be slightly
 off it. $`T_{\rm conj}`$ (the §1.2 convention $`\nu + \omega = \pi/2`$) replaces $`T_{\rm peri}`$,
-which degenerates with $`\omega`$ as $`e \to 0`$.
+which becomes degenerate with $`\omega`$ as $`e \to 0`$.
 
-One smoothness caveat: with linear (2-tap) shift interpolation, $`A(\theta)`$ is
+One caveat concerns smoothness. With linear (2-tap) shift interpolation, $`A(\theta)`$ is
 piecewise-linear in each shift, so $`\log p(y\mid\theta)`$ is piecewise-$`C^1`$ in the
 velocities with derivative kinks where a shift crosses an integer pixel. On an oversampled
 model grid the kink amplitudes are set by sub-pixel spectral curvature and are far below
-the posterior scale; NUTS (Hoffman & Gelman 2014) treats them as it treats any
-leapfrog-scale roughness. The 4-tap
-cubic kernel (opt-in, flagged) is the smoothing upgrade if a dataset ever exposes them.
+the posterior scale. NUTS (Hoffman & Gelman 2014) treats them as it treats any
+leapfrog-scale roughness. The 4-tap cubic kernel (opt-in, flagged) is the smoother
+alternative if a dataset is sensitive to them.
 
 ### 7.3 Hyperparameters: ML-II by default
 
-The prior scales $`(\tau_i, \eta_i)`$ control exactly the part of spectrum space the data
+The prior scales $`(\tau_i, \eta_i)`$ control the part of spectrum space the data
 cannot constrain (§5.1: sub-LSF modes, low-$`k`$ anchoring), so they must be chosen
-explicitly rather than defaulted. Because the spectra are already integrated out,
+explicitly. Because the spectra are already integrated out,
 maximizing the marginal posterior jointly over $`(\theta, \log\tau, \log\eta)`$ is ML-II
 or empirical Bayes (up to weak hyperpriors that keep the optimization proper). The MAP
-pipeline does this with L-BFGS in numpyro's unconstrained space; NUTS then runs with the
+pipeline does this with L-BFGS in numpyro's unconstrained space. NUTS then runs with the
 hyperparameters conditioned at their ML-II values (default), or samples them, trading the
 usual mild underestimation of hyperparameter uncertainty for extra
 dimensions. Both are supported, and the choice is recorded in the fit metadata. The marginal
@@ -1185,10 +1183,11 @@ determinant.
 
 ### 7.4 Posterior spectra
 
+The posterior is
 $`p(d \mid y) = \int p(d \mid y, \theta)\, p(\theta \mid y)\, d\theta`$, a mixture of the
 §3.3 conditional Gaussians over posterior $`\theta`$ draws. Draws propagate orbital
-uncertainty into the spectra; the pointwise bands from a single $`\hat\theta`$ (§3.3) are the
-*conditional* uncertainty only. Both are exposed and documented as different objects.
+uncertainty into the spectra. The pointwise bands from a single $`\hat\theta`$ (§3.3) are the
+conditional uncertainty only. Both are exposed and documented as different objects.
 
 ### 7.5 Realism extensions in θ
 
@@ -1204,85 +1203,85 @@ v_B = v^{\rm in}(t;\, \omega_{\rm in} + \pi, K_2) + v^{\rm out}(t;\, \omega_{\rm
 v_C = v^{\rm out}(t;\, \omega_{\rm out} + \pi, K_C),
 ```
 
-with the light-time effect across the outer orbit neglected (v2 seam; relevant only for
-$`P_{\rm out}`$ measured to seconds). Sites: the five outer analogues
+with the light-time effect across the outer orbit neglected (a v2 extension; relevant only for
+$`P_{\rm out}`$ measured to seconds). The sites are the five outer analogues
 (`period_out`, `t_conj_out`, `secosw_out`, `sesinw_out`, `k_out` $`= (K_{AB}, K_C)`$),
-same $`\sqrt{e}`$-disk parameterization and constraint, with the outer conjunction
+with the same $`\sqrt{e}`$-disk parameterization and constraint and the outer conjunction
 convention applied to the inner pair's center of mass. The tertiary is one more linear
-component; nothing downstream changes.
+component. Nothing downstream changes.
 
-**Per-epoch light fractions.** $`\ell_{ij}`$ enters $`\mathbf{A}(\theta)`$ *linearly*
+**Per-epoch light fractions.** $`\ell_{ij}`$ enters $`\mathbf{A}(\theta)`$ linearly
 (§1.3), so a `light` site ($`(n_{\rm stellar},)`$ constant or
 $`(J, n_{\rm stellar})`$ per-epoch, rows on the simplex via Dirichlet priors) swaps into
-the static graph exactly like the shifts, and the §5.2 eclipse breaker becomes an
-*inferred* quantity. The likelihood is smooth (indeed quadratic-in-$`\ell`$ per epoch
-pre-marginalization), so MAP/NUTS handle it natively.
+the static graph like the shifts. The eclipse light variation of §5.2 becomes an
+inferred quantity. The likelihood is smooth (quadratic in $`\ell`$ per epoch before
+marginalization), so MAP and NUTS apply unchanged.
 
-**LSF widths.** A Gaussian kernel's *values* at fixed integer offsets are smooth in
-$`\sigma`$, so `lsf_sigma` (one width per un-anchored instrument; one per LSF anchor for
-an instrument built with `lsf_anchors_angstrom`, where the traced per-anchor bank is
-re-interpolated through the same static tables the build used) is traced. The kernel
-*radius* stays fixed at build time by the construction-time widths, which therefore become
-strict per-entry upper bounds: a realized $`\sigma`$ above them would be silently truncated
-by the fixed radius, so the model rejects it with a $`-\infty`$ factor (the same
-guard-not-silent-corruption pattern as the bandwidth budget, §7.1). Identifiability is
-§5.4's caveat sharpened by §1.3: absolute widths require one anchored reference instrument,
+**LSF widths.** A Gaussian kernel's values at fixed integer offsets are smooth in
+$`\sigma`$, so `lsf_sigma` is traced. There is one width per un-anchored instrument, and one
+per LSF anchor for an instrument built with `lsf_anchors_angstrom`, where the traced
+per-anchor bank is re-interpolated through the same static tables the build used. The kernel
+radius is fixed at build time by the construction-time widths, which therefore become
+strict per-entry upper bounds. A realized $`\sigma`$ above them would be silently truncated
+by the fixed radius, so the model rejects it with a $`-\infty`$ factor (the same guard as
+for the bandwidth budget, §7.1). The identifiability caveat of §5.4, refined by §1.3,
+applies: absolute widths require one anchored reference instrument,
 and fitted per-anchor profiles are diagnostics rather than measurements. The asymmetry
 site ``lsf_h3`` follows the same pattern (per-anchor Gauss–Hermite $`h_3`$ for
-anchored instruments only, the static radius untouched, clipped and guarded at
-$`|h_3| \le 0.2`$), with the still-sharper identifiability caveat of §1.3.
+anchored instruments only, the static radius unchanged, clipped and guarded at
+$`|h_3| \le 0.2`$), with the stricter identifiability caveat of §1.3.
 
 **Per-epoch response.** The multiplicative response enters the
 likelihood in three places: the target, $`z_j = y_j - r_j \odot (\mathbf{R}\mathbf{1})`$;
 the sandwich weights, since $`\mathbf{A}_j = \mathrm{diag}(r_j)\mathbf{R}_j\mathbf{B}_j\cdots`$
 folds $`r_j^2`$ into $`\mathbf{A}^\top W \mathbf{A}`$; and the right-hand side through
 $`r_j z_j`$. A `response` swap is therefore not a pure operator swap like the shifts. It is
-nonetheless cheap, because $`\mathbf{R}\mathbf{1}`$ (the rebinned unit continuum, stored per group) is
-*response-independent*:
+nonetheless cheap, because $`\mathbf{R}\mathbf{1}`$ (the rebinned unit continuum, stored per
+group) is response-independent:
 
 ```math
 z^{\rm new}_j \;=\; z^{\rm old}_j + \left(r^{\rm old}_j - r^{\rm new}_j\right) \odot \mathbf{R}\mathbf{1}
 ```
 
-rebuilds the target exactly without carrying the raw fluxes (re-masking keeps zero-weight
-pixels at exactly zero, so the ``0·nan`` trap found on real data cannot recur), while the
-$`\sum \log w`$ term is untouched, since the noise lives on the data rather than on
-response-divided data. `response` is a θ site: $`(n_{\rm coef},)`$ shared or
-$`(J, n_{\rm coef})`$ per-epoch, $`r = 1 + \sum_m c_m T_m(x)`$ on each group's native
-abscissa. Identifiability is §5's response row, sharpened by measurement: the
-epoch-to-epoch *differences* of the coefficients are well constrained (closed loop:
-recovered to $`\sim 10^{-3}`$ against injected $`3\times 10^{-2}`$), while the epoch-shared
-mode trades against the components' broad features and lands at its zero-centered prior
-rather than at truth. The order should be kept low and the priors tight; the common mode is
-a normalization convention rather than a measurement.
+rebuilds the target exactly without storing the raw fluxes (re-masking keeps zero-weight
+pixels at exactly zero, so ``0·nan`` cannot occur), while the
+$`\sum \log w`$ term is unchanged, since the noise applies to the data rather than to
+response-divided data. `response` is a θ site, $`(n_{\rm coef},)`$ shared or
+$`(J, n_{\rm coef})`$ per-epoch, with $`r = 1 + \sum_m c_m T_m(x)`$ on each group's native
+abscissa. Identifiability follows §5's response row, refined by measurement: the
+epoch-to-epoch differences of the coefficients are well constrained (closed loop:
+recovered to $`\sim 10^{-3}`$ against injected $`3\times 10^{-2}`$). The epoch-shared
+mode is degenerate with the components' broad features and is returned at its zero-centered
+prior rather than at the injected value. The order should be kept low and the priors tight. The
+common mode is a normalization convention rather than a measurement.
 
 ### 7.6 Free per-epoch velocities (the RV table)
 
 In this diagnostic mode the Keplerian is replaced by a `velocity` site of shape
-$`(n_{\rm stellar}, n_{\rm epochs})`$, so each epoch's velocity is its own parameter. The
-resulting table is the product most binary-star work reports, the point of contact for users
-of cross-correlation codes, and, because a Keplerian is a strong constraint, the model check
-for §7.
+$`(n_{\rm stellar}, n_{\rm epochs})`$, so each epoch's velocity is a free parameter. The
+resulting table is the product most binary-star work reports, the quantity users of
+cross-correlation codes work with, and, because a Keplerian is a strong constraint, the model
+check for §7.
 
-**Identifiability: one arbitrary zero point per component.** With no orbit tying the
-components together, component $`i`$'s deviation spectrum $`d_i`$ is free, so translating it
-absorbs a constant added to that component's shifts and the likelihood cannot tell:
+**Identifiability: one arbitrary zero point per component.** With no orbit coupling the
+components, component $`i`$'s deviation spectrum $`d_i`$ is free, so translating it
+absorbs a constant added to that component's shifts and the likelihood is unchanged:
 
 ```math
 T(\delta_{ij} + \Delta_i)\, d_i \;=\; T(\delta_{ij})\, \big[T(\Delta_i)\, d_i\big].
 ```
 
 This is $`\gamma`$ (§5.3) once per star rather than once in total. The equality is
-exact for whole-pixel $`\Delta_i`$; for fractional ones the linear-interpolation shift
+exact for whole-pixel $`\Delta_i`$. For fractional ones the linear-interpolation shift
 operator blurs slightly as well as translating, so the likelihood is left with a weak
-preference that is a property of the *operator*, not of the data. Measured: a one-pixel
-common shift of one component costs $`4\times10^{-9}`$ of the log-likelihood in relative
-terms, a 0.1-pixel one costs 7.3 nats. An uncentered table would therefore have its
+preference that is a property of the operator, not of the data. A one-pixel common shift of
+one component was measured to change the log-likelihood by $`4\times10^{-9}`$ in relative
+terms, and a 0.1-pixel one by 7.3 nats. An uncentered table would therefore have its
 absolute level set by interpolation error.
 
-albireo removes the zero points in pixel space, which is where the removal is exact:
-with $`\xi = \mathrm{artanh}(v/c)`$ (§1.1, chosen so shifts compose and invert
-exactly) a constant *pixel* offset is relativistic velocity addition, not ordinary
+albireo removes the zero points in pixel space, where the removal is exact.
+With $`\xi = \mathrm{artanh}(v/c)`$ (§1.1, chosen so shifts compose and invert
+exactly) a constant pixel offset is relativistic velocity addition, not ordinary
 addition, so
 
 ```math
@@ -1295,32 +1294,32 @@ v^{\rm rel}_{ij} = c \tanh\!\big(\tilde\delta_{ij}\,\Delta x\big)
 is exactly invariant under $`v_{ij} \mapsto v_{ij} \oplus u_i`$, while centering the
 velocities would be right only to $`O(v^2/c^2)`$.
 
-**What survives, and what does not.** Each component's velocity variation, and hence its
-semi-amplitude, and every epoch-to-epoch difference are identified, as is the slope of
+**Identified and unidentified quantities.** Each component's velocity variation, and hence its
+semi-amplitude, and every epoch-to-epoch difference are identified. So is the slope of
 $`v_2`$ against $`v_1`$, which is $`-K_2/K_1`$: the Wilson mass ratio is a slope and is therefore
-unaffected by both zero points. The systemic velocity and either star's absolute velocity are not,
-and must be measured afterwards from the disentangled spectra as §5.3 prescribes.
+unaffected by both zero points. The systemic velocity and either star's absolute velocity are not
+identified, and must be measured afterwards from the disentangled spectra as §5.3 prescribes.
 
 **Uncertainties need the same projection.** Each zero point is an exactly flat likelihood
-direction, so its posterior width is the prior width and every epoch's marginal variance
-inherits it: on the velocity-table fixture the raw Laplace diagonal returns
+direction, so its posterior width is the prior width, which every epoch's marginal variance
+includes. On the velocity-table fixture the raw Laplace diagonal returns
 $`120/\sqrt{10} = 37.95`$
 km/s on every entry, against a per-epoch error of 0.059 km/s. Projecting each
 component's mean out of the covariance leaves exactly $`n_{\rm stellar}`$ null directions
 and gives the identified errors. Posterior samples of the `velocity_rel` deterministic
-need no projection at all.
+need no projection.
 
 **The mode needs a warm start.** From a cold start with every epoch at one velocity the
-components are indistinguishable, and the optimizer lands in a wrong basin, at a
-potential far worse than the warm-started one, so the failure is detectable rather
-than silent. The intended workflow is to fit a Keplerian first, then free the velocities
+components are indistinguishable, and the optimizer converges to a wrong basin, at a
+potential far worse than the warm-started one, so the failure is detectable.
+The intended workflow is to fit a Keplerian first, then free the velocities
 and difference the two tables (both centered, differenced in pixel space so the zero
-points cancel exactly). Structured residuals, phase-correlated or with one epoch far out,
-are the signature of a wrong period, an unseen third body, or line-profile variability.
+points cancel exactly). Structured residuals, phase-correlated or with one outlying epoch,
+indicate a wrong period, an unseen third body, or line-profile variability.
 
 ---
 
-## 8. What the tests assert (traceability)
+## 8. Traceability: claims and their tests
 
 | Claim | Test |
 |---|---|
@@ -1338,19 +1337,19 @@ are the signature of a wrong period, an unseen third body, or line-profile varia
 | bandwidth guard (§7.1) | out-of-budget orbit ⇒ non-finite model log-density; in-budget ⇒ finite |
 | velocity conventions match the simulator | `orbit_velocities(θ)` ≡ `OrbitParams.component_velocities` |
 | ML-II sanity (§7.3) | MAP over (θ, log τ, log η) recovers K's and sane hyperscales |
-| **Joint-inference gate**: $`K_1, K_2`$ to <1% with valid posteriors | closed-loop NUTS: posterior means within 1%, truth in central 95%, zero divergences |
+| **Joint-inference acceptance test**: $`K_1, K_2`$ to <1% with valid posteriors | closed-loop NUTS: posterior means within 1%, injected values in central 95%, zero divergences |
 | light/LSF θ-paths equal fresh builds (§7.5) | `with_light_fractions` / `with_lsf` vs. `build_problem` at matched kernel radius, rtol $`10^{-12}`$; FD gradients through both sites |
 | response θ-path equals fresh builds (§7.5) | `with_response` vs. `build_problem(response_coeffs=...)`: `r` bitwise, marginal rtol $`10^{-12}`$; FD gradients; replace-not-compound; masked pixels inert |
-| **Response gate**: per-epoch response closed loop | difference-mode coefficients to $`5\times10^{-3}`$ against injected $`3\times10^{-2}`$; K's <1%; common mode prior-pinned (asserted at prior scale, not at truth) |
-| AR(1) chain closed forms exact (§1.4a) | marginal vs. dense brute force under the correlated covariance — chain correlation built independently and LAPACK-inverted — with masked gaps ($`\rho = \phi^{g}`$) and jitter composed, rtol $`10^{-10}`$; FD gradients, including at $`\phi = 0`$ (the `pow` nan-grad trap); $`\phi = 0`$ ≡ diagonal model |
-| **Correlated-noise gate**: correlated closed loop | injected $`\phi = 0.45`$ and ivar scale error $`\alpha = 1.5`$ recovered ($`\pm 0.05`$, $`\pm 5\%`$) jointly with K's <1%; chain whitener removes the lag-1 autocorrelation the diagonal whitener exposes ($`\approx\phi`$ vs $`\approx 0`$), while both report unit *scale* |
+| **Response acceptance test**: per-epoch response closed loop | difference-mode coefficients to $`5\times10^{-3}`$ against injected $`3\times10^{-2}`$; K's <1%; common mode prior-dominated (asserted at prior scale, not at the injected value) |
+| AR(1) chain closed forms exact (§1.4a) | marginal vs. dense brute force under the correlated covariance (chain correlation built independently and LAPACK-inverted) with masked gaps ($`\rho = \phi^{g}`$) and jitter composed, rtol $`10^{-10}`$; FD gradients, including at $`\phi = 0`$ (the `pow` nan-gradient case); $`\phi = 0`$ ≡ diagonal model |
+| **Correlated-noise acceptance test**: correlated closed loop | injected $`\phi = 0.45`$ and ivar scale error $`\alpha = 1.5`$ recovered ($`\pm 0.05`$, $`\pm 5\%`$) jointly with K's <1%; chain whitener removes the lag-1 autocorrelation the diagonal whitener leaves ($`\approx\phi`$ vs $`\approx 0`$), while both report unit scale |
 | correlated band assembly (§4.5a) | band $`=`$ probe on the gapped+jittered fixture (loglike rtol $`10^{-12}`$, `validate` operator check); $`\partial/\partial\phi`$ band $`=`$ probe to $`10^{-9}`$; `epoch_chunk` batching invariant (the AR weight tuple pads and slices together); the dense gold test runs the band path |
-| SB3 velocity law (§7.5) | `orbit_velocities` with outer sites ≡ hand-composed nested Keplerians, atol $`10^{-12}`$ |
+| SB3 velocity law (§7.5) | `orbit_velocities` with outer sites ≡ manually composed nested Keplerians, atol $`10^{-12}`$ |
 | LSF bound + outer-disk guards | width above build bound / outer $`e > e_{\max}`$ ⇒ non-finite model log-density |
 | telluric constant exchange (§5.4) | closed loop: the two $`k=0`$ offsets cancel in the light-weighted sum to $`<5\times10^{-3}`$ |
-| **Realism gate**: closed loop per realism feature | telluric joint MAP; SB3 MAP (inner and outer $`K`$'s <2%); per-epoch light inferred (ℓ rms <0.01, components individually recovered); LSF width vs. reference instrument <3%; $`K_2`$ scan (peak at truth, negative $`D`$ under null) |
+| **Realism acceptance tests**: closed loop per realism feature | telluric joint MAP; SB3 MAP (inner and outer $`K`$'s <2%); per-epoch light inferred (ℓ rms <0.01, components individually recovered); LSF width vs. reference instrument <3%; $`K_2`$ scan (peak at the injected value, negative $`D`$ under null) |
 | TODCOR identities (§10.2) | free-amplitude surface $`=`$ Zucker & Mazeh's symmetric $`R^2`$, fixed-ratio/free-scale surface $`=`$ their $`R^2(s_1, s_2; \alpha)`$, held-fraction surface $`=`$ the pinned least squares, each to $`10^{-10}`$ against a NumPy transcription on a uniform-weight grid epoch |
-| **Velocity gate**: velocities and calibrated errors (§10.1, §10.4) | simulated SB2 through LSF, rebin, cosmics, gaps and barycentric motion: every velocity within $`5\sigma`$, rms $`<0.1`$ km/s, pull rms in $`[0.6, 1.6]`$; both frames agree; mixed instruments; one and three components; free and global light fractions recover the injected ones; profiled $`=`$ ivar errors $`\times\sqrt{\chi^2_\nu}`$ |
+| **Velocity acceptance test**: velocities and calibrated errors (§10.1, §10.4) | simulated SB2 through LSF, rebin, cosmic-ray hits, gaps and barycentric motion: every velocity within $`5\sigma`$, rms $`<0.1`$ km/s, pull rms in $`[0.6, 1.6]`$; both frames agree; mixed instruments; one and three components; free and global light fractions recover the injected ones; profiled $`=`$ ivar errors $`\times\sqrt{\chi^2_\nu}`$ |
 | zero points and flags (§10.4, §10.5) | a template offset composes relativistically to $`10^{-9}`$; an unknown offset is reported as differential; twin stars at one velocity are flagged blended and at 120 km/s are not; a minimum at the range edge is flagged; a continuum offset is absorbed by the nuisance and biases the light without it |
 | orbit from the table (§10.6) | injected $`P, e, \omega, K_1, K_2, \gamma`$ recovered from a noisy table within $`3\sigma`$; `predict` $`\equiv`$ `orbit_velocities(to_theta())` $`+ \gamma`$; per-component $`\gamma`$ recovers offset zero points while a forced shared one corrupts $`K`$; the periodogram finds $`P`$ to 1% |
 
@@ -1358,17 +1357,17 @@ Every section above is implemented and covered by the tests in this table.
 
 ## 9. Stellar labels from disentangled components
 
-Sections 1 to 8 return component *spectra*. This section gives the forward model that turns
+Sections 1 to 8 return component spectra. This section gives the forward model that turns
 one of those into four labels ($`T_{\mathrm{eff}}`$, $`\log g`$, [M/H], $`v\sin i`$) against a
 published synthetic grid, so the component can be rendered as a template for epoch radial
 velocities elsewhere. It is implemented in `albireo.library` (grids and their interpolation)
 and `albireo.match` (the fit).
 
 The scope is narrow, and §9.6 states the accuracy it requires. This mode is not an atmospheric
-analysis; `albireo.handoff` remains the route to GSSP, iSpec, Korg.jl and PySME for anything
+analysis. `albireo.handoff` remains the interface to GSSP, iSpec, Korg.jl and PySME for anything
 needing abundances or bespoke synthesis.
 
-### 9.1 What a disentangled component actually is
+### 9.1 Relation of a disentangled component to the stellar spectrum
 
 Write $`s_i`$ for star $`i`$'s own-continuum normalized spectrum and $`t_i = s_i - 1`$ for its
 deviation. The observed composite, in the system's continuum, is
@@ -1377,31 +1376,31 @@ deviation. The observed composite, in the system's continuum, is
 F(\lambda) = 1 + \sum_i w_i(\lambda)\, t_i(\lambda), \qquad \sum_i w_i(\lambda) = 1,
 ```
 
-with $`w_i`$ the true, wavelength-dependent continuum light fraction. But §1.3's model fitted
+with $`w_i`$ the true, wavelength-dependent continuum light fraction. The §1.3 model instead fits
 
 ```math
 F(\lambda) = 1 + \sum_i \ell^0_i \, d_i(\lambda)
 ```
 
-with $`\ell^0`$ assumed and constant. Equating the two, what the disentangler recovered is
+with $`\ell^0`$ assumed and constant. Equating the two, the disentangler recovers
 
 ```math
 \hat d_i \;=\; \frac{w_i(\lambda)}{\ell^0_i}\; t_i \;+\; n_i ,
 ```
 
 where $`n_i`$ collects the null-space contamination of §5.1: the $`\eta`$-anchored $`k=0`$ constant
-and the low-$`k`$ exchange modes, which are additive and live in the continuum.
+and the low-$`k`$ exchange modes, which are additive and confined to the continuum.
 
 Three consequences determine the design:
 
-1. Only the ratio $`w_i/\ell^0_i`$ is identified, never $`w_i`$ alone, which is §5.2's exact
-   $`(\ell, d) \to (\ell/\alpha, \alpha d)`$ degeneracy restated. An error in the assumed
+1. Only the ratio $`w_i/\ell^0_i`$ is identified, not $`w_i`$ alone, which is the exact
+   $`(\ell, d) \to (\ell/\alpha, \alpha d)`$ degeneracy of §5.2. An error in the assumed
    $`\ell^0`$ rescales every line depth, which is indistinguishable from a change in
    $`T_{\mathrm{eff}}`$ unless the fit has another parameter that can absorb it.
 2. $`n_i`$ is additive, so the nuisance absorbing it must be additive too. A multiplicative
-   continuum polynomial is identically zero wherever $`t_i`$ is zero, which is exactly where
-   $`n_i`$ lives, so it cannot represent it.
-3. The light fractions' *wavelength dependence* carries the light-ratio information. A
+   continuum polynomial is identically zero wherever $`t_i`$ is zero, which is where
+   $`n_i`$ is confined, so the polynomial cannot represent it.
+3. The light fractions' wavelength dependence contains the light-ratio information. A
    wavelength-independent dilution factor discards it.
 
 ### 9.2 The forward model
@@ -1421,31 +1420,31 @@ and one shared dilution scalar per companion:
 \end{aligned}
 ```
 
-The dilution line carries the light-ratio information. Written as a softmax over
+The dilution line contains the light-ratio information. Written as a softmax over
 $`\ln C_i + \ln A_i`$, it enforces $`\sum_i w_i(\lambda) = 1`$ at every pixel by construction,
 with no constraint site and no penalty term, and its wavelength dependence comes from the
 grids' own continua rather than from a fitted polynomial. This is GSSP's `gssp_binary`
-parameterization (Tkachenko 2015); treating the dilution as wavelength-independent instead
-was measured there to move a secondary's $`T_{\mathrm{eff}}`$ by 275 K. The single-component
+parameterization (Tkachenko 2015). Treating the dilution as wavelength-independent instead
+was measured there to change a secondary's $`T_{\mathrm{eff}}`$ by 275 K. The single-component
 fallback replaces the softmax with one free scalar per component, which is `gssp_single`,
 and is strictly weaker.
 
-$`a_{i0}`$ is the unconstrained $`k=0`$ zero point of §5.1. It is fitted and reported rather than
-absorbed: a large fitted value indicates that the disentangling zero point was biased.
+$`a_{i0}`$ is the unconstrained $`k=0`$ zero point of §5.1. It is fitted and reported, because
+a large fitted value indicates that the disentangling zero point was biased.
 
 **Rotational broadening.** $`K_{\mathrm{rot}}`$ is the Gray (2005) limb-darkened profile,
-*integrated over each pixel* rather than point-sampled. The profile has a square-root edge, so
-point sampling puts a kink of unbounded slope wherever the support boundary crosses a pixel;
-the pixel integral is $`C^1`$ in $`v\sin i`$ because $`g(\pm 1) = 0`$, which is what L-BFGS and NUTS
-need. It is not $`C^2`$ at half-integer $`v\sin i/\Delta v`$, where the edge lands exactly on a
-pixel boundary and that tap picks up a $`|\delta|^{3/2}`$ term. Both properties are checked in
+integrated over each pixel rather than point-sampled. The profile has a square-root edge, so
+point sampling produces a kink of unbounded slope wherever the support boundary crosses a pixel.
+The pixel integral is $`C^1`$ in $`v\sin i`$ because $`g(\pm 1) = 0`$, as L-BFGS and NUTS
+require. It is not $`C^2`$ at half-integer $`v\sin i/\Delta v`$, where the edge coincides with a
+pixel boundary and that tap acquires a $`|\delta|^{3/2}`$ term. Both properties are checked in
 `tests/test_operators.py`.
 
-**Why the comparison is at native resolution.** $`\hat d`$ is not quite the
-intrinsic spectrum: §1.3 applies the LSF *inside* the epoch model, so $`\hat d`$ is a regularized
+**Comparison at native resolution.** $`\hat d`$ is only approximately the
+intrinsic spectrum: §1.3 applies the LSF inside the epoch model, so $`\hat d`$ is a regularized
 partial deconvolution, faithful where the data had signal and shrunk toward zero where the
-smoothness prior dominated. That argues for convolving *both sides once* with the declared $`B`$
-and comparing in the space the data constrained, which is what `compare="matched"` does.
+smoothness prior dominated. This argues for convolving both sides once with the declared $`B`$
+and comparing in the space the data constrained, as `compare="matched"` does.
 
 Convolving the residuals, however, correlates them over the kernel width, while the
 likelihood of §9.1 stays diagonal.
@@ -1457,36 +1456,36 @@ For a unit-sum kernel $`k`$ the resulting over-count is
 
 the usual effective-sample-size factor. On AI Phe (HARPS, $`R = 115{,}000`$, $`\Delta v = 0.8`$
 km s$`^{-1}`$, so $`\sigma_{\mathrm{LSF}} = 1.38`$ px) that predicts 4.91 and the fit measured
-4.26, which accounts for the difference between the two modes. A mis-specified likelihood does
-not only inflate $`\chi^2`$: $`v\sin i`$ absorbs it, and both components went to the floor of their
-prior (0.14 and 0.46 km s$`^{-1}`$), where native returned 2.2 km s$`^{-1}`$ for
-both. The default is therefore `"native"`; `"matched"` is retained, and becomes appropriate
-only once a residual-covariance model can carry the correlation it creates.
+4.26, which accounts for the difference between the two modes. A mis-specified likelihood
+inflates $`\chi^2`$ and is also absorbed by $`v\sin i`$: both components went to the floor of
+their prior (0.14 and 0.46 km s$`^{-1}`$), where the native mode returned 2.2 km s$`^{-1}`$ for
+both. The default is therefore `"native"`. `"matched"` is retained, and becomes appropriate
+only once a residual-covariance model represents the correlation it creates.
 
-The closed-loop test cannot decide between the two modes: its injected rows never
+The closed-loop test does not distinguish the two modes: its injected rows do not
 pass through an LSF or a disentangling, so they are intrinsic spectra and both modes recover
-them. Only real data with a deconvolution behind it separates the two. The LSF width
-itself is not fitted here in either mode, since §1.3's identifiability argument continues to
-apply. When a star's library declares its own resolving power, `"matched"` convolves that
+them. Only real data that have been disentangled separate the two. The LSF
+width is not fitted here in either mode, since the identifiability argument of §1.3
+applies. When a star's library declares its own resolving power, `"matched"` convolves that
 star's template with the quadrature width of §9.2a rather than with $`B`$, while $`\hat d`$
-still takes $`B`$. Both comparisons against $`\hat d`$ are superseded for label fitting by the
-epoch comparison of §9.2a, which is the default of `Fit.match_labels`.
+is still convolved with $`B`$. Both comparisons against $`\hat d`$ are superseded for label
+fitting by the epoch comparison of §9.2a, which is the default of `Fit.match_labels`.
 
 ### 9.2a Comparing in the epoch space
 
 The two modes of §9.2 compare the template with $`\hat d`$ under a diagonal likelihood. This
 subsection derives the comparison that the disentangling's own statistics make exact and
-gives the reasons the alternatives were set aside. The measurements are in the research notes
+gives the reasons the alternatives were rejected. The measurements are in the research notes
 `d65_label_likelihoods.md` and `d65_converged_labels.md` (in the repository under
-`internal/research/2026-09-09-gaia-rvs-benchmark/`, as are the other notes §9 cites):
-twelve simulated Gaia RVS SB2 products, and an orbit-tier product for each of their eleven
-systems, rebuilt at their archived MAP.
+`internal/research/2026-09-09-gaia-rvs-benchmark/`, as are the other notes §9 cites).
+They use twelve simulated Gaia RVS SB2 products, and an orbit-tier product for each of their
+eleven systems, rebuilt at their archived MAP.
 
 **The identity.** Hold the orbit, the declared light fractions $`\ell^0`$, the LSF, the
 smoothness hyperparameters and the noise model at the disentangling's MAP. Write $`z`$ for the
 stacked epoch data in deviation space, $`W`$ for its noise precision (diagonal, or the AR(1)
 chain precision of §1.4a, jitter included), $`A`$ for the stacked operator of §1.4, which
-carries $`\ell^0`$, and $`\Lambda`$ for the smoothness prior of §2. With
+includes $`\ell^0`$, and $`\Lambda`$ for the smoothness prior of §2. With
 
 ```math
 G = A^\top W A, \qquad h = A^\top W z, \qquad P = \Lambda + G, \qquad \hat d = P^{-1} h ,
@@ -1498,18 +1497,18 @@ the chi-square of stacked template rows $`m`$ against the epoch spectra is
 L_{\mathrm{data}}(m) = \lVert z - A m \rVert_W^2 = z^\top W z - 2\, m^\top h + m^\top G\, m .
 ```
 
-This is an identity of the Gaussian quadratic form, not an approximation: $`W`$ is the precision
-the disentangling itself applies, so $`L_{\mathrm{data}}`$ is exact for AR(1) noise as for
-white noise. It needs $`h`$, $`z^\top W z`$ and the band of $`G`$, which the disentangling
-already forms (§4.5, with a null prior), so one evaluation is one band product.
-`Fit.epoch_statistics` builds them and `EpochStatistics` carries them. On the benchmark
-products $`L_{\mathrm{data}}`$ through the band agreed with a dense per-epoch AR(1) brute
-force that shares no assembly with it to at most $`8.5\times10^{-14}`$ relative. A telluric or
-nebular row is held at its posterior mean: $`A_e \hat d_e`$ is subtracted from $`z`$ before
-$`h`$ and $`z^\top W z`$ are formed, which with one operator for all rows is
-$`h_s - G_{se}\hat d_e`$ and the corresponding correction of $`z^\top W z`$.
+This is an identity of the Gaussian quadratic form: $`W`$ is the precision the disentangling
+applies, so $`L_{\mathrm{data}}`$ is exact for AR(1) noise as for white noise. It needs
+$`h`$, $`z^\top W z`$ and the band of $`G`$, which the disentangling already forms (§4.5, with
+a null prior), so one evaluation is one band product. `Fit.epoch_statistics` builds them and
+`EpochStatistics` stores them. On the benchmark products, $`L_{\mathrm{data}}`$
+through the band agreed to at most $`8.5\times10^{-14}`$ relative with a dense per-epoch AR(1)
+brute force that shares no assembly with it. A telluric or nebular row is held at its posterior
+mean: $`A_e \hat d_e`$ is subtracted from $`z`$ before $`h`$ and $`z^\top W z`$ are formed,
+which with one operator for all rows is $`h_s - G_{se}\hat d_e`$ and the corresponding
+correction of $`z^\top W z`$.
 
-**Why the comparisons against $`\hat d`$ are mis-specified.** Given $`m`$, $`h`$ is Gaussian with
+**Mis-specification of the comparisons against $`\hat d`$.** Given $`m`$, $`h`$ is Gaussian with
 mean $`G m`$ and covariance $`G`$, so $`\hat d = P^{-1}h`$ is Gaussian with mean $`P^{-1}G m`$ and
 covariance $`P^{-1} G P^{-1}`$. Its exact chi-square is
 
@@ -1518,41 +1517,42 @@ covariance $`P^{-1} G P^{-1}`$. Its exact chi-square is
 = (h - G m)^\top G^{-1} (h - G m) = L_{\mathrm{data}}(m) - z^\top W z + h^\top G^{-1} h ,
 ```
 
-on the range of $`G`$ (a direction in its null space moves neither side). The exact likelihood
+on the range of $`G`$ (a direction in its null space changes neither side). The exact likelihood
 of $`\hat d`$ is therefore $`L_{\mathrm{data}}`$ up to a constant, and its covariance is dense.
-`"native"` replaces it by the pointwise posterior variances, which are neither the sampling
-covariance nor diagonal in truth; `"matched"` adds the correlation of §9.2 on top. Converged
-with the same optimiser, the native comparison returned formal errors too small by a factor of
-three to thirty-five and temperatures twice as far from the truth as $`L_{\mathrm{data}}`$
-(118.6 K against 60.2 K median absolute error), with its largest failures on the faint
-secondaries. Filtering the template instead, comparing $`\hat d`$ with $`M m`$ for
-$`M = P^{-1}G`$ under the same diagonal likelihood, left the temperatures unmoved and inflated the chi-square by a median factor of
-2.40 (`d64_coupled_label_fit.md`), since it corrects the mean and not the covariance.
+`"native"` replaces that covariance by the pointwise posterior variances, which are not the
+sampling covariance and omit the off-diagonal terms. `"matched"` adds the correlation of §9.2.
+Converged with the same optimiser, the native comparison returned formal errors too small by a
+factor of three to thirty-five and temperatures twice as far from the injected values as
+$`L_{\mathrm{data}}`$ (118.6 K against 60.2 K median absolute error). Its largest failures were
+on the faint secondaries. Filtering the template instead, comparing $`\hat d`$ with $`M m`$ for
+$`M = P^{-1}G`$ under the same diagonal likelihood, left the temperatures unchanged and inflated
+the chi-square by a median factor of 2.40 (`d64_coupled_label_fit.md`), since it corrects the
+mean and not the covariance.
 
 **Two rejected alternatives.** Taking the template as the prior mean of the component,
 $`s = m + \delta`$ with $`\delta \sim \mathcal{N}(0, \Lambda^{-1})`$, gives the marginal
 likelihood $`L_{\mathrm{hier}} = L_{\mathrm{data}} - (h - Gm)^\top P^{-1} (h - Gm)`$, whose
-curvature in $`m`$ is $`2\,G P^{-1}\Lambda \preceq 2\Lambda`$: the smooth deviation forgives
-any template change the prior would let it absorb. Measured over each prior, it carried 0.4 to
-0.9 percent of $`L_{\mathrm{data}}`$'s information on temperature and gravity and returned the
-prior centres. The filtered-and-whitened form
+curvature in $`m`$ is $`2\,G P^{-1}\Lambda \preceq 2\Lambda`$. The smooth deviation absorbs
+any template change that the prior allows. Measured over each prior, this likelihood contained
+0.4 to 0.9 percent of $`L_{\mathrm{data}}`$'s information on temperature and gravity and
+returned the prior centres. The filtered-and-whitened form
 $`L_{W1} = (\hat d - M m)^\top P\, (\hat d - M m) = L_{\mathrm{data}} - L_{\mathrm{hier}}`$ has
-the curvature of $`L_{\mathrm{data}}`$ on the modes the data dominate, where the labels live,
-and with the declared operator returned the same temperatures to a median 3.1 K, at the price
-of a block solve per evaluation (`d65_label_likelihoods.md`).
+the curvature of $`L_{\mathrm{data}}`$ on the modes the data dominate, which contain the label
+information. With the declared operator it returned the same temperatures to a median 3.1 K,
+at the cost of a block solve per evaluation (`d65_label_likelihoods.md`).
 
 **The declared light cancels.** The label rows scale each template by $`w_i/\ell^0_i`$ (§9.1)
-and $`A`$ multiplies row $`i`$ by $`\ell^0_i`$, so $`A m`$ carries $`w_i t_i`$ and
+and $`A`$ multiplies row $`i`$ by $`\ell^0_i`$, so $`A m`$ contains $`w_i t_i`$ and
 $`L_{\mathrm{data}}`$ does not depend on $`\ell^0`$. Redeclaring
 $`\ell^0_i \to c\,\ell^0_i`$ with $`(\tau_i, \eta_i) \to c^2 (\tau_i, \eta_i)`$ left it unchanged
 to $`4.9\times10^{-14}`$ relative. The fit measures the light fraction rather than a ratio to
-the declaration: in the orbit tier, where the declared light came from a correlation stage,
+the declaration. In the orbit tier, where the declared light came from a correlation stage,
 the median absolute error of the secondary's light fell from the declaration's 0.043 to 0.011,
-and improved on it on ten of eleven products.
+and the error was lower on ten of eleven products.
 
 **The library's own resolving power.** A synthetic library is already broadened to its
 resolving power $`R_{\mathrm{lib}}`$, and $`A`$ applies the whole instrument profile, so a
-template drawn from it would pass through both. The stellar operator therefore carries only
+template drawn from it would be broadened by both. The stellar operator therefore applies only
 
 ```math
 \sigma_q = \sqrt{\sigma_{\mathrm{inst}}^2 - \sigma_{\mathrm{lib}}^2}, \qquad
@@ -1562,108 +1562,109 @@ template drawn from it would pass through both. The stellar operator therefore c
 read from `SpectralLibrary.resolving_power` (the BOSZ registry entries are at
 $`R = 20{,}000`$, $`\sigma_{\mathrm{lib}} = 6.37`$ km/s), while a conditioned telluric or
 nebular row keeps the declared profile under which its posterior mean was solved. A library at
-or below the instrument's resolving power is refused, since no convolution sharpens a
-template. Without the reduction the operator carried 12.77 km/s where the RVS data carry
-11.07, and the fit put $`v\sin i`$ at the floor of its prior on 6 of 24 components.
+or below the instrument's resolving power is rejected, since no convolution sharpens a
+template. Without the reduction the operator gave 12.77 km/s where the RVS data have 11.07,
+and the fit placed $`v\sin i`$ at the floor of its prior on 6 of 24 components.
 
 **The model grid's own smoothing.** The template also passes through discrete steps on the
-model grid of pixel $`\Delta v`$ that the epoch spectra never took, and each smooths it (§9.5
-derives the terms): the library's box average onto the grid, the pixel integration of the
-rotation kernel, the label rows' shift by the frame velocity, the operator's shift of each
-epoch, and the model pixel held constant across the rebin onto the native pixels. Together they
-add $`\sigma_{\mathrm{grid}}^2 = \tfrac{7}{12}\,\Delta v^2`$ in variance, which the fitted
-rotation gives back. `Fit.epoch_statistics` therefore removes it from the stellar operator as
-well, by default:
+model grid of pixel $`\Delta v`$ that the epoch spectra did not undergo, and each smooths it
+(§9.5 derives the terms). The steps are the library's box average onto the grid, the pixel
+integration of the rotation kernel, the label rows' shift by the frame velocity, the operator's
+shift of each epoch, and the model pixel held constant across the rebin onto the native pixels.
+Together they add $`\sigma_{\mathrm{grid}}^2 = \tfrac{7}{12}\,\Delta v^2`$ in variance, which
+the fit compensates with a lower rotation. `Fit.epoch_statistics` therefore removes it from the
+stellar operator as well, by default:
 
 ```math
 \sigma_{\mathrm{op}}^2 = \sigma_{\mathrm{inst}}^2 - \sigma_{\mathrm{lib}}^2 - \tfrac{7}{12}\,\Delta v^2
 = \sigma_q^2 - \tfrac{7}{12}\,\Delta v^2 ,
 ```
 
-per declared width (per LSF anchor, or per epoch for a per-epoch declaration), recording
+per declared width (per LSF anchor, or per epoch for a per-epoch declaration). It records
 $`\sigma_{\mathrm{grid}}^2`$, $`\sigma_q`$ and $`\sigma_{\mathrm{op}}`$ in `EpochStatistics`
-(`grid_variance_kms2`, `lsf_sigma_kms`, `operator_sigma_kms`); `grid_compensation=False` keeps
-$`\sigma_q`$. The subtraction uses the mean of each term rather than the phases of the problem,
-since the frame shift's phase is itself fitted; computing the epoch shifts' term from the
-operator's own phases moved $`v\sin i`$ by at most 0.12 km/s. Where $`\sigma_{\mathrm{op}}`$
-would fall below half a model pixel, that is where
+(`grid_variance_kms2`, `lsf_sigma_kms`, `operator_sigma_kms`), and `grid_compensation=False`
+keeps $`\sigma_q`$. The subtraction uses the mean of each term rather than the phases of the
+problem, since the frame shift's phase is itself fitted. Computing the epoch shifts' term from
+the operator's own phases changed $`v\sin i`$ by at most 0.12 km/s. Where
+$`\sigma_{\mathrm{op}}`$ would fall below half a model pixel, that is where
 $`\Delta v > \sqrt{6/5}\,\sigma_q \approx 1.10\,\sigma_q`$, a sampled Gaussian no longer
-realises its variance, so the width is floored at $`\Delta v/2`$ (or at $`\sigma_q`$, when that is
-narrower) and a warning names the grid spacing that avoids the floor; with the LSF narrowed to
-3 km/s on the 4.63 km/s grid the floor removed 4.4 of the 12.5 km$`^2`$ s$`^{-2}`$ and
-$`v\sin i`$ rose only from 7.16 to 8.23 km/s for a star at 11. A grid with
-$`\sigma_q < \Delta v`$ that is not floored is warned about too, since the compensated kernel
-is then below 0.65 pixel. On the closed-loop fixture of `tests/test_pipeline.py` (native pixel
-4.63 km/s, LSF $`\sigma = 5.5`$ km/s, an intrinsic library, $`v\sin i = 11`$ km/s injected) the
-uncompensated comparison returned 7.37 km/s with the orbit fixed at the truth and the
-compensated one 10.08; over five noise draws the mean error was $`-3.02`$ and $`-0.24`$ km/s,
-and end to end through the pipeline 6.91 and 9.82 km/s, with the temperatures, gravities,
-metallicities, light fractions, semi-amplitudes and systemic velocity unchanged
-(`d65_grid_smoothing.md`).
+realises its variance. The width is then floored at $`\Delta v/2`$ (or at $`\sigma_q`$, when
+that is narrower) and a warning gives the grid spacing that avoids the floor. With the LSF
+narrowed to 3 km/s on the 4.63 km/s grid, the floor removed 4.4 of the 12.5 km$`^2`$ s$`^{-2}`$
+and $`v\sin i`$ rose only from 7.16 to 8.23 km/s for a star at 11. A warning is also issued for
+a grid with $`\sigma_q < \Delta v`$ that is not floored, since the compensated kernel is then
+below 0.65 pixel. On the closed-loop fixture of `tests/test_pipeline.py` (native pixel
+4.63 km/s, LSF $`\sigma = 5.5`$ km/s, an intrinsic library, $`v\sin i = 11`$ km/s injected),
+with the orbit fixed at the injected values, the uncompensated comparison returned 7.37 km/s and
+the compensated one 10.08. Over five noise draws the mean errors were $`-3.02`$ and $`-0.24`$
+km/s, and end to end through the pipeline they returned 6.91 and 9.82 km/s, with the
+temperatures, gravities, metallicities, light fractions, semi-amplitudes and systemic velocity
+unchanged (`d65_grid_smoothing.md`).
 
-A simulation that renders its epochs on a model grid of its own puts part of the same smoothing
-into the data: $`\tfrac{5}{12}\,\Delta v_{\mathrm{sim}}^2`$, the same steps less the frame shift,
-which `albireo.gaia.rvs_delivered_sigma_kms(..., simulation_dv_kms=...)` adds to the width a
-simulated Gaia RVS epoch carries, with the delivery's own resampling. Epochs simulated on the
-analysis's own model grid carry all of $`\sigma_{\mathrm{grid}}^2`$ but the frame shift, and
-against them the compensation biases $`v\sin i`$ high (9 km/s fitted at 11.1 km/s on a 5 km/s
-grid in `tests/test_match_epochs.py`); such data are compared with `grid_compensation=False`,
-or with their width declared wider by $`\tfrac{5}{12}\,\Delta v^2`$ in variance. The
-compensation is therefore only as good as the declared width of the data. On three
-slow-rotator products of the Gaia RVS benchmark (`mixed-0004`, `-0008` and `-0012`, oracle tier, rebuilt at their
-archived MAP, $`v\sin i`$ injected at 0.6 to 10.2 km/s), the median error of the six fitted
-rotations was +3.06 km/s uncompensated at the nominal 11.07 km/s, +4.22 km/s with the
-compensation alone, +1.09 km/s with the delivery's interpolation declared (11.61 km/s), and
-+0.63 km/s (+0.32 km/s for the primaries) with the benchmark's full declaration of 11.67 km/s,
-an operator width of 9.51 km/s; temperatures, gravities and light fractions moved by at most
-0.9 K, 0.003 dex and 0.0001 against the uncompensated fit. An operator width of 9.56 km/s,
-measured empirically on the noiseless delivered epochs, had left +0.09 km/s
-(`d65_converged_labels.md`), so about 1 km$`^2`$ s$`^{-2}`$ of the data's smoothing is still
-not declared or not removed. The phases of the frame shift and of the rotation kernel's pixel
-term, which the means leave out, account for most of the excess on `mixed-0004`, whose frame
-shift sits at 0.9 of a pixel, but predict a slightly low rotation on the other two.
+A simulation that renders its epochs on its own model grid adds part of the same smoothing to
+the data: $`\tfrac{5}{12}\,\Delta v_{\mathrm{sim}}^2`$, from the same steps less the frame shift.
+`albireo.gaia.rvs_delivered_sigma_kms(..., simulation_dv_kms=...)` adds this to the width of a
+simulated Gaia RVS epoch, together with the delivery's own resampling. Epochs simulated on the
+analysis's own model grid contain all of $`\sigma_{\mathrm{grid}}^2`$ but the frame shift, and
+against them the compensation biases $`v\sin i`$ high (a 9 km/s component fitted at 11.1 km/s on
+a 5 km/s grid in `tests/test_match_epochs.py`). Such data are compared with
+`grid_compensation=False`, or with their width declared wider by $`\tfrac{5}{12}\,\Delta v^2`$
+in variance. The compensation is therefore only as accurate as the declared width of the data.
+On three slow-rotator products of the Gaia RVS benchmark (`mixed-0004`, `-0008` and `-0012`,
+oracle tier, rebuilt at their archived MAP, $`v\sin i`$ injected at 0.6 to 10.2 km/s), the
+median error of the six fitted rotations was +3.06 km/s uncompensated at the nominal 11.07 km/s
+and +4.22 km/s with the compensation alone. It was +1.09 km/s with the delivery's interpolation
+declared (11.61 km/s), and +0.63 km/s (+0.32 km/s for the primaries) with the benchmark's full
+declaration of 11.67 km/s, an operator width of 9.51 km/s. Temperatures, gravities and light
+fractions changed by at most 0.9 K, 0.003 dex and 0.0001 against the uncompensated fit. An
+operator width of 9.56 km/s, measured empirically on the noiseless delivered epochs, left
++0.09 km/s (`d65_converged_labels.md`), so about 1 km$`^2`$ s$`^{-2}`$ of the data's smoothing is
+still not declared or not removed. The phases of the frame shift and of the rotation kernel's
+pixel term, which the means omit, account for most of the excess on `mixed-0004`, whose frame
+shift is at 0.9 of a pixel. They predict a slightly low rotation on the other two.
 
 **Rotation, the optimiser and the restarts.** The pixel-integrated rotational kernel is exactly
 one tap for $`v\sin i \le \Delta v/2`$, so $`L_{\mathrm{data}}`$ is exactly flat there and its
-gradient in $`v\sin i`$ is zero; a gradient method that starts or lands on that plateau cannot
+gradient in $`v\sin i`$ is zero. A gradient method that starts on or reaches that plateau cannot
 leave it. `run_map` also converges slowly on this problem, whose objective changes over the
-prior by a median $`2\times10^{4}`$ in [M/H] and by 35 in a secondary's gravity: at 500 L-BFGS
+prior by a median $`2\times10^{4}`$ in [M/H] and by 35 in a secondary's gravity. At 500 L-BFGS
 steps it left a faint secondary's gravity 0.7 to 1.0 dex from the optimum at S/N 20 to 22.
-The epoch comparison is therefore minimised directly in the constrained parameters $`\phi`$ by a bounded
-Levenberg-Marquardt. With $`J = \partial m/\partial\phi`$ from forward-mode differentiation of
-the rows, the gradient and Gauss-Newton matrix are
+The epoch comparison is therefore minimised directly in the constrained parameters $`\phi`$ by
+a bounded Levenberg-Marquardt. With $`J = \partial m/\partial\phi`$ from forward-mode
+differentiation of the rows, the gradient and Gauss-Newton matrix are
 
 ```math
 g = -2\, J^\top (h - G m), \qquad H = 2\, J^\top G J ,
 ```
 
-exact up to the curvature of $`m(\phi)`$, since $`L_{\mathrm{data}}`$ is quadratic in $`m`$; the
-offsets' Normal prior and the hull guard add their exact derivatives. Bounds are held by an
+exact up to the curvature of $`m(\phi)`$, since $`L_{\mathrm{data}}`$ is quadratic in $`m`$. The
+offsets' Normal prior and the hull guard add their exact derivatives. Bounds are enforced by an
 active set with projection, the damping is scaled by the running maximum of
 $`\mathrm{diag}\, H`$, and a run stops when the undamped step predicts a decrease below
 $`10^{-3}`$. It converged in a median of four iterations. The fit starts from the node-scan
-candidates of the warm start, then runs restart rounds, each of which evaluates the objective
+candidates of the warm start and then runs restart rounds. Each round evaluates the objective
 along every component's $`v\sin i`$ (about twenty values over the prior, slow rotation
 included) and over the faintest component's $`(T_{\mathrm{eff}}, \log g)`$ library nodes with
-everything else held, and refits from the best distinct points; rounds repeat until one gains
+everything else held, and refits from the best distinct points. Rounds repeat until one gains
 less than 1 in chi-square. Over 88 product, comparison and prior cells a rotation restart
 lowered an optimum by more than 1 in chi-square fourteen times and a node restart twice.
-When the faint component has collapsed (its light below one percent, or two of its labels on bounds) a
-coarse joint restart in its radius ratio, rotation, temperature and gravity is added, because
-a component with no light has no labels and no one-dimensional move lowers the objective; a
-collapse that survives it is recorded on the result. The formal covariance is
-$`2 H^{-1}`$ over the parameters that are neither on a bound nor on the rotation plateau.
+When the faint component has collapsed (its light below one percent, or two of its labels on
+bounds) a coarse joint restart in its radius ratio, rotation, temperature and gravity is added.
+The labels of a component with no light are undetermined, and no one-dimensional move lowers
+the objective. A collapse that remains is recorded on the result. The formal covariance
+is $`2 H^{-1}`$ over the parameters that are neither on a bound nor on the rotation plateau.
 
 Converged this way, over the twelve products under box priors, $`L_{\mathrm{data}}`$ returned
 median absolute errors of 60.2 K in $`T_{\mathrm{eff}}`$, 0.062 dex in $`\log g`$, 0.006 dex in
-[M/H], 2.69 km/s in $`v\sin i`$ and 0.0124 in the secondary's light fraction, against 118.6 K,
-0.180 dex, 0.024 dex, 6.89 km/s and 0.0350 for the native comparison, with a median reduced
-chi-square of 0.998 (`d65_converged_labels.md`). The remaining light error of about 0.01
-follows the label and orbit errors: with both held at the truth it fell to a few thousandths.
+[M/H], 2.69 km/s in $`v\sin i`$ and 0.0124 in the secondary's light fraction, with a median
+reduced chi-square of 0.998. The native comparison returned 118.6 K, 0.180 dex, 0.024 dex,
+6.89 km/s and 0.0350 (`d65_converged_labels.md`). The remaining light error of about 0.01
+results from the label and orbit errors: with both held at the injected values it fell to a few
+thousandths.
 
-### 9.3 Interpolation, and why not an emulator (yet)
+### 9.3 Interpolation of the spectral grid
 
-$`\mathcal{I}`$ interpolates the *flux*, never the model atmosphere, and the continuum in the
+$`\mathcal{I}`$ interpolates the flux, not the model atmosphere, and the continuum in the
 log. On the 250 K / 0.5 dex spacing of the BOSZ grid, Mészáros & Allende Prieto (2013)
 measured 0.19% scatter for atmosphere interpolation against 0.051% for linear flux
 interpolation and 0.031% for a cubic, while a Payne-style network reaches about 0.1%. On a
@@ -1671,56 +1672,56 @@ well-sampled FGK grid a differentiable cubic is therefore more accurate than the
 with no training cost and nothing to host.
 
 There are two interpolants, chosen by geometry: separable Catmull-Rom on a complete axis
-product, and barycentric interpolation over a Delaunay triangulation when physics has cut the
-corners off the grid, as it has for the OB libraries. The cubic reproduces a node bit-for-bit;
-the barycentric path reproduces one to rounding, since its weights at a vertex are $`1-\epsilon`$
-and $`\epsilon`$ rather than $`1`$ and $`0`$. Either allows the warm-start node scan and the
-continuous fit to be compared on the same footing.
+product, and barycentric interpolation over a Delaunay triangulation when the grid is incomplete
+at its corners for physical reasons, as in the OB libraries. The cubic reproduces a node
+bit-for-bit. The barycentric path reproduces one to rounding, since its weights at a vertex are
+$`1-\epsilon`$ and $`\epsilon`$ rather than $`1`$ and $`0`$. Either allows the warm-start node
+scan and the continuous fit to be compared directly.
 The cubic's phantom end nodes are extrapolated linearly rather than clamped: clamping destroys
 linear reproduction in the edge cells, and on a grid with a few values per axis it performs
 worse than plain multilinear over a third of the range (measured).
 
-Whether a learned emulator is worth building is therefore an empirical question about a
-particular grid, and `crossval_library` provides the measurement, as in benchmarks.md.
+Whether a learned emulator is worth building therefore depends on the grid, and
+`crossval_library` provides the measurement, as in benchmarks.md.
 
-### 9.4 Degeneracies, extending the §5.4 ledger
+### 9.4 Degeneracies (continuation of §5.4)
 
 | Degeneracy | Exact/approx | Broken by | albireo policy |
 |---|---|---|---|
-| $`T_{\mathrm{eff}}`$ vs. $`\log g`$ | approx, $`\rho \approx 0.98`$ with both free | an external $`\log g`$ | eclipsing binaries give $`\log g`$ to 0.01 dex from $`M`$ and $`R`$ — declare `logg=Fixed(...)`. Non-eclipsing: run free, fixed, and fixed-with-dilution, and report the spread. The correlation is *reported*, not hidden |
-| assumed $`\ell^0`$ vs. line depth vs. $`T_{\mathrm{eff}}`$ | exact for constant $`\ell`$ (§5.2) | joint fit of both components with $`\sum w = 1`$, wavelength-dependent | `RadiusRatio` is the default; `FixedDilution` is the diagnostic that shows what it was worth. The epoch comparison (§9.2a) does not depend on $`\ell^0`$ at all |
+| $`T_{\mathrm{eff}}`$ vs. $`\log g`$ | approx, $`\rho \approx 0.98`$ with both free | an external $`\log g`$ | eclipsing binaries give $`\log g`$ to 0.01 dex from $`M`$ and $`R`$: declare `logg=Fixed(...)`. Non-eclipsing: run free, fixed, and fixed-with-dilution, and report the spread. The correlation is reported |
+| assumed $`\ell^0`$ vs. line depth vs. $`T_{\mathrm{eff}}`$ | exact for constant $`\ell`$ (§5.2) | joint fit of both components with $`\sum w = 1`$, wavelength-dependent | `RadiusRatio` is the default; `FixedDilution` is the diagnostic that shows the difference it makes. The epoch comparison (§9.2a) does not depend on $`\ell^0`$ |
 | $`v\sin i`$ vs. instrumental width | near-exact (§5.4, restated) | nothing, within one instrument | LSF fixed at its declared value; a fitted $`v\sin i`$ below it is reported as not a measurement |
-| $`v\sin i`$ vs. macroturbulence | near-exact (widths add in quadrature) | line-shape detail at high $`R`$ | macroturbulence is *fixed*, not fitted; with the default 0 a fitted $`v\sin i`$ means "all broadening beyond the instrument", which is what a template needs |
-| [M/H] vs. microturbulence | approx | an external $`\xi`$ | $`\xi`$ is a property of the grid, echoed in `assumptions`, never silently defaulted — fixing it at 2 km/s when the truth is 10 costs ~0.5 dex in [M/H] (ZETA-PAYNE) |
-| $`k=0`$ zero point vs. line depth | exact (§5.1) | the additive nuisance | $`a_{i0}`$ fitted and reported; removing it exists only as the control that shows it matters |
-| $`T_{\mathrm{eff}}`$ vs. He abundance (OB) | approx | a He axis in the grid | not offered — the public OB grids fix He. Stated as a known systematic, since in 3900–4600 Å the He lines *are* the temperature diagnostic |
+| $`v\sin i`$ vs. macroturbulence | near-exact (widths add in quadrature) | line-shape detail at high $`R`$ | macroturbulence is fixed; with the default 0 a fitted $`v\sin i`$ represents all broadening beyond the instrument, which is what a template needs |
+| [M/H] vs. microturbulence | approx | an external $`\xi`$ | $`\xi`$ is a property of the grid, reported in `assumptions` and never defaulted silently: fixing it at 2 km/s when the true value is 10 causes an error of ~0.5 dex in [M/H] (ZETA-PAYNE) |
+| $`k=0`$ zero point vs. line depth | exact (§5.1) | the additive nuisance | $`a_{i0}`$ fitted and reported; the option to remove it exists only as a control that shows its effect |
+| $`T_{\mathrm{eff}}`$ vs. He abundance (OB) | approx | a He axis in the grid | not offered: the public OB grids fix He. Stated as a known systematic, since in 3900–4600 Å the He lines are the temperature diagnostic |
 
-### 9.5 Uncertainties, and why the formal one is not enough
+### 9.5 Uncertainties: the formal covariance and the spread over posterior draws
 
 The Laplace covariance is the curvature of the potential at the MAP, projected to the
-constrained parameterization by the delta method. It measures the sharpness of the optimum,
-which is not the quantity needed here: the residuals of a disentangled component are correlated
-rather than white, because disentangling artifacts are structured across wavelength by
-construction (§5.1). Codes that have checked report the same gap: Gebruers et al. (2022) give
+constrained parameterization by the delta method. It measures the sharpness of the optimum and
+not the uncertainty of the labels, because the residuals of a disentangled component are
+correlated: disentangling artifacts are structured across wavelength by construction (§5.1).
+Published comparisons show the same difference: Gebruers et al. (2022) give
 70 K formal against 425 K realistic for B stars at S/N 150, and Czekala et al. (2015) find
 5–10× once correlated residuals are modelled.
 
-albireo therefore quotes two numbers side by side and labels them. The second comes from
+albireo therefore quotes two labelled numbers side by side. The second comes from
 refitting the labels once per joint posterior draw of the component spectra (`refit_draws`),
-which propagates the correlations the formal error cannot see, including the low-$`k`$ exchange
-modes that trade flux between components. This internalizes the loop
+which propagates the correlations that the formal error omits, including the low-$`k`$ exchange
+modes that transfer flux between components. This runs internally the loop that
 `albireo.handoff.export_draws` documents, without a round trip through an external code.
 
 A per-component jitter site is enabled by default for the two comparisons against $`\hat d`$
-and bounded. Its maximum-likelihood point is the RMS residual, so on an unusually good fit it
-runs to zero scale and takes the gradient norm with it. The bound states that the quoted
-per-pixel errors are wrong by at most a factor of five. The epoch comparison of §9.2a has no
+and bounded. Its maximum-likelihood point is the RMS residual, so on an unusually good fit the
+scale tends to zero and the gradient norm diverges. The bound allows the quoted
+per-pixel errors to be wrong by at most a factor of five. The epoch comparison of §9.2a has no
 jitter site, since its chi-square is exact in data units under the disentangling's noise model.
 
-**Calibration of the formal errors, measured.** For the epoch comparison the formal error is
-$`2H^{-1}`$ at the optimum (§9.2a), and it was calibrated against the truth on the twelve
-simulated Gaia RVS products under box priors (`d65_converged_labels.md`). The pull is the
-error over the formal sigma, excluding labels on a bound or on the rotation plateau; a
+**Measured calibration of the formal errors.** For the epoch comparison the formal error is
+$`2H^{-1}`$ at the optimum (§9.2a), and it was calibrated against the injected values on the
+twelve simulated Gaia RVS products under box priors (`d65_converged_labels.md`). The pull is the
+error over the formal sigma, excluding labels on a bound or on the rotation plateau. A
 calibrated error has a 68th percentile of $`|\mathrm{pull}|`$ near 1.
 
 | label | epoch comparison: median, 68th percentile | native comparison: median, 68th percentile |
@@ -1732,21 +1733,21 @@ calibrated error has a 68th percentile of $`|\mathrm{pull}|`$ near 1.
 | light fraction | 2.01, 2.72 | 19.92, 35.10 |
 
 The epoch comparison's formal errors are therefore close to calibrated for temperature, gravity
-and metallicity, and too small by about three for rotation and the light fraction; the native
-comparison's are too small by three to thirty-five. Both excesses of the epoch comparison have
-identified causes outside the noise. The fitted rotation absorbs a smoothing the operator does
-not model (the benchmark archive's linear resampling of each epoch, about 3 km/s in
-quadrature, which accounts for the median rotation excess to 0.05 km/s), and the light
-fraction inherits the label and orbit errors that a covariance at a fixed orbit does not
-include. No inflation is applied in code: the rotation and the light fraction should be
-quoted with an error enlarged by about three, or with a spread from refits, until a residual
-model carries what these pulls show.
+and metallicity, and about three times too small for rotation and the light fraction. The native
+comparison's are three to thirty-five times too small. Both excesses of the epoch comparison
+have identified causes outside the noise. The fitted rotation absorbs a smoothing the operator
+does not model: the benchmark archive's linear resampling of each epoch, about 3 km/s in
+quadrature, which accounts for the median rotation excess to 0.05 km/s. The light fraction is
+affected by the label and orbit errors that a covariance at a fixed orbit does not include. No
+inflation is applied in code. The rotation and the light fraction should be quoted with about
+three times the formal error, or with a spread from refits, until a residual model accounts for
+what these pulls show.
 
-The same absorption works in the other direction when the model carries more smoothing than
-the data, and the model grid is where it does. A box average of width $`\Delta v`$ is a kernel of
-variance $`\Delta v^2/12`$, and a shift by a fraction $`f`$ of a pixel through linear
+The same absorption acts in the opposite direction when the model contains more smoothing than
+the data, as it does on the model grid. A box average of width $`\Delta v`$ is a kernel of
+variance $`\Delta v^2/12`$. A shift by a fraction $`f`$ of a pixel through linear
 interpolation is the two-tap kernel with weight $`1-f`$ at $`-f\,\Delta v`$ and $`f`$ at
-$`(1-f)\,\Delta v`$, of mean zero and variance $`f(1-f)\,\Delta v^2`$, which averages to
+$`(1-f)\,\Delta v`$, of mean zero and variance $`f(1-f)\,\Delta v^2`$. This variance averages to
 $`\Delta v^2/6`$ over $`f`$ and peaks at $`\Delta v^2/4`$. Five such steps lie between a
 library spectrum and the epoch pixels of the comparison of §9.2a:
 
@@ -1762,43 +1763,43 @@ library spectrum and the epoch pixels of the comparison of §9.2a:
 of which $`\Delta v^2/4`$ is in the operator $`A`$ and $`\Delta v^2/3`$ in the label rows. The
 rotation term comes from the kernel's integration over each pixel. The sampled Gaussian LSF adds
 nothing measurable above 0.85 pixel. Measured through replicas of the operators on narrow lines,
-the terms are additive to 0.02 km$`^2`$ s$`^{-2}`$ and independent of the line width, and a
-fit that carries an excess $`\Delta\sigma^2`$ over the data returns
+the terms are additive to 0.02 km$`^2`$ s$`^{-2}`$ and independent of the line width. A fit
+whose model has an excess $`\Delta\sigma^2`$ over the data returns
 $`v_{\rm fit}^2 \simeq v^2 - \Delta\sigma^2/0.225`$, since the limb-darkened rotation profile has
-variance $`0.225\,(v\sin i)^2`$; for the whole of $`\sigma_{\rm grid}^2`$ that is
+variance $`0.225\,(v\sin i)^2`$. For the whole of $`\sigma_{\rm grid}^2`$ that is
 $`v_{\rm fit}^2 \simeq v^2 - 2.59\,\Delta v^2`$. Its fractional effect on $`v\sin i`$ therefore
 scales as $`(\Delta v / v\sin i)^2`$ and does not depend on the LSF. On the closed-loop fixture
-of `tests/test_pipeline.py` with the orbit held at the truth, this budget predicted
+of `tests/test_pipeline.py` with the orbit held at the injected values, this budget predicted
 $`v\sin i`$ = 8.20, 10.67, 11.00 and 11.14 km/s for a star at 11 km/s on model grids of 4.63
-(the native pixel), 3, 2 and 1.5 km/s, and the uncompensated epoch comparison returned 7.37,
+(the native pixel), 3, 2 and 1.5 km/s. The uncompensated epoch comparison returned 7.37,
 9.69, 10.08 and 10.28 (`d65_grid_smoothing.md`). The operator of §9.2a removes
 $`\tfrac{7}{12}\,\Delta v^2`$ from its width by default, which on that fixture gave 10.08,
-10.87, 10.56 and 10.54 km/s, and the temperatures, gravities and light fractions did not move.
+10.87, 10.56 and 10.54 km/s, and the temperatures, gravities and light fractions did not change.
 
 Two parts of the budget are not stationary. The frame-shift term depends on the fitted
-$`v`$: on the native grid of the fixture $`\gamma = 12`$ km/s is 2.59 pixels, so $`f_v(1-f_v)`$ is
-0.241 rather than $`1/6`$, which the mean formula leaves as $`-0.39`$ km/s, while on grids where
+$`v`$. On the native grid of the fixture $`\gamma = 12`$ km/s is 2.59 pixels, so $`f_v(1-f_v)`$ is
+0.241 rather than $`1/6`$, which the mean formula leaves as $`-0.39`$ km/s. On grids where
 $`\gamma`$ is a whole number of pixels the formula removes slightly too much. The rotation
 kernel's pixel term oscillates when $`v\sin i`$ is comparable with $`\Delta v`$ (2.81 rather than
-1.78 km$`^2`$ s$`^{-2}`$ at 5 km/s on the native grid), and the rebin term drifts along the band
+1.78 km$`^2`$ s$`^{-2}`$ at 5 km/s on the native grid). The rebin term varies along the band
 when the model and native pixels have nearly equal widths.
 
-A model grid finer than the native pixel is not a substitute for the compensation. The bias
+A model grid finer than the native pixel does not replace the compensation. The bias
 in $`v^2`$ falls as $`\Delta v^2`$, but for a slow rotator it is still large at any grid a
-disentangling can afford: uncompensated, a 1.5 km/s grid returned 3.18 km/s for a star at 5 and
-10.28 for one at 11, and a 2 km/s grid took 1.5 times as long as the native one on the
-closed-loop test while returning 9.78 km/s for 11, where the native grid with the compensation
-returned 9.82. The model grid should be refined only where the compensation cannot reach, that
+disentangling can afford. Uncompensated, a 1.5 km/s grid returned 3.18 km/s for a star at 5 and
+10.28 for one at 11. A 2 km/s grid took 1.5 times as long as the native one on the
+closed-loop test and returned 9.78 km/s for 11, where the native grid with the compensation
+returned 9.82. The model grid should be refined only where the compensation is incomplete, that
 is where $`\Delta v > 1.10\,\sigma_q`$ and the operator width would fall below half a pixel
-(§9.2a), and the warning then names the spacing required. `refit_draws` does not apply to the
+(§9.2a), and the warning then gives the spacing required. `refit_draws` does not apply to the
 epoch comparison, whose natural spread would come from draws of the epoch noise rather than of
-$`\hat d`$, and that refit has not been built.
+$`\hat d`$, and that refit has not been implemented.
 
-### 9.6 The accuracy this has to reach
+### 9.6 Required accuracy
 
-A label from this mode is a template coordinate. The relevant question is not whether it is the
-star's temperature but whether a better label would change the epoch radial velocities, and the
-literature sets a loose tolerance:
+A label from this mode is a template coordinate. It needs to be accurate only to the extent
+that a better label would change the epoch radial velocities, and the literature gives a loose
+tolerance:
 
 ```math
 T_{\mathrm{eff}} \lesssim 2\text{–}3\%,\quad \log g \lesssim 0.15\ \mathrm{dex},\quad
@@ -1806,36 +1807,36 @@ T_{\mathrm{eff}} \lesssim 2\text{–}3\%,\quad \log g \lesssim 0.15\ \mathrm{dex
 ```
 
 Posbic et al. (2012) measure a template 400–1000 K too warm to bias solar-type RVs by
-$`\approx 0.2`$ km/s (about FWHM/60) with no loss of precision; Tkachenko et al. (2022) find
+$`\approx 0.2`$ km/s (about FWHM/60) with no loss of precision. Tkachenko et al. (2022) find
 LSD profile shapes insensitive to $`\pm5\%`$ in $`T_{\mathrm{eff}}`$ and $`\pm0.3`$–0.4 dex in
-$`\log g`$ and [M/H]. Published methods clear this tolerance, as does the closed loop in
+$`\log g`$ and [M/H]. Published methods meet this tolerance, as does the closed loop in
 `tests/test_match.py`. On the simulated Gaia RVS binaries of §9.2a, at S/N 17
 to 99 per epoch and survey resolution, the converged epoch comparison met the temperature
 tolerance on 21 of 24 components (within 2% on 20) and the metallicity tolerance to 0.031 dex
-on ten of twelve systems, with a median gravity error of 0.062 dex, while the native
-comparison missed by twice as much in temperature (`d65_converged_labels.md`). Rotation does
-not reach 10% on slow rotators: its median absolute error of 2.69 km/s is largely the
-unmodelled smoothing described in §9.5, and fell to 1.43 km/s once the operator carried it.
+on ten of twelve systems. The median gravity error was 0.062 dex. The temperature error of
+the native comparison was twice as large (`d65_converged_labels.md`). Rotation does
+not reach 10% on slow rotators. Its median absolute error of 2.69 km/s is largely the
+unmodelled smoothing described in §9.5, and fell to 1.43 km/s once the operator included it.
 
-What a wrong template does cost is a per-component constant velocity zero point: the CfA
+The effect of a wrong template is a constant velocity zero point per component: the CfA
 SB2 orbits' $`\gamma_1 - \gamma_2 = 0.35 \pm 0.55`$ km/s and, in the extreme case, Gaia DR3's
-$`-20`$ km/s for hot stars before mitigation (Blomme et al. 2023). That is the same
-one-zero-point-per-component quantity §5.3 and §7.6 already track. This mode therefore fixes
-zero points, flux ratios and gross template mismatch; it does not improve RV precision.
+$`-20`$ km/s for hot stars before mitigation (Blomme et al. 2023). This is the per-component
+zero point of §5.3 and §7.6. This mode therefore fixes zero points, flux ratios and gross
+template mismatch. It does not improve RV precision.
 
 ## 10. Epoch velocities by N-dimensional correlation
 
-Everything above infers the orbit from the composite spectra and never measures a per-epoch
-velocity. This section describes the complementary measurement: given the component spectra
+The preceding sections infer the orbit from the composite spectra and do not measure a per-epoch
+velocity. This section describes the complementary measurement. Given the component spectra
 (from a library, a label match, or the disentangling itself), each component's velocity is
 measured in every epoch separately, by the two-dimensional correlation of Zucker & Mazeh
 (1994) generalized to $`N`$ components and to weighted, masked, multi-instrument data. It is
-implemented in `albireo.todcor`, and `albireo.rvorbit` fits a Keplerian to what it produces.
+implemented in `albireo.todcor`, and `albireo.rvorbit` fits a Keplerian to its output.
 
 ### 10.1 The estimator
 
 Fix the templates $`t_i`$ (deviation spectra on the model grid, normalized to their own
-continua) and write the epoch model of §1.4 with the spectra *given*:
+continua) and write the epoch model of §1.4 with the spectra given:
 
 ```math
 y_j = 1 + \sum_{i=1}^{N} a_{ij}\, \mathbf{R}_j \mathbf{B}_j \mathbf{T}(\delta_{ij})\, t_i
@@ -1844,10 +1845,11 @@ y_j = 1 + \sum_{i=1}^{N} a_{ij}\, \mathbf{R}_j \mathbf{B}_j \mathbf{T}(\delta_{i
 ```
 
 with $`\mathbf{P}_j`$ an additive low-order (Chebyshev) nuisance basis on the native pixels,
-additive for the reason §9.1 gives: what it absorbs lives in the continuum, where a
-multiplicative term is identically zero. Write $`A_i(\delta) = \mathbf{R}\mathbf{B}\mathbf{T}(\delta) t_i`$
-for a template shifted, convolved and projected onto the epoch's pixels, $`z = y - 1`$, and for a
-set of shifts $`\mathbf{s} = (\delta_1, \dots, \delta_N)`$
+additive for the reason given in §9.1: what it absorbs is confined to the continuum, where a
+multiplicative term is identically zero. Write
+$`A_i(\delta) = \mathbf{R}\mathbf{B}\mathbf{T}(\delta) t_i`$ for a template shifted, convolved
+and projected onto the epoch's pixels, $`z = y - 1`$, and for a set of shifts
+$`\mathbf{s} = (\delta_1, \dots, \delta_N)`$
 
 ```math
 b_i(\delta_i) = A_i^{\!\top} \mathbf{W} z, \qquad
@@ -1870,8 +1872,8 @@ and $`\beta = (b;\ \mathbf{P}^{\!\top}\mathbf{W}z)`$. The velocities are the min
 which is searched on the integer shifts of the template grid (one segment-sum builds every
 shifted, projected column, and one matrix product per template pair gives every $`G_{ik}`$)
 and then refined below a pixel (§10.3). The search costs $`O(N^2 S^2 n_{\rm pix})`$ for $`S`$ shifts
-per component, so the global pass strides the grid by the narrowest LSF sigma, which cannot
-step over a correlation peak, and the fine pass runs at full resolution around its minimum.
+per component, so the global pass steps through the grid by the narrowest LSF sigma, which
+cannot skip a correlation peak, and the fine pass runs at full resolution around its minimum.
 
 ### 10.2 Relation to TODCOR
 
@@ -1894,43 +1896,43 @@ fixed-ratio, free-scale chi-square satisfies
 \qquad \alpha' = \frac{\ell_2}{\ell_1}\,\frac{\lVert A_2\rVert}{\lVert A_1\rVert},
 ```
 
-their original $`R(s_1, s_2; \alpha)`$. Both identities hold to $`10^{-10}`$ in the suite. The
-three- and four-component extensions (Zucker et al. 1995; Torres et al. 2007) are the same
-block solve with a larger $`G`$; nothing in the formulation is specific to
+their original $`R(s_1, s_2; \alpha)`$. Both identities hold to $`10^{-10}`$ in the test suite.
+The three- and four-component extensions (Zucker et al. 1995; Torres et al. 2007) are the same
+block solve with a larger $`G`$. Nothing in the formulation is specific to
 $`N = 2`$. The least-squares form adds two things. Masks, chip gaps, cosmic rays, per-pixel
 weights, mixed instruments and mixed samplings enter through $`\mathbf{W}`$ and
 $`\mathbf{R}_j`$ and change no formula, under the weighting convention of the rest of the
-package. And the templates can be intrinsic spectra with each instrument's LSF applied in
-quadrature above the resolution they already carry.
+package. The templates can also be intrinsic spectra with each instrument's LSF applied in
+quadrature above the resolution they already have.
 
-Two differences from the published practice are deliberate. Continuum-normalized data pin
+Two differences from the published practice are deliberate. Continuum-normalized data fix
 the composite's scale, so the default holds the light fractions exactly rather than leaving
-the overall amplitude free; `scale="free"` restores the classic scale-invariant form.
-And multi-order spectra are pooled through their declared weights into one chi-square rather
+the overall amplitude free. `scale="free"` restores the classic scale-invariant form.
+Multi-order spectra are pooled through their declared weights into one chi-square rather
 than combined through the per-order maximum-likelihood product of Zucker (2003), which profiles
-a separate noise level per order; an `ivar` declared per order (as the readers do), or
+a separate noise level per order. An `ivar` declared per order (as the readers do), or
 splitting the dataset by order, covers that case.
 
-### 10.3 Fractional shifts are exact, and the pixel-locking bound
+### 10.3 Exact fractional shifts and pixel locking
 
 The shift operator is linear in the template and, for a fractional shift $`n + f`$,
 $`\mathbf{T}(n + f)\, t = (1 - f)\,\mathbf{T}(n)\, t + f\,\mathbf{T}(n + 1)\, t`$ (§1.1). Every inner
-product above is therefore **bilinear in the fractional parts**, and $`\chi^2(\mathbf{s})`$ with
+product above is therefore bilinear in the fractional parts, and $`\chi^2(\mathbf{s})`$ with
 held amplitudes is an exact quadratic in $`f \in [0, 1]^N`$ inside each unit cell of the
-integer grid, reconstructed from $`3^N`$ exact evaluations and minimized in closed form, with
-the amplitude solve alternating when they are profiled. The sub-pixel minimum and the
-curvature at it are thus *computed* for the same operator the forward model uses, not read
-off a parabola through three grid points.
+integer grid. It is reconstructed from $`3^N`$ exact evaluations and minimized in closed form,
+with the amplitude solve alternating when the amplitudes are profiled. The sub-pixel minimum
+and the curvature at it are therefore computed for the same operator the forward model uses,
+and not from a parabola through three grid points.
 
-That operator has a known artifact: at $`f = \tfrac12`$ the two-tap interpolation is a
+That operator has a known artifact. At $`f = \tfrac12`$ the two-tap interpolation is a
 $`[\tfrac12, \tfrac12]`$ smoothing, which lowers a Gaussian line of width $`\sigma_{\rm px}`$ by
-$`\approx 1/(8\sigma_{\rm px}^2)`$ of its depth and so adds a one-pixel-periodic ripple to the
-chi-square whose pull on the minimum is of order $`2\pi / (64\sigma_{\rm px}^2) \approx
-0.1/\sigma_{\rm px}^2`$ pixels. That is an estimate rather than a bound: measured on
-noiseless data simulated at four times the template resolution, the largest error is 0.03 px at one pixel per sigma, 0.015
-at two, 0.006 at five and 0.002 at ten (benchmarks.md). Three pixels per LSF sigma puts it
-below a hundredth of a pixel; `Fit.templates()` upsamples the components to that, and `todcor`
-warns below two.
+$`\approx 1/(8\sigma_{\rm px}^2)`$ of its depth. This adds a one-pixel-periodic ripple to the
+chi-square, whose effect on the minimum is of order $`2\pi / (64\sigma_{\rm px}^2) \approx
+0.1/\sigma_{\rm px}^2`$ pixels. That is an estimate rather than a bound. Measured on noiseless
+data simulated at four times the template resolution, the largest error is 0.03 px at one pixel
+per sigma, 0.015 at two, 0.006 at five and 0.002 at ten (benchmarks.md). At three pixels per LSF
+sigma it is below a hundredth of a pixel. `Fit.templates()` upsamples the components to that,
+and `todcor` warns below two.
 
 ### 10.4 Uncertainties and detection
 
@@ -1944,13 +1946,13 @@ the Hessian. In the chi-square form the same profiling gives
 ```
 
 the curvature error rescaled by the reduced chi-square (what `errors="profiled"` reports),
-against $`2\mathbf{H}^{-1}`$ with the declared weights taken at face value (`errors="ivar"`). The
+against $`2\mathbf{H}^{-1}`$ with the declared weights taken as given (`errors="ivar"`). The
 off-diagonal of $`\mathbf{H}^{-1}`$ is the blending diagnostic: near conjunction the two shifts
 are measured along a ridge, their correlation approaches one, and the table flags the epoch.
 
 Both forms take the pixels as independent. A pipeline that resampled the spectra onto a
-common step correlates neighbouring pixels (§1.4a; Gaia's RVS grids carry lag-one
-correlations of 0.27 and 0.81), and the weighted least squares is then still the right
+common step correlates neighbouring pixels (§1.4a; Gaia's RVS grids have lag-one
+correlations of 0.27 and 0.81). The weighted least squares is then still the right
 estimator, but its covariance is not the curvature. With $`\mathbf{J}`$ the Jacobian of the
 model at the solution (the shifted templates' derivatives, the amplitudes and the nuisance
 basis), $`\mathbf{W} = \mathrm{diag}(w)`$ and $`\mathbf{R}`$ the AR(1) correlation of the
@@ -1963,39 +1965,39 @@ standardized noise along the pixel index,
 ```
 
 the sandwich, whose shift block `todcor` reports when a `noise_correlation` is declared
-($`\phi = 0`$ gives back the curvature). The model is linear in every parameter within a
+($`\phi = 0`$ recovers the curvature). The model is linear in every parameter within a
 shift's cell, by the interpolation identity of §10.3, so $`\mathbf{J}`$ is assembled from
 the projected templates at the two integer shifts bracketing each position, and
 $`\mathbf{R}`$ is applied by two first-order recursions. The correction grows with the
 correlation and with how much of the template derivative's power lies within the
-correlation length; on Gaia's DR4 grid it widens the errors by 10 to 20 percent, which is
-where the epoch-velocity pulls of the benchmark sat before it.
+correlation length. On Gaia's DR4 grid it widens the errors by 10 to 20 percent, which is
+the excess of the epoch-velocity pulls of the benchmark before the correction.
 Each component's detection statistic is $`\Delta\chi^2_i = \chi^2_{\min}(\text{without } i) -
-\chi^2_{\min}`$ with the remaining amplitudes refitted, which is small for a companion the epoch
+\chi^2_{\min}`$ with the remaining amplitudes refitted. It is small for a companion the epoch
 does not constrain, the case a batch run has to detect.
 
 ### 10.5 Frames and zero points
 
-Velocities are reported barycentric whatever the data's frame: for topocentric data the shift
+Velocities are reported barycentric whatever the data's frame. For topocentric data the shift
 searched is $`\xi(v) - \xi(v_{\rm bary})`$ in log-wavelength (§1.2), and the composition is
 exact because log-shifts add. A template's rest frame enters the same way: a template at
 velocity $`v_0`$ relative to the star's true rest frame gives $`v = v_{\rm meas} \oplus v_0`$,
 relativistic velocity addition (§7.6). A synthetic template has $`v_0 = 0`$ and yields absolute
 velocities. A disentangled component has an unknown $`v_0`$, since its zero point is the
 unidentified constant of §5.3, so the velocities measured against it are differential, one
-arbitrary constant per component; `VelocityTable.absolute` records which is which, and the
-label match of §9 is what pins the constant.
+arbitrary constant per component. `VelocityTable.absolute` records the status of each
+component, and the label match of §9 determines the constant.
 
 ### 10.6 The orbit from the table
 
 `albireo.rvorbit` fits the Keplerian of §7.2 (period, conjunction time,
 $`(\sqrt{e}\cos\omega, \sqrt{e}\sin\omega)`$, one $`K_i`$ per component, and a systemic velocity)
-to the table by weighted nonlinear least squares with the Jacobian from JAX, using the same
-Kepler solver and angle conventions as `orbit_velocities`, so the two routes compare element
-for element. The systemic velocity is one number when every component is absolute and one
+to the table by weighted nonlinear least squares with the Jacobian from JAX. It uses the same
+Kepler solver and angle conventions as `orbit_velocities`, so the two routes are comparable
+element by element. The systemic velocity is one number when every component is absolute and one
 per component otherwise, since a shared $`\gamma`$ across two different zero points would be
 absorbed into the semi-amplitudes. Errors are the curvature errors rescaled by the reduced
-chi-square, because a template fit's per-epoch errors never include template mismatch. The
+chi-square, because a template fit's per-epoch errors do not include template mismatch. The
 minimum masses follow from $`M_{1,2}\sin^3 i = 1.0361\times10^{-7}\,(1 - e^2)^{3/2}\,(K_1 + K_2)^2 K_{2,1}\,P`$
 in solar masses with $`K`$ in km/s and $`P`$ in days.
 
@@ -2023,4 +2025,4 @@ in solar masses with $`K`$ in km/s and $`P`$ in days.
 - Zucker, S. & Mazeh, T. 1994, ApJ, 420, 806
 - Zucker, S., Torres, G. & Mazeh, T. 1995, ApJ, 452, 863
 
-The science overview, `docs/science.md`, carries the complete bibliography with ADS links.
+The science overview, `docs/science.md`, contains the complete bibliography with ADS links.

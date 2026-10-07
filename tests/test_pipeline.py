@@ -1,24 +1,25 @@
 """Tests for the pipeline driver: one declaration in, structured products out.
 
-What is pinned here is the *driver*, not the stages it calls -- each of those has its own
-closed-loop tests. Three kinds of claim:
+These tests cover the driver, not the stages it calls, each of which has its own
+closed-loop tests. Three kinds of claim are tested:
 
-1. **The declaration is honest.** Light fractions are required and must sum to one, the
-   wavelength medium is never guessed, unknown settings are refused by name, and a TOML
+1. **The declaration is validated.** Light fractions are required and must sum to one, the
+   wavelength medium is never guessed, unknown settings are rejected by name, and a TOML
    file round-trips through the loader with every path resolved against its own
    directory.
 2. **The products are structured and complete.** One star run writes the velocity table
    (twice: the commented ASCII and a CSV), the component spectra with their bands, the
-   orbit, the labels, ``result.json`` with the keys a survey table needs, and the figures;
-   a batch writes ``results.csv`` with one row per star and records a failure without
+   orbit, the labels, ``result.json`` with the keys a survey table needs, and the figures.
+   A batch writes ``results.csv`` with one row per star and records a failure without
    stopping.
-3. **The loop closes.** A star whose components are drawn from a toy library at known
-   labels comes back with those labels, with the velocities *absolute* because the label
-   fit pinned each component's zero point, and with the systemic velocity -- which the
-   disentangling alone can never see -- recovered by the orbit fitted to the table.
+3. **The closed loop recovers the injected values.** For a star whose components are drawn
+   from a toy library at known labels, those labels are recovered. The velocities are
+   absolute because the label fit fixes each component's zero point, and the orbit fitted
+   to the table recovers the systemic velocity, which the disentangling alone does not
+   determine.
 
-Everything is offline and generated in-test; the worker-process test spawns two real
-processes, each importing JAX, which is the point of it.
+All data are generated in the tests, which run offline. The worker-process test spawns two
+real processes, each importing JAX, which is its purpose.
 """
 
 from __future__ import annotations
@@ -199,7 +200,7 @@ def test_known_elements_are_declared_and_described(toy):
         _star(dataset, truth, grid, ecc={"value": 0.2, "sigma": 0.05})
     with pytest.raises(ValueError, match="must start at 0"):
         _star(dataset, truth, grid, ecc=(0.1, 0.4))
-    # A TOML round trip carries the new keys.
+    # A TOML round trip preserves these keys.
     data = {
         "stars": [
             {
@@ -403,8 +404,8 @@ def test_the_truth_block_carries_elements_pulls_and_spectra(quick_run):
     assert abs(truth["elements_table"]["omega_deg"]) <= 180.0
     for name in ("A", "B"):
         spectra = truth["spectra"][name]
-        # A fast-mode fit (40 steps) is not converged; what is pinned is that the block
-        # exists and reads sensibly, not the recovery, which the slow closed loops pin.
+        # A fast-mode fit (40 steps) is not converged. This test asserts that the block
+        # exists and has plausible values. The slow closed-loop tests assert the recovery.
         assert 0.0 < spectra["rms"] < spectra["rms_truth"], spectra
         assert spectra["corr"] > 0.7, spectra
         assert spectra["pull_rms"] > 0.0
@@ -459,8 +460,9 @@ def test_the_written_spectra_can_be_read_back(quick_run):
 def test_a_batch_records_a_failure_without_stopping(toy, library, tmp_path):
     dataset, truth, grid = toy
     good = _star(dataset, truth, grid, name="good", labels=False)
-    # A declaration the façade refuses at fit time: an eccentricity bound above the
-    # solver's clip is caught when the model is built, not when the config is parsed.
+    # The Disentangler interface rejects this declaration at fit time: an eccentricity
+    # bound above the solver's clip is caught when the model is built, not when the config
+    # is parsed.
     bad = _star(
         dataset, truth, grid, name="bad", labels=False, overrides={"ecc_max": 0.95, "dv_kms": -1.0}
     )
@@ -540,7 +542,7 @@ def test_the_demo_declares_two_known_stars():
 
 
 # ---------------------------------------------------------------------------
-# 3. the loop closes
+# 3. the closed loop
 # ---------------------------------------------------------------------------
 
 
@@ -564,10 +566,10 @@ def test_the_pipeline_recovers_the_injected_system(library, tmp_path):
         )
     assert abs(orbit["period"] - ORBIT.period) < 0.01 * ORBIT.period
     labels = result.report["labels"]["components"]
-    # 5%, not the label mode's 2-3% template-selection target: what is pinned here is the
-    # driver, and on components that came through a real disentangling the fainter star's
-    # Teff lands about 4% off -- on this fixture as on AI Phoenicis (D55), where the
-    # secondary missed by 4.3% while the primary met the target. The formal errors below
+    # The tolerance is 5%, not the label mode's 2-3% template-selection target, because
+    # this test covers the driver. On components produced by a disentangling the fainter
+    # star's Teff is in error by about 4%, on this fixture as on AI Phoenicis (D55), where
+    # the secondary missed by 4.3% while the primary met the target. The formal errors below
     # are 5-10x smaller than that, which is the documented behaviour of the label mode.
     for name, true in TRUE_LABELS.items():
         assert abs(labels[name]["teff"] - true["teff"]) < 0.05 * true["teff"], name
@@ -593,14 +595,14 @@ def test_a_period_search_bootstraps_from_library_templates(library, tmp_path):
             plots=False,
             v_range=150.0,
             # Two candidates exercise the decision by the disentangling at a fraction
-            # of the default's wall on this toy.
+            # of the default's wall-clock time on this toy.
             period_decision_candidates=2,
         ),
     )
     result = run_star(star, config, progress=False)
     bootstrap = result.report["bootstrap"]
     assert abs(bootstrap["period"] - ORBIT.period) < 0.02 * ORBIT.period, bootstrap
-    # The template table the bootstrap measured is a product of its own, written before
+    # The template table the bootstrap measured is a separate product, written before
     # the disentangling, so the period decision can be examined from disk.
     template_table = Path(result.report["files"]["template_velocities"])
     assert template_table.name == "template_velocities.rv" and template_table.exists()
@@ -608,8 +610,8 @@ def test_a_period_search_bootstraps_from_library_templates(library, tmp_path):
     bjd = np.loadtxt(template_table, comments="#", usecols=(0,), ndmin=1)
     assert bjd.size == dataset.n_epochs
     assert Path(result.report["files"]["template_velocities_csv"]).exists()
-    # The bootstrap also carries the table the period search itself ran on, which the
-    # winning orbit's re-assignment would otherwise leave nowhere on disk.
+    # The bootstrap also keeps the table the period search ran on, which would otherwise
+    # not be on disk after the winning orbit's re-assignment.
     assert result.live["bootstrap"]["table_unexchanged"].n_epochs == dataset.n_epochs
     orbit = result.report["orbit"]
     # The bootstrap warm-starts a Keplerian disentangling, so the final table's orbit
@@ -621,7 +623,7 @@ def test_a_period_search_bootstraps_from_library_templates(library, tmp_path):
 
 
 def test_the_noise_correlation_setting_is_checked_and_declared(toy):
-    """A number, a table per instrument or "fit"; anything else is refused by name."""
+    """A number, a table per instrument or "fit"; anything else is rejected by name."""
     from albireo.facade import Between as _Between
     from albireo.pipeline import _noise_declaration, _noise_values
 
@@ -674,7 +676,7 @@ def test_a_free_eccentricity_starts_from_the_table_orbit_when_it_is_usable():
     assert _element_starts(ctx, _Orbit(float("nan"), 1.0), star, settings) is None
     assert _element_starts(ctx, _Orbit(0.4, 1.2), star, settings) == (0.4, 1.2)
     assert "started from the template table" in ctx.lines[-1]
-    # An eccentricity the table has not detected is not a start: 0.2 +- 0.15 stays default.
+    # An eccentricity not detected in the table is not a start: 0.2 +- 0.15 stays default.
     assert _element_starts(ctx, _Orbit(0.2, 1.2, error=0.15), star, settings) is None
     assert "not detected at three sigma" in ctx.lines[-1]
     assert _element_starts(ctx, _Orbit(0.2, 1.2, error=float("nan")), star, settings) is None
@@ -695,7 +697,7 @@ def test_a_free_eccentricity_starts_from_the_table_orbit_when_it_is_usable():
 
 
 def test_an_exchanged_pair_is_recognised_and_the_truth_reordered():
-    """Velocities that match the truth in the other order are judged in that order."""
+    """Velocities that match the injected values in the other order are compared in that order."""
     from albireo.pipeline import _exchange_rms, _exchanged_truth
 
     phase = np.linspace(0.0, 1.0, 12, endpoint=False)
@@ -725,7 +727,7 @@ def test_an_exchanged_pair_is_recognised_and_the_truth_reordered():
 
 
 def test_semi_amplitude_starts_follow_the_table_and_fill_in_the_rest():
-    """Measured starts are taken as they are; a missing one follows its nearest neighbour."""
+    """Measured starts are taken as they are; a missing one is set from its nearest neighbour."""
     from albireo.facade import Between
     from albireo.pipeline import _k_prior
 
@@ -784,12 +786,12 @@ def test_the_candidate_periods_are_the_union_of_three_searches(monkeypatch):
 
     candidates, searches = _period_candidates(_Table(), swap_invariant=True)
     assert calls == [(False, 1, False), (False, 2, False), (False, 1, True), (True, 1, False)]
-    # The four sources (the sinusoid, its two-harmonic form, the first component alone, the
-    # swap-invariant peaks each followed by their double) merged round robin by rank: every
-    # source's best peak, then every source's second, and so on. Everything within 2% of an
-    # earlier candidate is dropped: 10.05 duplicates 10.0, the first component's 10.0 is
-    # already there, and the invariant branch's 6.0, 10.0 and 6.0 (the double of 3.0 and of
-    # 5.0, and the peak 6.0 itself) are all already there.
+    # The four sources are the sinusoid, its two-harmonic form, the first component alone,
+    # and the swap-invariant peaks each followed by their double. They are merged round
+    # robin by rank: every source's best peak, then every source's second, and so on.
+    # Everything within 2% of an earlier candidate is dropped: 10.05 duplicates 10.0, the
+    # first component's 10.0 is already there, and the invariant branch's 6.0, 10.0 and 6.0
+    # (the double of 3.0 and of 5.0, and the peak 6.0 itself) are all already there.
     assert candidates == [10.0, 11.0, 15.0, 3.0, 20.0, 30.0, 6.0, 13.0, 4.0, 8.0, 5.0, 12.0]
     assert searches["single"]["period"] == 10.0
     assert searches["harmonic"]["period"] == 11.0
@@ -813,7 +815,7 @@ def test_the_candidate_periods_are_the_union_of_three_searches(monkeypatch):
 
 
 def _peak_list_stub(lists):
-    """A ``find_period`` standing in for four searches whose peak lists are given."""
+    """A ``find_period`` stub for four searches whose peak lists are given."""
 
     def stub(table, *, swap_invariant=False, n_harmonics=1, **kwargs):
         if kwargs.get("components"):
@@ -832,13 +834,13 @@ def _peak_list_stub(lists):
 def test_a_deeper_peak_list_only_adds_candidates_and_never_removes_one(monkeypatch):
     """Merging by rank makes the proposal monotone in the number of peaks each search reports.
 
-    ``rvorbit._distinct_peaks`` walks the local maxima in descending power, so the list it
+    ``rvorbit._distinct_peaks`` takes the local maxima in descending power, so the list it
     returns for a given ``n_peaks`` is the first entries of the list it returns for any
-    larger one: a deeper search extends each source rather than rewriting it. Merged round
-    robin by rank, a deeper setting therefore only appends, and a period proposed at the
-    shallower setting cannot be deduplicated away by a peak that the deeper setting reached
-    first. Concatenation had no such property, and over the 33 blind-tier stars of D64 it
-    lost 233 of the 1296 starts proposed at twenty peaks when the count went to fifty.
+    larger one. A deeper search only extends each source. Merged round robin by rank, a
+    deeper setting therefore only appends, and a period proposed at the shallower setting
+    cannot be removed as a duplicate of a peak that the deeper setting reached first.
+    Concatenation had no such property, and over the 33 blind-tier stars of D64 it lost
+    233 of the 1296 starts proposed at twenty peaks when the count was raised to fifty.
     """
     import albireo.rvorbit as rvorbit_module
     from albireo.pipeline import _period_candidates
@@ -861,22 +863,22 @@ def test_a_deeper_peak_list_only_adds_candidates_and_never_removes_one(monkeypat
     at_twelve, _ = _period_candidates(_Table(), swap_invariant=True)
 
     assert set(at_eight) <= set(at_twelve) and len(at_twelve) > len(at_eight)
-    # It is not only a superset: the shallow proposal is the head of the deeper one, since
-    # the extra ranks fall after every rank the shallow setting reached.
+    # The shallow proposal is also the head of the deeper one, since the extra ranks come
+    # after every rank the shallow setting reached.
     assert at_twelve[: len(at_eight)] == at_eight
-    # The deeper setting's own new peak at 4.05 is the one dropped, not the invariant
-    # search's 4.0, which outranks it.
+    # The deeper setting's new peak at 4.05 is the one dropped, not the invariant search's
+    # 4.0, which outranks it.
     assert 4.0 in at_twelve and 4.05 not in at_twelve
 
 
 def test_the_best_peak_of_the_last_search_is_not_displaced_by_a_deep_earlier_one(monkeypatch):
-    """A lower-ranked peak of an earlier source no longer pre-empts a better peak of a later.
+    """A lower-ranked peak of an earlier source does not displace a better peak of a later one.
 
     The case is the blind-tier star gaia-37608387208382848 of D64. The start within 0.03% of
-    its true 6.1037 d period is the double of the swap-invariant search's top peak, and a
-    one-harmonic peak at 6.079648 d, 0.4% away and deep in that search's list, displaced it
-    under the old concatenation: the orbit started at 6.103977 d reaches chi-square 2028 and
-    the one started at 6.079648 d reaches 10072.
+    its true 6.1037 d period is the double of the swap-invariant search's top peak. Under
+    the former concatenation a one-harmonic peak at 6.079648 d, 0.4% away and deep in that
+    search's list, displaced it. The orbit started at 6.103977 d reaches chi-square 2028
+    and the one started at 6.079648 d reaches 10072.
     """
     import albireo.rvorbit as rvorbit_module
     from albireo.pipeline import _period_candidates
@@ -905,11 +907,11 @@ def test_the_best_peak_of_the_last_search_is_not_displaced_by_a_deep_earlier_one
 
 
 def test_an_orbit_outside_the_declared_ranges_cannot_win(monkeypatch):
-    """A lower chi-square at an absurd semi-amplitude or eccentricity is set aside.
+    """A lower chi-square outside the declared semi-amplitude or eccentricity range is set aside.
 
     A companion the templates could not follow leaves velocities that a wrong period fits
-    with a semi-amplitude of thousands of km/s at a lower chi-square than the truth; the
-    declared ranges say such an orbit is not a solution, so the decision skips it.
+    with a semi-amplitude of thousands of km/s at a lower chi-square than the true orbit.
+    The declared ranges exclude such an orbit, so the decision skips it.
     """
     import types
 
@@ -937,7 +939,7 @@ def test_an_orbit_outside_the_declared_ranges_cannot_win(monkeypatch):
     best, _, record = _orbit_over_candidates(ctx, table, [0.34, 0.58, 1.20], circular=False)
     assert best.period == 0.58 and record["n_candidates"] == 3
     assert any("lies outside the declared ranges" in f and "1537" in f for f in flags)
-    # With nothing inside the ranges the lowest chi-square stands, and says so.
+    # With nothing inside the ranges the lowest chi-square is kept and flagged.
     flags.clear()
     best, _, _ = _orbit_over_candidates(ctx, table, [0.34, 1.20], circular=False)
     assert best.period == 0.34
@@ -989,12 +991,12 @@ def test_the_orbit_loop_merges_fits_and_names_every_ambiguity(monkeypatch):
     )
     assert decision["n_candidates"] == 4
     assert best.period == 6.30 and best.chi2 == 90.0
-    # 6.31 converged to the winner's period and is not an ambiguity; 12.62 is, at +20;
+    # 6.31 converged to the winner's period and is not an ambiguity. 12.62 is one, at +20.
     # 3.15 is 310 away and is not named.
     assert decision["ambiguous"] == [{"period": 12.62, "delta_chi2": 20.0}]
     assert len(ctx.flags) == 1 and "12.6200 d at +20.0" in ctx.flags[0]
     assert "6.31" not in ctx.flags[0] and "3.15" not in ctx.flags[0]
-    # The ranking the period decision takes the top few of: the distinct orbits in
+    # The ranking from which the period decision takes the top few: the distinct orbits in
     # chi-square order, the winner first, each with the table it was fitted to. 6.31 is
     # the same period as the winner and was merged into it, as it is for the ambiguity.
     assert [round(o.period, 2) for o, _ in decision["ranked"]] == [6.30, 12.62, 3.15]
@@ -1033,13 +1035,13 @@ def _orbit_table(bjd, *, sigma=0.3, seed=0):
 
 
 def test_the_detection_gate_takes_the_weight_off_undetected_velocities_only(monkeypatch):
-    """A companion the templates lost leaves draws the gate removes, and the primary stays (D65).
+    """The gate removes the velocities of an undetected companion and keeps the primary's (D65).
 
-    On the benchmark system that motivated it the 7% secondary was undetected at 24 of 26
-    epochs, its velocities spread across the search window at detection statistics of 1.4 to
-    61, and the joint fit from the true period ended at 511 d with semi-amplitudes of 49 and
-    66 km/s. The gate sets those velocities to nan in a copy of the table that only the
-    search and the candidate fits see.
+    On the benchmark system that motivated the gate, the 7% secondary was undetected at 24
+    of 26 epochs, with velocities spread across the search window at detection statistics
+    of 1.4 to 61. The joint fit from the true period ended at 511 d with semi-amplitudes of
+    49 and 66 km/s. The gate sets those velocities to nan in a copy of the table that only
+    the search and the candidate fits use.
     """
     from types import SimpleNamespace
 
@@ -1063,8 +1065,8 @@ def test_the_detection_gate_takes_the_weight_off_undetected_velocities_only(monk
     np.testing.assert_array_equal(gated.velocity[0], weak.velocity[0])
     same, none = _detection_gate(weak, 0.0)
     assert same is weak and not none.any()
-    # The first component is never gated, however weak: that is the rule measured, and
-    # gating it took one benchmark system's true period from rank 2 to absent.
+    # The first component is never gated, however weak. That is the rule as measured, and
+    # gating it moved one benchmark system's true period from rank 2 to absent.
     faint_first = np.array(statistic)
     faint_first[0, :5] = 12.0
     primary_weak = replace(weak, delta_chi2=faint_first)
@@ -1078,12 +1080,12 @@ def test_the_detection_gate_takes_the_weight_off_undetected_velocities_only(monk
     alone, alone_mask = _detection_gate(only_first, 100.0)
     assert alone is only_first and not alone_mask.any()
 
-    # The search: the first component's source keeps every epoch, the relative velocity
-    # only the six at which both were detected.
+    # In the search the first component's source keeps every epoch, and the relative
+    # velocity only the six at which both were detected.
     _, searches = _period_candidates(weak, swap_invariant=True, detection_min=100.0)
     assert searches["first"]["used"].all()
     np.testing.assert_array_equal(searches["single"]["used"], ~lost)
-    # A companion detected nowhere leaves the first component's source alone, not a failure.
+    # A companion detected nowhere leaves only the first component's source, not a failure.
     nowhere = np.array(statistic)
     nowhere[1] = 10.0
     blind = replace(weak, delta_chi2=nowhere)
@@ -1091,7 +1093,7 @@ def test_the_detection_gate_takes_the_weight_off_undetected_velocities_only(monk
     assert searches["single"] is None and searches["invariant"] is None
     assert searches["first"] is not None and candidates
 
-    # The candidate fits see the gated copy and hand back the table as measured.
+    # The candidate fits use the gated copy and return the table as measured.
     flags: list[str] = []
     ctx = SimpleNamespace(settings=Analysis(k_min=2.0, k_max=250.0, ecc_max=0.9), flag=flags.append)
     best, best_table, _ = _orbit_over_candidates(
@@ -1103,9 +1105,9 @@ def test_the_detection_gate_takes_the_weight_off_undetected_velocities_only(monk
     ungated, _, _ = _orbit_over_candidates(ctx, weak, [6.35], circular=False)
     assert ungated.chi2 > 100.0 * best.chi2
 
-    # The exchange is decided on the gated copy: the refit is on the exchanged gated copy,
-    # so a gated velocity still carries no weight, and the table handed back is the table
-    # as measured with the same epochs exchanged.
+    # The exchange is decided on the gated copy. The refit is on the exchanged gated copy,
+    # so a gated velocity still has no weight, and the table returned is the table as
+    # measured with the same epochs exchanged.
     import albireo.rvorbit as rvorbit_module
     from albireo.rvorbit import _exchanged
 
@@ -1136,7 +1138,7 @@ def test_the_detection_gate_takes_the_weight_off_undetected_velocities_only(monk
     assert exchanged.settings["reassigned_by_orbit"] == 1
     monkeypatch.setattr(rvorbit_module, "fit_rv_orbit", fit_rv_orbit)
 
-    # Without the exchange nothing is re-assigned at all.
+    # Without the exchange nothing is re-assigned.
     def refuse(*args, **kwargs):
         raise AssertionError("the exchange was not allowed")
 
@@ -1153,11 +1155,12 @@ def test_the_detection_gate_takes_the_weight_off_undetected_velocities_only(monk
 def test_leave_one_epoch_out_peaks_follow_the_merge_on_a_short_table(monkeypatch):
     """The fifth source: three peaks per left-out epoch, after the round robin (D65).
 
-    On the benchmark system that motivated it one epoch of twelve had its twin components
-    exchanged, which put the true period at peak 108 of the one-harmonic search; leaving each
-    epoch out in turn and adding the three highest peaks of each put it at rank 1 of the
-    chi-square ranking. The block is appended after the round robin, in epoch order, and a
-    peak within 2% of anything already listed is dropped, which is the form that was measured.
+    On the benchmark system that motivated the source, one epoch of twelve had its twin
+    components exchanged, which put the true period at peak 108 of the one-harmonic search.
+    Leaving each epoch out in turn and adding the three highest peaks of each put it at rank
+    1 of the chi-square ranking. The block is appended after the round robin, in epoch
+    order, and a peak within 2% of anything already listed is dropped, which is the form
+    that was measured.
     """
     import albireo.rvorbit as rvorbit_module
     from albireo.pipeline import _LEAVE_ONE_OUT_MAX_EPOCHS, _period_candidates
@@ -1196,7 +1199,7 @@ def test_leave_one_epoch_out_peaks_follow_the_merge_on_a_short_table(monkeypatch
 
     monkeypatch.setattr(rvorbit_module, "find_period", stub)
     table = _velocity_table(n_epochs=5)
-    # Only on request: the bootstrap asks, the route that fits declared velocities does not.
+    # Only the bootstrap requests the source; the route that fits declared velocities does not.
     plain, searches = _period_candidates(table, swap_invariant=True)
     assert searches["leave_one_out"] is None and calls == []
     candidates, searches = _period_candidates(table, swap_invariant=True, leave_one_out=True)
@@ -1219,7 +1222,8 @@ def test_leave_one_epoch_out_peaks_follow_the_merge_on_a_short_table(monkeypatch
     assert searches["leave_one_out"] is None and calls == []
 
     # The limit is on the usable epochs as measured, before the detection gate: gating the
-    # companion at six of 26 epochs leaves 20 relative velocities, and still no source.
+    # companion at six of 26 epochs leaves 20 relative velocities, and the source still
+    # does not run.
     statistic = np.array(long_table.delta_chi2)
     statistic[1, :6] = 10.0
     gated_long = replace(long_table, delta_chi2=statistic)
@@ -1243,7 +1247,7 @@ def test_leave_one_epoch_out_peaks_follow_the_merge_on_a_short_table(monkeypatch
 def test_the_known_period_and_declared_velocity_routes_never_gate_or_leave_epochs_out(
     toy, tmp_path, monkeypatch
 ):
-    """The gate and the leave-one-out source belong to the bootstrap alone (D65).
+    """The gate and the leave-one-out source are used only by the bootstrap (D65).
 
     Both were measured on the bootstrap's library-template tables. The template table of the
     known-period route (``_table_orbit``) and the table measured after a free-velocity
@@ -1295,10 +1299,10 @@ def test_the_bootstrap_flags_a_table_on_few_nights_and_honours_the_exchange_rule
 ):
     """Two rules of D65 on the bootstrap: the few-nights flag and the light ratio of the exchange.
 
-    The flag changes nothing; three of the 33 blind tables of the third run had their usable
-    epochs on fewer than eight nights and the search recovered none of them. The exchange
-    in the candidate fits now follows the rule the velocities measured after the
-    disentangling follow, on the light fractions of the table's own amplitudes.
+    The flag changes nothing. Three of the 33 blind tables of the third run had their usable
+    epochs on fewer than eight nights, and the search recovered none of them. The exchange
+    in the candidate fits uses the same rule as the velocities measured after the
+    disentangling, on the light fractions of the table's own amplitudes.
     """
     from types import SimpleNamespace
 
@@ -1372,7 +1376,7 @@ def test_the_bootstrap_flags_a_table_on_few_nights_and_honours_the_exchange_rule
     )
     assert report["periodogram_peak"] is None and report["aliases"] == []
 
-    # Eight nights and alike light: neither flag, and the exchange runs.
+    # Eight nights and similar light fractions: neither flag is raised, and the exchange runs.
     spread = 2455000.2 + 5.0 * np.arange(8.0)
     ctx, report = run(table_with(spread, [0.55, 0.45]), "spread")
     assert seen["fits"]["exchange"] is True and report["n_nights"] == 8
@@ -1380,7 +1384,7 @@ def test_the_bootstrap_flags_a_table_on_few_nights_and_honours_the_exchange_rule
 
 
 def test_the_velocity_products_carry_every_digit_of_the_epoch_time(tmp_path):
-    """Six decimals of a BJD could not reproduce a period search; the products round-trip (D65)."""
+    """Six decimals of a BJD do not reproduce a period search; the products round-trip (D65)."""
     import csv
 
     from albireo.pipeline import _write_velocity_csv
@@ -1394,7 +1398,7 @@ def test_the_velocity_products_carry_every_digit_of_the_epoch_time(tmp_path):
     with _write_velocity_csv(tmp_path / "table.csv", table).open(encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
     np.testing.assert_array_equal([float(r["bjd"]) for r in rows], table.bjd)
-    assert rows[0]["v_A"] == f"{table.velocity[0, 0]:.6f}"  # everything else as before
+    assert rows[0]["v_A"] == f"{table.velocity[0, 0]:.6f}"  # the other columns keep six decimals
 
     # The edge flag: merged in the .rv file and the CSV's at_edge, per component in the CSV.
     at_edge = np.zeros((2, 6), dtype=bool)
@@ -1415,13 +1419,13 @@ def test_the_disentangling_decides_among_the_best_candidate_periods(toy, tmp_pat
     """The table ranks the candidates by chi-square; the disentangling chooses among the best.
 
     The velocity table cannot separate a period from its aliases when the table is poor.
-    Two blind systems of the D62 Gaia population make the case: on fifteen epochs an
+    Two blind systems of the D62 Gaia population are examples. On fifteen epochs an
     eccentric Keplerian at 0.2485 d with semi-amplitudes of 233 and 239 km/s at e = 0.73
-    fitted better than the true 6.104 d, and on twelve epochs the same happened at 1.129 d
-    at e = 0.72 against a true 5.356 d. Both lie inside the declared ranges, so the range
-    filter does not reach them. The three candidate orbits here stand for that case: the
-    chi-square prefers the first, the marginal likelihood of the disentangling prefers the
-    second, and the second is the one the fit is started from.
+    fitted better than the true 6.104 d. On twelve epochs the same happened at 1.129 d at
+    e = 0.72 against a true 5.356 d. Both lie inside the declared ranges, so the range
+    filter does not remove them. The three candidate orbits here represent that case: the
+    first has the lowest chi-square, the second has the highest marginal likelihood of the
+    disentangling, and the fit is started from the second.
     """
     from types import SimpleNamespace
 
@@ -1457,9 +1461,9 @@ def test_the_disentangling_decides_among_the_best_candidate_periods(toy, tmp_pat
         summary=lambda: "  table summary",
     )
     templates = [SimpleNamespace(meta={"source": "stub"}) for _ in range(2)]
-    # The chi-square order: the absurd alias first, the truth second. The truth's secondary
-    # is one the templates could not follow, so its semi-amplitude is degenerate and the
-    # declaration falls back to the range, which is where the scan's best becomes a start.
+    # The chi-square order: an alias first, the true period second. The templates could
+    # not follow the true orbit's secondary, so its semi-amplitude is degenerate and the
+    # declaration falls back to the range, in which case the scan's best becomes a start.
     ranked = [
         (orbit_at(0.24847, 8.0, (233.0, 239.0)), table),
         (orbit_at(6.10400, 31.0, (40.0, 300.0)), table),
@@ -1467,7 +1471,7 @@ def test_the_disentangling_decides_among_the_best_candidate_periods(toy, tmp_pat
     ]
     # period -> (best marginal over phase at the start, the semi-amplitude scan's best
     # value, and the semi-amplitudes it found). The first and third scans end below their
-    # start and are refused, so those candidates are worth their phase scan's maximum.
+    # start and are rejected, so those candidates keep their phase scan's maximum.
     scanned = {
         0.24847: (-1000.0, -1010.0, [231.0, 237.0]),
         6.10400: (-850.0, -840.0, [38.0, 61.0]),
@@ -1493,7 +1497,7 @@ def test_the_disentangling_decides_among_the_best_candidate_periods(toy, tmp_pat
             return self.best_value - self.start_value
 
     class _FakeDis:
-        """Only what the comparison touches: a coarse copy, a phase scan, a K scan."""
+        """Only what the comparison uses: a coarse copy, a phase scan, a K scan."""
 
         def __init__(self, spec):
             centre = 0.5 * (float(spec.period.lo) + float(spec.period.hi))
@@ -1518,8 +1522,8 @@ def test_the_disentangling_decides_among_the_best_candidate_periods(toy, tmp_pat
 
     def fake_declare(ctx_, dataset_, lsf_, spec, velocities):
         assert velocities is None
-        # The comparison scans the conjunction, which is as uncertain as the period it
-        # came from, and declares every semi-amplitude on the settings' own bounds, so
+        # The comparison scans the conjunction, which is as uncertain as the period it was
+        # fitted with, and declares every semi-amplitude on the settings' own bounds, so
         # that every candidate is measured on one velocity budget and one model grid.
         assert spec.t_conj == "scan"
         declared.append([(float(s.lo), float(s.hi)) for s in spec.k])
@@ -1562,12 +1566,12 @@ def test_the_disentangling_decides_among_the_best_candidate_periods(toy, tmp_pat
     assert [c["chosen"] for c in decision["candidates"]] == [False, True, False]
     assert [c["scan_moved"] for c in decision["candidates"]] == [False, True, False]
     assert decision["candidates"][1]["k"] == pytest.approx([38.0, 61.0])
-    assert decision["candidates"][0]["k"] == pytest.approx([10.0, 20.0])  # the refused scan
+    assert decision["candidates"][0]["k"] == pytest.approx([10.0, 20.0])  # the rejected scan
     assert all(c["n_trials"] == 319 for c in decision["candidates"])  # 317 K trials, 2 phases
     assert all(c["seconds"] >= 0.0 for c in decision["candidates"])
     assert [c["table_chi2"] for c in decision["candidates"]] == [8.0, 31.0, 45.0]
-    # Three candidates were declared, on identical semi-amplitude bounds, and nothing that
-    # holds a compiled model survived into the report.
+    # Three candidates were declared, on identical semi-amplitude bounds, and no object
+    # that holds a compiled model is in the report.
     assert len(declared) == 3 and declared[0] == declared[1] == declared[2]
     json.dumps(_jsonable(block["report"]))
     # The disagreement with the table is flagged, with both periods and the margin.
@@ -1578,7 +1582,7 @@ def test_the_disentangling_decides_among_the_best_candidate_periods(toy, tmp_pat
     # where the range is searched (this orbit's secondary is outside the declared range).
     assert [float(s.start_at) for s in spec.k] == pytest.approx([38.0, 61.0])
 
-    # With the setting at zero the table's choice stands and no model is ever built.
+    # With the setting at zero the table's choice is kept and no model is built.
     declared.clear()
     plain = _context(
         star, tmp_path / "table", Analysis(period_decision_candidates=0), library="stub"
@@ -1596,11 +1600,11 @@ def test_the_disentangling_decides_among_the_best_candidate_periods(toy, tmp_pat
 
 
 def test_a_degenerate_bootstrap_falls_back_to_the_declared_range(library, tmp_path, monkeypatch):
-    """A bootstrap semi-amplitude outside the range must not pin the disentangling to it.
+    """A bootstrap semi-amplitude outside the range must not be imposed on the disentangling.
 
-    The first guard clipped such a value into the range and declared it known, which held
-    a faint secondary's K at the floor; the range search is what the known-period route
-    does, and it recovers the orbit from the bootstrap's period alone.
+    Clipping such a value into the range and declaring it known would hold a faint
+    secondary's K at the lower bound. The range is searched instead, as on the known-period
+    route, and the search recovers the orbit from the bootstrap's period alone.
     """
     import dataclasses
 
@@ -1663,16 +1667,16 @@ def test_the_demo_runs_end_to_end(tmp_path):
 def test_a_semi_amplitude_start_no_medium_allows_is_skipped_and_not_a_failure(
     toy, library, tmp_path
 ):
-    """A stage nobody asked for must be skipped, not raise, when the medium is missing.
+    """A stage that was not requested must be skipped, not raise, when the medium is missing.
 
-    A ranged semi-amplitude with a library at hand buys a head start: a velocity table
-    from library templates at the declared period, whose orbit seeds the starting values.
-    Rendering a template needs the wavelength medium, which the files need not declare.
-    Nobody asked for that table, so its unavailability is not a reason to fail the star:
-    the skip is recorded as a flag and the declared range's evenly spaced starts are used,
-    which is where they start when no library is declared at all. The refusal stays a
-    refusal on the routes the user did ask for (``period = "search"``, ``light =
-    "measure"``). This is what the packaged demo's first star hit.
+    With a ranged semi-amplitude and a library, a velocity table is measured from library
+    templates at the declared period, and its orbit gives the starting values. Rendering a
+    template needs the wavelength medium, which the files need not declare. The user did
+    not request that table, so its unavailability does not fail the star. The skip is
+    recorded as a flag and the declared range's evenly spaced starts are used, as they are
+    when no library is declared. On the routes the user requested (``period = "search"``,
+    ``light = "measure"``) the missing medium is still an error. The first star of the
+    packaged demo is such a case.
     """
     dataset, truth, grid = toy
     undeclared = ab.Dataset(tuple(replace(e, medium=None) for e in dataset), frame=dataset.frame)
@@ -1693,14 +1697,14 @@ def test_a_semi_amplitude_start_no_medium_allows_is_skipped_and_not_a_failure(
 # 4. the guards: a stage that failed must not be read as a measurement
 # ---------------------------------------------------------------------------
 #
-# One archived star of the D62 benchmark wrote fifteen rows of plausible velocities out of
-# a diverged disentangling, a label fit that beat neither of its nulls, and a correlation
-# that reported a position it never evaluated
+# For one archived star of the D62 benchmark the pipeline wrote fifteen rows of plausible
+# velocities from a diverged disentangling, a label fit no better than either of its
+# nulls, and a correlation that reported a position it had not evaluated
 # (internal/research/2026-09-09-gaia-rvs-benchmark/d63_edge_pinned_table.md). Each guard
-# below refuses one of the steps by which that file was written. Three of them refuse a
-# table a healthy fit can still write: a component held at a light fraction the shrunken
-# spectrum no longer has, an exchange of two components the correlation's peaks cannot
-# support, and a frame offset the label fit never learned.
+# below prevents one of the steps by which that file was written. Three of them reject a
+# table a successful fit can still write: a component held at a light fraction the
+# shrunken spectrum does not have, an exchange of two components the correlation's peaks
+# cannot support, and a frame offset the label fit did not measure.
 
 
 def _context(star, directory, settings=None, library=None):
@@ -1721,11 +1725,11 @@ def _context(star, directory, settings=None, library=None):
 class _StubFit:
     """Enough of a ``Fit`` for ``_templates``: templates, mode, budget, narrowest LSF.
 
-    ``lights`` and ``taus`` add what the velocity stage reads besides: the declared
+    ``lights`` and ``taus`` add what the velocity stage also reads: the declared
     components as real :class:`albireo.Star` objects, so that the smoothness starting
-    point is the library's own default rather than a number this file chose, and the
-    hyperparameters ML-II came back with. Given a ``table``, ``measure_velocities``
-    returns it and the stub also answers the reporting and assessment helpers that
+    point is the library's default and not a number set in this file, and the
+    hyperparameters returned by ML-II. Given a ``table``, ``measure_velocities``
+    returns it and the stub also supports the reporting and assessment helpers that
     ``_run_stages`` calls around the stage.
     """
 
@@ -1819,7 +1823,7 @@ class _StubMatch:
 
 
 def _velocity_table(*, n_epochs=6, chi2=1000.0, chi2_null=2000.0, blended=False):
-    """A hand-built ``VelocityTable``; ``chi2 > chi2_null`` makes its R-squared negative."""
+    """A manually built ``VelocityTable``; ``chi2 > chi2_null`` makes its R-squared negative."""
     from albireo.todcor import VelocityTable
 
     ones = np.ones(n_epochs)
@@ -1862,27 +1866,27 @@ def test_a_zero_point_the_label_fit_disowned_is_refused(toy, tmp_path):
         cases.append(ctx)
         return ctx, _templates(ctx, _StubFit(("A", "B"), **kwargs), match)
 
-    # A fit that beat both nulls, with both offsets far from the scan's bounds, is adopted.
+    # A fit better than both nulls, with both offsets far from the scan's bounds, is adopted.
     ctx, templates = run(_StubMatch({"A": 12.4, "B": 11.6}))
     assert [t.v_zero_kms for t in templates] == [12.4, 11.6]
     assert ctx.zero_points["adopted"] is True and not ctx.zero_points["refused"]
     assert ctx.zero_points["v_zero_kms"] == {"A": 12.4, "B": 11.6}
     assert not ctx.flags
 
-    # (i) the fit beats neither null: chi2 above both, as in the archived star.
+    # (i) the fit is better than neither null: chi2 above both, as in the archived star.
     ctx, templates = run(_StubMatch({"A": 12.4, "B": 11.6}, chi2=1.15e7, nearest=7.0e6))
     assert [t.v_zero_kms for t in templates] == [None, None]
     assert ctx.zero_points["adopted"] is False
     assert any("beats neither null" in f for f in ctx.flags), ctx.flags
 
-    # (ii) an offset pinned on the bound of its own scan (the archived star: 3e-4 km/s from
-    # -150 over a +-150 km/s scan).
+    # (ii) an offset at the bound of its scan (the archived star: 3e-4 km/s from -150 over
+    # a +-150 km/s scan).
     ctx, templates = run(_StubMatch({"A": -149.9997, "B": 11.6}))
     assert [t.v_zero_kms for t in templates] == [None, None]
     reason = " ".join(ctx.zero_points["refused"])
     assert "'A'" in reason and "-149.9997" in reason and "bound of its scan" in reason
 
-    # (iii) two zero points that no single systemic velocity can hold, on a Keplerian fit.
+    # (iii) two zero points inconsistent with a single systemic velocity, on a Keplerian fit.
     ctx, templates = run(_StubMatch({"A": -60.0, "B": 60.0}), budget=100.0)
     assert [t.v_zero_kms for t in templates] == [None, None]
     assert any("velocity budget" in f for f in ctx.flags), ctx.flags
@@ -1890,7 +1894,7 @@ def test_a_zero_point_the_label_fit_disowned_is_refused(toy, tmp_path):
     ctx, templates = run(_StubMatch({"A": -60.0, "B": 60.0}), budget=100.0, mode="velocity")
     assert [t.v_zero_kms for t in templates] == [-60.0, 60.0]
 
-    # Every refusal is in the log as well as in the flags.
+    # Every rejection is in the log as well as in the flags.
     text = (cases[1].directory / "log.txt").read_text(encoding="utf-8")
     assert "flag: template zero points refused" in text
 
@@ -1898,11 +1902,12 @@ def test_a_zero_point_the_label_fit_disowned_is_refused(toy, tmp_path):
 def test_a_frame_offset_the_label_fit_never_learned_is_refused_for_that_component(toy, tmp_path):
     """A posterior as wide as its prior: that component alone keeps its unidentified zero point.
 
-    The three refusals above are properties of the fit as a whole. This one is per
-    component: the label fit of a third benchmark run kept 11 percent of the secondary's
-    equivalent width, its ``v`` site came back as wide as the prior it started from, the
-    offset it reported sat 46 km/s from the systemic velocity, and every velocity of that
-    component carried it. The other component's offset was measured and is still applied.
+    The three rejections above are properties of the fit as a whole. This one is per
+    component. In a third benchmark run the label fit kept 11 percent of the secondary's
+    equivalent width, and the posterior of its ``v`` site was as wide as its prior. The
+    offset it reported was 46 km/s from the systemic velocity, and every velocity of that
+    component was shifted by it. The other component's offset was measured and is still
+    applied.
     """
     from albireo.pipeline import _templates
 
@@ -1910,7 +1915,8 @@ def test_a_frame_offset_the_label_fit_never_learned_is_refused_for_that_componen
     star = _star(dataset, truth, grid, name="unlearned")
     settings = Analysis(v_zero_range=150.0)
 
-    # B learned nothing (0.93 of its prior), A did (0.20): B stays differential, A is pinned.
+    # B's offset is unconstrained (0.93 of its prior) and A's is constrained (0.20): B stays
+    # differential and A's is applied.
     ctx = _context(star, tmp_path / "one", settings)
     offsets = {"A": 12.4, "B": -46.0}
     templates = _templates(
@@ -1923,14 +1929,14 @@ def test_a_frame_offset_the_label_fit_never_learned_is_refused_for_that_componen
     assert flag.startswith("zero point refused for B (frame offset posterior 0.93 of the prior)")
     assert "that component's velocities stay differential" in flag
     assert ctx.zero_points["refused"] == ["B: the label fit learned nothing about the frame offset"]
-    # One component pinned is still an adopted zero point, and B's offset is recorded,
-    # unapplied, beside the reason it was refused.
+    # With one offset applied the zero point is still adopted, and B's offset is recorded,
+    # unapplied, beside the reason it was rejected.
     assert ctx.zero_points["adopted"] is True
     assert ctx.zero_points["v_zero_kms"] == offsets
     log = (ctx.directory / "log.txt").read_text(encoding="utf-8")
     assert "template zero points from the label fit: A +12.40 km/s, B none" in log
 
-    # Neither component learned anything: nothing is pinned and nothing is adopted.
+    # Neither offset is constrained: none is applied and nothing is adopted.
     ctx = _context(star, tmp_path / "both", settings)
     templates = _templates(
         ctx, _StubFit(("A", "B")), _StubMatch(offsets, widths={"v_A": 0.95, "v_B": 0.93})
@@ -1940,7 +1946,7 @@ def test_a_frame_offset_the_label_fit_never_learned_is_refused_for_that_componen
     assert len(ctx.zero_points["refused"]) == 2
     assert "A (frame offset posterior 0.95 of the prior)" in ctx.flags[0]
 
-    # A match that reports no widths at all pins both, as before the test existed.
+    # A match that reports no widths is not checked, and both offsets are applied.
     ctx = _context(star, tmp_path / "silent", settings)
     templates = _templates(ctx, _StubFit(("A", "B")), _StubMatch(offsets))
     assert [t.v_zero_kms for t in templates] == [12.4, -46.0]
@@ -1949,14 +1955,14 @@ def test_a_frame_offset_the_label_fit_never_learned_is_refused_for_that_componen
 
 
 def test_zero_points_no_search_window_can_hold_are_dropped_and_the_epochs_measured(toy, tmp_path):
-    """Two zero points 95 km/s apart on velocities spanning 60: the zero points go, not the star.
+    """Two zero points 95 km/s apart on velocities spanning 60 are dropped and the epochs measured.
 
-    The default search window of a template is its own zero point away from the fitted
-    velocities, so zero points that disagree by more than those velocities span leave no
-    window that holds every component, and the correlation refuses rather than report a
-    table pinned to the edge of its search. The velocities then stay differential, as when
-    the label fit disowns its own offsets, and the orbit fit carries one systemic velocity
-    per component.
+    The default search window of a template is offset from the fitted velocities by its
+    zero point. Zero points that disagree by more than the span of those velocities
+    therefore leave no window that contains every component, and the correlation raises an
+    error rather than report a table at the edge of its search. The velocities then stay
+    differential, as when the label fit has not measured its offsets, and the orbit fit has
+    one systemic velocity per component.
     """
     from albireo.pipeline import _measure_epoch_velocities
 
@@ -1973,7 +1979,7 @@ def test_zero_points_no_search_window_can_hold_are_dropped_and_the_epochs_measur
     pinned = [replace(t, v_zero_kms=z) for t, z in zip(bare, (-60.0, 35.0), strict=True)]
 
     class _Fit:
-        """A fit whose correlation refuses a window while any template carries a zero point."""
+        """A fit whose correlation rejects a window while any template has a zero point."""
 
         def __init__(self):
             self.calls = []
@@ -1989,7 +1995,7 @@ def test_zero_points_no_search_window_can_hold_are_dropped_and_the_epochs_measur
 
     fit = _Fit()
     table, used = _measure_epoch_velocities(ctx, fit, pinned, [0.62, 0.38])
-    assert fit.calls == [[-60.0, 35.0], [None, None]]  # refused, then measured again
+    assert fit.calls == [[-60.0, 35.0], [None, None]]  # rejected, then measured again
     assert [t.v_zero_kms for t in used] == [None, None]
     assert all(t.meta["zero_point"] == "dropped" for t in used)
     assert table.n_epochs == 6 and not all(table.absolute)
@@ -1999,7 +2005,7 @@ def test_zero_points_no_search_window_can_hold_are_dropped_and_the_epochs_measur
     assert any(f.startswith("template zero points dropped") for f in ctx.flags), ctx.flags
     assert "one gamma per component" in ctx.flags[0]
 
-    # A failure with no zero point to drop is a real one, and is raised as it stands.
+    # A failure with no zero point to drop is raised unchanged.
     class _Fails:
         def measure_velocities(self, *, templates, light):
             raise ValueError("the correlation found no usable epoch")
@@ -2013,13 +2019,13 @@ def test_zero_points_no_search_window_can_hold_are_dropped_and_the_epochs_measur
 def test_the_declared_fractions_are_held_only_while_the_smoothness_stayed_near_its_start(
     toy, tmp_path
 ):
-    """A smoothness ML-II moved an order of magnitude: the amplitudes are fitted, not held.
+    """When ML-II moves a smoothness by an order of magnitude the amplitudes are fitted, not held.
 
     The disentangling recovers a component at the declared light fraction only while its
-    posterior mean is not shrunk, and a smoothness precision far from its start says it
-    is. A secondary of a third benchmark run lost a quarter of its line depth that way and
-    the table then lost it under the declared fraction, at -89 percent against the
-    injected semi-amplitude, where a freely fitted amplitude left -25.
+    posterior mean is not shrunk, and a smoothness precision far from its start indicates
+    that it is. In a third benchmark run a secondary lost a quarter of its line depth in
+    this way. With the declared fraction the table then gave its semi-amplitude at -89
+    percent against the injected value, and with a freely fitted amplitude at -25.
     """
     from albireo.facade import _smoothness_of
     from albireo.pipeline import _template_light
@@ -2028,7 +2034,7 @@ def test_the_declared_fractions_are_held_only_while_the_smoothness_stayed_near_i
     star = _star(dataset, truth, grid, name="smooth")
     declared = list(LIGHT)
 
-    # tau 400 against the 300 the stellar default starts at: the fractions stand.
+    # tau 400 against the 300 the stellar default starts at: the fractions are held.
     ctx = _context(star, tmp_path / "held")
     held = _StubFit(("A", "B"), lights=LIGHT, taus=(400.0, 400.0))
     assert [float(_smoothness_of(s).tau0) for s in held.dis.stars] == [300.0, 300.0]
@@ -2049,8 +2055,8 @@ def test_the_orbit_exchanges_the_components_only_where_they_are_alike(toy, tmp_p
     """Equal peaks are exchangeable; peaks a factor of several apart are not.
 
     On a 95/5 pair the exchange swapped 19 of 80 epochs on noise draws of the faint
-    component's velocity, and the primary's semi-amplitude went from 5 to 56 percent off,
-    because an exchanged row carries the other component's amplitude.
+    component's velocity, and the error of the primary's semi-amplitude went from 5 to 56
+    percent, because an exchanged row has the other component's amplitude.
     """
     from albireo.pipeline import _exchange_allowed
 
@@ -2080,8 +2086,8 @@ def test_the_table_as_measured_is_kept_where_the_orbit_exchanged_an_epoch(
 ):
     """The velocity stage, with the fit and the products stubbed: the exchange, and its record.
 
-    What separates a genuine exchange from a swap made on noise is the table the
-    correlation actually measured, so the stage writes it beside the delivered one
+    A genuine exchange is distinguished from a swap made on noise by the table the
+    correlation measured, so the stage writes that table beside the delivered one
     whenever an epoch was exchanged.
     """
     import albireo.pipeline as pipeline_module
@@ -2094,7 +2100,7 @@ def test_the_table_as_measured_is_kept_where_the_orbit_exchanged_an_epoch(
     calls = []
 
     def swap_one(table, predicted, **kwargs):
-        """Exchange one epoch, as ``reassign_by_orbit`` would where the orbit says so."""
+        """Exchange one epoch, as ``reassign_by_orbit`` would where the orbit requires it."""
         calls.append(np.asarray(predicted, dtype=float).shape)
         velocity = np.asarray(table.velocity, dtype=float).copy()
         velocity[:, swapped_at] = velocity[::-1, swapped_at]
@@ -2125,7 +2131,7 @@ def test_the_table_as_measured_is_kept_where_the_orbit_exchanged_an_epoch(
         report, _text, live = _run_stages(ctx)
         return ctx, report, live
 
-    # Alike components: the exchange runs, and the table as measured is kept beside it.
+    # Similar components: the exchange runs, and the table as measured is kept beside it.
     ctx, report, live = run([0.5, 0.5], "alike")
     assert calls == [(2, measured.n_epochs)]
     assert live["velocities"].velocity[0][swapped_at] == measured.velocity[1][swapped_at]
@@ -2138,7 +2144,7 @@ def test_the_table_as_measured_is_kept_where_the_orbit_exchanged_an_epoch(
     assert "as measured, before the exchange" in path.read_text(encoding="utf-8")
     assert report["velocities"]["names"] == ["A", "B"]
 
-    # A 95/5 pair: the exchange never runs, so there is no table to keep beside anything.
+    # A 95/5 pair: the exchange does not run, so no second table is written.
     calls.clear()
     ctx, _report, live = run([0.95, 0.05], "apart")
     assert calls == []
@@ -2156,10 +2162,10 @@ def test_the_bootstrap_table_the_period_search_ran_on_is_kept_beside_the_deliver
     """The bootstrap's template table is written twice where the winning orbit re-assigned.
 
     ``_orbit_over_candidates`` re-assigns the components at the epochs where a per-epoch
-    correlation exchanged two alike spectra, and refits, so the table it returns beside the
-    winning orbit is not the table the period search ran on. The delivered file stays the
-    winning orbit's and its header says whose assignment it carries; the table as measured
-    is written beside it, because only that one reproduces the periodogram.
+    correlation exchanged two similar spectra, and refits, so the table it returns beside
+    the winning orbit is not the table the period search ran on. The delivered file stays
+    the winning orbit's and its header states whose assignment it has. The table as
+    measured is written beside it, because only that table reproduces the periodogram.
     """
     from albireo.pipeline import _write_template_table
 
@@ -2183,7 +2189,7 @@ def test_the_bootstrap_table_the_period_search_ran_on_is_kept_beside_the_deliver
     assert "as measured, before the exchange: the table the period search ran on" in text
     assert "purpose: bootstrap" in text
 
-    # The delivered file holds what it always held, and now says whose assignment it is.
+    # The delivered file is the winning orbit's table and states whose assignment it has.
     delivered_path = Path(ctx.files["template_velocities"])
     delivered_text = delivered_path.read_text(encoding="utf-8")
     assert "component assignment: the winning orbit's, not the correlation's" in delivered_text
@@ -2200,7 +2206,7 @@ def test_the_bootstrap_table_the_period_search_ran_on_is_kept_beside_the_deliver
     np.testing.assert_allclose(kept[:, 1], measured.velocity[0], atol=1e-6)
     np.testing.assert_allclose(kept[:, 2], measured.velocity[1], atol=1e-6)
 
-    # No epoch re-assigned: there is nothing to keep, and no line claiming otherwise.
+    # No epoch re-assigned: no second table and no assignment line are written.
     ctx = _context(star, tmp_path / "as-measured")
     _write_template_table(ctx, measured, "bootstrap", unexchanged=measured)
     assert "template_velocities_unexchanged" not in ctx.files
@@ -2210,7 +2216,7 @@ def test_the_bootstrap_table_the_period_search_ran_on_is_kept_beside_the_deliver
 
 
 def test_a_failed_velocity_table_is_marked_and_no_orbit_is_fitted(toy, tmp_path):
-    """A median R-squared below zero: the templates fit worse than no template at all."""
+    """A median R-squared below zero: the templates fit worse than no template."""
     from albireo.pipeline import _assess_table, _describe_table, _orbit, _velocity_header
 
     dataset, truth, grid = toy
@@ -2242,13 +2248,13 @@ def test_a_failed_velocity_table_is_marked_and_no_orbit_is_fitted(toy, tmp_path)
     assert _orbit(ctx, _NoFit(), failed) == (None, None)
     assert any("orbit from the table skipped" in f for f in ctx.flags), ctx.flags
 
-    # The written file says so on the line under the format line, before any row.
+    # The written file states the failure on the line under the format line, before any row.
     path = failed.write(ctx.directory / "velocities.rv", header=_velocity_header(ctx, failed))
     lines = path.read_text(encoding="utf-8").splitlines()
     assert lines[0] == "# albireo.todcor velocity table"
     assert lines[1].startswith("# FAILED: median R-squared -1.00")
     assert lines[2] == "# star: failed"
-    # A usable table carries no such line.
+    # A usable table has no such line.
     ok_path = healthy.write(ctx.directory / "ok.rv", header=_velocity_header(ctx, healthy))
     assert "FAILED" not in ok_path.read_text(encoding="utf-8")
 
@@ -2277,7 +2283,7 @@ def test_an_unmeasured_epoch_in_a_declared_table_is_refused(toy, tmp_path):
 
 
 def test_a_diverged_disentangling_stops_the_star(toy, library, tmp_path, monkeypatch):
-    """The one number that separates a fit from a failure of the optimizer stops the star."""
+    """A z-score rms above its ceiling indicates a failure of the optimizer and stops the star."""
     from albireo.facade import Fit
 
     with pytest.raises(ValueError, match="z_rms_max must be positive"):
@@ -2305,7 +2311,7 @@ def test_a_diverged_disentangling_stops_the_star(toy, library, tmp_path, monkeyp
     assert (directory / "error.txt").is_file()
     assert not (directory / "velocities.rv").exists(), "the velocity stage did not run"
     assert not (directory / "labels.txt").exists(), "the label stage did not run"
-    # The table measured before the disentangling stays on disk, as its own product.
+    # The table measured before the disentangling stays on disk, as a separate product.
     assert (directory / "template_velocities.rv").is_file()
     log = (directory / "log.txt").read_text(encoding="utf-8")
     assert "flag: the disentangling diverged" in log
@@ -2318,7 +2324,7 @@ def test_a_diverged_disentangling_stops_the_star(toy, library, tmp_path, monkeyp
 
 
 def test_the_label_comparison_is_declared_checked_and_passed_to_the_fit(toy, library, tmp_path):
-    """``label_compare`` defaults to the epochs, is refused by name, and reaches the fit."""
+    """``label_compare`` defaults to the epochs, is checked by name, and is passed to the fit."""
     from albireo.pipeline import _labels, config_template
 
     assert Analysis().label_compare == "epochs"
@@ -2379,12 +2385,12 @@ class _EpochMatch(_StubMatch):
 
 
 def test_the_label_stage_flags_what_the_epoch_fit_did_not_measure(toy, tmp_path):
-    """A label on a bound has no posterior width, so the width test cannot see it.
+    """A label on a bound has no posterior width, so the width test does not detect it.
 
     In the epochs comparison a site on a bound, or a v sin i on the plateau below half a
     model pixel, is left out of the formal covariance, and ``posterior_over_prior`` has no
-    entry for it; the flag names it with the reason. A collapse the restarts could not
-    resolve is a note on the fit, and it travels into the flags as it stands.
+    entry for it. The flag names it with the reason. A collapse the restarts could not
+    resolve is a note on the fit, and the note is copied to the flags unchanged.
     """
     from albireo.pipeline import _assess_labels
 
@@ -2413,7 +2419,7 @@ def test_the_label_stage_flags_what_the_epoch_fit_did_not_measure(toy, tmp_path)
     assert f"labels: {note}" in ctx.flags
     assert not any("light fractions" in f for f in ctx.flags), "the light agrees"
 
-    # A d_hat comparison carries none of the epoch fit's attributes and raises none of these.
+    # A d_hat comparison has none of the epoch fit's attributes and raises none of these.
     ctx = _context(star, tmp_path / "native")
     plain = _StubMatch({"A": 12.0, "B": 12.0}, widths={})
     plain.flux_ratio, plain.multimodal = {"A": 0.6, "B": 0.4}, False
@@ -2422,7 +2428,7 @@ def test_the_label_stage_flags_what_the_epoch_fit_did_not_measure(toy, tmp_path)
 
 
 def test_the_label_stage_flags_and_records_the_grid_compensation(toy, tmp_path):
-    """A floored compensation, or a model grid coarser than sigma_q, is flagged as it stands,
+    """A floored compensation, or a model grid coarser than sigma_q, is flagged verbatim,
     and the operator widths and the grid variance are recorded for result.json."""
     from albireo.pipeline import _assess_labels, _describe_operator
 
@@ -2454,7 +2460,7 @@ def test_the_label_stage_flags_and_records_the_grid_compensation(toy, tmp_path):
         "operator_sigma_kms": [["TOY", [2.313]]],
         "notes": [floored],
     }
-    json.dumps(described)  # result.json takes it as it stands
+    json.dumps(described)  # result.json stores it unchanged
 
     # Without notes nothing is flagged, and without the compensation the widths coincide.
     statistics = SimpleNamespace(
@@ -2485,7 +2491,7 @@ def test_the_label_stage_flags_and_records_the_grid_compensation(toy, tmp_path):
 def test_a_measured_light_far_from_the_declared_one_is_flagged(
     toy, tmp_path, declared, measured, off
 ):
-    """A factor of 1.5 catches a faint component; a difference of 0.15 a bright one."""
+    """A factor of 1.5 flags a faint component; a difference of 0.15 a bright one."""
     from albireo.pipeline import _assess_labels
 
     dataset, truth, grid = toy

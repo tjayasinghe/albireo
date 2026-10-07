@@ -1,12 +1,12 @@
-"""Measure what the label-matching mode costs and what it recovers (D52, D53).
+"""Measure the cost and accuracy of the label-matching mode (D52, D53).
 
 Produces the numbers ``docs/benchmarks.md`` records: interpolation error against the
 published reference values, closed-loop recovery at a range of signal-to-noise, the
 wall-clock split across the stages of a fit, and the ratio between the formal error and the
 spread over posterior draws.
 
-Nothing here needs the network. The grid is a toy built in this file, at a node density
-matched to the BOSZ subset the mode is designed for (250 K in Teff, 0.5 dex in log g,
+Nothing here needs the network. The grid is a toy built in this file. Its node density
+matches the BOSZ subset the mode is designed for (250 K in Teff, 0.5 dex in log g,
 0.25 dex in [M/H]), so the interpolation numbers are comparable with the literature's.
 
     python scripts/label_bench.py [--quick]
@@ -39,7 +39,7 @@ LSF_SIGMA_KMS = 5.5
 
 
 def toy_spectrum(teff, logg, mh, wave):
-    """Each label drives its own lines, so the label-to-spectrum map is invertible."""
+    """Each label controls its own lines, so the label-to-spectrum map is invertible."""
     t, g = (teff - 4800.0) / 600.0, logg - 4.0
     lines = (
         (5167.3, 0.30 + 0.13 * np.tanh(t)),

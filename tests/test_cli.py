@@ -1,10 +1,10 @@
 """Tests for the ``albireo`` command: the novice's route through the pipeline.
 
-The file path is what a first-time user actually takes -- FITS files on disk, a TOML
-they edited, one command -- so the ``run`` test writes a simulated SB2 as IRAF-style
-FITS images with the resolving power in the header, and checks that the command reads
-them, takes the LSF from the header, and writes the products. ``fetch`` is tested against
-a stubbed archive, since the real one is the network.
+A first-time user starts from FITS files on disk, a TOML file they edited, and one
+command. The ``run`` test therefore writes a simulated SB2 as IRAF-style FITS images with
+the resolving power in the header, and checks that the command reads them, takes the LSF
+from the header, and writes the products. ``fetch`` is tested against a stubbed archive,
+because the real archive requires the network.
 """
 
 from __future__ import annotations
@@ -57,8 +57,8 @@ def _write_fits_epochs(dataset, directory):
         hdr["CONTNORM"] = True
         hdr["SPECSYS"] = "BARYCENT"
         hdr["BARYCORR"] = float(epoch.v_bary)
-        # No coordinates: the reader warns and takes the time as it is, which is what a
-        # simulated BJD needs. MJD-OBS + EXPTIME/2 lands on the epoch's own bjd.
+        # No coordinates: the reader warns and uses the time unchanged, as a simulated BJD
+        # requires. MJD-OBS + EXPTIME/2 gives the epoch's bjd.
         hdr["MJD-OBS"] = float(epoch.bjd) - 2400000.5 - 0.5 * 60.0 / 86400.0
         hdr["EXPTIME"] = 60.0
         hdu.writeto(directory / f"epoch_{j:02d}.fits", overwrite=True)

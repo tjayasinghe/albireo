@@ -1,11 +1,10 @@
-"""Tests for :mod:`albireo.io` — FITS in, :class:`~albireo.data.Dataset` out.
+"""Tests for :mod:`albireo.io`, which reads FITS files into a :class:`~albireo.data.Dataset`.
 
-The fixtures below reproduce the two container layouts the reader claims to handle, and
-in particular the exact shape of an ESO Phase-3 FEROS spectrum: a one-row binary table
-with array columns, ``TMID`` in the *extension* header rather than the primary,
+The fixtures below reproduce the two container layouts that the reader supports. The
+first is the layout of an ESO Phase-3 FEROS spectrum: a one-row binary table with array
+columns, ``TMID`` in the extension header rather than the primary,
 ``SPECSYS='BARYCENT'``, ``CONTNORM=False``, and an ``ERR`` column that is entirely
-``NaN``. Every one of those was a place the first version of this reader could have got
-a velocity wrong without saying so.
+``NaN``. Mishandling any of these gives a wrong velocity with no error.
 """
 
 from __future__ import annotations
@@ -135,7 +134,7 @@ def test_reads_an_eso_phase3_spectrum(tmp_path):
 
 
 def test_lsf_sigma_from_resolving_power():
-    """R quotes a FWHM; sigma is smaller by 2 sqrt(2 ln 2). Getting it backwards is 2.35x."""
+    """R is given as a FWHM; sigma is smaller by 2 sqrt(2 ln 2). Getting it backwards is 2.35x."""
     raw = RawSpectrum(
         wave=np.array([1.0, 2.0]),
         flux=np.array([1.0, 1.0]),

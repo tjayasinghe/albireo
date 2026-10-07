@@ -1,15 +1,14 @@
 """The clean-room shift-and-add reference implementation (roadmap Tier 2 item 9).
 
-`scripts/shift_and_add.py` is not part of the package — it exists so the benchmark page can
-compare albireo against the technique the field actually uses, on identical data. That makes
-it exactly the kind of code that can be quietly wrong: nothing downstream of it fails if the
-recurrence is subtly not the published one, the numbers just come out different and get
-written into a comparison table.
+`scripts/shift_and_add.py` is not part of the package. It exists so the benchmark page can
+compare albireo against the technique the field uses, on identical data. Such code can be
+wrong without any failure: if the recurrence is not the published one, nothing downstream
+of it fails, and the different numbers are written into a comparison table.
 
-So these tests check it against the *paper*, not against itself. The sharpest is
-`test_the_published_smearing_law_is_reproduced`: González & Levato (2006) §2.3 derive that
-the residual is not annihilated but diffused, by a Gaussian of sqrt(2m)·sigma_d after m
-sweeps. Reproducing a law the implementation was not fitted to is the strongest available
+These tests therefore check it against the paper, not against itself. The most stringent
+is `test_the_published_smearing_law_is_reproduced`: González & Levato (2006) §2.3 derive
+that the residual is not annihilated but diffused, by a Gaussian of sqrt(2m)·sigma_d after
+m sweeps. Reproducing a law the implementation was not fitted to is the strongest available
 evidence that the iteration coded here is the iteration in the paper.
 """
 
@@ -73,7 +72,7 @@ def test_it_recovers_the_light_weighted_components_without_noise():
 
 
 def test_dividing_by_the_light_fraction_is_what_recovers_the_truth():
-    """The conversion most likely to be got wrong silently in a comparison table."""
+    """The conversion most likely to be silently wrong in a comparison table."""
     comps = _components()
     shifts = _shifts()
     rec = disentangle(_observe(comps, shifts), shifts, n_iter=12)
@@ -91,7 +90,7 @@ def test_dividing_by_the_light_fraction_is_what_recovers_the_truth():
 
 
 def test_the_first_primary_estimate_is_the_rest_frame_coadd():
-    """B_0 = 0 and A is never seeded, so A_1 falls out as the plain co-add.
+    """B_0 = 0 and A is never seeded, so A_1 is the plain co-add.
 
     González & Levato: "the starting primary spectrum A_0 is not needed at all, since A_1 is
     computed from B_0."
@@ -111,9 +110,9 @@ def test_the_first_primary_estimate_is_the_rest_frame_coadd():
 def test_the_published_smearing_law_is_reproduced():
     """González & Levato §2.3: after m sweeps the residual is smeared by sqrt(2m)*sigma_d.
 
-    Tested on a *delta-function* residual so the smearing is directly measurable: seed the
-    companion with a single spike, run the error recursion, and measure the width of what
-    comes back. The law is a prediction the implementation was not fitted to.
+    Tested on a delta-function residual so the smearing is directly measurable: seed the
+    companion with a single spike, run the error recursion, and measure the width of the
+    result. The law is a prediction the implementation was not fitted to.
     """
     n_ep = 24
     shifts = _shifts(n_ep=n_ep, amp=(8.0, -13.0))
@@ -129,7 +128,7 @@ def test_the_published_smearing_law_is_reproduced():
     def width_after(m):
         comp = np.zeros((2, n_pix))
         comp[1] = spike
-        # Drive the recursion by hand so the seeded error is the only thing present.
+        # Run the recursion manually so the seeded error is the only thing present.
         va, vb = shifts[0], shifts[1]
         for _ in range(m):
             for this, other, v_this, v_other in ((0, 1, va, vb), (1, 0, vb, va)):
@@ -165,16 +164,16 @@ def test_the_dc_level_is_a_fixed_point_the_method_cannot_determine():
     comps = _components()
     shifts = _shifts()
 
-    # Move a constant from one component to the other. The composite is untouched, so no
-    # amount of iterating can tell the two truths apart.
+    # Move a constant from one component to the other. The composite is unchanged, so no
+    # number of iterations can distinguish the two solutions.
     delta = 0.05
     tweaked = comps.copy()
     tweaked[0] = tweaked[0] + delta / LIGHT[0]
     tweaked[1] = tweaked[1] - delta / LIGHT[1]
-    # Interior only, and the exception is the interesting part: shifting zero-pads, so within
-    # a shift of the boundary the two constants do not cancel and the finite window breaks the
-    # degeneracy. That is the same margin effect D47 found dominating the forecast's
-    # worst-determined mode. In the interior the exchange is exact.
+    # Interior only. Shifting zero-pads, so within a shift of the boundary the two constants
+    # do not cancel and the finite window breaks the degeneracy. This is the same margin
+    # effect that dominates the forecast's worst-determined mode (D47). In the interior the
+    # exchange is exact.
     edge = int(np.ceil(np.abs(shifts).max())) + 2
     np.testing.assert_allclose(
         _observe(comps, shifts)[:, edge:-edge],
@@ -218,12 +217,12 @@ def test_weights_are_accepted_in_both_shapes():
 
 
 def test_masking_an_epoch_by_weight_actually_removes_it():
-    """Decisive for the nebular figure: this method CAN mask, so a comparison that assumes
+    """Decisive for the nebular figure: this method can mask, so a comparison that assumes
     it cannot would be unfair to it."""
     comps = _components()
     shifts = _shifts()
     obs = _observe(comps, shifts)
-    obs[3] += 5.0  # a ruined epoch
+    obs[3] += 5.0  # a corrupted epoch
     w = np.ones(shifts.shape[1])
     w[3] = 0.0
     clean = disentangle(obs, shifts, n_iter=8, weights=w)

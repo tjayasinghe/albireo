@@ -3,10 +3,9 @@
 **albireo** performs spectral disentangling of double- and multiple-lined spectroscopic
 binaries. Given a time series of composite spectra, it infers the orbital elements and the
 individual component spectra jointly. The component spectra are marginalized analytically,
-so only the low-dimensional orbital and instrumental parameters are sampled, with the
-No-U-Turn Sampler rather than by iterative least-squares refinement. The package is written
-in JAX (float64), is differentiable end to end, and runs on CPU or GPU, with numpyro for
-sampling and optax for optimization.
+so only the low-dimensional orbital and instrumental parameters are sampled, using the
+No-U-Turn Sampler. The package is written in JAX (float64), is differentiable end to end,
+and runs on CPU or GPU. It uses numpyro for sampling and optax for optimization.
 
 The name refers to Albireo, the double star in Cygnus.
 
@@ -18,7 +17,7 @@ The name refers to Albireo, the double star in Cygnus.
 ## Where to start
 
 - [Quickstart](quickstart.md): load the example dataset that ships with the package, fit
-  it, and plot the result. No data of your own and no network are needed.
+  it, and plot the result. No other data and no network access are needed.
 - [Scientific background](science.md): the disentangling problem, the methods in the
   literature, the degeneracies, and the references for every part of the package.
 - Tutorials: [disentangle an SB2 end to end](tutorials/sb2-end-to-end.md) and

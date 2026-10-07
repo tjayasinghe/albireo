@@ -1,9 +1,9 @@
-"""Tests for :mod:`albireo.preprocess` — the archival-spectrum entry path.
+"""Tests for :mod:`albireo.preprocess`, the archival-spectrum entry path.
 
-The recurring theme is that these functions exist to survive things the simulator never
-produces: a response that varies by an order of magnitude across the window, no error
-array at all, deep one-sided lines, cosmic rays, and per-exposure wavelength grids that
-differ by a hundredth of a pixel. Each test below pins one of those.
+These functions handle conditions that the simulator never produces: a response that
+varies by an order of magnitude across the window, no error array, deep one-sided lines,
+cosmic rays, and per-exposure wavelength grids that differ by a hundredth of a pixel.
+Each test below covers one of them.
 """
 
 from __future__ import annotations
@@ -52,12 +52,12 @@ def test_fit_continuum_recovers_a_flat_continuum_through_lines():
 
 @pytest.mark.parametrize("decay", [0.002, 0.005, 0.01])
 def test_fit_continuum_follows_a_steep_multiplicative_response(decay):
-    """The reason the fit is done in the log.
+    """A fit in log flux follows a steep multiplicative response.
 
     A merged echelle spectrum's response falls by an order of magnitude across a few
     hundred Angstrom (measured: 20x over 3850-4750 A in FEROS). A curvature penalty
-    applied to the flux lags that badly; applied to its logarithm it is exact for a pure
-    exponential, since straight lines are in the penalty's nullspace.
+    applied to the flux follows such a response poorly. Applied to its logarithm it is
+    exact for a pure exponential, since straight lines are in the penalty's nullspace.
     """
     wave, flux, truth = _spectrum(decay=decay, lines=((4300.0, 1.5, 0.5),))
     contrast = truth[0] / truth[-1]
@@ -67,7 +67,7 @@ def test_fit_continuum_follows_a_steep_multiplicative_response(decay):
 
 
 def test_fit_continuum_is_insensitive_to_the_smoothing_scale():
-    """A well-posed continuum should not depend much on a knob the user has to guess."""
+    """A well-posed continuum should not depend much on a parameter the user has to guess."""
     wave, flux, truth = _spectrum(decay=0.004, noise=0.002)
     fits = [fit_continuum(wave, flux, smooth_angstrom=s) for s in (60.0, 120.0, 240.0)]
     for cont in fits:
@@ -87,8 +87,8 @@ def test_fit_continuum_survives_a_very_long_smoothing_scale():
     """Regression: a per-pixel Whittaker smoother needs lam ~ (L/2pi)^4.
 
     At L = 5000 pixels that is 4e12, the weight term is lost to rounding, and the
-    factorization fails outright ("leading minor not positive definite"). The knot basis
-    keeps the penalty at O(1) whatever the requested scale.
+    factorization fails ("leading minor not positive definite"). The knot basis keeps the
+    penalty at O(1) whatever the requested scale.
     """
     wave, flux, truth = _spectrum(n=20000, decay=0.003)
     cont = fit_continuum(wave, flux, smooth_angstrom=300.0)
@@ -122,7 +122,7 @@ def test_fit_continuum_rejects_impossible_inputs():
 
 def test_normalize_guards_a_collapsing_continuum():
     wave = np.linspace(4000.0, 4600.0, 4000)
-    flux = np.exp(-0.05 * (wave - 4000.0)) + 1e-9  # falls through nine orders of magnitude
+    flux = np.exp(-0.05 * (wave - 4000.0)) + 1e-9  # falls by nine orders of magnitude
     flux_norm, ivar, cont = normalize(wave, flux, smooth_angstrom=100.0)
     assert ivar is None
     bad = ~np.isfinite(flux_norm)
@@ -220,7 +220,7 @@ def test_select_region_slices_and_validates():
 
 
 def test_mask_ranges_zeroes_weight_without_deleting_pixels():
-    """The distinction that costs a quadratic factor in solver bandwidth if reversed."""
+    """Masked pixels are kept, since deleting them widens the solver bandwidth at quadratic cost."""
     ep = _epoch()
     masked = mask_ranges(ep, [(4200.0, 4250.0)])
     assert masked.n_pixels == ep.n_pixels
@@ -244,7 +244,7 @@ def test_mask_tellurics_is_a_no_op_in_the_blue_and_bites_in_the_red():
     red = _epoch(lo=7500.0, hi=7800.0)
     masked = mask_tellurics(red)
     assert (masked.ivar == 0.0).sum() > 0
-    # The O2 A band sits at 7580-7720; padding widens it but must not swallow 7800.
+    # The O2 A band is at 7580-7720. Padding widens it but must not extend to 7800.
     assert masked.ivar[-1] > 0.0
 
 
@@ -286,7 +286,7 @@ def test_share_wavelength_grid_aligns_sub_pixel_offsets():
 
 
 def test_share_wavelength_grid_preserves_flux_sample_identity():
-    """A relabelling, not a resampling: every retained flux value is untouched."""
+    """The grid is relabelled, not resampled: every retained flux value is unchanged."""
     step = 0.03
     n = 500
     flux = RNG.standard_normal(n) * 0.01 + 1.0

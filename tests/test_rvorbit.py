@@ -13,10 +13,11 @@ from albireo.todcor import VelocityTable
 
 P, T_PERI, ECC, OMEGA, K1, K2, GAMMA = 6.31, 2.0, 0.15, 0.7, 30.0, 55.0, 12.0
 
-# Transit-time seeds fixed after a scan over the first twenty: the cadence decides whether
-# an alias outranks the truth, and these two draws do what their tests describe (with the
-# classical periodogram the truth is rank 10 at the first, rank 1 at fourteen of the twenty;
-# with one harmonic the eccentric truth is rank 15 at the second, rank 1 at five of them).
+# The transit-time seeds were fixed after a scan over the first twenty. The cadence
+# determines whether an alias outranks the injected period, and these two draws do what
+# their tests describe. With the classical periodogram the injected period is rank 10 at
+# the first and rank 1 at fourteen of the twenty. With one harmonic the injected period of
+# the eccentric orbit is rank 15 at the second and rank 1 at five of them.
 CLUMPED_SEED = 7
 HARMONIC_SEED = 7
 
@@ -128,7 +129,7 @@ def test_the_orbit_is_recovered_from_a_noisy_table():
     np.testing.assert_allclose(fit.gamma, [GAMMA, GAMMA], atol=0.1)
     assert fit.gamma_mode == "shared"
     assert fit.n_points == 28 and fit.n_parameters == 7
-    # Reduced chi-square near one, since the errors were injected at the declared level.
+    # The reduced chi-square is near one, since the errors were injected at the declared level.
     assert 0.4 < fit.chi2 / (fit.n_points - fit.n_parameters) < 2.0
     assert np.all(fit.rms < 0.1)
     assert fit.mass_ratio == pytest.approx(K1 / K2, abs=0.005)
@@ -161,7 +162,7 @@ def test_differential_components_get_their_own_gamma():
     with pytest.warns(UserWarning, match="shared systemic velocity"):
         shared = fit_rv_orbit(table, period=P, gamma="shared")
     assert shared.gamma_mode == "shared"
-    # Forcing one gamma onto two different zero points corrupts the semi-amplitudes.
+    # Forcing one gamma onto two different zero points biases the semi-amplitudes.
     assert np.max(np.abs(shared.k - np.array([K1, K2]))) > 1.0
 
 
@@ -187,7 +188,7 @@ def test_the_period_search_finds_the_orbit():
 
 
 def test_the_period_search_resolves_a_survey_baseline():
-    """Forty epochs over five years: the default grid must resolve the 6.31 d peak."""
+    """With forty epochs over five years the default grid must resolve the 6.31 d peak."""
     rng = np.random.default_rng(5)
     bjd = np.sort(rng.uniform(0.0, 1900.0, size=40))
     orbit = ab.OrbitParams(period=P, t_peri=T_PERI, ecc=ECC, omega=OMEGA, k=(K1, K2), gamma=GAMMA)
@@ -225,7 +226,7 @@ def test_the_period_search_resolves_a_survey_baseline():
 
 
 def test_swapped_epochs_are_reassigned_by_the_orbit():
-    """A twin table with the components exchanged at some epochs comes back in order."""
+    """A twin table with the components exchanged at some epochs is returned in order."""
     table, _truth, orbit = make_table(
         n_epochs=16, sigma=0.2, seed=2, absolute=(False, False), offsets=(3.0, -3.0)
     )
@@ -241,7 +242,7 @@ def test_swapped_epochs_are_reassigned_by_the_orbit():
     np.testing.assert_array_equal(swapped_out, swapped_in)
     np.testing.assert_allclose(fixed.velocity, table.velocity)
     assert fixed.settings["reassigned_by_orbit"] == 4
-    # An untouched table is returned as it is, and a one-component table is left alone.
+    # An untouched table is returned as it is, and a one-component table is not changed.
     same, none = reassign_by_orbit(table, predicted)
     assert not none.any() and same is table
     # The orbit fitted to the repaired table recovers the semi-amplitudes; the broken one
@@ -273,8 +274,8 @@ def test_the_swap_invariant_search_survives_exchanged_epochs():
 def test_the_periodogram_is_the_floating_mean_generalized_one():
     """The power is the weighted variance a free constant and a sinusoid remove together.
 
-    Checked against a direct weighted least-squares fit of ``c + a cos wt + b sin wt`` at
-    four frequencies of the returned grid, which is the definition the closed form of
+    It is checked against a direct weighted least-squares fit of ``c + a cos wt + b sin wt``
+    at four frequencies of the returned grid, which is the definition the closed form of
     Zechmeister & Kürster (2009) evaluates.
     """
     rng = np.random.default_rng(7)
@@ -297,11 +298,12 @@ def test_the_periodogram_is_the_floating_mean_generalized_one():
 
 
 def test_the_floating_mean_survives_a_clumped_survey_cadence():
-    """A Gaia-like cadence: the classical periodogram ranks an alias first, this one the truth.
+    """On a Gaia-like cadence the classical periodogram ranks an alias first and this one
+    ranks the injected period first.
 
-    Sixteen transits in about eleven visibility periods over the DR4 span. The sampling
-    window has a large mean at most frequencies, so the constant a zero-offset model cannot
-    fit is absorbed into the sinusoid; the seed is fixed at one that shows it.
+    The cadence has sixteen transits in about eleven visibility periods over the DR4 span.
+    The sampling window has a large mean at most frequencies, so the constant a zero-offset
+    model cannot fit is absorbed into the sinusoid. The seed is fixed at one that shows it.
     """
     from scipy.signal import lombscargle
 
@@ -324,7 +326,7 @@ def test_the_floating_mean_survives_a_clumped_survey_cadence():
 
 
 def test_the_second_harmonic_ranks_an_eccentric_period_higher():
-    """At e = 0.5 the velocity curve is not a sinusoid and the extra harmonic finds it."""
+    """At e = 0.5 the velocity curve is not a sinusoid and the extra harmonic finds the period."""
     from albireo.gaia import rvs_transit_times
 
     table = _injected(rvs_transit_times(18, seed=HARMONIC_SEED), ecc=0.5, sigma=0.5, seed=2)
@@ -333,7 +335,7 @@ def test_the_second_harmonic_ranks_an_eccentric_period_higher():
     rank_one = _rank([one["period"], *one["aliases"]], P)
     rank_two = _rank([two["period"], *two["aliases"]], P)
     assert rank_two == 1 and rank_one != 1, (rank_one, rank_two)
-    # Nested models on the same grid: the second harmonic cannot explain less.
+    # The models are nested on the same grid, so the second harmonic cannot explain less.
     assert np.all(two["power"] >= one["power"] - 1e-8)
     with pytest.raises(ValueError, match="n_harmonics"):
         find_period(table, n_harmonics=0)
@@ -348,7 +350,7 @@ def test_the_number_of_peaks_reported_is_a_parameter():
     assert [few["period"], *few["aliases"]] == [default["period"], *default["aliases"][:3]]
     # A short list is a prefix of a long one, and the list is as long as the periodogram
     # allows: a 40 d baseline resolves only sixteen distinct peaks between 2 and 20 d,
-    # which is fewer than the twenty asked for. A survey baseline has room for all of them.
+    # which is fewer than the twenty requested. A survey baseline resolves all of them.
     assert len(default["aliases"]) == 15
     survey = _injected(rvs_transit_times(20, seed=1), sigma=0.5, seed=1)
     assert len(find_period(survey)["aliases"]) == 19
@@ -369,7 +371,7 @@ def test_the_peak_loop_walks_only_the_local_maxima():
 
 
 def test_the_weights_enter_the_statistic_and_not_the_data():
-    """Errors varying by four change the power; scaling every error leaves it alone."""
+    """Errors varying by four change the power; scaling every error leaves it unchanged."""
     from dataclasses import replace
 
     table = _injected(rng_epochs(5, n=20, span=40.0), sigma=0.5, seed=5)
@@ -403,13 +405,14 @@ def _without(table, component, epochs, *, at_edge=True):
 
 
 def test_a_velocity_counts_wherever_its_own_component_was_measured():
-    """A primary measured at an epoch whose secondary sat at the search edge is kept (D65).
+    """A primary measured at an epoch whose secondary was at the search edge is kept (D65).
 
-    ``VelocityTable.good`` requires every component to be finite and off the edge, and the
-    search on the first component alone and the fit used to intersect with it, so the source
-    meant for a companion the templates could not follow lost exactly the primary epochs
-    that companion had spoiled. A velocity now counts where its own component was measured
-    and the epoch is not blended; the relative velocity still needs both.
+    ``VelocityTable.good`` requires every component to be finite and off the edge. If the
+    search on the first component alone and the fit were restricted to those epochs, that
+    search, which is meant for a companion the templates cannot follow, would lose the
+    primary epochs at which the companion was not measured. A velocity is therefore used
+    where its own component was measured and the epoch is not blended. The relative
+    velocity still needs both.
     """
     from dataclasses import replace
 
@@ -448,15 +451,16 @@ def test_a_velocity_counts_wherever_its_own_component_was_measured():
 
 
 def test_a_component_with_no_usable_velocity_leaves_the_other_fitted():
-    """A companion gated away everywhere: the primary's orbit, and nothing made up for the rest.
+    """A companion with no usable velocity is held, and the primary's orbit is still fitted.
 
     The semi-amplitude of a component no velocity constrains is not a measurement, and the
-    optimizer does not hold an unconstrained parameter where it started: on a benchmark
-    table whose secondary was gated at every epoch it ran to 1.5e7 km/s, and the ranking
-    then set the true period aside as outside the declared ranges. It is held at 1e-3 km/s,
-    with its own systemic velocity where each component has one, neither counts as a
-    parameter, and nothing derived from it is reported; the parameters the primary
-    constrains keep finite errors.
+    optimizer does not keep an unconstrained parameter at its start. On a benchmark table
+    whose secondary was below the detection threshold at every epoch the semi-amplitude
+    reached 1.5e7 km/s, and the ranking then rejected the true period as outside the
+    declared ranges. The semi-amplitude is held at 1e-3 km/s, with the component's own
+    systemic velocity where each component has one. Neither counts as a parameter, and
+    nothing derived from it is reported. The parameters the primary constrains keep finite
+    errors.
     """
     from dataclasses import replace
 
@@ -479,12 +483,12 @@ def test_a_component_with_no_usable_velocity_leaves_the_other_fitted():
     assert differential.k[1] == 1e-3 and np.isnan(differential.errors["gamma"][1])
     assert differential.gamma[1] == pytest.approx(float(np.mean(blind.velocity[0])))
     assert abs(differential.k[0] - K1) < 0.2
-    # A caller's semi-amplitude is where a held one stays.
+    # A held semi-amplitude stays at the value the caller gives.
     assert fit_rv_orbit(blind, period=P, k=[25.0, 40.0]).k[1] == 40.0
-    # Fewer usable velocities than parameters is refused in terms of velocities.
+    # Fewer usable velocities than parameters raises an error stated in terms of velocities.
     with pytest.raises(ValueError, match="usable velocities"):
         fit_rv_orbit(_without(blind, 0, np.arange(8), at_edge=False), period=P)
-    # Every component valid: nothing is held.
+    # With every component valid, nothing is held.
     assert fit_rv_orbit(table, period=P).held == ()
 
 
@@ -504,8 +508,8 @@ def test_a_companion_with_no_more_velocities_than_its_own_parameters_is_held(
     """The hold threshold is the component's own parameter count, not zero (D65).
 
     One velocity fixes a free semi-amplitude exactly, and two fix a semi-amplitude and a
-    systemic velocity of the component's own, so neither is a measurement: such a component
-    is held, its velocities carry no weight, and nothing derived from it is reported.
+    systemic velocity of the component's own, so neither is a measurement. Such a component
+    is held, its velocities have no weight, and nothing derived from it is reported.
     """
     from dataclasses import replace
 
@@ -530,19 +534,19 @@ def test_a_companion_with_no_more_velocities_than_its_own_parameters_is_held(
 
 
 def test_the_semi_amplitude_start_is_half_the_range_of_the_usable_velocities():
-    """The start is the old rule restricted to each component's own usable velocities (D65).
+    """The start is half the range of each component's own usable velocities (D65).
 
-    Half the range is ``K`` at any eccentricity once the phases are covered, and it is the
-    start as it was wherever every component is usable. A ``sqrt(2)`` times weighted
-    standard deviation was tried in its place and rejected: sampled evenly in time it is 0.34
-    to 0.51 of ``K`` at ``e = 0.9``. Velocities the caller set to nan (the pipeline's
-    detection gate) do not enter the start. ``max_iterations=1`` returns the start.
+    Half the range is ``K`` at any eccentricity once the phases are covered, and the start
+    is unchanged wherever every component is usable. A ``sqrt(2)`` times weighted standard
+    deviation is not used: sampled evenly in time it is 0.34 to 0.51 of ``K`` at
+    ``e = 0.9``. Velocities the caller set to nan (the pipeline's detection threshold) do
+    not enter the start. ``max_iterations=1`` returns the start.
     """
     from dataclasses import replace
 
     from albireo.rvorbit import _semi_amplitude_start
 
-    # e = 0.9 with the phases covered: half the range is K, the weighted spread is not.
+    # At e = 0.9 with the phases covered, half the range is K and the weighted spread is not.
     orbit = ab.OrbitParams(period=P, t_peri=T_PERI, ecc=0.9, omega=OMEGA, k=(K1, K2), gamma=GAMMA)
     dense = orbit.component_velocities(np.linspace(0.0, P, 4000, endpoint=False))
     assert _semi_amplitude_start(dense[0]) == pytest.approx(K1, rel=5e-3)
@@ -559,9 +563,9 @@ def test_the_semi_amplitude_start_is_half_the_range_of_the_usable_velocities():
     velocity = np.array(table.velocity)
     velocity[1, noise] = rng.uniform(-300.0, 300.0, size=8)
     noisy = replace(table, velocity=velocity)
-    # Taken at face value, a companion's undetected draws still set its start...
+    # A companion's undetected draws, if left in the table, set its start.
     assert fit_rv_orbit(noisy, period=P, max_iterations=1).k[1] > 250.0
-    # ...and once they are removed, as the pipeline's gate removes them, they do not.
+    # Once they are removed, as the pipeline's detection threshold removes them, they do not.
     gated = _without(noisy, 1, noise, at_edge=False)
     start = fit_rv_orbit(gated, period=P, max_iterations=1).k
     assert start[1] == pytest.approx(0.5 * np.ptp(noisy.velocity[1, ~noise]))
@@ -569,13 +573,13 @@ def test_the_semi_amplitude_start_is_half_the_range_of_the_usable_velocities():
 
 
 def test_a_rounding_shift_of_one_epoch_time_moves_neither_the_grid_nor_the_peaks():
-    """Six decimals of an epoch time must not decide the period search (D65).
+    """Rounding an epoch time to six decimals must not change the period search (D65).
 
-    The default grid used to be spaced evenly between its two ends, and its high end is
-    twice the smallest gap between epochs, so a shift of 1e-6 d in the closest pair moved
-    every upper frequency by a sizeable fraction of a step and reordered near-degenerate
-    peaks; the written tables carried six decimals of the epoch time. The grid is now
-    anchored at its low end with a step that does not depend on the high end.
+    The high end of the default grid is twice the smallest gap between epochs. On a grid
+    spaced evenly between its two ends, a shift of 1e-6 d in the closest pair moves every
+    upper frequency by a sizeable fraction of a step and reorders near-degenerate peaks.
+    The written tables have six decimals of the epoch time. The grid is therefore anchored
+    at its low end with a step that does not depend on the high end.
     """
     from dataclasses import replace
 
@@ -601,7 +605,7 @@ def test_a_rounding_shift_of_one_epoch_time_moves_neither_the_grid_nor_the_peaks
         two = find_period(shifted, n_harmonics=harmonics)
         assert [one["period"], *one["aliases"]] == [two["period"], *two["aliases"]]
 
-    # The grid spaced evenly between the same two ends, as the default was, moves under it.
+    # The grid spaced evenly between the same two ends, as the default was, moves under the shift.
     def evenly(t):
         gaps = np.diff(np.sort(t))
         lo, hi = 2.0 * float(gaps.min()), 2.0 * float(np.ptp(t))
@@ -617,12 +621,12 @@ def test_a_rounding_shift_of_one_epoch_time_moves_neither_the_grid_nor_the_peaks
 
 
 def test_the_anchored_grid_on_a_short_baseline_where_more_samples_are_needed():
-    """Where ten samples per 1/T give fewer than 20000 frequencies, N rises and stays put.
+    """Where ten samples per 1/T give fewer than 20000 frequencies, N is raised and stays fixed.
 
     Twelve epochs over 40 d with a closest pair 0.074 d apart need about 75 samples per 1/T
     to reach 20000 frequencies. ``N`` is computed from the span rounded down to two
-    significant figures, so the same 1e-6 d shift of the closest pair leaves ``N``, and every
-    point below both high ends, where they were; the last point is the high end itself.
+    significant figures, so the same 1e-6 d shift of the closest pair leaves ``N`` and every
+    point below both high ends unchanged. The last point is the high end itself.
     """
     from dataclasses import replace
 
@@ -711,10 +715,10 @@ _REF_POWER = {
 def test_an_all_valid_table_is_fitted_and_searched_as_before_d65():
     """Where every component is valid, D65 changes neither the fit nor the periodogram.
 
-    The per-component validity, the hold, the start and the compiled objective are all
-    meant to leave such a table alone. With the start, conjunction and grid given
+    The per-component validity, the hold, the start and the compiled objective must leave
+    the results for such a table unchanged. With the start, conjunction and grid given
     explicitly, the chi-square, the parameter count, the covariance and the periodogram
-    powers are pinned against the base commit's values.
+    powers are compared with the base commit's values.
     """
     table, _, _ = make_table(n_epochs=14, sigma=0.5, seed=1)
     eccentric = fit_rv_orbit(table, period=P * 1.01, k=[28.0, 52.0], t_conj=2.5, ecc=0.1, omega=0.5)

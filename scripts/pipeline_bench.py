@@ -1,15 +1,15 @@
-"""Batch scaling with worker processes, and what the thread cap is worth (D58).
+"""Batch scaling with worker processes, and the effect of the thread cap (D58).
 
 The pipeline runs stars in a spawn-based process pool with each worker's XLA and BLAS
-threads capped at ``cpu_count // jobs``. This script measures the resulting speedup: the
-same batch of simulated stars, in-process and with 2, 4 and 8 workers, with the cap on and,
-for one point, off, so that the record carries a measured cost of oversubscription on this
-machine.
+threads capped at ``cpu_count // jobs``. This script measures the resulting speedup. The
+same batch of simulated stars is run in-process and with 2, 4 and 8 workers with the cap
+on. One point is rerun with the cap off, so that the record includes a measured cost of
+oversubscription on this machine.
 
 The fixture is the pipeline's own toy star (a two-component SB2 drawn from the synthetic
-library, 8 epochs, 725 native pixels) with the label stage off, so that what is timed is
-the disentangling, the velocity table and the orbit, the stages every star pays for.
-Every star is identical up to its noise seed.
+library, 8 epochs, 725 native pixels) with the label stage off. The timed stages are the
+disentangling, the velocity table and the orbit, which are run for every star. Every star
+is identical up to its noise seed.
 
     python scripts/pipeline_bench.py                 # 8 stars; jobs 1, 2, 4, 8
     python scripts/pipeline_bench.py --stars 4 --jobs 1 2
@@ -105,8 +105,8 @@ def make_stars(n: int, max_steps: int) -> list[StarConfig]:
 def time_batch(stars, jobs: int, *, cap: bool) -> tuple[float, float]:
     out = Path(tempfile.mkdtemp(prefix="albireo_bench_"))
     config = PipelineConfig(stars=stars, output=out, analysis=Analysis(plots=False))
-    # With the cap off, the worker environment is pre-seeded with a flag string that
-    # already contains the key the pipeline looks for, so it adds nothing and each
+    # With the cap off, the worker environment is given a flag string that already
+    # contains the key the pipeline checks for, so the pipeline adds nothing and each
     # worker sizes its pools to the whole machine. The bare `intra_op_parallelism_threads`
     # token is the form XLA accepts (the double-dash form is rejected as unknown), and the
     # string has to start with `--` or XLA reads it as a file name.
@@ -137,8 +137,8 @@ def main() -> None:
     stars = make_stars(args.stars, args.steps)
     print(f"{len(stars)} stars, {args.steps} L-BFGS steps each, labels off, plots off\n")
 
-    # One warm-up star in-process so the compile is paid before the in-process timing,
-    # as every worker pays it once too.
+    # One warm-up star is run in-process so that compilation happens before the in-process
+    # timing. Every worker also compiles once.
     time_batch(stars[:1], 1, cap=True)
 
     rows = []

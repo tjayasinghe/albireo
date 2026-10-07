@@ -3,7 +3,7 @@
 This page summarises the science that albireo implements and places each part of the
 package in the context of the published literature. It is intended to be read before the
 [mathematical foundations](math.md), which give the equations. The
-[reference list](#references) carries an ADS link for each cited work.
+[reference list](#references) gives an ADS link for each cited work.
 
 ## 1. Spectroscopic binaries and the disentangling problem
 
@@ -24,10 +24,10 @@ from which effective temperatures, surface gravities, rotation rates and abundan
 spectra without a template for either star. Its applications include the multiplicity
 of massive stars (Sana et al. 2012), where most systems will interact and where the
 components must be characterised separately; benchmark eclipsing binaries, where a
-disentangled spectrum feeds a model-atmosphere analysis of each star; and searches for
-dark companions, where the presence or absence of a faint second set of lines decides
-between a compact object and a stripped star (Section 5). Pavlovski & Hensberge (2010)
-review the method and its applications.
+disentangled spectrum is the input to a model-atmosphere analysis of each star; and
+searches for dark companions, where the presence or absence of a faint second set of
+lines decides between a compact object and a stripped star (Section 5). Pavlovski &
+Hensberge (2010) review the method and its applications.
 
 ## 2. Methods of spectral disentangling
 
@@ -69,10 +69,11 @@ one component, shift the residuals to the rest frame of the other, average, and 
 with the semi-amplitudes chosen by a $`\chi^2`$ grid over $`(K_1, K_2)`$. Shenar et al. (2020)
 applied it to LB-1, and the same approach identified the companion of HR 6819
 (Bodensteiner et al. 2020). It is simple and robust at low signal-to-noise, and it is the
-most widely used method in the massive-star and compact-companion literature. Its costs are
-a grid search whose size grows exponentially with the number of parameters, an implicit
-regularisation set by when the iteration is stopped, light ratios that must be fixed by
-hand, and no estimate of uncertainty on the recovered spectra. Quintero, Eenens & Rauw
+most widely used method in the massive-star and compact-companion literature. Its
+limitations are a grid search whose size grows exponentially with the number of parameters,
+an implicit regularisation set by the iteration at which the scheme is stopped, light
+ratios that must be fixed manually, and no estimate of uncertainty on the recovered
+spectra. Quintero, Eenens & Rauw
 (2020) analyse the artefacts of the algorithm and propose corrections.
 
 ### 2.5 Singular value decomposition with global optimisation
@@ -125,7 +126,7 @@ differential shift cannot be attributed to one star or the other, and the consta
 exactly unconstrained. This is the origin of the undulations in Fourier-disentangled spectra
 (Ilijić et al. 2001; Hensberge et al. 2008). In albireo the smoothness prior sets the scale
 of these modes explicitly, the posterior covariance reports their inflation, and the
-uncertainty band widens where the data give no leverage.
+uncertainty band widens where the data do not constrain the spectra.
 
 **Light ratio and line depth.** With constant light fractions the composite spectrum
 depends only on the product of each component's light fraction and its line depths, so the
@@ -135,16 +136,16 @@ during eclipses, by external photometry, or by assumption. Because an assumed li
 propagates into every line depth and every atmospheric parameter derived from it, albireo
 has no default light fraction: the treatment must be declared, and per-epoch light
 fractions can be inferred where eclipses exist. The interpretation of LB-1 and HR 6819
-turned on this choice (Shenar et al. 2020; Bodensteiner et al. 2020; El-Badry &
+depended on this choice (Shenar et al. 2020; Bodensteiner et al. 2020; El-Badry &
 Quataert 2021).
 
 **Systemic velocity.** Translating every component spectrum by the same amount and
 shifting the systemic velocity by the opposite amount leaves the composite unchanged, so
 $`\gamma`$ is not identified by disentangling and must be measured afterwards from the
 disentangled spectra against a template. When per-epoch velocities are fitted instead of
-a Keplerian, the same argument applies once per component: each star's velocities carry
+a Keplerian, the same argument applies once per component: each star's velocities have
 an arbitrary zero point, while the semi-amplitudes and the mass ratio, which is the slope
-of one velocity against the other (Wilson 1941), survive.
+of one velocity against the other (Wilson 1941), are unaffected.
 
 **Line-spread function and intrinsic line width.** A broader instrumental profile
 combined with intrinsically narrower lines is observationally almost identical to the
@@ -153,7 +154,7 @@ share the same component spectra identify the differences between their widths; 
 absolute scale must come from one instrument whose profile is known. The width is declared
 per exposure, not per instrument name, because one spectrograph observes in more than one
 mode: the HARPS archive of AI Phoenicis mixes R = 115,000 and R = 80,000 exposures under
-one `INSTRUME`, and modelling the second kind at the first width was measured to move the
+one `INSTRUME`, and modelling the second kind at the first width was measured to shift the
 semi-amplitudes (see the benchmarks page).
 
 ## 4. The albireo model
@@ -180,7 +181,7 @@ the data.
 Each deviation spectrum receives an independent Gaussian prior whose precision is
 $`\tau\,\mathbf{D}_2^\top\mathbf{D}_2 + \eta\,\mathbf{I}`$, a curvature penalty plus a weak
 ridge. The ridge makes the affine null space of the curvature penalty proper; these are
-exactly the low-frequency directions of Section 3. Because the model is linear-Gaussian in
+the low-frequency directions of Section 3. Because the model is linear-Gaussian in
 the spectra conditional on the nonlinear parameters, the marginal likelihood has the
 standard closed form for a linear-Gaussian model (Rasmussen & Williams 2006, Chapter 2).
 The posterior precision of the stacked spectra is block-tridiagonal, is assembled
@@ -227,7 +228,7 @@ limb-darkened profile of Gray (2005). Conversion between air and vacuum waveleng
 the Edlén (1966) dispersion formula as revised by Birch & Downs (1994), the form tabulated
 by Morton (2000); the two scales differ by about 83 km s$`^{-1}`$ in the optical, and albireo
 requires the medium to be declared wherever absolute line positions matter. Where reduced
-spectra carry no usable error array, the noise is estimated from the spectrum itself with
+spectra have no usable error array, the noise is estimated from the spectrum itself with
 the DER_SNR estimator (Stoehr et al. 2008). Correlated noise introduced by pipeline
 resampling is modelled as a first-order autoregressive process per epoch, with the
 tridiagonal precision and the determinant in closed form. Archival spectra are identified
@@ -333,8 +334,8 @@ Section 3. A Keplerian is fitted to the resulting table by weighted nonlinear le
 squares, with a period search by the floating-mean generalized Lomb-Scargle periodogram
 (Lomb 1976; Scargle 1982; Zechmeister & Kürster 2009; VanderPlas 2018) and with one systemic
 velocity per component whenever a component is differential. The periodogram proposes
-candidate periods and the Keplerian fit decides among them; on a survey cadence this step
-decides whether the period is found at all.
+candidate periods and the Keplerian fit selects among them. On a survey cadence this step
+determines whether the period is found.
 
 ## 9. Systems used for validation
 
@@ -372,9 +373,10 @@ signal-to-noise that follows from G_RVS, delivery onto the archive grid with the
 correlation that resampling introduces, the resolving powers measured per CCD, and the
 transit cadence of the scanning law in distribution. Populations of systems drawn from the
 field's distributions (Moe & Di Stefano 2017) or from real catalogues (Southworth 2015;
-Gaia Collaboration, Arenou et al. 2023) are run through the pipeline under knowledge tiers,
-and the recovery of orbits, velocities, spectra and labels is tabulated against the
-injected truth ([tutorial](tutorials/gaia-rvs.md)).
+Gaia Collaboration, Arenou et al. 2023) are run through the pipeline at several levels of
+prior knowledge, from a known orbit to a blind period search, and the recovery of orbits,
+velocities, spectra and labels is tabulated against the injected values
+([tutorial](tutorials/gaia-rvs.md)).
 
 ## 10. Software foundations
 

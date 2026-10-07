@@ -1,28 +1,28 @@
 """Reading ESO Science Data Products by what they declare, not what they are called (D45).
 
-Thirteen real Phase 3 spectra across seven instruments were dumped column by column to
-write this file, and the headline is that **no two collections agree on anything except
-the utypes**. The flux column is ``FLUX`` on HARPS, ``FLUX_REDUCED`` on GIRAFFE, and both
-at once on X-shooter; the extension is ``SPECTRUM`` except in the Gaia-ESO release, where
-it is ``phase3spectrum``; wavelengths are angstrom, Angstrom or nm; and ESO misspells
+Thirteen real Phase 3 spectra across seven instruments were listed column by column to
+write this file. No two collections agree on anything except the utypes. The flux column
+is ``FLUX`` on HARPS, ``FLUX_REDUCED`` on GIRAFFE, and both at once on X-shooter. The
+extension is ``SPECTRUM`` except in the Gaia-ESO release, where it is
+``phase3spectrum``. Wavelengths are angstrom, Angstrom or nm. ESO misspells
 ``Accuracy`` as ``Accurancy`` in ESPRESSO and GIRAFFE products but not in X-shooter.
 
-Four things have to hold, and each one is a way a name-keyed reader gets a confident wrong
-answer rather than an error:
+Four properties must hold. Each is a case in which a name-keyed reader returns a wrong
+result rather than an error:
 
-**The sky is not the star.** UVES ships ``BGFLUX_REDUCED`` whose UCD is byte-identical to
-the UCD on the HARPS *flux* column. Only the utype role separates them, which is why the
-role is the key and the UCD is a tie-breaker.
+**The sky background is not the stellar flux.** UVES provides ``BGFLUX_REDUCED``, whose
+UCD is byte-identical to the UCD on the HARPS flux column. Only the utype role separates
+them, so the role is the key and the UCD is a tie-breaker.
 
-**The error must belong to the flux it weights.** X-shooter carries a calibrated flux in
+**The error must belong to the flux it weights.** X-shooter provides a calibrated flux in
 erg/cm2/s/A beside a raw error in adu. Both are finite and positive, so pairing them across
-namespaces is wrong by the whole flux calibration and complains about nothing.
+namespaces is wrong by the whole flux calibration and raises no error.
 
 **Air is not vacuum.** The wavelength scale is declared only in the spectral axis's own
-UCD, and it is worth 83 km/s — the same order as the semi-amplitudes being measured.
+UCD, and the difference is 83 km/s, the same order as the semi-amplitudes being measured.
 
-**A flagged pixel is not a measurement.** Nor is a zero uncertainty, which is how these
-pipelines write "nothing here" rather than "known exactly".
+**A flagged pixel is not a measurement.** Nor is a zero uncertainty, which these
+pipelines write where there is no measurement, not where the value is known exactly.
 """
 
 import warnings
@@ -44,7 +44,7 @@ RA, DEC = 274.246199, -56.02876
 RNG = np.random.default_rng(45)
 
 # The UCDs and units below are verbatim from real files; naming them keeps the layout
-# tables readable as the transcriptions they are.
+# tables readable.
 AIR = "em.wl;obs.atmos"
 VACUUM = "em.wl"
 RAW_FLUX = "phot.flux.density;em.wl;stat.uncalib"
@@ -63,7 +63,7 @@ ERR_V2 = "spec:Data.FluxAxis.Accuracy.StatError"
 BACKGROUND = "spec:Data.BackgroundModel.Value"
 # ESO's own misspelling, exactly as it appears in GIRAFFE and ESPRESSO products.
 QUAL_V2 = "spec:Data.FluxAxis.Accurancy.QualityStatus"
-# ESO's reduced columns sit in their own namespace beside the calibrated ones.
+# ESO's reduced columns are in their own namespace beside the calibrated ones.
 FLUX_ESO = "eso:Data.FluxAxis.Value"
 ERR_ESO = "eso:Data.FluxAxis.Accuracy.StatError"
 
@@ -78,7 +78,7 @@ def _flux(wave):
 
 
 def _primary(**cards):
-    """The primary header every ESO Phase 3 product carries, before the overrides."""
+    """The primary header every ESO Phase 3 product has, before the overrides."""
     hdu = fits.PrimaryHDU()
     header = hdu.header
     header["INSTRUME"] = "TESTSPEC"
@@ -137,7 +137,7 @@ def write_sdp(
 
     hdus = [_primary(**primary_cards)]
     if decoy:
-        # A short calibration table that a name-keyed reader would happily read instead.
+        # A short calibration table that a name-keyed reader would read instead.
         hdus.append(
             fits.BinTableHDU.from_columns(
                 [
@@ -172,7 +172,7 @@ def write_sdp(
     return str(path)
 
 
-# The layouts below are transcriptions of real files, not inventions.
+# The layouts below are transcriptions of real files.
 HARPS = [
     ("WAVE", WAVE_V1, AIR, "Angstrom", "wave"),
     ("FLUX", FLUX_V1, RAW_FLUX, "adu", "flux"),
@@ -183,7 +183,7 @@ UVES = [
     ("WAVE", WAVE_V2, AIR, "angstrom", "wave"),
     ("FLUX_REDUCED", FLUX_V2, NET_FLUX, "adu", "flux"),
     ("ERR_REDUCED", ERR_V2, RAW_ERR, "adu", "err"),
-    # The trap: the same UCD the HARPS *flux* column carries, on the sky background.
+    # The sky background has the same UCD as the HARPS flux column.
     ("BGFLUX_REDUCED", BACKGROUND, RAW_FLUX, "adu", "zeros"),
 ]
 
@@ -209,7 +209,7 @@ def test_the_sky_background_is_never_mistaken_for_the_flux(tmp_path):
 
 
 def test_the_calibrated_flux_wins_when_a_file_carries_two(tmp_path):
-    """X-shooter ships a calibrated FLUX beside a raw FLUX_REDUCED in the eso: namespace."""
+    """X-shooter provides a calibrated FLUX beside a raw FLUX_REDUCED in the eso: namespace."""
     xshooter = [
         ("WAVE", WAVE_V2, AIR, "nm", "wave"),
         ("FLUX", FLUX_V2, CAL_FLUX, CGS, "flux"),
@@ -222,7 +222,7 @@ def test_the_calibrated_flux_wins_when_a_file_carries_two(tmp_path):
 
 
 def test_the_error_column_is_matched_to_the_flux_it_weights(tmp_path):
-    """Pairing a cgs flux with an adu error is wrong by the flux calibration, silently."""
+    """Pairing a cgs flux with an adu error is silently wrong by the flux calibration."""
     xshooter = [
         ("WAVE", WAVE_V2, AIR, "nm", "wave"),
         ("FLUX", FLUX_V2, CAL_FLUX, CGS, "flux"),
@@ -238,13 +238,13 @@ def test_the_error_column_is_matched_to_the_flux_it_weights(tmp_path):
 
 
 def test_a_flux_error_column_is_found_by_name_when_no_utype_says_so(tmp_path):
-    """FLUX_ERROR spelled out, with no utype to dispatch on — the Gaia RVS shape.
+    """FLUX_ERROR spelled out, with no utype to dispatch on (the Gaia RVS layout).
 
-    Products outside the ESO Phase 3 world carry no IVOA utypes at all, so the whole
-    dispatch falls through to the name table, and there `FLUX_ERROR` is a different string
-    from `FLUX_ERR`. Missing it is not a missing feature: the reader would report no error
-    column and weight the epoch by the scatter it estimates itself, which looks exactly
-    like a spectrum whose archive supplied no uncertainties.
+    Products outside ESO Phase 3 have no IVOA utypes, so the whole dispatch falls through
+    to the name table, where `FLUX_ERROR` is a different string from `FLUX_ERR`. If the
+    name were not recognized, the reader would report no error column and weight the epoch
+    by the scatter it estimates itself, which is indistinguishable from a spectrum whose
+    archive supplied no uncertainties.
     """
     nameless = [
         ("WAVE", "", "", "angstrom", "wave"),
@@ -281,7 +281,7 @@ def test_a_calibration_table_does_not_win_over_the_real_spectrum(tmp_path):
 
 
 def test_a_file_with_no_utypes_at_all_still_reads(tmp_path):
-    """The name tables survive as a fallback, because not every product is an ESO one."""
+    """The name tables are kept as a fallback, because not every product is an ESO one."""
     plain = [
         ("WAVE", None, None, "angstrom", "wave"),
         ("FLUX", None, None, "adu", "flux"),
@@ -297,7 +297,7 @@ def test_a_file_with_no_utypes_at_all_still_reads(tmp_path):
 
 
 def test_air_and_vacuum_come_from_the_wave_columns_own_ucd(tmp_path):
-    """Reading TUCD1 by index is right only while the wave column happens to be first."""
+    """Reading TUCD1 by index is right only while the wave column is first."""
     swapped = [
         ("FLUX", FLUX_V2, "phot.flux.density", "adu", "flux"),
         ("WAVE", WAVE_V2, AIR, "angstrom", "wave"),
@@ -323,13 +323,13 @@ def test_nanometre_wavelengths_are_converted_to_angstrom(tmp_path):
 
 
 def test_the_wavelength_scale_reaches_the_epoch(tmp_path):
-    """The whole point of reading it: EpochData.medium is what Dataset validates."""
+    """The scale is read because EpochData.medium is what Dataset validates."""
     epoch = to_epoch(read_spectrum(write_sdp(tmp_path / "a.fits", UVES)), smooth_angstrom=60.0)
     assert epoch.medium == "air"
 
 
 def test_trimming_an_epoch_keeps_its_wavelength_scale(tmp_path):
-    """Every masking and slicing helper goes through one rebuild, and it must carry it."""
+    """Every masking and slicing helper goes through one rebuild, which must keep the medium."""
     epoch = EpochData(
         wave=np.linspace(4400.0, 4500.0, 200),
         flux=np.ones(200),
@@ -352,7 +352,7 @@ def test_read_dataset_refuses_a_mixture_of_air_and_vacuum(tmp_path):
 
 
 def test_one_warning_per_complaint_not_per_file(tmp_path):
-    """51 copies of the same sentence is how a user learns to ignore warnings."""
+    """51 copies of the same warning lead users to ignore warnings."""
     for index in range(6):
         write_sdp(tmp_path / f"s{index}.fits", HARPS, tmid=53243.0 + index)
     with pytest.warns(RuntimeWarning) as caught:
@@ -363,7 +363,7 @@ def test_one_warning_per_complaint_not_per_file(tmp_path):
 
 
 def test_a_declared_medium_overrides_the_files(tmp_path):
-    """After converting by hand, the user must be able to say so."""
+    """After converting manually, the user must be able to declare the medium."""
     write_sdp(tmp_path / "air.fits", UVES)
     ds = read_dataset(str(tmp_path), medium="vacuum", region=(4400.0, 4500.0), smooth_angstrom=60.0)
     assert ds.epochs[0].medium == "vacuum"
@@ -373,7 +373,7 @@ def test_a_declared_medium_overrides_the_files(tmp_path):
 
 
 def test_a_flagged_pixel_gets_no_weight(tmp_path):
-    """X-shooter flags 17% of its pixels, and their errors look perfectly healthy."""
+    """X-shooter flags 17% of its pixels, and the errors of those pixels look normal."""
     quality = np.zeros(3000, dtype=np.int32)
     quality[100:150] = 1
     layout = [*BLOEM[:3], ("QUAL_REDUCED", QUAL_V2, "meta.code.qual", "", quality)]
@@ -389,7 +389,7 @@ def test_a_flagged_pixel_gets_no_weight(tmp_path):
 
 
 def test_a_zero_uncertainty_is_not_infinite_precision(tmp_path):
-    """It is how these pipelines write 'nothing here'; weighting it as exact is fatal."""
+    """These pipelines write zero where no measurement exists; it must not be weighted as exact."""
     err = np.full(3000, 5.0)
     err[200:220] = 0.0
     layout = [BLOEM[0], BLOEM[1], (BLOEM[2][0], BLOEM[2][1], BLOEM[2][2], "adu", err)]
@@ -399,7 +399,7 @@ def test_a_zero_uncertainty_is_not_infinite_precision(tmp_path):
 
 
 def test_an_all_nan_error_column_is_reported_not_swallowed(tmp_path):
-    """FEROS and HARPS ship one, and the weights become albireo's assumption instead."""
+    """FEROS and HARPS provide one, and the weights become albireo's assumption instead."""
     with pytest.warns(RuntimeWarning, match="no finite positive value"):
         raw = read_spectrum(write_sdp(tmp_path / "n.fits", HARPS))
     assert raw.err is None
@@ -441,7 +441,7 @@ def test_mjd_end_beats_the_exposure_time_fallback(tmp_path):
 
 
 def test_a_fabricated_barycentric_velocity_says_so(tmp_path):
-    """Zero is a real number here, and it is wrong unless the pipeline applied nothing."""
+    """Zero is a valid value here, and it is wrong unless the pipeline applied no correction."""
     path = write_sdp(
         tmp_path / "b.fits", UVES, RA=None, DEC=None, **{"HIERARCH ESO DRS BARYCORR": None}
     )
@@ -458,18 +458,18 @@ def test_a_one_character_R_keyword_is_not_a_resolving_power(tmp_path):
 
 
 def test_the_raw_specsys_survives_even_when_the_frame_is_aliased(tmp_path):
-    """Heliocentric is reported as barycentric; the file's own word is still recorded."""
+    """Heliocentric is reported as barycentric; the file's own value is still recorded."""
     with pytest.warns(RuntimeWarning, match="heliocentric"):
         raw = read_spectrum(write_sdp(tmp_path / "h.fits", UVES, SPECSYS="HELIOCEN"))
     assert raw.frame == "barycentric"
     assert raw.specsys == "HELIOCEN"
 
 
-# -- what the reader refuses to guess -----------------------------------------
+# -- what the reader does not infer -------------------------------------------
 
 
 def test_a_quality_column_that_never_says_zero_is_ignored_not_inverted(tmp_path):
-    """UVES_SQUAD's STATUS runs {-5, 1}; read as 'nonzero is bad' it condemns every pixel."""
+    """UVES_SQUAD's STATUS is in {-5, 1}; read as 'nonzero is bad' it rejects every pixel."""
     status = np.where(np.arange(3000) % 3 == 0, -5, 1).astype(np.int32)
     layout = [*BLOEM[:3], ("QUAL_REDUCED", QUAL_V2, "meta.code.qual", "", status)]
     with pytest.warns(RuntimeWarning, match="never takes the value 0"):
@@ -480,7 +480,7 @@ def test_a_quality_column_that_never_says_zero_is_ignored_not_inverted(tmp_path)
 
 
 def test_a_polarity_free_mask_column_is_not_guessed_at(tmp_path):
-    """MASK/FLAG carry no agreed convention, and albireo's own EpochData.mask is True=GOOD."""
+    """MASK/FLAG have no agreed convention, and albireo's own EpochData.mask is True=GOOD."""
     good = np.ones(3000, dtype=np.int32)
     good[100:150] = 0
     layout = [*BLOEM[:3], ("MASK", None, None, "", good)]
@@ -520,7 +520,7 @@ def test_an_error_column_belonging_to_the_other_flux_is_rejected(tmp_path):
 
 
 def test_a_dead_region_beside_a_live_pad_is_still_refused(tmp_path):
-    """The guard must ask about the pixels that survive the trim, not the padded slice."""
+    """The guard must test the pixels that remain after the trim, not the padded slice."""
     quality = np.zeros(3000, dtype=np.int32)
     wave = 435.0 + 0.005 * np.arange(3000)
     quality[(wave >= 436.0) & (wave <= 437.0)] = 1
@@ -531,7 +531,7 @@ def test_a_dead_region_beside_a_live_pad_is_still_refused(tmp_path):
 
 
 def test_only_bjd_is_enough_when_the_file_has_no_time(tmp_path):
-    """The error for a missing time says to pass bjd=, so passing bjd= has to work."""
+    """The error for a missing time recommends passing bjd=, so passing bjd= must work."""
     path = write_sdp(tmp_path / "t.fits", UVES, tmid=None, MJD_OBS=None, EXPTIME=None)
     raw = read_spectrum(path, bjd=2453243.5)
     assert raw.bjd == 2453243.5

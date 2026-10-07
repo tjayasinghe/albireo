@@ -1,19 +1,20 @@
-"""The hand-set light-ratio systematic, quantified (M5 paper asset).
+"""Quantify the systematic from a manually set light ratio (M5 paper asset).
 
-The LB-1 / HR 6819 debates hinged on disentangled component spectra whose light
-ratio was set by hand: the recovered deviation spectrum scales as 1/ell, so an
+The LB-1 / HR 6819 debates depended on disentangled component spectra whose light
+ratio was set manually. The recovered deviation spectrum scales as 1/ell, so an
 assumed ell that is wrong by a factor alpha rescales every line depth by alpha,
-which then feeds directly into surface-gravity and class diagnostics. This script
+which propagates directly into surface-gravity and class diagnostics. This script
 demonstrates, on a seeded simulation:
 
-1. Fixed-orbit disentangling with a hand-set wrong ell reproduces the systematic:
-   measured line-depth scaling equals ell_true / ell_assumed (math.md §5.2).
-2. The marginal likelihood over ell, with hyperparameters refit by ML-II at every
-   trial ell so that the comparison is like for like, is flat with constant light
-   fractions (the data do not determine ell) but sharply peaked at the truth when
-   three partial-eclipse epochs are added. With fixed hyperparameters the
-   constant-light profile shows spurious prior-mediated curvature, which is the
-   reason for the per-trial refit.
+1. Fixed-orbit disentangling with a manually set wrong ell reproduces the
+   systematic: measured line-depth scaling equals ell_true / ell_assumed
+   (math.md §5.2).
+2. The marginal likelihood over ell is flat with constant light fractions (the
+   data do not determine ell) but sharply peaked at the injected value when three
+   partial-eclipse epochs are added. The hyperparameters are refit by ML-II at
+   every trial ell so that the comparison is like for like, because with fixed
+   hyperparameters the constant-light profile shows spurious prior-mediated
+   curvature.
 
 Run: python scripts/m5_light_ratio_demo.py   (~12 min CPU; 16 small ML-II fits)
 """
@@ -82,7 +83,7 @@ def depth_scaling(d_hat, d_true):
     """Affine fit d_hat ~ a * d_true + b over interior pixels.
 
     The slope ``a`` isolates the multiplicative light-ratio systematic
-    (prediction: ell_true / ell_assumed); the intercept ``b`` is the separate,
+    (prediction: ell_true / ell_assumed). The intercept ``b`` is the separate,
     additive k~0 envelope offset (math.md §5.1) that would otherwise contaminate
     a per-pixel depth ratio.
     """

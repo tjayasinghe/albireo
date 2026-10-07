@@ -1,17 +1,16 @@
-"""Tests for the multiplicative per-epoch response θ-swap (D7's deferral, closed by D33).
+"""Tests for the multiplicative per-epoch response θ-swap (deferred in D7, built in D33).
 
-The response enters the *targets* ``z = y - r (R 1)`` and the sandwich weights
-``w r^2``, not just the forward operator — which is why D7 deferred the swap. What has
-to hold, and is pinned here: the swap must equal having built the problem with those
-coefficients in the first place (to float precision — ``z`` is updated in place via the
-stored response-independent ``base = R 1``); it must replace rather than compound;
-masked pixels must stay inert (the D30 ``0 * nan`` trap); gradients must flow; and
-maximizing the marginal likelihood over the site must recover injected per-epoch
-response perturbations without corrupting the orbit. The epoch-*shared* part of a
-low-order response is only weakly identified (it trades against the components' broad
-features, design.md §5), so the closed loop asserts sharply on the epoch-to-epoch
-*differences* — the thing a per-epoch continuum treatment exists to absorb — and
-loosely on the common mode.
+The response enters the targets ``z = y - r (R 1)`` and the sandwich weights ``w r^2``
+as well as the forward operator, which is why D7 deferred the swap. The tests assert
+five properties. The swap must equal a build of the problem with the same coefficients
+(to float precision, since ``z`` is updated in place via the stored response-independent
+``base = R 1``). It must replace rather than compound. Masked pixels must stay inert
+(the D30 ``0 * nan`` failure). Gradients must propagate through the swap. Maximizing the
+marginal likelihood over the site must recover injected per-epoch response perturbations
+without biasing the orbit. The epoch-shared part of a low-order response is only weakly
+identified (it is degenerate with the components' broad features, design.md §5). The
+closed loop therefore applies a tight tolerance to the epoch-to-epoch differences, which
+a per-epoch continuum treatment is meant to absorb, and a loose one to the common mode.
 """
 
 from __future__ import annotations
@@ -158,10 +157,10 @@ def test_bad_shapes_are_rejected():
 
 
 def test_masked_pixel_values_stay_inert_through_the_swap():
-    """Garbage (including nan) at zero-weight pixels must not reach the marginal.
+    """Arbitrary values (including nan) at zero-weight pixels must not affect the marginal.
 
-    data.py documents masked flux as never read, and the swap rebuilds z — so this
-    pins that the rebuild cannot resurrect the D30 ``0 * nan`` trap.
+    data.py documents masked flux as never read, and the swap rebuilds z. This test
+    asserts that the rebuild does not reintroduce the D30 ``0 * nan`` failure.
     """
     ds, _, prior = small_problem()
     poisoned_epochs = []
@@ -298,14 +297,14 @@ def test_theta_site_matches_the_direct_route():
 
 @pytest.mark.slow
 def test_closed_loop_recovers_per_epoch_response_and_orbit():
-    """The D33 gate: injected per-epoch response perturbations are inferred jointly.
+    """The D33 acceptance test: injected per-epoch response perturbations are inferred jointly.
 
-    Sharp assertion on the epoch-to-epoch *differences* of the coefficients (the
-    identifiable direction, and the point of the site); loose on the common mode,
-    which legitimately trades against the components' broad features (design.md §5)
-    and is pinned only by its zero-centered prior. The orbit must come out at gate
-    accuracy alongside, and the fitted response must beat the unit response by a
-    decisive margin at the same orbit.
+    The tolerance is tight on the epoch-to-epoch differences of the coefficients (the
+    identifiable direction, and the purpose of the site). It is loose on the common
+    mode, which is degenerate with the components' broad features (design.md §5) and
+    constrained only by its zero-centered prior. The orbit must also be recovered to
+    acceptance-test accuracy, and at the same orbit the fitted response must have a much
+    higher likelihood than the unit response.
     """
     _, truth, model = _gate_data(response_amplitude=0.03)
     c_true = np.stack(truth.response_coeffs)
@@ -341,11 +340,11 @@ def test_closed_loop_recovers_per_epoch_response_and_orbit():
         f"difference-mode response error {np.sqrt(np.mean(diff_err**2)):.2e} "
         f"(injected rms {np.sqrt(np.mean(c_true**2)):.2e})"
     )
-    # The common mode is the §5-degenerate direction: nearly flat in the likelihood
-    # (the components' broad features absorb it, at ML-II hyperparameters happily), it
-    # lands within the prior scale of zero rather than at truth — measured ~0.04 rms
-    # against a 0.05 prior. Asserted at prior scale to pin that it cannot run away;
-    # anyone tightening this below ~2 prior sigmas is testing the prior, not the data.
+    # The common mode is the §5-degenerate direction. It is nearly flat in the likelihood
+    # (the components' broad features absorb it readily at ML-II hyperparameters), so it
+    # is fitted within the prior scale of zero, not at the injected value (measured
+    # ~0.04 rms against a 0.05 prior). The assertion at prior scale checks that it stays
+    # bounded. A tolerance below ~2 prior sigmas would test only the prior.
     common_err = c_hat.mean(axis=0) - c_true.mean(axis=0)
     assert np.all(np.abs(common_err) < 0.1)
 

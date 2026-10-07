@@ -1,33 +1,33 @@
 """Nebular contamination: leave it in, mask it out, or model it (``docs/math.md`` §1.3).
 
-Massive stars form in H II regions, so their spectra carry emission lines that belong to
-neither star: the lines are stationary while the stars move, and their strength changes
-from night to night with seeing, slit losses and sky subtraction. This script takes one
-simulated SB2 whose H-beta absorption carries such a line and disentangles it three
-ways, with the data, orbit, priors and grid held fixed:
+Massive stars form in H II regions, so their spectra contain emission lines that belong
+to neither star. The lines are stationary while the stars move, and their strength
+changes from night to night with seeing, slit losses and sky subtraction. This script
+takes one simulated SB2 whose H-beta absorption contains such a line and disentangles it
+in three ways, with the data, orbit, priors and grid held fixed:
 
-1. Leave it in. Two stellar components and nothing else. The emission is absorbed into
-   the stellar spectra: it fills the line core, so the disentangled profile comes out
-   too shallow and too narrow.
+1. Leave it in. The model has two stellar components only. The emission is absorbed
+   into the stellar spectra. It fills the line core, so the disentangled profile is too
+   shallow and too narrow.
 2. Mask it. Zero the inverse variance across the nebular window
    (:func:`albireo.mask_ranges`). This is the standard treatment in the literature. It
    removes the core of the line from which a Balmer gravity diagnostic is measured, so
-   the result has a gap in the middle and only the wings constrain the answer.
-3. Model it. A third component at rest in the barycentric frame with a free per-epoch
-   amplitude (D40), confined by the prior to the nebular window
+   the result has a gap in the middle and only the wings constrain the profile.
+3. Model it. A third component is added at rest in the barycentric frame, with a free
+   per-epoch amplitude (D40), confined by the prior to the nebular window
    (:func:`albireo.window_profile`). The stellar spectra are recovered uncontaminated
    and complete, and the nebular line is recovered as a separate product.
 
-The orbit is held at the truth throughout, because the comparison concerns the spectra
-rather than the orbit (``tests/test_nebular.py`` covers the joint fit). The quantity
-compared is the equivalent width: it is the input to an atmosphere code, so an error in
-it propagates into the temperature and gravity derived from the spectrum.
+The orbit is held at the injected values throughout, because the comparison concerns the
+spectra rather than the orbit (``tests/test_nebular.py`` covers the joint fit). The
+quantity compared is the equivalent width. It is the input to an atmosphere code, so an
+error in it propagates into the temperature and gravity derived from the spectrum.
 
-Two conventions apply. The amplitude scale is not identified: only the product
+Two conventions apply. The amplitude scale is not identified. Only the product
 ``amplitude * spectrum`` is observable, so the recovered amplitudes are compared after
-centering (:func:`albireo.nebular_amplitudes` pins their geometric mean to 1). The
-nebular velocity is not identified either: it determines where the component's lines
-fall on the model grid, which the prior windows must match, and nothing else.
+centering (:func:`albireo.nebular_amplitudes` sets their geometric mean to 1). The
+nebular velocity is not identified either. It determines only where the component's
+lines fall on the model grid, which the prior windows must match.
 
 Environment
 -----------
@@ -63,17 +63,17 @@ SNR = 220.0
 N_EPOCHS = 8 if FAST else 14
 SEED = 5
 
-# The prior window is generous. Confinement is soft, so a window that is too wide only
-# returns some of the freedom the profile removes, whereas a window that is too narrow
-# clips real emission and pushes the residual back into the stellar spectra, which is the
+# The prior window is wide. Confinement is soft, so a window that is too wide only
+# restores some of the freedom the profile removes. A window that is too narrow truncates
+# real emission, and the residual is absorbed into the stellar spectra, which is the
 # failure being corrected.
 WINDOWS = ab.nebular_windows(lines=[HBETA], halfwidth_kms=500.0)
-# The mask window, for treatment 2. It is tighter than the prior window because a mask
-# removes pixels outright, and a mask applied by hand would not be as wide as a soft
-# prior can be. +-150 km/s is about 2.4 A at H-beta.
+# The mask window for treatment 2 is narrower than the prior window because a mask
+# removes pixels, and a mask applied manually would not be as wide as a soft prior can
+# be. +-150 km/s is about 2.4 A at H-beta.
 MASK = ab.nebular_windows(lines=[HBETA], halfwidth_kms=150.0)
 
-# (K_1 + K_2) plus the nebula at rest, with headroom for the static solver bandwidth.
+# The static solver bandwidth is set by (K_1 + K_2) plus the nebula at rest, with headroom.
 V_REL_MAX = 150.0
 
 
@@ -120,7 +120,7 @@ def simulate():
 
 
 def stellar_prior(n_comp: int, *, confine: bool) -> ab.SmoothnessPrior:
-    """(tau, eta) per component; the nebular entry has a short curvature scale and is
+    """(tau, eta) per component. The nebular entry has a short curvature scale and is
     confined to the window."""
     tau = np.full(n_comp, 200.0)
     eta = np.full(n_comp, 2.0)
@@ -133,7 +133,7 @@ def stellar_prior(n_comp: int, *, confine: bool) -> ab.SmoothnessPrior:
 
 
 def disentangle(dataset, truth, *, nebular: bool):
-    """Posterior-mean spectra at the true orbit. Returns (d_hat, log-likelihood)."""
+    """Posterior-mean spectra at the injected orbit. Returns (d_hat, log-likelihood)."""
     problem = ab.build_problem(
         GRID,
         dataset,
@@ -161,12 +161,13 @@ def combination(d_hat) -> np.ndarray:
 
 
 def equivalent_width(comb, half_width_angstrom: float = 8.0) -> float:
-    """H-beta equivalent width [A], the quantity an atmosphere code consumes.
+    """H-beta equivalent width [A], the input to an atmosphere code.
 
-    Measured on the offset-removed composite, because the overall level of a disentangled
-    spectrum is set by the ridge rather than by the data (the low-frequency degeneracy).
-    Every treatment, the truth included, is processed identically, so the comparison is
-    exact although the absolute number carries that convention.
+    It is measured on the offset-removed composite, because the overall level of a
+    disentangled spectrum is set by the ridge rather than by the data (the low-frequency
+    degeneracy). Every treatment, including the injected spectrum, is processed
+    identically, so the comparison is exact although the absolute number depends on that
+    convention.
     """
     inside = np.abs(GRID.wave - HBETA) < half_width_angstrom
     return float(-np.sum(comb[inside] * np.gradient(GRID.wave)[inside]))
@@ -232,8 +233,8 @@ def main() -> None:
     print(f"\ntrue H-beta: core depth {truth_comb[core].min():+.3f}, EW {ew_true:.3f} A\n")
     print(f"{'treatment':<12} {'core depth':>11} {'core error':>11} {'EW [A]':>9} {'EW error':>9}")
     for name, comb, _ in results:
-        # A masked core has no data behind it and the prior interpolates. The table
-        # reports the pixel values; the figure shows that they are not measurements.
+        # A masked core contains no data and the prior interpolates. The table reports the
+        # pixel values. The figure shows that they are not measurements.
         ew = equivalent_width(comb)
         err = np.mean(comb[core] - truth_comb[core])
         print(

@@ -1,15 +1,14 @@
 """Air vs vacuum wavelengths as a declared, validated property.
 
-The whole point is that this is worth **83 km/s** — nearly constant across the optical,
-and the same order as the orbital semi-amplitudes albireo exists to measure. It does not
-average out, and it is not a rounding error. Before this field existed there was nowhere
-to say which scale an epoch was on, so combining an ESPRESSO epoch (vacuum) with a FEROS
-epoch (air) put the same physical line at two different model pixels and silently biased
-every velocity that depended on the offending epochs.
+The difference between the two scales is 83 km/s, nearly constant across the optical and
+of the same order as the orbital semi-amplitudes albireo measures. It does not average
+out. Without the field the scale of an epoch cannot be declared, and combining an ESPRESSO
+epoch (vacuum) with a FEROS epoch (air) puts the same physical line at two different model
+pixels and silently biases every velocity that depends on those epochs.
 
-`medium=None` stays legal because it is what every epoch built before the field existed
-means. What is *not* legal is a mixture — including a mixture of declared and undeclared,
-since "unknown" cannot be checked against "air".
+`medium=None` remains valid because it is the value of every epoch built before the field
+existed. A mixture is not valid, including a mixture of declared and undeclared epochs,
+since an undeclared scale cannot be checked against "air".
 """
 
 import numpy as np
@@ -22,16 +21,16 @@ from albireo.data import Dataset, EpochData
 def _edlen_reference(wave_vacuum):
     """The IAU-adopted Edlen (1966) / Birch & Downs (1994) refractivity, transcribed here.
 
-    An independent plain-NumPy transcription straight from the published coefficients,
+    This is an independent plain-NumPy transcription of the published coefficients,
 
         (n - 1) x 1e8 = 8342.13 + 2406030/(130 - s^2) + 15997/(38.9 - s^2),  s = 1e4/lambda_vac
 
-    used to check albireo's implementation. Anchoring on the formula rather than on
-    remembered air/vacuum line pairs is deliberate: published line values come from
-    different sources with different conventions and are not reliably self-consistent to
-    the milli-Angstrom, whereas the refractivity is exactly what the standard defines.
-    What this cross-check catches is the wiring — the direction of the division, the
-    wavenumber convention (vacuum, not air), and the micron/Angstrom unit factor.
+    used to check albireo's implementation. The check is anchored on the formula rather
+    than on air/vacuum line pairs. Published line values come from different sources with
+    different conventions and are not reliably self-consistent to the milli-Angstrom,
+    whereas the refractivity is exactly what the standard defines. The cross-check detects
+    errors in the implementation: the direction of the division, the wavenumber convention
+    (vacuum, not air), and the micron/Angstrom unit factor.
     """
     wave = np.asarray(wave_vacuum, dtype=float)
     sigma2 = (1e4 / wave) ** 2
@@ -64,19 +63,19 @@ def test_conversion_applies_the_edlen_refractivity():
 
 
 def test_halpha_lands_where_optical_line_lists_put_it():
-    """One end-to-end sanity anchor on a line everybody knows.
+    """An end-to-end check on a well-known line.
 
-    H-alpha is 6564.61 A in vacuum and 6562.80 A in air. Loose tolerance on purpose: the
-    exact tabulated value differs by a few mA between sources (and the line is a blended
-    multiplet), so this checks the conversion is right to well under a pixel, not that it
-    reproduces one particular table.
+    H-alpha is 6564.61 A in vacuum and 6562.80 A in air. The tolerance is loose because the
+    tabulated value differs by a few mA between sources (and the line is a blended
+    multiplet). The test checks that the conversion is right to well under a pixel, not
+    that it reproduces one particular table.
     """
     assert float(np.asarray(ab.vacuum_to_air(6564.614))) == pytest.approx(6562.80, abs=0.01)
     assert float(np.asarray(ab.air_to_vacuum(6562.80))) == pytest.approx(6564.61, abs=0.01)
 
 
 def test_air_to_vacuum_is_the_exact_inverse():
-    """Two fixed-point iterations, and the round trip has to close to float64."""
+    """With two fixed-point iterations the round trip must close to float64."""
     wave = np.geomspace(3000.0, 10000.0, 2001)
     back = np.asarray(ab.air_to_vacuum(ab.vacuum_to_air(wave)))
     assert np.max(np.abs(back - wave)) < 1e-10
@@ -85,12 +84,12 @@ def test_air_to_vacuum_is_the_exact_inverse():
 
 
 def test_the_offset_is_the_velocity_that_makes_it_matter():
-    """~83 km/s across the optical — the claim the docstrings and the guard rest on."""
+    """The offset is ~83 km/s across the optical, as the docstrings and the guard assume."""
     wave = np.array([3000.0, 5000.0, 6562.8, 10000.0])
     air = np.asarray(ab.vacuum_to_air(wave))
     v = ab.C_KMS * (wave - air) / wave
     assert np.all(v > 82.0) and np.all(v < 88.0), v
-    # And in Angstrom it grows with wavelength, which is why a constant shift is wrong.
+    # In Angstrom it grows with wavelength, so a constant shift is wrong.
     offsets = wave - air
     assert np.all(np.diff(offsets) > 0)
     assert offsets[0] == pytest.approx(0.874, abs=0.01)
@@ -127,7 +126,7 @@ def test_a_dataset_of_one_medium_is_fine():
 
 
 def test_mixing_air_and_vacuum_raises_rather_than_picking_one():
-    """The exception this field exists to produce."""
+    """A mixture of the two scales raises an error, which is the purpose of the field."""
     with pytest.raises(ValueError, match="disagree about their wavelength scale") as exc:
         Dataset([_epoch(medium="air"), _epoch(medium="vacuum")])
     message = str(exc.value)
@@ -138,7 +137,7 @@ def test_mixing_air_and_vacuum_raises_rather_than_picking_one():
 
 
 def test_mixing_declared_with_undeclared_also_raises():
-    """'Unknown' is not a value that can be checked against 'air'."""
+    """An undeclared scale cannot be checked against 'air'."""
     with pytest.raises(ValueError, match="disagree about their wavelength scale") as exc:
         Dataset([_epoch(medium="air"), _epoch()])
     assert "undeclared" in str(exc.value)
@@ -153,7 +152,7 @@ def test_the_error_names_the_offending_epochs_and_truncates_long_lists():
 
 
 def test_converting_makes_the_mixture_legal():
-    """The documented fix has to actually work end to end."""
+    """The documented fix must work end to end."""
     wave = np.linspace(4000.0, 4010.0, 20)
     air_epoch = EpochData(
         wave=wave, flux=np.ones(20), ivar=np.full(20, 100.0), bjd=1.0, medium="air"
@@ -177,12 +176,12 @@ def test_converting_makes_the_mixture_legal():
     )
     ds = Dataset([air_epoch, harmonized])
     assert len(ds) == 2
-    # Converting there and back must land on the original grid.
+    # Converting there and back must reproduce the original grid.
     assert np.max(np.abs(harmonized.wave - air_epoch.wave)) < 1e-10
 
 
 def test_medium_survives_the_existing_epoch_machinery():
-    """The field is carried, not dropped, by whatever already copies epochs."""
+    """The field is preserved by the existing code that copies epochs."""
     ds = Dataset([_epoch(medium="vacuum"), _epoch(medium="vacuum")], frame="barycentric")
     assert ds[0].medium == "vacuum"
     assert all(e.medium == "vacuum" for e in ds)

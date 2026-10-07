@@ -8,22 +8,22 @@ component and is marginalized analytically, so the detection statistic
     D(K_2) = 2 [ log p(y | K_2) - log p(y | no companion) ]
 
 costs one linear solve per grid point. ``D`` is the matched filter marginalized over the
-unknown companion spectrum; no template grid is required. The recovered companion spectrum
+unknown companion spectrum. No template grid is required. The recovered companion spectrum
 and its pointwise uncertainty at the peak follow from the conditional Gaussian.
 
 ``K_1`` may be marginalized instead of held fixed (``k1_sigma=``; §6.1). The integral is a
 Gauss-Hermite rule over a Gaussian prior on ``K_1``, applied to both the companion and the
 no-companion model, so ``D`` remains a ratio of two marginal likelihoods. Shift-and-add
 analyses hold ``K_1`` fixed at a literature value (Shenar et al. 2020) and report that
-small deviations in the assumed primary semi-amplitude put spurious features in the
+small deviations in the assumed primary semi-amplitude introduce spurious features in the
 recovered secondary spectrum.
 
 ``D`` depends on the companion's prior scale ``(tau_2, eta_2)`` and is not asymptotically
 chi-squared. Its null distribution is estimated by injection-recovery on datasets
 resimulated through the observed data's own operators (:mod:`albireo.calibrate`, §6.2).
-The light fraction of the putative companion must be supplied explicitly: the observable
-is ``ell_2 * d_2``, so ``ell_2`` trades exactly against the companion's line depths, and
-only external information (photometry, eclipse depths) sets it.
+The light fraction of the putative companion must be supplied explicitly. The observable
+is ``ell_2 * d_2``, so ``ell_2`` is exactly degenerate with the companion's line depths,
+and only external information (photometry, eclipse depths) determines it.
 
 References
 ----------
@@ -79,14 +79,14 @@ def _k1_quadrature(k1: float, k1_sigma: float | None, k1_nodes: int):
 
     ``k1_sigma=None`` (or 0) gives the single-node rule, a delta at ``k1``, whose
     log-sum-exp is the identity, so a fixed-``K_1`` scan incurs no additional cost from
-    the quadrature. (The result is not bit-identical to a trial-by-trial
-    evaluation: batching the trials into one ``lax.map`` re-associates the linear
-    algebra and moves the log-likelihoods by ~1e-9, a floating-point effect rather than
-    a change of method.) Otherwise the rule is Gauss-Hermite on ``N(k1, k1_sigma^2)``:
+    the quadrature. (The result is not bit-identical to a trial-by-trial evaluation:
+    batching the trials into one ``lax.map`` re-associates the linear algebra and changes
+    the log-likelihoods by ~1e-9, a floating-point effect.) Otherwise the rule is
+    Gauss-Hermite on ``N(k1, k1_sigma^2)``:
     ``int f(K) N(K) dK = sum_a (w_a / sqrt(pi)) f(k1 + sqrt(2) sigma x_a)``, exact for
     polynomials up to degree ``2n - 1`` and requiring far fewer likelihood evaluations
-    than a uniform grid of the same accuracy (``docs/math.md`` §6.1). The same rule
-    carries the LSF's Gauss-Hermite skewness (D38).
+    than a uniform grid of the same accuracy (``docs/math.md`` §6.1). The same rule is
+    used for the LSF's Gauss-Hermite skewness (D38).
     """
     if k1_sigma is None or k1_sigma == 0.0:
         return np.array([float(k1)]), np.zeros(1)
@@ -115,15 +115,15 @@ class K2ScanResult:
     ``companion`` and their pointwise standard deviations) are the conditional posterior
     at the peak trial ``K_2``, on the model grid. ``model`` is the two-component
     :class:`~albireo.inference.MarginalOrbitModel`, reusable for follow-up (for example
-    a joint NUTS run started at the peak); it is None on a result read back from disk by
+    a joint NUTS run started at the peak). It is None on a result read back from disk by
     :func:`albireo.results.load_fit`, which stores the numbers and not the model.
 
     With ``K_1`` marginalized (``k1_sigma=``), ``log_likelihood`` is the marginal over
-    the quadrature and ``log_likelihood_grid`` is the ``(n_k1, n_k2)`` surface behind it.
-    The shape of the ridge in that plane is the ``K_1``-``K_2`` covariance that a
-    fixed-``K_1`` scan assumes away. The peak spectra are conditional on ``k1_peak``,
-    the best node at ``k2_peak``: a profile rather than a marginal, because there is no
-    closed form for the ``K_1``-marginalized spectrum and a mixture of the nodes'
+    the quadrature and ``log_likelihood_grid`` is the ``(n_k1, n_k2)`` surface it is
+    computed from. The shape of the ridge in that plane is the ``K_1``-``K_2`` covariance
+    that a fixed-``K_1`` scan neglects. The peak spectra are conditional on ``k1_peak``,
+    the best node at ``k2_peak``. This is a profile rather than a marginal, because there
+    is no closed form for the ``K_1``-marginalized spectrum and a mixture of the nodes'
     spectra would blur the lines rather than widen their error bars (``docs/math.md``
     §6.1). With ``K_1`` fixed, the grid has one row and ``k1_peak`` equals ``k1``.
     """
@@ -182,9 +182,9 @@ def k2_scan(
     ----------
     grid, dataset, lsf_sigma_v, telluric, nebular, nebular_v_kms, response_coeffs, block_size
         As in :class:`albireo.inference.MarginalOrbitModel`. A nebular component
-        matters here in particular: an unmodelled static emission line is a stationary
+        matters here in particular. An unmodelled static emission line is a stationary
         residual, and a faint-companion scan is a matched filter for such a residual, so
-        it reports the nebula at whatever ``K_2`` puts the companion nearest to rest.
+        it reports the nebula at the ``K_2`` that places the companion nearest to rest.
     orbit
         The fixed SB1 solution: a mapping with ``period``, ``t_conj``, ``secosw`` and
         ``sesinw`` (gamma = 0 throughout). The companion moves with ``omega + pi``
@@ -200,9 +200,9 @@ def k2_scan(
     k1_sigma
         Standard deviation [km/s] of the Gaussian prior on ``K_1``, or None (default) to
         hold ``K_1`` fixed and reproduce the fixed-``K_1`` scan exactly. The published
-        uncertainty on the primary's semi-amplitude is the natural value: the statistic
+        uncertainty on the primary's semi-amplitude is the natural value. The statistic
         then compares two models marginalized over the same ``K_1`` uncertainty, rather
-        than conditioning on a value whose error leaks into the companion's spectrum.
+        than conditioning on a value whose error propagates into the companion's spectrum.
         The cost is a factor ``k1_nodes`` in likelihood evaluations, absorbed by the
         vectorized sweep.
     k1_nodes
@@ -210,7 +210,7 @@ def k2_scan(
         ``k1_sigma`` is None.
     light_fractions
         Explicit ``(ell_1, ell_2)``, or per-epoch ``(2, n_epochs)``. Required; see
-        the module docstring on the trade between ``ell_2`` and the line depths.
+        the module docstring on the degeneracy between ``ell_2`` and the line depths.
     prior
         Spectral prior for the two-component model, one ``(tau, eta)`` pair per
         component, ordered primary, companion, then the telluric and nebular entries for
@@ -320,7 +320,7 @@ def _scan_grids(
 
     Separated from :func:`k2_scan` because :mod:`albireo.calibrate` evaluates the same
     surfaces thousands of times on resimulated data with the same operators. The
-    ``problem`` and ``null_problem`` overrides carry the redrawn data in without a
+    ``problem`` and ``null_problem`` overrides supply the redrawn data without a
     rebuild (:func:`albireo.forward.with_data`).
     """
     n1, n2 = k1_grid.size, k2_grid.size

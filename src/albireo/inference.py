@@ -1,7 +1,7 @@
 """Joint Bayesian inference of the orbit with the spectra marginalized.
 
 Implements ``docs/math.md`` §7. The nonlinear parameter vector ``theta`` is a dict of
-JAX arrays; conditional on ``theta`` the component spectra are marginalized analytically
+JAX arrays. Conditional on ``theta`` the component spectra are marginalized analytically
 (:mod:`albireo.likelihood`), so inference runs over ``theta`` alone. The sites of a
 Keplerian model are
 
@@ -12,28 +12,27 @@ Keplerian model are
 - ``k``: RV semi-amplitudes ``(K_1, K_2, ...)`` [km/s], one per inner stellar
   component; even-indexed components use ``omega``, odd-indexed ``omega + pi``.
 
-The optional sites follow; the instrumental, continuum and noise sites among them are the
+The optional sites follow. The instrumental, continuum and noise sites among them are the
 realism extensions of ``docs/math.md`` §7.5.
 
 - ``log_tau``, ``log_eta``: log spectral-prior hyperparameters [dimensionless], one per
   model component, including the telluric and nebular components when enabled; both
   sites or neither, with ``log_tau - log_eta <= 30`` for every component. Past that
   stiffness ratio the prior determinant's pivot underflows and the posterior precision's
-  Cholesky solve loses every digit, so the marginal likelihood is arithmetic noise; the
-  model rejects it (see ``_LOG_TAU_ETA_MAX``).
+  Cholesky solve loses every digit, so the marginal likelihood is arithmetic noise. The
+  model rejects such ratios (see ``_LOG_TAU_ETA_MAX``).
 - ``period_out`` [d], ``t_conj_out`` [d], ``secosw_out``, ``sesinw_out``
   [dimensionless], ``k_out`` [km/s]: a hierarchical outer orbit (SB3), all five
   together. The inner components' center of mass moves with semi-amplitude ``k_out[0]``
-  and argument ``omega_out``; one tertiary component is appended, moving with
+  and argument ``omega_out``. One tertiary component is appended, moving with
   ``k_out[1]`` and ``omega_out + pi``.
 - ``velocity``: free per-epoch radial velocities [km/s], ``(n_stellar, n_epochs)``,
   replacing the Keplerian sites, which must then be absent (``docs/math.md`` §7.6).
   Each epoch's velocity is its own parameter. Each component's zero point is removed
-  before use, in pixel space, where the removal is exact; an uncentered table would have
+  before use, in pixel space, where the removal is exact. An uncentered table would have
   its absolute level set by shift-interpolation error rather than by the data. The
-  identified table is the
-  ``velocity_rel`` deterministic (:func:`relative_velocities`), and
-  :func:`keplerian_residuals` is the model check this mode supports.
+  identified table is the ``velocity_rel`` deterministic (:func:`relative_velocities`),
+  and :func:`keplerian_residuals` is the model check this mode supports.
 - ``light``: stellar light fractions [dimensionless], ``(n_stellar,)`` constant or
   ``(n_epochs, n_stellar)`` per epoch, rows on the simplex (Dirichlet priors).
 - ``lsf_sigma``: Gaussian LSF widths [km/s], one entry per LSF anchor for instruments
@@ -41,17 +40,17 @@ realism extensions of ``docs/math.md`` §7.5.
   un-anchored instrument, concatenated in instrument order. The construction-time
   ``lsf_sigma_v`` values are per-entry upper bounds, since they fix the kernel radii.
   An instrument declared :data:`albireo.forward.PER_EPOCH` takes its widths from the
-  epochs and cannot carry this site: the width is what each file declared.
+  epochs and cannot have this site, since each file declares its width.
 - ``lsf_h3``: Gauss-Hermite LSF skewness [dimensionless], one entry per LSF
   anchor of each anchored instrument, concatenated in instrument order, ``|h3| <= 0.2``.
-  Un-anchored instruments have no entry: a stationary asymmetric LSF is absorbed by the
-  free spectra (``docs/math.md`` §1.3). May appear with or without ``lsf_sigma``;
-  without it the widths stay at the build values.
+  Un-anchored instruments have no entry, because a stationary asymmetric LSF is absorbed
+  by the free spectra (``docs/math.md`` §1.3). The site may appear with or without
+  ``lsf_sigma``; without it the widths stay at the build values.
 - ``response``: multiplicative per-epoch Chebyshev response coefficients
   [dimensionless], ``(n_coef,)`` shared or ``(n_epochs, n_coef)`` per epoch
   (:func:`albireo.forward.with_response`). ``r = 1 + sum_m c_m T_m``, so
   all-zero coefficients give the unit response. This is the per-epoch continuum
-  treatment: a low-order response trades against the components' broad features
+  treatment. A low-order response trades against the components' broad features
   (``docs/math.md`` §5.4), so the order should be low and the priors tight and
   zero-centered. The site replaces the construction-time ``response_coeffs``.
 - ``log_jitter``: log noise-inflation factor [dimensionless], scalar (shared) or one
@@ -61,37 +60,37 @@ realism extensions of ``docs/math.md`` §7.5.
 - ``ar1_phi``: AR(1) correlation of the standardized noise [dimensionless], scalar
   (shared) or one per epoch, ``|phi| < 1`` (:func:`albireo.forward.with_ar1`).
   Requires ``ar1=True`` at construction, because the correlated coupling widens the
-  static solver bandwidth; the marginal stays on the band assembly path. Composes
-  with ``log_jitter``: the jitter scales the noise, ``phi`` correlates it.
+  static solver bandwidth. The marginal stays on the band assembly path. Composes
+  with ``log_jitter``: the jitter scales the noise and ``phi`` correlates it.
 - ``log_nebular_amp``: log per-epoch amplitude of the nebular component
   [dimensionless], ``(n_epochs,)`` (requires ``nebular=True`` at construction).
   The site is centered before use, ``a_j = exp(u_j - mean(u))``, because only the
   products ``a_j d_neb`` are observable and the overall scale is degenerate with the
   component spectrum. A prior on this site is a prior on the epoch-to-epoch variation
-  (a zero-mean Normal with sigma 0.2 allows roughly 20% night to night); a constant
+  (a zero-mean Normal with sigma 0.2 allows roughly 20% night to night). A constant
   shift of every entry has no effect. The common mode is an exactly flat direction of
-  the likelihood, held only by the site's prior: the posterior stays proper and well
-  conditioned (curvature ``1/sigma^2`` along it), but ``mean(log_nebular_amp)`` in the
-  samples reproduces the prior. The applied amplitudes are the ``nebular_amp``
+  the likelihood, constrained only by the site's prior. The posterior stays proper and
+  well conditioned (curvature ``1/sigma^2`` along it), but ``mean(log_nebular_amp)`` in
+  the samples reproduces the prior. The applied amplitudes are the ``nebular_amp``
   deterministic (:func:`nebular_amplitudes`).
 
-``gamma`` is identically zero: a systemic velocity is exactly degenerate with a
+``gamma`` is identically zero, because a systemic velocity is exactly degenerate with a
 common shift of the component spectra. The ``(secosw, sesinw)`` parameterization is
 smooth through ``e = 0``, where ``omega`` and a time of periastron are undefined, and
 maps a uniform prior on the unit disk to a uniform prior on ``e`` (``docs/math.md``
 §7.2). The disk constraint ``e < 1`` enters the model as a ``-inf`` factor, with ``e``
 clipped to ``ecc_max`` before the Kepler solve so that the likelihood stays finite, and
-rejectable, outside it. The map is non-differentiable only at ``secosw = sesinw = 0``;
-circular orbits should be initialized slightly off the origin.
+rejectable, outside it. The map is non-differentiable only at ``secosw = sesinw = 0``,
+so circular orbits should be initialized slightly off the origin.
 
 Inference proceeds in three stages (``docs/math.md`` §7.1-7.3):
 
 1. :func:`run_map` maximizes the marginal posterior over ``theta`` by L-BFGS in
    numpyro's unconstrained space. With ``log_tau``/``log_eta`` among the sampled sites
    this is the ML-II (empirical Bayes) hyperparameter fit, since the marginal likelihood
-   is already integrated over the spectra (§7.3). The prior scales control the part of
-   spectrum space the data cannot constrain below the LSF scale (§5.1), so by default
-   they are estimated from the data here rather than fixed a priori.
+   is integrated over the spectra (§7.3). The prior scales control the part of spectrum
+   space the data cannot constrain below the LSF scale (§5.1), so by default they are
+   estimated from the data here rather than fixed a priori.
 2. :func:`laplace_inverse_mass` evaluates the Hessian of the potential at the MAP and
    returns its inverse as the NUTS mass matrix.
 3. :func:`run_nuts` samples ``theta`` with the No-U-Turn Sampler (Hoffman & Gelman 2014;
@@ -164,18 +163,18 @@ _ECC_MAX_DEFAULT = 0.95  # the Kepler solver is verified up to e = 0.95
 # forward-only (no tape), so the constraint is the batch's own working set rather than
 # assembly.py's gradient budget, and the budget can be considerably larger.
 _SWEEP_BATCH_BYTES = 1 << 30
-# Gauss-Hermite skewness bound: beyond about 0.2 the truncated series dips measurably
+# Gauss-Hermite skewness bound: beyond about 0.2 the truncated series is measurably
 # negative in the tail, and real instrument profiles lie well below it (D38).
 _H3_MAX = 0.2
-# Largest log(tau) - log(eta) the spectral prior's arithmetic survives. The prior
-# determinant is a pentadiagonal Cholesky recursion whose pivot is a difference of
-# like-sized quantities: below eta/tau of about 1e-13 it rounds to zero and is floored
-# (albireo.assembly.prior_logdet), and the posterior precision built on the same tau has
+# Largest log(tau) - log(eta) at which the spectral prior's arithmetic remains accurate.
+# The prior determinant is a pentadiagonal Cholesky recursion whose pivot is a difference
+# of like-sized quantities. Below eta/tau of about 1e-13 it rounds to zero and is floored
+# (albireo.assembly.prior_logdet). The posterior precision built on the same tau has
 # pivots far above the data term, so its forward substitution loses every digit and the
-# marginal likelihood becomes arithmetic noise. exp(30) = 1.1e13 is that ratio. ML-II
-# walks there on its own: the interior optimum in log_tau is broad and nothing bounds
-# log_eta from below, so a line search can accept a trial hundreds of nats "better"
-# whose chi-square is negative. The default declarations start at log(300) - log(5) = 4.1
+# marginal likelihood becomes arithmetic noise. exp(30) = 1.1e13 is that ratio, and ML-II
+# reaches it. The interior optimum in log_tau is broad and nothing bounds log_eta from
+# below, so a line search can accept a trial that appears hundreds of nats better but
+# has a negative chi-square. The default declarations start at log(300) - log(5) = 4.1
 # (albireo.facade.Smoothness), about six sigma of the Normal(log tau0, 3) hyperpriors
 # inside this bound.
 _LOG_TAU_ETA_MAX = 30.0
@@ -203,10 +202,10 @@ _THETA_SITES = (
 def _sweep_batch_default(n_trials: int, n: int, bandwidth: int) -> int:
     """Trials per vmapped batch of :meth:`MarginalOrbitModel.log_likelihood_sweep`.
 
-    Same two-regime rule as :func:`albireo.assembly._epoch_chunk_default`: the whole
-    sweep runs as one batch while it stays under ``_SWEEP_BATCH_BYTES``, otherwise the
-    batch is cut to fit. The estimate counts the ``(n, bandwidth)`` float64 arrays a
-    marginal solve keeps live; the band tensor and the block-tridiagonal factor
+    This is the two-regime rule of :func:`albireo.assembly._epoch_chunk_default`: the
+    whole sweep runs as one batch while it stays under ``_SWEEP_BATCH_BYTES``, otherwise
+    the batch is cut to fit. The estimate counts the ``(n, bandwidth)`` float64 arrays a
+    marginal solve keeps in memory. The band tensor and the block-tridiagonal factor
     dominate, and the smaller arrays are absorbed into the constant.
     """
     per_trial = 48 * max(n, 1) * max(bandwidth, 1)
@@ -283,7 +282,7 @@ def orbit_velocities(theta: Mapping, bjd, *, ecc_max: float = _ECC_MAX_DEFAULT):
     ``gamma = 0``. With the outer-orbit sites present (SB3), the outer
     center-of-mass velocity (semi-amplitude ``k_out[0]``, argument ``omega_out``,
     conjunction convention on the inner pair's center of mass) is added to every
-    inner component, and one tertiary row is appended with semi-amplitude
+    inner component. One tertiary row is appended with semi-amplitude
     ``k_out[1]`` and argument ``omega_out + pi``.
     """
     par = orbit_parameters(theta, ecc_max=ecc_max)
@@ -303,7 +302,7 @@ def _centered_shifts(velocity, grid):
     """Per-epoch pixel shifts with each component's zero point removed.
 
     The centering is the identifiability convention of the free-velocity table (D42;
-    ``docs/math.md`` §7.6). It is exact in pixel space: ``xi = artanh(v/c)`` turns
+    ``docs/math.md`` §7.6). It is exact in pixel space. ``xi = artanh(v/c)`` turns
     relativistic velocity addition into ordinary addition, so subtracting a constant
     pixel shift is exactly a translation of the component's spectrum, whereas
     subtracting a constant velocity is only a first-order approximation of one.
@@ -326,16 +325,16 @@ def relative_velocities(velocity, grid):
     spectra by linear interpolation and a fractional shift blurs slightly as well as
     translating. Measured on a 10-epoch SB2 at SNR 200, a one-pixel common shift of one
     component changes the log-likelihood by 4e-9 in relative terms (boundary effects
-    only), while a 0.1-pixel shift costs 7.3 nats. An uncentered table would have its
-    absolute zero point set by interpolation error: a number that resembles a systemic
-    velocity, changes when the model grid is resampled, and carries no information. The
+    only), while a 0.1-pixel shift lowers it by 7.3 nats. An uncentered table would have
+    its absolute zero point set by interpolation error. That number resembles a systemic
+    velocity, changes when the model grid is resampled, and contains no information. The
     zero points are therefore removed and the remainder is reported.
 
     The remainder is fully identified: each component's velocity variation (hence its
     semi-amplitude), the epoch-to-epoch differences, and the slope of component 1
     against component 2 (the Wilson mass ratio), which is a slope and therefore
     independent of both zero points. The systemic velocity and the absolute velocity of
-    either star are not recoverable from this table; they are measured afterwards from
+    either star are not recoverable from this table. They are measured afterwards from
     the disentangled spectra, as the convention prescribes for ``gamma``.
 
     Parameters
@@ -345,7 +344,7 @@ def relative_velocities(velocity, grid):
         ``velocity`` theta site, or a posterior sample of it.
     grid
         The model :class:`~albireo.grids.LogGrid` on which the shifts are taken. The
-        centering is grid-dependent by construction, since it is done in pixel space.
+        centering is grid-dependent, since it is done in pixel space.
 
     Returns
     -------
@@ -363,24 +362,24 @@ def relative_velocity_errors(covariance, unconstrained: Mapping, *, site: str = 
     The diagonal of the Laplace covariance is not a usable error bar for this site. Each
     component's zero point is an exactly flat direction of the likelihood
     (:func:`relative_velocities`), so its posterior width equals the prior width, and
-    every epoch's marginal variance inherits it. Measured on the velocity-table fixture with a
-    ``Normal(0, 120)`` prior over 10 epochs, every raw marginal sigma is
+    every epoch's marginal variance includes it. Measured on the velocity-table fixture
+    with a ``Normal(0, 120)`` prior over 10 epochs, every raw marginal sigma is
     37.95 km/s = 120/sqrt(10), identical to four digits across both components and all
-    epochs, while the identified per-epoch error is 0.059 km/s: a factor of 640. The raw
-    value is insensitive to the data and would appear on a good dataset and on an
+    epochs. The identified per-epoch error is 0.059 km/s, a factor of 640 smaller. The
+    raw value is insensitive to the data and would appear on a good dataset and on an
     uninformative one alike.
 
     Projecting each component's mean out of the covariance removes exactly those
-    directions and leaves the identified ones; the projected block has exactly
+    directions and leaves the identified ones. The projected block has exactly
     ``n_stellar`` zero eigenvalues.
 
     The projection is applied in velocity units, where it equals the pixel-space
-    centering to ``O(v^2/c^2)``: the Jacobian of the pixel-space centering differs from
+    centering to ``O(v^2/c^2)``. The Jacobian of the pixel-space centering differs from
     unity by about ``1e-8`` at stellar velocities, far below the error of the Laplace
-    (Gaussian) approximation itself.
+    (Gaussian) approximation.
 
     Posterior samples are preferable when available. The ``velocity_rel`` deterministic
-    recorded by :meth:`MarginalOrbitModel.model` is already the identified table, so
+    recorded by :meth:`MarginalOrbitModel.model` is the identified table, so
     ``samples["velocity_rel"].std(axis=0)`` needs neither a projection nor a Gaussian
     assumption. This function serves the MAP-plus-Laplace route.
 
@@ -410,8 +409,8 @@ def relative_velocity_errors(covariance, unconstrained: Mapping, *, site: str = 
     A Laplace covariance is a local Gaussian approximation with the hyperparameters held
     at their MAP values, so it omits the widening that marginalizing over
     ``log_tau``/``log_eta`` would add. On the velocity-table fixture the errors are about
-    1.4x optimistic against the realized errors. They are a fast estimate; NUTS gives
-    the posterior.
+    1.4x smaller than the realized errors. They are a fast estimate. NUTS gives the
+    posterior.
     """
     unconstrained = dict(unconstrained)
     if site not in unconstrained:
@@ -420,7 +419,7 @@ def relative_velocity_errors(covariance, unconstrained: Mapping, *, site: str = 
     if len(shape) != 2:
         raise ValueError(f"the {site!r} site must be (n_stellar, n_epochs); got shape {shape}")
     # Locate the site's slots without assuming how ravel_pytree orders the dict: flatten
-    # a matching pytree of markers and read off where they land.
+    # a matching pytree of markers and read their positions.
     marks, _ = ravel_pytree(
         {
             name: jnp.full(jnp.shape(jnp.asarray(value)), 1.0 if name == site else 0.0)
@@ -448,16 +447,16 @@ def relative_velocity_errors(covariance, unconstrained: Mapping, *, site: str = 
 def keplerian_residuals(velocity, theta: Mapping, bjd, grid, *, ecc_max: float = _ECC_MAX_DEFAULT):
     """Per-epoch velocity residuals of a free table against a Keplerian orbit.
 
-    The model check of the free-velocity mode (``docs/math.md`` §7.6): fit per-epoch
-    velocities with no orbit imposed, then test whether a Keplerian passes through them.
-    A slightly wrong period, an unmodelled third body, or line-profile variability that
-    the Keplerian absorbs into ``e`` appear as structured residuals (phase-correlated, or
-    one epoch far out) where noise alone would not.
+    This is the model check of the free-velocity mode (``docs/math.md`` §7.6): fit
+    per-epoch velocities with no orbit imposed, then test whether a Keplerian passes
+    through them. A slightly wrong period, an unmodelled third body, or line-profile
+    variability that the Keplerian absorbs into ``e`` appear as structured residuals
+    (phase-correlated, or one epoch far out) where noise alone would not.
 
     Both tables are zero-pointed the same way, and the subtraction is done in pixel space,
     so the result is an exact relativistic velocity difference rather than a first-order
     one. The two tables' arbitrary zero points (:func:`relative_velocities`) then cancel
-    exactly; otherwise the residual would carry a meaningless constant offset.
+    exactly. Otherwise the residual would contain a meaningless constant offset.
 
     Parameters
     ----------
@@ -498,18 +497,18 @@ def keplerian_residuals(velocity, theta: Mapping, bjd, grid, *, ecc_max: float =
 def nebular_amplitudes(theta: Mapping):
     """Per-epoch nebular amplitudes from ``theta['log_nebular_amp']`` (differentiable).
 
-    ``a_j = exp(u_j - mean(u))``: the geometric mean is pinned to 1 by convention. The
-    model sees only the products ``a_j d_neb``, so without a pinned scale the pair
+    ``a_j = exp(u_j - mean(u))``: the geometric mean is fixed at 1 by convention. The
+    model depends only on the products ``a_j d_neb``, so without a fixed scale the pair
     ``(c a_j, d_neb / c)`` gives the same fit for every ``c > 0``, and only the spectral
-    prior separates them. That direction is nearly flat and unbounded in one coordinate,
-    and it would dominate the sampler's step size. Centering removes it exactly, at the
-    cost of the one degree of freedom that was never identified.
+    prior distinguishes them. That direction is nearly flat and unbounded in one
+    coordinate, and it would dominate the sampler's step size. Centering removes it
+    exactly. The one degree of freedom this removes was not identified.
 
-    For reading a fit: the recovered ``d_neb`` is on the scale of
-    a typical epoch, so its line strengths are comparable to injected or published values
-    only up to that convention. The posterior for ``a`` describes relative variation: it
-    supports the statement that epoch 7 is 1.4 times the typical epoch, but not a
-    statement about the absolute strength of the nebular emission.
+    In a fit, the recovered ``d_neb`` is on the scale of a typical epoch, so its line
+    strengths are comparable to injected or published values only up to that convention.
+    The posterior for ``a`` describes relative variation. It supports the statement that
+    epoch 7 is 1.4 times the typical epoch, but none about the absolute strength of the
+    nebular emission.
 
     Returns
     -------
@@ -531,21 +530,21 @@ class MarginalOrbitModel:
     the computation graph is static. The numpyro model rejects, with a ``-inf`` factor,
     any configuration whose realized relative shifts exceed that budget, so a prior
     wider than ``v_rel_max_kms`` slows mixing near the bound but cannot corrupt the
-    result. The direct :meth:`log_likelihood` entry point has no such guard; explicit
+    result. The direct :meth:`log_likelihood` entry point has no such guard. Explicit
     calls must stay within the bound.
 
     Parameters
     ----------
     grid, dataset, light_fractions, lsf_sigma_v, lsf_anchors_angstrom, response_coeffs
         As in :func:`albireo.forward.build_problem`. ``light_fractions`` and
-        ``lsf_sigma_v`` are the build-time values, used whenever ``theta`` carries no
+        ``lsf_sigma_v`` are the build-time values, used whenever ``theta`` has no
         ``light`` / ``lsf_sigma`` site. When those sites are inferred, the build-time
         light fractions only set ``n_stellar``, and the build-time LSF widths become
-        strict upper bounds: they fix the kernel radii, and the model rejects wider
+        strict upper bounds. They fix the kernel radii, and the model rejects wider
         widths, which the fixed radii would otherwise truncate.
         ``lsf_anchors_angstrom`` makes an instrument's LSF wavelength-dependent
         and gives it one ``lsf_sigma`` entry per anchor rather than one in total.
-        ``response_coeffs`` is the fixed response used whenever ``theta`` carries no
+        ``response_coeffs`` is the fixed response used whenever ``theta`` has no
         ``response`` site, and is replaced when it does
         (:func:`albireo.forward.with_response`).
     telluric, nebular, nebular_v_kms
@@ -553,15 +552,15 @@ class MarginalOrbitModel:
         enabled component adds a trailing row to the recovered spectra and a trailing
         entry to ``prior`` (order: stellar, telluric, nebular), and must be accounted
         for in ``v_rel_max_kms``. ``nebular=True`` also enables the ``log_nebular_amp``
-        site; without the site the amplitudes stay at 1 and the component is static.
+        site. Without the site the amplitudes stay at 1 and the component is static.
     v_rel_max_kms
         Bound on the largest relative velocity between any two model components at any
-        epoch [km/s]: for an SB2 ``(K_1 + K_2)(1 + e)``; for an SB3 add the outer
-        orbit's ``(K_AB + K_C)(1 + e_out)``; plus the barycentric motion if a telluric
+        epoch [km/s]: ``(K_1 + K_2)(1 + e)`` for an SB2, plus the outer orbit's
+        ``(K_AB + K_C)(1 + e_out)`` for an SB3, plus the barycentric motion if a telluric
         component is enabled. The priors must not allow configurations that exceed it,
         or mixing stalls at the guard, so the value should include headroom.
     prior
-        Fixed :class:`SmoothnessPrior`, used whenever ``theta`` carries no
+        Fixed :class:`SmoothnessPrior`, used whenever ``theta`` has no
         ``log_tau``/``log_eta`` sites. Optional if the hyperparameters are always in
         ``theta``, with one exception: its per-pixel profiles are kept even when the
         scalars are inferred, because a profile is structure rather than a
@@ -576,8 +575,8 @@ class MarginalOrbitModel:
         Allow an ``ar1_phi`` site (correlated noise). The AR coupling widens
         ``A^T W A`` by a static amount (:attr:`albireo.forward.Problem.ar_bandwidth_extra`)
         that must be reserved in the solver bandwidth at construction, so the site is a
-        construction-time choice like the bandwidth itself. It costs a few pixels
-        of bandwidth whether or not ``theta`` carries the site.
+        construction-time choice like the bandwidth. It costs a few pixels of bandwidth
+        whether or not ``theta`` has the site.
     """
 
     def __init__(
@@ -616,9 +615,9 @@ class MarginalOrbitModel:
         hb = self.problem.half_bandwidth_bound(v_rel_max_kms)
         # The shift budget inside half_bandwidth (inverse of half_bandwidth_bound). The
         # numpyro model rejects any configuration whose realized relative shifts exceed
-        # it, so a prior wider than v_rel_max cannot corrupt the assembled band.
-        # Computed from the base bandwidth: the AR extra below is reserved for the noise
-        # coupling's reach and must not be spent on shifts.
+        # it, so a prior wider than v_rel_max cannot corrupt the assembled band. It is
+        # computed from the base bandwidth, because the AR extra below is reserved for
+        # the noise coupling and is not available for shifts.
         support = max(g.row_support for g in self.problem.groups)
         self._shift_bound = hb - 1 - 2 * self.problem.kernel_radius - support
         self.ar1 = bool(ar1)
@@ -628,8 +627,8 @@ class MarginalOrbitModel:
         self.fixed_prior = prior
         # Instrument order for the optional "lsf_sigma" theta site; the widths the
         # kernels were built with are the upper bounds (they fix the kernel radii).
-        # Deduplicated in first-seen order: one instrument owns several groups whenever
-        # its epochs sit on different native grids (albireo.forward._epoch_groups), and
+        # Deduplicated in first-seen order: one instrument has several groups whenever
+        # its epochs are on different native grids (albireo.forward._epoch_groups), and
         # the LSF width is a property of the instrument, not of the grid. One sampled
         # width per group would mis-shape the site and, through dict(zip(...)), keep
         # only the last group's value.
@@ -670,10 +669,10 @@ class MarginalOrbitModel:
             if "log_tau" not in theta or "log_eta" not in theta:
                 raise ValueError("theta must carry both log_tau and log_eta, or neither")
             # The per-pixel profiles are structure, not hyperparameters (D40): they set
-            # where a component may deviate from the continuum, the sampled scalars set
-            # how much. An inferred (tau, eta) therefore replaces the scalars and keeps
-            # the construction-time profiles; dropping them here would un-confine a
-            # windowed component as soon as ML-II was switched on, without any error.
+            # where a component may deviate from the continuum, and the sampled scalars
+            # set how much. An inferred (tau, eta) therefore replaces the scalars and
+            # keeps the construction-time profiles. Dropping them here would leave a
+            # windowed component unconfined whenever ML-II is enabled, without an error.
             base = self.fixed_prior
             return SmoothnessPrior(
                 jnp.exp(theta["log_tau"]),
@@ -798,13 +797,13 @@ class MarginalOrbitModel:
     def problem_at(self, theta: Mapping):
         """The :class:`albireo.forward.Problem` at ``theta``: data, weights and operators.
 
-        The entry point for residual diagnostics, which real data require: the inverse
-        variances of an archival spectrum are usually estimated rather than measured
-        (:func:`albireo.preprocess.estimate_ivar`), and a factor-of-two error there
-        rescales every uncertainty the run reports. Run without a ``log_jitter`` site
-        first and measure the discrepancy, then decide whether a jitter should absorb it
-        (:func:`albireo.forward.with_jitter` states when that is legitimate and when it
-        only widens a biased answer).
+        This is the entry point for residual diagnostics, which real data require. The
+        inverse variances of an archival spectrum are usually estimated rather than
+        measured (:func:`albireo.preprocess.estimate_ivar`), and a factor-of-two error
+        there rescales every uncertainty the run reports. Run without a ``log_jitter``
+        site first and measure the discrepancy, then decide whether a jitter should
+        absorb it (:func:`albireo.forward.with_jitter` states when that is legitimate
+        and when it only widens a biased result).
 
         Parameters
         ----------
@@ -865,18 +864,18 @@ class MarginalOrbitModel:
     ):
         """Marginal log-likelihood over a grid of ``theta`` values in one compiled graph.
 
-        The trial points are independent and each returns a single number; nothing is
-        sampled. A Python loop over :meth:`log_likelihood` pays a device synchronization
-        per point and dispatches every point's linear algebra alone. This method runs the
-        trials as a single ``lax.map`` sharing one compiled graph and batched kernels,
-        which makes a 2-D ``(K_1, K_2)`` grid affordable, as well as the thousands of
-        such scans an injection-recovery calibration runs (:mod:`albireo.calibrate`).
+        The trial points are independent and each returns a single number. Nothing is
+        sampled. A Python loop over :meth:`log_likelihood` incurs a device
+        synchronization per point and dispatches every point's linear algebra separately.
+        This method runs the trials as a single ``lax.map`` sharing one compiled graph and
+        batched kernels, which makes a 2-D ``(K_1, K_2)`` grid affordable, as well as the
+        thousands of such scans an injection-recovery calibration runs
+        (:mod:`albireo.calibrate`).
 
         Parameters
         ----------
         theta
-            The fixed part of the parameter dict, exactly as :meth:`log_likelihood`
-            takes it.
+            The fixed part of the parameter dict, as :meth:`log_likelihood` takes it.
         sweep
             The varying part: a mapping from site name to an array whose leading axis is
             the trial axis. Every entry must share that leading length, and each trailing
@@ -884,11 +883,11 @@ class MarginalOrbitModel:
             two-component model takes ``(n_trials, 2)``). Entries override ``theta``.
         batch_size
             Trials per vmapped batch. ``None`` (default) applies the size-adaptive rule
-            of :func:`_sweep_batch_default`; 1 is a purely sequential scan (least
-            memory); ``n_trials`` forces one wide batch (fastest, most memory).
+            of :func:`_sweep_batch_default`, 1 gives a sequential scan (least memory),
+            and ``n_trials`` forces one wide batch (fastest, most memory).
         problem
             Alternative base :class:`~albireo.forward.Problem` with the same structure
-            and other numbers, such as a resimulated dataset
+            and different values, such as a resimulated dataset
             (:func:`albireo.simulate.resimulate`), so a bootstrap reuses this model's
             operators instead of rebuilding them per trial.
 
@@ -953,15 +952,15 @@ class MarginalOrbitModel:
             A numpyro model for :func:`run_map` / :func:`run_nuts`. It records ``ecc``
             and ``omega`` (and ``ecc_out``, ``omega_out``, ``velocity_rel`` and
             ``nebular_amp`` when the corresponding sites are present) as deterministic
-            sites, and adds ``-inf`` factors for the eccentricity disk, the LSF width and
+            sites. It adds ``-inf`` factors for the eccentricity disk, the LSF width and
             skewness bounds, the AR(1) stationarity bound, the smoothness bound
             (``log_tau - log_eta`` at most 30, beyond which the prior determinant's pivot
             is floored and the marginal likelihood is arithmetic noise) and the bandwidth
             guard (``docs/math.md`` §7.1). The model takes the base
-            :class:`~albireo.forward.Problem` as an optional argument and advertises it
-            through a ``model_args`` attribute; the runners pass it through numpyro as a
+            :class:`~albireo.forward.Problem` as an optional argument and exposes it
+            through a ``model_args`` attribute. The runners pass it through numpyro as a
             traced jit argument, the same contract as :meth:`marginal`. As a closure
-            constant, the problem's arrays would be baked into the jitted potential as
+            constant, the problem's arrays would be embedded in the jitted potential as
             XLA constants, whose compile-time folding allocates multi-GB temporaries at
             survey scale. Calling the model with no argument (as plain numpyro utilities
             such as ``log_density`` do) falls back to the closure, which is correct but
@@ -971,7 +970,7 @@ class MarginalOrbitModel:
         ------
         ValueError
             If a site is unknown or both fixed and sampled, if a free-velocity model also
-            carries Keplerian sites, or if the orbital sites are incomplete.
+            has Keplerian sites, or if the orbital sites are incomplete.
         """
         unknown = [s for s in priors if s not in _THETA_SITES]
         if unknown:
@@ -1006,7 +1005,7 @@ class MarginalOrbitModel:
             theta.update({name: jnp.asarray(v) for name, v in fixed.items()})
             if free_velocity:
                 # No Keplerian: record the identified table rather than the raw site,
-                # whose per-component zero points the likelihood cannot see (D42).
+                # whose per-component zero points do not affect the likelihood (D42).
                 numpyro.deterministic(
                     "velocity_rel", relative_velocities(theta["velocity"], self.problem.grid)
                 )
@@ -1034,8 +1033,8 @@ class MarginalOrbitModel:
                 )
             if "lsf_h3" in theta:
                 h3 = jnp.atleast_1d(theta["lsf_h3"])
-                # Beyond the bound the truncated Gauss-Hermite series is no longer a
-                # credible line-spread profile (see _H3_MAX); clipped and rejected.
+                # Beyond the bound the truncated Gauss-Hermite series is not a credible
+                # line-spread profile (see _H3_MAX); such values are clipped and rejected.
                 numpyro.factor(
                     "lsf_h3_bound",
                     jnp.where(jnp.all(jnp.abs(h3) <= _H3_MAX), 0.0, -jnp.inf),
@@ -1049,16 +1048,16 @@ class MarginalOrbitModel:
                 ratio = jnp.atleast_1d(theta["log_tau"]) - jnp.atleast_1d(theta["log_eta"])
                 # Past this stiffness ratio the prior determinant's pivot is floored and
                 # the posterior precision's Cholesky solve loses every digit, so the
-                # marginal is arithmetic noise rather than a likelihood (see
-                # _LOG_TAU_ETA_MAX); rejected, as the LSF and AR(1) bounds are.
+                # marginal is arithmetic noise (see _LOG_TAU_ETA_MAX). Such ratios are
+                # rejected, as for the LSF and AR(1) bounds.
                 numpyro.factor(
                     "smoothness_bound",
                     jnp.where(jnp.all(ratio <= _LOG_TAU_ETA_MAX), 0.0, -jnp.inf),
                 )
             if "log_nebular_amp" in theta:
-                # Record the amplitudes the model applied: the site itself is identified
-                # only up to an additive constant (nebular_amplitudes centers it), so the
-                # raw samples are not the applied amplitudes.
+                # Record the amplitudes the model applied: the site is identified only up
+                # to an additive constant (nebular_amplitudes centers it), so the raw
+                # samples are not the applied amplitudes.
                 numpyro.deterministic("nebular_amp", nebular_amplitudes(theta))
             problem = self._theta_problem(theta, base=base)
             # Reject configurations whose relative shifts exceed the static bandwidth;
@@ -1069,7 +1068,7 @@ class MarginalOrbitModel:
                 "marginal_loglike", self._marginal_from_problem(problem, theta).log_likelihood
             )
 
-        # Advertise the problem as a model argument (picked up by run_map /
+        # Expose the problem as a model argument (read by run_map /
         # laplace_inverse_mass / run_nuts) so numpyro traces it instead of folding it.
         _model.model_args = (self.problem,)  # type: ignore[attr-defined]
         return _model
@@ -1098,7 +1097,7 @@ class MAPResult:
         numpyro's potential energy in the unconstrained space: the negative log joint up to
         constants, minus the log absolute Jacobian determinant of every bounded site's
         transform. The returned point is therefore the mode in the unconstrained
-        coordinates, not the constrained-space MAP; on the Gaia RVS benchmark's recovered
+        coordinates, not the constrained-space MAP. On the Gaia RVS benchmark's recovered
         orbits the two differ by a median 0.007 formal sigma and at most 0.23
         (``docs/benchmarks.md``, Gaia RVS, after the third run).
     grad_norm
@@ -1138,8 +1137,8 @@ def run_map(
     Runs L-BFGS (optax, with a zoom line search) on numpyro's potential in the
     unconstrained space, so constrained priors are handled by numpyro's standard
     transforms. With ``log_tau``/``log_eta`` among the sampled sites this is the ML-II
-    (empirical Bayes) hyperparameter fit, since the spectra are already marginalized out
-    of the likelihood (``docs/math.md`` §7.3).
+    (empirical Bayes) hyperparameter fit, since the spectra are marginalized out of the
+    likelihood (``docs/math.md`` §7.3).
 
     Parameters
     ----------
@@ -1154,11 +1153,11 @@ def run_map(
         Maximum number of L-BFGS steps.
     tol
         Convergence threshold on the unconstrained-space gradient norm. It is absolute,
-        on a potential whose scale grows with the number of good pixels: on a
-        survey-sized dataset the gradient norm at the true parameters is already in the
-        hundreds, so the default is unreachable and ``converged`` is ``False``
-        regardless of the fit quality. The parameters, observed through ``callback``,
-        are the better convergence indicator.
+        on a potential whose scale grows with the number of good pixels. On a
+        survey-sized dataset the gradient norm at the true parameters is in the hundreds,
+        so the default is unreachable and ``converged`` is ``False`` regardless of the
+        fit quality. The parameters, observed through ``callback``, are the better
+        convergence indicator.
     callback
         Called after every accepted step as ``callback(step, potential, grad_norm, params)``
         with ``params`` the constrained site values. The function is otherwise silent and
@@ -1168,7 +1167,7 @@ def run_map(
         Positional arguments for ``model``, passed through numpyro as traced jit
         arguments rather than closure constants, which XLA constant-folds into multi-GB
         temporaries at scale. Default: the model's own ``model_args`` attribute
-        when it has one (:meth:`MarginalOrbitModel.model` advertises its base problem
+        when it has one (:meth:`MarginalOrbitModel.model` exposes its base problem
         there), else ``()``. Passing ``()`` explicitly forces the closure path.
 
     Returns
@@ -1246,7 +1245,7 @@ def laplace_inverse_mass(
     the eigenvalues at ``floor * max_eig``, and returns the inverse as a dense array. The
     result is passed as ``inverse_mass_matrix`` to :func:`run_nuts` built from the same
     model. With the mass matrix preset to an approximation of the posterior covariance,
-    warmup only tunes the step size; without it, parameter scales spanning many orders
+    warmup only tunes the step size. Without it, parameter scales spanning many orders
     of magnitude drive early trajectories to the tree-depth cap, and warmup costs more
     than sampling (``docs/benchmarks.md``).
 
@@ -1280,14 +1279,14 @@ def laplace_inverse_mass(
     potential = model_info.potential_fn(*model_args)
     z = jax.tree.map(jnp.asarray, model_info.param_info.z)
     flat, unravel = ravel_pytree(z)
-    # Reverse-over-reverse, not jax.hessian (forward-over-reverse). Forward-over-reverse
-    # runs here, since it differentiates the custom rule's backward pass, which consists
-    # of plain operations, but it was measured to return an appreciably asymmetric
-    # Hessian on this stack, on the plain-autodiff path as well, so the cause is the
-    # solver scans rather than the custom VJP. jacrev(jacrev(...)) matches central
-    # finite differences of the gradient to 8 digits where forward-over-reverse does not
-    # (D28). Forward mode applied directly to the marginal is not possible: JAX rejects
-    # jvp of a custom_vjp function.
+    # Reverse-over-reverse is used, not jax.hessian (forward-over-reverse).
+    # Forward-over-reverse runs here, since it differentiates the custom rule's backward
+    # pass, which consists of plain operations. However, it was measured to return an
+    # appreciably asymmetric Hessian on this stack, on the plain-autodiff path as well,
+    # so the cause is the solver scans rather than the custom VJP. jacrev(jacrev(...))
+    # matches central finite differences of the gradient to 8 digits where
+    # forward-over-reverse does not (D28). Forward mode applied directly to the marginal
+    # is not possible, because JAX rejects jvp of a custom_vjp function.
     hess = jax.jacrev(jax.jacrev(lambda zf: potential(unravel(zf))))(flat)
     hess = 0.5 * (hess + hess.T)
     eigval, eigvec = jnp.linalg.eigh(hess)
@@ -1340,8 +1339,8 @@ def run_nuts(
         makes warmup cheap.
     adapt_mass_matrix
         Whether warmup adapts the mass matrix. When an explicit ``inverse_mass_matrix``
-        is supplied the default is ``False``: the early adaptation windows would replace
-        the Laplace matrix with a poor few-sample estimate and restore the slow,
+        is supplied the default is ``False``, because the early adaptation windows would
+        replace the Laplace matrix with a poor few-sample estimate and restore the slow,
         deep-tree warmup that the matrix avoids. ``True`` overrides this.
     max_tree_depth
         NUTS tree-depth cap.
@@ -1350,7 +1349,7 @@ def run_nuts(
     model_args
         As in :func:`run_map` (default: the model's own ``model_args`` attribute). With
         arguments present the MCMC runs with ``jit_model_args=True``, so they are traced
-        through the jitted sample loop rather than baked into it as XLA constants.
+        through the jitted sample loop rather than embedded in it as XLA constants.
 
     Returns
     -------

@@ -1,27 +1,26 @@
 """Query and download reduced spectra from the ESO Science Archive.
 
-**Experimental.** This is a thin layer over an external service; its query surface
-follows the archive's, not a stability promise of albireo's.
+**Experimental.** This is a thin layer over an external service; its query interface
+follows the archive's and is not guaranteed to be stable.
 
 The ESO archive publishes Phase 3 one-dimensional spectra under one query language, one
 file layout and one proprietary period: FEROS, HARPS, UVES, X-shooter, GIRAFFE and
 ESPRESSO all deliver ``SCIENCE.SPECTRUM`` products, and every product becomes public a
 year after observation. One loader therefore serves all of them.
 
-This module is the fetch half, an ObsCore/TAP client and a downloader; :mod:`albireo.io`
-reads the files. It uses the standard library only (``urllib``, ``json``,
-``concurrent.futures``), so locating data adds no dependency; astropy is needed only to
-open a file.
+This module is an ObsCore/TAP client and a downloader; :mod:`albireo.io` reads the files.
+It uses the standard library only (``urllib``, ``json``, ``concurrent.futures``), so
+locating data adds no dependency; astropy is needed only to open a file.
 
 Three properties of the archive determine the design.
 
 - Searches are by cone, not by name. ``target_name`` is PI free text and is not
   resolver-normalized (HR 6819 is filed as ``HR-6819``). For one-dimensional spectra
   ``s_region`` is a bare ``POSITION J2000 ra dec`` (a point, not a footprint), so the form
-  ESO's own documentation shows for images, ``CONTAINS(POINT(...), s_region)=1``, matches
-  nothing; ``INTERSECTS(s_region, CIRCLE(...))`` is used instead.
-- Truncation is silent. The sync endpoint caps output at 20,000 rows by default, and the
-  JSON and CSV serializations carry no overflow marker (only VOTable does), so
+  ESO's documentation shows for images, ``CONTAINS(POINT(...), s_region)=1``, matches
+  nothing. ``INTERSECTS(s_region, CIRCLE(...))`` is used instead.
+- Truncation is not signalled. The sync endpoint caps output at 20,000 rows by default,
+  and the JSON and CSV serializations have no overflow marker (only VOTable does), so
   :func:`query` compares the row count against ``maxrec`` and raises at the cap.
 - An archive row is not necessarily one epoch. GIRAFFE delivers one file per science fibre
   (up to 130 per raw frame), and multi-epoch stacks spanning weeks are flagged with
@@ -31,7 +30,7 @@ Three properties of the archive determine the design.
 The BLOeM functions (:func:`bloem_spectra`, :class:`BloemTarget`) apply all three to one
 survey: a BLOeM identifier such as ``"1-002"`` is resolved to that star's ~25 epochs. The
 survey's spectra are filed under the Gaia DR3 source id rather than the survey's own name,
-and the cross-match is a VizieR table; VizieR serves the same TAP dialect, so the join
+and the cross-match is a VizieR table. VizieR serves the same TAP dialect, so the join
 needs no additional dependency.
 """
 
@@ -69,7 +68,7 @@ FILE_URL = "https://dataportal.eso.org/dataPortal/file/{dp_id}"
 # under its older name.
 VIZIER_SYNC_URL = "https://tapvizier.cds.unistra.fr/TAPVizieR/tap/sync"
 
-# The columns ESO populates for essentially every spectrum, measured over 2.4 million rows:
+# The columns ESO populates for nearly every spectrum, measured over 2.4 million rows:
 # target_name, s_ra/s_dec, t_min/t_max, t_exptime, em_min/em_max, em_res_power,
 # obs_collection, proposal_id, calib_level, access_estsize, obs_release_date and
 # dataproduct_subtype are 100% non-null; snr is 99.9996%. s_resolution, abmaglim and
@@ -96,7 +95,7 @@ DEFAULT_COLUMNS = (
 
 
 def _user_agent() -> str:
-    """The User-Agent string, carrying the installed albireo version."""
+    """The User-Agent string, with the installed albireo version."""
     from albireo import __version__
 
     return f"albireo/{__version__} (https://github.com/tjayasinghe/albireo)"
@@ -105,12 +104,12 @@ def _user_agent() -> str:
 # The ESO endpoints refuse or drop connections under load often enough that a bare urlopen
 # fails a few times in a 50-file run, so transfers are retried. OSError is excluded from
 # this tuple: it would cover local disk errors (a full filesystem on the .part write) and
-# retry them five times before reporting them as network trouble.
+# retry them five times before reporting them as network failures.
 _TRANSIENT = (urllib.error.URLError, TimeoutError, ConnectionError)
 
 
 class _TapQueryError(Exception):
-    """A 400 from a TAP service, carrying the VOTable body that says why."""
+    """A 400 from a TAP service, with the VOTable body that explains it."""
 
     def __init__(self, body: str):
         super().__init__(body[:200])
@@ -203,7 +202,7 @@ def spectra_query(
     ra_deg, dec_deg, radius_deg
         Cone search in ICRS degrees. Give both coordinates or neither. Expressed as
         ``INTERSECTS(s_region, CIRCLE(...))``: ``s_region`` is a bare point for 1-D
-        products, so the ``CONTAINS(POINT(...), ...)`` form in ESO's own examples returns
+        products, so the ``CONTAINS(POINT(...), ...)`` form in ESO's examples returns
         nothing.
     instrument
         ``instrument_name``, uppercase and unhyphenated as the archive stores it:
@@ -258,10 +257,10 @@ def spectra_query(
 
 
 def _like_prefix(value: str, what: str) -> str:
-    """A literal prefix for a ``LIKE`` pattern, refusing characters that are wildcards.
+    """A literal prefix for a ``LIKE`` pattern, rejecting wildcard characters.
 
     ESO's ADQL parser rejects ``ESCAPE`` (verified against the live service), so a ``_``
-    cannot be neutralized and would match any single character. It is refused; no ESO
+    cannot be escaped and would match any single character. It is rejected; no ESO
     programme id contains one.
     """
     if "_" in value or "%" in value:
@@ -273,7 +272,7 @@ def _like_prefix(value: str, what: str) -> str:
 
 
 def _quote(value: str) -> str:
-    """Validate a string for an ADQL literal, refusing one that contains a single quote."""
+    """Validate a string for an ADQL literal, rejecting one that contains a single quote."""
     text = str(value)
     if "'" in text:
         raise ValueError(f"ADQL string literals may not contain a single quote; got {text!r}")
@@ -295,18 +294,18 @@ def query(
         The query, e.g. from :func:`spectra_query`.
     maxrec
         Row cap. Reaching it raises, because the archive does not signal truncation: the
-        sync endpoint's JSON and CSV serializations carry no overflow marker (only VOTable
+        sync endpoint's JSON and CSV serializations have no overflow marker (only VOTable
         does). A capped result is indistinguishable from a complete one, and a partial list
         of a programme's epochs would yield a wrong orbit.
     timeout
-        Socket timeout in seconds. The service's own default execution limit is 60 s.
+        Socket timeout in seconds. The service's default execution limit is 60 s.
     url
         TAP sync endpoint.
 
     Returns
     -------
     list of ArchiveRecord
-        In the order the query asked for.
+        In the order the query specifies.
     """
     rows = _tap_rows(adql, url=url, maxrec=maxrec, timeout=timeout)
     return [ArchiveRecord(dp_id=str(row["dp_id"]), row=row) for row in rows]
@@ -322,9 +321,8 @@ def _tap_rows(
 ) -> list[dict]:
     """Run an ADQL query against an IVOA TAP sync endpoint and return rows as dicts.
 
-    Shared by the ESO and VizieR paths: a silent MAXREC truncation, an error document
-    served with a 200 status, and a dropped connection are properties of the protocol
-    rather than of either archive.
+    Shared by the ESO and VizieR paths: an unsignalled MAXREC truncation, an error document
+    served with a 200 status, and a dropped connection are properties of the protocol.
     """
     payload = urllib.parse.urlencode(
         {
@@ -344,7 +342,7 @@ def _tap_rows(
         except urllib.error.HTTPError as exc:
             # A TAP service reports an ADQL error as a 400 whose body is a VOTable that
             # explains it. Propagating the HTTPError would discard that body, so it is
-            # carried in the exception and unpacked below.
+            # stored in the exception and read below.
             if exc.code != 400:
                 raise
             raise _TapQueryError(exc.read().decode("utf-8", "replace")) from exc
@@ -356,7 +354,7 @@ def _tap_rows(
             f"the {service} TAP service rejected the query. Its message was:\n"
             f"{_votable_message(exc.body)}\nThe query was:\n{adql}"
         ) from exc
-    # VizieR honours FORMAT=json only when the query succeeds: a syntax error comes back as
+    # VizieR honours FORMAT=json only when the query succeeds: a syntax error is returned as
     # a VOTable document, sometimes with a 200 status. The payload is inspected rather than
     # the status so that the service's message is reported instead of a JSONDecodeError.
     if raw.lstrip().startswith("<"):
@@ -462,7 +460,7 @@ def download(
     """Download products into ``outdir``, resumably, and write a manifest.
 
     Each file is written to a ``.part`` temporary and renamed atomically, so an
-    interrupted run leaves no half-written FITS file under the final name; re-running
+    interrupted run leaves no half-written FITS file under the final name. Re-running
     skips files already present. Downloads are checked against ``Content-Length`` where
     the server sends it, since a cleanly truncated transfer otherwise looks like success.
 
@@ -476,7 +474,7 @@ def download(
         Re-download files already present.
     jobs
         Parallel downloads. ESO publishes no rate limit; the default of 4 is conservative
-        rather than tuned.
+        and has not been tuned.
     timeout
         Per-file socket timeout in seconds.
     manifest
@@ -505,7 +503,7 @@ def download(
             pool.submit(_download_one, record, outdir, force, timeout): index
             for index, record in enumerate(records)
         }
-        # Completion order, so `progress` reports each file as it lands; `results` is
+        # Completion order, so `progress` reports each file as it finishes; `results` is
         # indexed back into input order.
         for future in as_completed(futures):
             index = futures[future]
@@ -532,9 +530,9 @@ def download(
 # stars in the Small Magellanic Cloud, about 25 epochs each, with an intrinsic binary
 # fraction above 70%. The constants below record how the survey is filed in the archive.
 
-# The reduced spectra sit under obs_collection='GIRAFFE'. There is no BLOeM Phase 3
-# collection, and target_name is the Gaia DR3 source id rather than the survey's own name,
-# which is what the VizieR cross-match supplies. The programme id is 112.25R7, not the
+# The reduced spectra are filed under obs_collection='GIRAFFE'. There is no BLOeM Phase 3
+# collection, and target_name is the Gaia DR3 source id, which the VizieR cross-match
+# supplies, rather than the survey's own name. The programme id is 112.25R7, not the
 # 112.25W2 printed in arXiv v1 of 2407.14593; in the archive that id belongs to an ERIS
 # programme.
 BLOEM_COLLECTION = "GIRAFFE"
@@ -543,7 +541,7 @@ BLOEM_PROGRAMME = "112.25R7"
 # A second programme observes the same 929 stars and is excluded by default. 115.28A9 uses
 # a different setup: 4537-4761 A at R=23000 and 6442-6822 A at R=17000, against the
 # survey's LR02 at 3960-4571 A and R=6300. Merging them without distinct instrument keys
-# would present the model with three disjoint windows under one LSF.
+# would assign one LSF to three disjoint windows.
 BLOEM_FOLLOWUP_PROGRAMME = "115.28A9"
 
 # VizieR table names contain slashes and must be double-quoted in ADQL.
@@ -553,7 +551,7 @@ _BLOEM_BINARY_TABLE = '"J/A+A/698/A41/tabled1"'  # 309 rows: the B-star binary c
 
 @dataclass(frozen=True)
 class BloemTarget:
-    """One BLOeM star, resolved from its survey identifier to something the archive knows.
+    """One BLOeM star, resolved from its survey identifier to its archive target name.
 
     Attributes
     ----------
@@ -633,12 +631,12 @@ def _clean(value: object) -> str:
 
 
 def _gaia_id(value: object, context: str) -> str:
-    """A Gaia source id as an exact decimal string, refusing anything lossy.
+    """A Gaia source id as an exact decimal string, rejecting anything lossy.
 
     VizieR sends it as a bare JSON integer literal, which Python's ``json`` decodes to an
-    arbitrary-precision ``int`` without loss. A ``float`` arriving here means some layer has
-    already rounded it: 809 of the 929 BLOeM ids do not survive a float64 round trip, and
-    the rounded value remains a plausible-looking source id.
+    arbitrary-precision ``int`` without loss. A ``float`` here means the value has already
+    been rounded: 809 of the 929 BLOeM ids are changed by a float64 round trip, and the
+    rounded value remains a plausible-looking source id.
     """
     if isinstance(value, bool) or not isinstance(value, int | str):
         raise RuntimeError(
@@ -663,8 +661,8 @@ _BINARY_CLASS_CACHE: dict[str, str] = {}
 def _binary_classes(timeout: float) -> dict[str, str]:
     """``{bloem_id: class}`` from the B-star multiplicity table, fetched at most once.
 
-    Cached for the process: the 309-row published table does not change, and uncached,
-    every :func:`resolve_bloem` in a loop over targets would fetch it again.
+    Cached for the process: the 309-row published table does not change, and without the
+    cache every :func:`resolve_bloem` in a loop over targets would fetch it again.
     """
     if _BINARY_CLASS_CACHE:
         return _BINARY_CLASS_CACHE
@@ -689,7 +687,7 @@ def bloem_catalogue(
 ) -> list[BloemTarget]:
     """The BLOeM target list, resolved to Gaia DR3 source ids.
 
-    One VizieR query for the 929-row identifier cross-match and, unless
+    Issues one VizieR query for the 929-row identifier cross-match and, unless
     ``with_classification`` is disabled, a second for the published multiplicity classes,
     joined on the survey identifier.
 
@@ -714,7 +712,7 @@ def bloem_catalogue(
     The classification covers only the 309 B-type stars of Villasenor et al. (2025):
     91 SB1, 59 SB2, 3 SB3, 110 RV-variable and 46 RV-constant. The O stars are classified
     in a separate, unharmonized catalogue that this function does not join, so a ``None``
-    class means not in that table, never single.
+    class means absent from that table, not single.
 
     References
     ----------
@@ -847,13 +845,13 @@ def bloem_spectra(
         ``proposal_id`` prefix. Defaults to the survey programme ``112.25R7``, whose four
         sub-runs are the LR02 epochs the BLOeM papers analyse. ``None`` returns every
         GIRAFFE spectrum of the star regardless of programme, which currently includes the
-        ``115.28A9`` follow-up: a different setup at R = 17000 and 23000 in two other
-        wavelength windows, usable only as separate instruments with their own
-        line-spread functions, never pooled with LR02.
+        ``115.28A9`` follow-up. That programme uses a different setup, at R = 17000 and
+        23000 in two other wavelength windows. Its spectra are usable only as separate
+        instruments with their own line-spread functions, not pooled with LR02.
     public_only
         Drop rows still inside their proprietary period. Sub-run ``.004`` releases through
-        2027-01-15, so a fetch before then is partial by construction; without this flag
-        the proprietary rows are returned and fail to download.
+        2027-01-15, so a fetch before then is necessarily partial. Without this flag the
+        proprietary rows are returned and fail to download.
     maxrec
         Row cap. One star has ~25-32 epochs; the default leaves room without disabling the
         truncation guard.
@@ -906,7 +904,7 @@ def bloem_spectra(
 
 
 def _is_proprietary(record: ArchiveRecord) -> bool:
-    """Whether a record is still inside its proprietary period, by its own release date."""
+    """Whether a record is still inside its proprietary period, by its release date."""
     released = record.row.get("obs_release_date")
     if not released:
         return False

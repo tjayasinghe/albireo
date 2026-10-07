@@ -1,7 +1,7 @@
-"""AI Phoenicis: scoring a label fit against a system whose answer is already known.
+"""AI Phoenicis: validation of the label fit against independently published values.
 
 ``aiphe_bench.py`` validates the disentangling on this system, because AI Phe's orbit is
-published to better than 0.02 per cent. This script validates the labels on the same system:
+published to better than 0.02 per cent. This script validates the labels on the same system.
 AI Phe is one of the few binaries where every quantity the label fit produces has an
 independent published value:
 
@@ -10,9 +10,8 @@ independent published value:
     R2/R1      1.6237                    from the fractional radii, run C
 
 ``RadiusRatio`` fits the two components jointly through one shared scalar, so the radius
-ratio is returned by the label fit, and here it can be held against a published number
-measured photometrically from eclipses rather than spectroscopically. Nothing in the fit is
-told that number.
+ratio is returned by the label fit. Here it can be compared with a published value measured
+photometrically from eclipses. The fit does not use that value.
 
 log g is derived rather than quoted. For a double-lined eclipsing binary the surface gravity
 follows from the spectroscopic and photometric elements alone, with no absolute masses or
@@ -20,15 +19,15 @@ radii and no distance:
 
     g_1 = 2 pi sqrt(1 - e^2) K_2 / (P r_1^2 sin i)
 
-which is Kepler's third law and the mass ratio with everything that cancels cancelled. Every
-symbol on the right is already in ``aiphe_bench.py`` except the inclination. It reproduces
-the published absolute masses and radii to 0.002 dex, which the script checks.
+which follows from Kepler's third law and the mass ratio after cancellation. Every symbol
+on the right is already in ``aiphe_bench.py`` except the inclination. The expression
+reproduces the published absolute masses and radii to 0.002 dex, which the script checks.
 
-Scope. The disentangling is not re-derived: the velocities are fixed at the published orbit,
-exactly as ``aiphe_bench.py`` does, so what is under test is the label fit and not the orbit.
-The light fractions supplied to the disentangling are a blackbody estimate, accurate to a few
-per cent at best, which makes this a test of the claim that a wrong assumed dilution returns
-as dilution rather than as temperature.
+Scope. The disentangling is not re-derived. The velocities are fixed at the published orbit,
+as in ``aiphe_bench.py``, so the test is of the label fit and not of the orbit. The light
+fractions supplied to the disentangling are a blackbody estimate, accurate to a few per cent
+at best. This makes the run a test of the claim that a wrong assumed dilution is recovered
+as dilution and does not bias the temperature.
 
 Run:  python scripts/aiphe_labels_bench.py --data data/aiphe
       (fetch the spectra first with scripts/download_aiphe.py)
@@ -44,7 +43,7 @@ import jax.numpy as jnp
 import numpy as np
 
 # The published system and the analysis window come from the disentangling benchmark, so the
-# two scripts cannot drift apart on the numbers they share.
+# numbers the two scripts share cannot differ.
 from aiphe_bench import (
     DV_KMS,
     ECC_PUB,
@@ -71,7 +70,7 @@ from albireo.forward import build_problem
 from albireo.likelihood import marginal_loglikelihood
 from albireo.priors import SmoothnessPrior
 
-# Maxted et al. (2020), run C -- the same solution R1_FRAC and R2_FRAC come from.
+# Maxted et al. (2020), run C, the same solution R1_FRAC and R2_FRAC come from.
 INCLINATION_DEG = 88.5
 # Published absolute values, used only to check the derivation below.
 M1_PUB, R1_PUB = 1.1938, 1.8036
@@ -83,8 +82,8 @@ LIBRARY = "bosz2024-fgk-r20000"
 def published_logg() -> tuple[float, float]:
     """Surface gravities from the orbital and photometric elements alone.
 
-    g_i = 2 pi sqrt(1 - e^2) K_j / (P r_i^2 sin i), with j the *other* component: the
-    companion's semi-amplitude carries this star's mass through the mass ratio.
+    g_i = 2 pi sqrt(1 - e^2) K_j / (P r_i^2 sin i), with j the other component. The
+    companion's semi-amplitude gives this star's mass through the mass ratio.
     """
     period = P_PUB * 86400.0
     sin_i = np.sin(np.radians(INCLINATION_DEG))
@@ -177,8 +176,8 @@ def main() -> None:
     )
 
     # The model grid is wider than the analysis window (LogGrid.covering adds the velocity
-    # budget and the LSF radius on both sides), so the library has to cover the grid, not the
-    # window; the resampler rejects a library that covers only the window.
+    # budget and the LSF radius on both sides), so the library has to cover the grid. The
+    # resampler rejects a library that covers only the window.
     pad = 2.0
     library = ab.fetch_library(
         LIBRARY,
@@ -244,8 +243,8 @@ def main() -> None:
     published_ratio = R2_FRAC / R1_FRAC
     for label, match in (("fitted jointly", fixed), ("log g free", free)):
         ell_fit = match.flux_ratio
-        # l2/l1 = (R2/R1)^2 * (continuum ratio), and the fit carries the continua, so the
-        # radius ratio it implies is read back out of the fitted light fractions.
+        # l2/l1 = (R2/R1)^2 * (continuum ratio), and the fit includes the continua, so the
+        # radius ratio it implies is recovered from the fitted light fractions.
         implied = match.radius_ratio.get("secondary")
         offset = f"{100 * (implied / published_ratio - 1.0):+.1f}%" if implied else ""
         print(

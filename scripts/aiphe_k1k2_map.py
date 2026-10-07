@@ -1,27 +1,27 @@
-"""AI Phoenicis: the (K1, K2) map, three ways, with a contour that means something.
+"""AI Phoenicis: the (K1, K2) map by three methods, with a contour of defined confidence level.
 
-The shift-and-add literature plots a chi-square surface over (K1, K2) and reads the
-minimum off it; no published map carries a contour level, because the recovered spectra
-are re-solved at every grid point and treated as free parameters, so the number of degrees
-of freedom the surface consumes is not known (Hynes & Maxted 1998). albireo's marginal
-likelihood integrates the spectra out instead of counting them, so the level
-``Delta(-2 ln L) = 2.30`` is the two-parameter 68.3 per cent region in the usual sense, and
-``p_eff = tr[(Lambda + A^T W A)^-1 A^T W A]`` says how many spectral degrees of freedom the
-data actually constrain, which is the number the naive surface would have to know.
+The shift-and-add literature plots a chi-square surface over (K1, K2) and takes its
+minimum. No published map has a contour level, because the recovered spectra are re-solved
+at every grid point and treated as free parameters, so the number of degrees of freedom the
+surface uses is not known (Hynes & Maxted 1998). albireo's marginal likelihood integrates
+the spectra out, so the level ``Delta(-2 ln L) = 2.30`` is the two-parameter 68.3 per cent
+region in the usual sense. ``p_eff = tr[(Lambda + A^T W A)^-1 A^T W A]`` is the number of
+spectral degrees of freedom the data constrain, which is the number a contour level on the
+chi-square surface would require.
 
 Three panels on one dataset and one grid:
 
 1. the marginal log-likelihood over (K1, K2) with every other site held at its MAP value
    (period, conjunction, eccentricity vector, hyperparameters, noise scale): the
-   like-for-like comparison with the community's figure, spectra integrated rather than
-   counted, with ``p_eff`` printed;
+   like-for-like comparison with the figure in the shift-and-add literature, with the
+   spectra integrated out and ``p_eff`` printed;
 2. the same two parameters from the NUTS posterior, everything else marginalised: the
    sample cloud with its 68.3 and 95.4 per cent ellipses;
 3. the clean-room shift-and-add chi-square on the same grid, with the naive
-   ``Delta chi^2 = 2.30`` contour drawn where a reader would draw it.
+   ``Delta chi^2 = 2.30`` contour.
 
-The difference between the first two contours is a result: it is the width the nuisance
-parameters add. The difference between the first and the third is the point of the page.
+The difference between the first two contours is the width that the nuisance parameters
+add. The difference between the first and the third is what the figure is meant to show.
 
 Run:  python scripts/aiphe_k1k2_map.py --data data/aiphe --results offset_tests.json
           [--posterior nuts_eggs_keyed.json] [--config eggs_keyed] [--out FIG.png]
@@ -152,7 +152,7 @@ def main() -> None:
     results = json.loads(Path(args.results).read_text())
     posterior = json.loads(Path(args.posterior).read_text()) if args.posterior else None
     # The MAP with the noise scale fitted, if a posterior run exists; else the plain MAP,
-    # whose contour is too tight by the residual z-RMS, and the panel says so.
+    # whose contour is too tight by the residual z-RMS (the panel is labelled accordingly).
     record = posterior["map"] if posterior else results[args.config]
     raws = load_raws(Path(args.data))
     ds = dataset_for(raws, args.config)

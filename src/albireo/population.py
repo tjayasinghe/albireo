@@ -1,28 +1,28 @@
-"""Populations of double-lined binaries: the truths a Gaia RVS benchmark is drawn from.
+"""Populations of double-lined binaries from which a Gaia RVS benchmark is drawn.
 
 **Experimental.** The record and the draw parameters may change.
 
-A :class:`BinarySystem` is one complete truth: two main-sequence stars with masses, radii,
-temperatures, gravities and rotation; a Keplerian orbit with its inclination; the
-semi-amplitudes that follow; whether the pair eclipses; the light ratio in the RVS band;
-the system's Gaia photometry and G_RVS; its sky position, its ecliptic latitude and the
-number of RVS transits Gaia records for it. :func:`draw_population` builds such systems
-from the empirical distributions of the field, and the catalogue adapters build them from
-real binaries (Gaia DR3 double-lined orbits, DEBCat), filling only what the catalogue
-lacks.
+A :class:`BinarySystem` is the complete injected truth of one system: two main-sequence
+stars with masses, radii, temperatures, gravities and rotation; a Keplerian orbit with its
+inclination; the semi-amplitudes that follow; and whether the pair eclipses. It also
+records the light ratio in the RVS band, the system's Gaia photometry and G_RVS, its sky
+position, its ecliptic latitude and the number of RVS transits Gaia records for it.
+:func:`draw_population` builds such systems from the empirical distributions of the field,
+and the catalogue adapters build them from real binaries (Gaia DR3 double-lined orbits,
+DEBCat), filling only what the catalogue lacks.
 
-The parametric arm composes published prescriptions with no free choices left. Primary
+The parametric draw combines published prescriptions and leaves no free choices. Primary
 masses follow a Salpeter power law over the requested range. Periods are weighted by the
-companion frequency per decade of Moe & Di Stefano (2017, their equations 20-23), mass
-ratios by their broken power law with the twin excess (equations 5-16), and
+companion frequency per decade of Moe & Di Stefano (2017, their equations 20-23). Mass
+ratios are weighted by their broken power law with the twin excess (equations 5-16), and
 eccentricities by their ``p(e) ~ e^eta`` with the tidal ceiling ``e_max(P)`` (equations 3,
-17 and 18); orbits with periods of two days or less are circular. Mass maps to the other
-stellar quantities through Pecaut & Mamajek's (2013) mean dwarf sequence, a table carried
+17 and 18). Orbits with periods of two days or less are circular. Mass maps to the other
+stellar quantities through Pecaut & Mamajek's (2013) mean dwarf sequence, a table included
 here, or through the mass-luminosity, mass-radius and mass-temperature relations of Eker
 et al. (2018), which are calibrated on detached eclipsing binaries. Eclipses follow from
-the geometry with the eccentric-orbit factor (Winn 2010), rotation is synchronised for
-periods below 15 days (Meibom, Mathieu & Stassun 2006), and the RVS light ratio is the
-ratio of the library continua at the two stars' labels scaled by the radius ratio.
+the geometry with the eccentric-orbit factor (Winn 2010), and rotation is synchronised for
+periods below 15 days (Meibom, Mathieu & Stassun 2006). The RVS light ratio is the ratio
+of the library continua at the two stars' labels scaled by the radius ratio.
 
 References
 ----------
@@ -97,7 +97,7 @@ def semi_amplitudes(m1, m2, period, ecc, incl):
     """``(K1, K2)`` in km/s from the masses, the period, the eccentricity and the inclination.
 
     ``K_1 = (2 pi G / P)^(1/3) m_2 sin i / ((m_1 + m_2)^(2/3) sqrt(1 - e^2))`` and the
-    same with the masses exchanged, as the reference implementation computes them; the
+    same with the masses exchanged, as the reference implementation computes them. The
     notebook's 1.30 + 1.20 Msun pair at P = 4 d, e = 0.1, i = 87 degrees gives 87.7 and
     95.0 km/s.
 
@@ -131,7 +131,7 @@ def ecliptic_to_icrs(lon_deg, lat_deg):
     """ICRS right ascension and declination from ecliptic longitude and latitude.
 
     One rotation about the equinox by the J2000 obliquity ``eps = 23.4392911`` degrees,
-    written out because albireo takes no coordinates dependency. With ``lam`` the
+    written out because albireo has no coordinates dependency. With ``lam`` the
     longitude and ``beta`` the latitude,
 
     ``x = cos(beta) cos(lam)``, ``y = cos(beta) sin(lam)``, ``z = sin(beta)``;
@@ -141,10 +141,10 @@ def ecliptic_to_icrs(lon_deg, lat_deg):
     ``alpha = atan2(y', x') mod 360``, ``delta = asin(z')``.
 
     The frame is the mean equinox and ecliptic of J2000. Measured over 500 positions
-    against astropy 8.0, the result sits 0.04 arcsec from ``BarycentricMeanEcliptic``
+    against astropy 8.0, the result is 0.04 arcsec from ``BarycentricMeanEcliptic``
     (the same frame; the residual is the ICRS frame bias and the rounding of the
-    obliquity), at most 14 arcsec from ``BarycentricTrueEcliptic`` (which adds the
-    nutation of the equinox and of the obliquity), and at most 35 arcsec from
+    obliquity). It is at most 14 arcsec from ``BarycentricTrueEcliptic`` (which adds the
+    nutation of the equinox and of the obliquity) and at most 35 arcsec from
     ``GeocentricTrueEcliptic`` (origin at the Earth). All three are under an arcminute. A
     sky position enters this module only through the ecliptic latitude that sets the
     transit count and the position a transit forecast is requested for, where an
@@ -186,8 +186,8 @@ def eclipse_probability(r1_rsun, r2_rsun, a_rsun, ecc=0.0, omega=0.0):
     for isotropic orbit normals. An eccentric orbit brings the stars closer at one
     conjunction than the other: the primary eclipse takes the factor
     ``(1 + e sin omega) / (1 - e^2)`` and the secondary ``(1 - e sin omega) / (1 - e^2)``
-    (Winn 2010, equations 9 and 10); the larger of the two is returned, which is the
-    condition for the system to eclipse at all.
+    (Winn 2010, equations 9 and 10). The larger of the two is returned, which is the
+    condition for the system to eclipse.
     """
     base = (np.asarray(r1_rsun, dtype=np.float64) + np.asarray(r2_rsun, dtype=np.float64)) / (
         np.asarray(a_rsun, dtype=np.float64)
@@ -203,9 +203,9 @@ def eclipse_probability(r1_rsun, r2_rsun, a_rsun, ecc=0.0, omega=0.0):
 
 # Pecaut & Mamajek's mean dwarf sequence, version 2022.04.16 of the table at
 # http://www.pas.rochester.edu/~emamajek/EEM_dwarf_UBVIJHK_colors_Teff.txt, from B9V to M6V
-# (the rows that carry Gaia colours). Columns: spectral type, Teff [K], log L/Lsun, R/Rsun,
+# (the rows that have Gaia colours). Columns: spectral type, Teff [K], log L/Lsun, R/Rsun,
 # M_V, Bp-Rp, G-Rp, M_G, M/Msun. R_Rsun is back-computed there from M_bol and Teff, and Msun
-# from a polynomial in M_V, so the table carries mass and two independent quantities.
+# from a polynomial in M_V, so the table contains mass and two independent quantities.
 _MAMAJEK_ROWS = (
     ("B9V", 10700, 1.86, 2.49, 0.50, -0.120, -0.036, 0.515, 2.75),
     ("B9.5V", 10400, 1.80, 2.45, 0.60, -0.087, -0.016, 0.615, 2.68),
@@ -271,7 +271,7 @@ def _isotonic_rows(rows) -> np.ndarray:
 
     The published sequence is a mean relation and its mass column is not strictly
     monotonic between neighbouring subtypes (A3V/A4V, A7V/A8V), which would make an
-    interpolation on mass double-valued; the few rows that step backwards are dropped.
+    interpolation on mass double-valued. The few non-monotonic rows are dropped.
     """
     table = np.array([row[1:] for row in rows], dtype=np.float64)
     order = np.argsort(table[:, 7])
@@ -289,7 +289,7 @@ _MAMAJEK_LOGM = np.log10(_MAMAJEK_BY_MASS[:, 7])
 _MAMAJEK_LOGT = np.log10(_MAMAJEK_BY_MASS[:, 0])
 
 # Eker et al. (2018) Table 4: log L = a log M + b over six mass domains, and Table 5: the
-# mass-radius relation below 1.5 Msun and the mass-temperature relation above it; the third
+# mass-radius relation below 1.5 Msun and the mass-temperature relation above it. The third
 # relation follows from L = 4 pi R^2 sigma T^4 in each range.
 _EKER_MLR = (
     (0.179, 0.45, 2.028, -0.976),
@@ -325,8 +325,8 @@ class MainSequence:
     Notes
     -----
     Both relations describe field dwarfs of solar composition and no age. A real detached
-    binary of the same mass can sit above the sequence by the evolution of its primary;
-    the catalogue adapters therefore take radii and temperatures from the catalogue where
+    binary of the same mass can lie above the sequence because its primary has evolved.
+    The catalogue adapters therefore take radii and temperatures from the catalogue where
     they exist.
     """
 
@@ -525,9 +525,10 @@ def _mass_ratio_pdf(m1: float, logp: float, q_grid: np.ndarray) -> np.ndarray:
     """The MDS17 mass-ratio density on ``q_grid``, twin excess included.
 
     The excess twin fraction of MDS17 is the fraction of the companions with ``q > 0.3``
-    that lie above the power law in ``0.95 < q < 1``, so the density is built on the full
-    ``0.1 < q < 1`` interval and only then read on ``q_grid``: a grid that starts above
-    0.3 sees the conditional density, and the twin fraction is not inflated by the cut.
+    that lie above the power law in ``0.95 < q < 1``. The density is therefore built on the
+    full ``0.1 < q < 1`` interval and only then interpolated onto ``q_grid``. A grid that
+    starts above 0.3 is given the conditional density, and the twin fraction is not
+    inflated by the cut.
     """
     gs, gl = _gamma_smallq(m1, logp), _gamma_largeq(m1, logp)
     full = np.linspace(0.1, 1.0, 1801)
@@ -556,7 +557,7 @@ def _sample_eccentricity(rng, m1: float, period: float) -> float:
     eta = _eta(m1, math.log10(period))
     u = rng.uniform()
     # p(e) ~ e^eta on (0, e_max): the inverse CDF is closed-form. Below 1e-3 the orbit is
-    # circular for every purpose here, and an exact zero is what the fits hold exactly.
+    # circular for every purpose here, and the fits hold a zero eccentricity exactly.
     e = float(e_max * u ** (1.0 / (eta + 1.0)))
     return e if e >= 1e-3 else 0.0
 
@@ -568,7 +569,7 @@ def _sample_eccentricity(rng, m1: float, period: float) -> float:
 
 @dataclasses.dataclass(frozen=True)
 class BinarySystem:
-    """One double-lined binary, completely specified: the truth a simulation is built on.
+    """One double-lined binary, completely specified: the injected truth of a simulation.
 
     Attributes
     ----------
@@ -599,8 +600,8 @@ class BinarySystem:
     ra_deg, dec_deg
         ICRS position in degrees, or ``None`` when the system has none. A drawn system
         gets one from its ecliptic latitude and a longitude drawn with it
-        (:func:`ecliptic_to_icrs`), and a catalogue system gets the catalogue's. It is
-        what a real transit forecast is requested for
+        (:func:`ecliptic_to_icrs`), and a catalogue system gets the catalogue's. A real
+        transit forecast is requested for this position
         (:func:`albireo.gaia.gost_transits`); the ecliptic latitude alone sets the
         transit count.
     source
@@ -779,11 +780,11 @@ def rvs_light_ratio(library, labels1, labels2, radius_ratio: float) -> float:
 def _draw_mass(rng, lo: float, hi: float, sequence=None, slope: float = -2.3) -> float:
     """A primary mass on ``[lo, hi]`` from the IMF ``dN/dm ~ m^slope``.
 
-    With a ``sequence`` the mass function is weighted for a magnitude-limited sample: a
+    With a ``sequence`` the mass function is weighted for a magnitude-limited sample. A
     survey to a fixed apparent magnitude reaches a star of absolute magnitude ``M_G`` to a
     distance proportional to ``10^(-0.2 M_G)``, so it contains such stars in proportion
-    to ``10^(-0.6 M_G)``, and the field's K dwarfs give way to the F and G dwarfs such a
-    sample is made of.
+    to ``10^(-0.6 M_G)``. The F and G dwarfs of which such a sample is made then replace
+    the field's K dwarfs.
     """
     if sequence is None:
         p = slope + 1.0
@@ -860,7 +861,7 @@ def draw_population(
     kind
         ``"eclipsing"``: every system eclipses, the inclination drawn from the eclipsing
         part of an isotropic distribution. ``"spectroscopic"``: none eclipses.
-        ``"mixed"``: isotropic inclinations, eclipsing or not as the geometry falls.
+        ``"mixed"``: isotropic inclinations, eclipsing or not according to the geometry.
     seed
         Seed.
     library
@@ -874,8 +875,8 @@ def draw_population(
         Primary and secondary masses in solar masses. Default: the masses whose sequence
         temperatures span the library's Teff box, or the tabulated range without one. Both
         stars must lie inside it, so the mass-ratio draw is conditioned on the secondary
-        being in range: with the FGK box and a primary near a solar mass that favours
-        ratios above 0.7, which is also what a double-lined selection favours.
+        being in range. With the FGK box and a primary near a solar mass this favours
+        ratios above 0.7, as a double-lined selection also does.
     period_range
         Periods in days; the Gaia double-lined sample is two thirds below ten days, and
         the draw follows the field's period distribution within the range.
@@ -883,9 +884,9 @@ def draw_population(
         Smallest mass ratio drawn: a faint companion is not double-lined.
     mass_weighting
         ``"magnitude"``: the primary mass follows the initial mass function weighted by
-        the volume a magnitude-limited survey reaches, ``10^(-0.6 M_G)``, and a system is
+        the volume a magnitude-limited survey reaches, ``10^(-0.6 M_G)``. A system is then
         kept with the probability its combined light adds over the primary alone (a twin
-        is seen through 2.8 times the volume of a single star). ``"volume"``: the initial
+        is observed over 2.8 times the volume of a single star). ``"volume"``: the initial
         mass function alone. The Gaia double-lined sample is magnitude limited.
     min_separation_kms
         Smallest largest separation ``(K_1 + K_2)(1 + e)`` kept, the velocity selection of
@@ -916,10 +917,9 @@ def draw_population(
     if mass_weighting not in ("magnitude", "volume"):
         raise ValueError(f"mass_weighting must be 'magnitude' or 'volume'; got {mass_weighting!r}")
     rng = np.random.default_rng(seed)
-    # The sky longitude is drawn from a generator of its own, spawned from the same seed.
-    # Nothing else depends on it, and keeping it out of the main stream means that adding
-    # it left every other draw where it was: a population drawn before systems carried a
-    # position reproduces unchanged.
+    # The sky longitude is drawn from a separate generator, spawned from the same seed.
+    # Nothing else depends on it and it does not advance the main stream, so a population
+    # drawn by a version without positions is reproduced unchanged.
     lon_rng = np.random.default_rng(np.random.SeedSequence(seed).spawn(1)[0])
     sequence = relation if isinstance(relation, MainSequence) else MainSequence(relation)
     ratio = _ContinuumRatio(library) if library is not None else None
@@ -955,8 +955,8 @@ def draw_population(
         if m2 < m_lo:
             continue
         if mass_weighting == "magnitude":
-            # The pair is seen through the volume its combined light reaches, relative to
-            # the twin that reaches furthest.
+            # The pair is kept in proportion to the volume its combined light reaches,
+            # relative to the twin, which reaches furthest.
             delta = float(sequence.absolute_g(m2)) - float(sequence.absolute_g(m1))
             if rng.uniform() > ((1.0 + 10.0 ** (-0.4 * delta)) / 2.0) ** 1.5:
                 continue
@@ -1242,12 +1242,12 @@ def from_debcat(
     DEBCat gives the period, masses, radii, temperatures, gravities and metallicity of
     every well-studied detached eclipsing binary, with a V magnitude. It gives no
     eccentricity, no inclination beyond the fact of eclipsing, no G magnitude and no
-    rotation, so those are drawn: the eccentricity from the period-conditioned
-    prescription, the inclination from the eclipsing range, G from the double-lined
-    sample's distribution, and rotation as synchronised or field. A missing metallicity
-    (``-9.99``) becomes solar. Systems whose temperatures fall outside the library box
-    are kept, with the light ratio from a blackbody ratio instead; the benchmark decides
-    what to do with them.
+    rotation. Those are drawn: the eccentricity from the period-conditioned prescription,
+    the inclination from the eclipsing range, G from the double-lined sample's
+    distribution, and rotation as synchronised or field. A missing metallicity (``-9.99``)
+    becomes solar. Systems whose temperatures are outside the library box are kept, with
+    the light ratio from a blackbody ratio instead. Their treatment is left to the
+    benchmark.
 
     Parameters
     ----------
@@ -1354,7 +1354,7 @@ def query_gaia_sb2(limit: int = 500, *, timeout: float = 120.0) -> list[dict[str
     returns one dictionary per source with the columns :func:`from_gaia_sb2` reads. The
     eccentricity of a circular solution is stored as NULL by the archive and comes back
     as 0. Gaia publishes no G_RVS, no transit count and no light ratio for its
-    double-lined sources (their combined velocities were discarded), so G_RVS is
+    double-lined sources (their combined velocities were discarded). G_RVS is therefore
     predicted from the colour, the transit count is ``rv_n_good_obs_primary``, and the
     light ratio comes from the masses through the main sequence.
 
@@ -1484,7 +1484,7 @@ def from_gaia_sb2(
 
 
 def population_summary(systems: Sequence[BinarySystem]) -> str:
-    """A few lines describing a population: counts, and the quartiles of what matters."""
+    """A few lines describing a population: counts and the quartiles of its main quantities."""
     if not systems:
         return "empty population"
 

@@ -1,6 +1,6 @@
 """Tests for the Gaia RVS benchmark harness (``albireo.benchmark``).
 
-The fast tests pin the declaration: a system under each tier becomes the pipeline
+The fast tests assert three properties: a system under each tier becomes the pipeline
 declaration the tier describes, the collector and the summary read what the pipeline
 writes, and the report is produced from rows alone. The slow test runs two systems through
 the whole chain on the toy library.
@@ -88,7 +88,7 @@ def test_the_config_resolves_its_arguments(systems):
     config = BenchmarkConfig(output="x", systems=systems, tiers=("blind", "oracle"), product="dr3")
     assert [t.name for t in config.tiers] == ["blind", "oracle"]
     assert config.product.name == "dr3-mean" and config.product_name == "dr3-mean"
-    # The release the product belongs to is the span a GOST cadence cuts its epochs to.
+    # A GOST cadence cuts its epochs to the span of the release the product belongs to.
     assert config.release == "dr3"
     assert BenchmarkConfig(output="x", systems=systems).release == "dr4"
     with pytest.raises(ValueError, match="product"):
@@ -114,10 +114,10 @@ def test_each_tier_becomes_the_declaration_it_describes(systems, library):
 
     oracle = build_star(system, TIERS["oracle"], **kwargs)
     assert oracle.name == f"{system.name}__oracle"
-    # The analysis declares the width the simulated, delivered epochs carry: the nominal
+    # The analysis declares the width of the simulated, delivered epochs. This is the nominal
     # line-spread function with the resampling's Delta_det^2 / 6, the detector pixel's width
     # in place of the delivered one, and the simulation's (5/12) dv^2 on its 2 km/s grid
-    # added, 11.67 km/s against 11.07 (D65).
+    # added: 11.67 km/s against 11.07 (D65).
     assert grid.dv_kms == pytest.approx(2.0)
     delivered = rvs_delivered_sigma_kms(RVS_DR4_EPOCH, simulation_dv_kms=grid.dv_kms)
     assert oracle.lsf == {"RVS": {"sigma_kms": delivered}}
@@ -158,7 +158,7 @@ def test_build_stars_skips_what_does_not_apply(systems, library, tmp_path):
     )
     stars, records = build_stars(config, progress=False)
     names = [s.name for s in stars]
-    # The eclipsing tier only for the eclipsing system; the few-transit system left out.
+    # The eclipsing tier applies only to the eclipsing system; the few-transit system is left out.
     assert f"{systems[0].name}__eclipsing" in names
     assert f"{systems[1].name}__eclipsing" not in names
     assert all("few__" not in n for n in names)
@@ -201,7 +201,7 @@ def test_the_gost_cadence_takes_its_epochs_from_the_forecast(systems, monkeypatc
     bjd = system_transit_times(system, cadence="gost", seed=2)
     expected = rvs_transit_times_from_gost(forecast(*key), seed=2)
     np.testing.assert_array_equal(bjd, expected)
-    # The count is the service's, not the record's, and 0.78 of the forecast survives.
+    # The count is the service's, not the record's, and 0.78 of the forecast is kept.
     assert bjd.size != system.n_transits
     assert 40 <= bjd.size <= 55
     start, span = RVS_SPANS["dr4"]
@@ -222,7 +222,7 @@ def test_the_minimum_transit_rule_uses_the_gost_count(systems, library, tmp_path
     )
     stars, records = build_stars(config, progress=False)
     # The third system has 14+ transits in its record but only six in the forecast, and
-    # about 0.78 of those survive: it falls under min_transits = 10 and is not simulated.
+    # about 0.78 of those are kept, so it is below min_transits = 10 and is not simulated.
     assert [s.name for s in stars] == [f"{s.name}__blind" for s in systems[:2]]
     assert records[systems[2].name]["skipped"].endswith("below min_transits = 10")
     assert "snr_epoch" not in records[systems[2].name]

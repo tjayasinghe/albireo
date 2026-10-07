@@ -1,9 +1,9 @@
-"""Closed-loop tests for the simulator (M1).
+"""Closed-loop tests for the simulator.
 
-The simulator is the oracle for all downstream inference tests, so these tests pin down
-its physics: noise consistent with ivar, masks/gaps/cosmics behaving as advertised,
-telluric frame behavior, end-to-end velocity sign conventions, response application, and
-mixed-instrument support.
+The simulator is the oracle for all downstream inference tests, so these tests verify
+its physics: noise consistent with ivar, masks/gaps/cosmic-ray hits behaving as
+documented, telluric frame behavior, end-to-end velocity sign conventions, response
+application, and mixed-instrument support.
 """
 
 import numpy as np
@@ -94,9 +94,9 @@ def test_gaps_and_cosmics_are_masked_and_corrupted():
         # one contiguous gap of at least ~the requested width
         runs = np.diff(np.flatnonzero(np.diff(np.concatenate([[0], bad.view(np.int8), [0]]))))
         assert runs.max() >= int(0.9 * 0.08 * n)
-        # corrupted pixels carry garbage, so downstream code must honor the mask
+        # corrupted pixels contain arbitrary values, so downstream code must apply the mask
         assert np.max(np.abs(ep.flux[bad] - noiseless[bad])) > 1.0
-        # effective_ivar folds the mask in
+        # effective_ivar includes the mask
         assert np.all(ep.effective_ivar[bad] == 0.0)
 
 

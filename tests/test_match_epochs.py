@@ -1,23 +1,24 @@
-"""The epoch comparison of the label fit (D65): statistics, invariance, optimiser, façade.
+"""The epoch comparison of the label fit (D65): statistics, invariance, optimiser and the
+Disentangler interface.
 
 ``compare="epochs"`` replaces the diagonal comparison against the disentangled components
 with the chi-square of the template composite against the epoch spectra,
-``L_data(m) = z^T W z - 2 m^T h + m^T G m``, evaluated through the disentangling's own
-sufficient statistics at its MAP. Three properties carry the design and are tested here
-against constructions that share nothing with the fast path:
+``L_data(m) = z^T W z - 2 m^T h + m^T G m``, evaluated through the disentangling's
+sufficient statistics at its MAP. Three properties are tested here against constructions
+that share no code with the fast path:
 
-- the identity is exact, AR(1) noise and a telluric row held at its posterior mean
-  included, and with the stellar operator reduced to the quadrature width a library at its
-  own resolving power still needs; the oracle is a dense per-epoch covariance built from
-  ``docs/math.md`` §1.4a and the forward model's own prediction, with no band assembly,
-  adjoint or link table in it;
-- the declared light fractions cancel, so a redeclared light with its smoothness scales
-  leaves ``L_data`` unchanged to rounding;
-- the bounded Levenberg-Marquardt reaches the labels and the light fraction from a poor
+- The identity is exact, including with AR(1) noise, with a telluric row held at its
+  posterior mean, and with the stellar operator reduced to the quadrature width that a
+  library at its own resolving power still needs. The oracle is a dense per-epoch
+  covariance built from ``docs/math.md`` §1.4a and the forward model's prediction, with no
+  band assembly, adjoint or link table.
+- The declared light fractions cancel, so a redeclared light with its smoothness scales
+  leaves ``L_data`` unchanged to rounding.
+- The bounded Levenberg-Marquardt reaches the labels and the light fraction from a poor
   start, and the rotation restart leaves the plateau below half a model pixel, where the
   objective is exactly flat and no gradient method can move.
 
-Everything is simulated in-test; nothing downloads.
+All data are simulated in the tests. Nothing is downloaded.
 """
 
 import warnings
@@ -51,7 +52,7 @@ ELL0 = np.array([0.6, 0.4])
 LSF_KMS = 7.0
 DV_KMS = 5.0
 PERIOD, K = 6.0, (40.0, 60.0)
-AR1_MAX_GAP = 4  # build_problem's default, which the façade does not override
+AR1_MAX_GAP = 4  # build_problem's default, which the Disentangler interface does not override
 
 
 def _sigma_of(resolving_power):
@@ -89,15 +90,16 @@ def _system(
 ):
     """A simulated SB2 with a known orbit, and a Fit placed at its declared start.
 
-    No MAP is run: the orbit is declared Fixed at the truth, and the statistics are exact at
-    any parameters, so the fit's starting theta serves. ``lights`` and ``scale`` redeclare
-    the stars' light fractions with their smoothness scales multiplied by ``scale**2``.
-    ``render_dv`` renders the epochs on a finer grid than the 5 km/s model grid; by default
-    they are rendered on the model grid itself, and then carry its discretisation.
+    No MAP is run. The orbit is declared Fixed at the injected values and the statistics are
+    exact at any parameters, so the fit's starting theta is sufficient. ``lights`` and
+    ``scale`` redeclare the stars' light fractions with their smoothness scales multiplied
+    by ``scale**2``. ``render_dv`` renders the epochs on a finer grid than the 5 km/s model
+    grid. By default they are rendered on the model grid and then include its
+    discretisation.
     """
-    # The epochs must cover every line of the toy library, the temperature lines at 5167.3
-    # and 5172.7 A included: without them Teff enters only through the continua, and a fit
-    # 700 K from the truth has the lower chi-square (a degenerate fixture, not a bad fitter).
+    # The epochs must cover every line of the toy library, including the temperature lines
+    # at 5167.3 and 5172.7 A. Without them Teff enters only through the continua, and a fit
+    # 700 K from the injected value has the lower chi-square.
     grid = ab.LogGrid.from_wavelength_range(5155.0, 5245.0, dv_kms=DV_KMS)
     render = (
         grid if render_dv is None else ab.LogGrid.from_wavelength_range(5155.0, 5245.0, render_dv)
@@ -172,10 +174,10 @@ def _operator_width(resolving_power, grid_compensation):
 def _brute_force_chi2(fit, stellar_rows, resolving_power, grid_compensation=True):
     """``||z - A_e d_e - A_s m||_W^2`` epoch by epoch, from a dense AR(1) covariance.
 
-    ``C_e = alpha^2 D^-1/2 R_phi D^-1/2`` over each run of good pixels whose index gaps do
-    not exceed the chain's maximum gap, factorised densely, fed the forward model's
-    per-epoch prediction: the non-stellar rows through the declared LSF, the stellar rows
-    through the quadrature width less the grid's own ``(7/12) dv^2``.
+    ``C_e = alpha^2 D^-1/2 R_phi D^-1/2`` is built over each run of good pixels whose index
+    gaps do not exceed the chain's maximum gap, and is factorised densely. It is used with
+    the forward model's per-epoch prediction: the non-stellar rows pass through the declared
+    LSF, and the stellar rows through the quadrature width less the grid's ``(7/12) dv^2``.
     """
     model = fit.dis.model
     problem = model.problem_at(fit.theta)
@@ -230,15 +232,16 @@ def plain(library):
 
 
 # ---------------------------------------------------------------------------
-# the statistics: exact, and blind to the declared light
+# the statistics: exact, and independent of the declared light
 # ---------------------------------------------------------------------------
 
 
 def test_epoch_chi2_equals_a_dense_brute_force(correlated_telluric, library):
-    """AR(1) noise, a telluric row at its posterior mean, and the quadrature operator.
+    """The identity is exact with AR(1) noise, a telluric row at its posterior mean, and
+    the quadrature operator.
 
-    With and without the grid compensation; at R = 30,000 ``sigma_q`` = 5.57 km/s stays
-    above the 5 km/s model pixel, so no warning is raised.
+    It is tested with and without the grid compensation. At R = 30,000 ``sigma_q`` =
+    5.57 km/s stays above the 5 km/s model pixel, so no warning is raised.
     """
     fit, _ = correlated_telluric
     rng = np.random.default_rng(1)
@@ -265,7 +268,7 @@ def test_the_declared_light_cancels(library):
     a = first.epoch_statistics(resolving_power=30_000.0)
     b = second.epoch_statistics(resolving_power=30_000.0)
     rows, _ = _components(library, first.dis.grid)
-    # the same physical template: the label rows carry w / l0, so they scale by l0 / l0'
+    # the same physical template: the label rows include w / l0, so they scale by l0 / l0'
     redeclared = rows * (ELL0 / lights)[:, None]
     for trial, trial_b in ((rows, redeclared), (0.5 * rows, 0.5 * redeclared)):
         assert abs(float(a.chi2(trial)) - float(b.chi2(trial_b))) <= 1e-10 * float(a.chi2(trial))
@@ -351,7 +354,7 @@ def test_the_grid_compensation_removes_seven_twelfths_of_a_model_pixel_squared(p
 
 def test_a_compensation_below_half_a_model_pixel_is_floored_and_warned(plain):
     """R = 20,000 leaves sigma_q = 2.91 km/s against a 5 km/s pixel: (7/12) dv^2 = 14.6
-    km^2/s^2 exceeds sigma_q^2 = 8.5, so the width is floored at half a pixel and named."""
+    km^2/s^2 exceeds sigma_q^2 = 8.5, so the width is floored at half a pixel and reported."""
     fit, _ = plain
     sigma_q = float(np.sqrt(LSF_KMS**2 - _sigma_of(20_000.0) ** 2))
     with pytest.warns(UserWarning, match="grid compensation floored") as record:
@@ -374,7 +377,7 @@ def test_a_compensation_below_half_a_model_pixel_is_floored_and_warned(plain):
 
 def test_a_model_grid_coarser_than_sigma_q_is_warned_without_a_floor(plain):
     """R = 25,000: sigma_q = 4.80 km/s < dv = 5 km/s, and the compensated 2.91 km/s is above
-    half a pixel, so it is applied in full and the warning says the kernel is under a pixel."""
+    half a pixel, so it is applied in full and the warning reports a kernel under a pixel."""
     fit, _ = plain
     sigma_q = float(np.sqrt(LSF_KMS**2 - _sigma_of(25_000.0) ** 2))
     width = float(np.sqrt(sigma_q**2 - 7.0 / 12.0 * DV_KMS**2))
@@ -389,8 +392,8 @@ def test_a_model_grid_coarser_than_sigma_q_is_warned_without_a_floor(plain):
 
 
 def test_the_consistency_check_reads_the_compensation_from_its_fields(plain, library):
-    """A compensated operator passes through its fields; one narrowed by a false resolving
-    power, or with its recorded widths or variance edited, is refused."""
+    """A compensated operator passes the check through its fields. One narrowed by a false
+    resolving power, or with its recorded widths or variance edited, is rejected."""
     from dataclasses import replace
 
     fit, _ = plain
@@ -401,9 +404,9 @@ def test_the_consistency_check_reads_the_compensation_from_its_fields(plain, lib
     for stats in (compensated, uncompensated):
         _check_statistics(stats, names, grid, "air", ELL0, resolving, LSF_KMS)
 
-    # The route before the compensation had fields: declare the resolving power whose width
-    # is the one to remove, then restore the library's. The widths are self-consistent, so
-    # only the instrument width they imply gives it away.
+    # The compensated width can also be reached without the fields: declare the resolving
+    # power whose width is the one to remove, then restore the library's. The widths are
+    # self-consistent, so only the instrument width they imply reveals it.
     sigma_fake = float(np.sqrt(_sigma_of(30_000.0) ** 2 + 7.0 / 12.0 * DV_KMS**2))
     r_fake = ab.C_KMS / sigma_fake / (2.0 * np.sqrt(2.0 * np.log(2.0)))
     faked = replace(
@@ -452,10 +455,10 @@ def test_quadrature_width_and_its_refusal():
 def test_the_offset_pairs_of_the_epoch_comparison_are_grouped_in_the_summary():
     """On every epochs fit the offsets of the two components correlate near -0.99.
 
-    Only their light-weighted sum reaches the epoch spectra, so the pairs say nothing about
-    the labels, and listed one by one they hid the pairs that do. An offset paired with a
-    label stays listed, and the d_hat comparisons, where no such degeneracy exists, list
-    every pair as before.
+    Only their light-weighted sum affects the epoch spectra, so the pairs give no
+    information about the labels, and listed one by one they obscure the pairs that do. An
+    offset paired with a label stays listed, and the d_hat comparisons, where no such
+    degeneracy exists, list every pair.
     """
     flagged = [
         ("offset_A[0]", "offset_B[0]", -0.994),
@@ -482,7 +485,7 @@ def test_the_offset_pairs_of_the_epoch_comparison_are_grouped_in_the_summary():
 
 
 def test_the_default_rotation_scan_reaches_slow_rotation():
-    """The old default started every fit at 37.5 km/s or more on a 0-150 km/s prior."""
+    """The default scan must not start every fit at 37.5 km/s or more on a 0-150 km/s prior."""
     trials = _default_scan_vsini(0.0, 150.0)
     assert min(trials) < 2.0 and 5.0 in trials and 10.0 in trials
     assert max(trials) <= 150.0 and len(trials) <= 5
@@ -491,7 +494,7 @@ def test_the_default_rotation_scan_reaches_slow_rotation():
 
 
 # ---------------------------------------------------------------------------
-# refusals: statistics are never silently ignored
+# rejections: statistics are never silently ignored
 # ---------------------------------------------------------------------------
 
 
@@ -573,15 +576,15 @@ def test_matched_mode_convolves_the_template_with_the_quadrature_width(plain, li
 def test_disentangled_templates_are_reproduced_by_the_declared_light_not_the_measured_one(
     library,
 ):
-    """Why the pipeline's velocity table holds the declared fractions after an epochs fit.
+    """The pipeline's velocity table uses the declared fractions after an epochs fit.
 
     The epoch comparison measures the light without reference to the declaration, and on
-    the D65 benchmark products it measured it better than the declaration. A disentangled
-    component is ``(w / l0) t``, though, so the amplitude that reproduces the epochs with it
-    as a TODCOR template is ``l0``: holding the true fraction ``w`` instead scales each
-    template's contribution by ``w / l0``. Measured here with the true median light and a
-    declaration off by 0.25: the velocities degrade by an order of magnitude or more, while
-    templates rescaled by ``l0 / w`` give back the declared case to rounding.
+    the D65 benchmark products the measured light was better than the declared one. A
+    disentangled component is ``(w / l0) t``, however, so the amplitude that reproduces the
+    epochs with it as a TODCOR template is ``l0``. Holding the true fraction ``w`` instead
+    scales each template's contribution by ``w / l0``. With the true median light and a
+    declaration off by 0.25, the velocities degrade by an order of magnitude or more, and
+    templates rescaled by ``l0 / w`` reproduce the declared case to rounding.
     """
     from dataclasses import replace
 
@@ -620,18 +623,20 @@ def test_disentangled_templates_are_reproduced_by_the_declared_light_not_the_mea
 def rendered_finely(library):
     """Epochs rendered on a 1 km/s grid rather than on the 5 km/s model grid.
 
-    The façade's operator removes the model grid's own smoothing, (7/12) dv^2 = 14.6
-    km^2/s^2 here, on the premise that the epochs carry none of it. Epochs rendered on the
-    model grid itself carry all of it but the frame shift, and against them the compensated
-    fit put v sin i of the 9 km/s component at 11.1 km/s. Rendered at a fifth of the pixel
-    they carry 0.4 km^2/s^2, as spectra from a telescope carry none.
+    The operator of the Disentangler interface removes the model grid's smoothing,
+    (7/12) dv^2 = 14.6 km^2/s^2 here, on the premise that the epochs contain none of it.
+    Epochs rendered on the model grid contain all of it except the frame shift, and against
+    them the compensated fit returned v sin i = 11.1 km/s for the 9 km/s component. Rendered
+    at a fifth of the pixel they contain 0.4 km^2/s^2, and spectra from a telescope contain
+    none.
     """
     return _system(library, snr=150.0, render_dv=1.0)
 
 
 @pytest.mark.slow
 def test_the_epoch_fit_recovers_labels_and_light_from_a_poor_start(rendered_finely, library):
-    """Warm-started at 45 km/s in rotation, from one scan candidate; the façade default."""
+    """The default comparison of the Disentangler interface is warm-started at 45 km/s in
+    rotation from one scan candidate."""
     fit, weights = rendered_finely
     got = fit.match_labels(
         _stars(library), mh=ab.Between(-1.0, 0.5), scan_vsini=[45.0], top_k=1, max_steps=150
@@ -646,7 +651,8 @@ def test_the_epoch_fit_recovers_labels_and_light_from_a_poor_start(rendered_fine
         assert abs(got.flux_ratio[name] - float(np.median(weights[i]))) < 0.02
     # the reported chi-square is L_data at the reported parameters
     assert got.chi2 == pytest.approx(float(got.statistics.chi2(got._rows())), rel=1e-9)
-    # the façade's statistics carry the grid compensation, and the assumptions record it
+    # the statistics built by the Disentangler interface include the grid compensation,
+    # and the assumptions record it
     assert got.assumptions["epoch_grid_variance_kms2"] == pytest.approx(7.0 / 12.0 * DV_KMS**2)
     assert got.assumptions["epoch_quadrature_lsf_sigma_kms"] == {"S": [LSF_KMS]}
     assert got.assumptions["epoch_operator_lsf_sigma_kms"]["S"][0] == pytest.approx(
@@ -654,7 +660,7 @@ def test_the_epoch_fit_recovers_labels_and_light_from_a_poor_start(rendered_fine
     )
     assert 0.9 < got.chi2 / got.n_pixels_used < 1.1
     assert got.chi2 < got.chi2_nearest_node < got.chi2_continuum
-    # bounds respected, and the formal errors finite and positive where measured
+    # the bounds are satisfied, and the formal errors are finite and positive where measured
     for name, spec_prefix in (("A", "A"), ("B", "B")):
         assert 4000.0 <= got.labels[name]["teff"] <= 5500.0
         assert 0.0 <= got.labels[name]["vsini"] <= 60.0
@@ -664,8 +670,8 @@ def test_the_epoch_fit_recovers_labels_and_light_from_a_poor_start(rendered_fine
     assert np.isfinite(got.flux_ratio_errors["B"]) and got.flux_ratio_errors["B"] > 0.0
     summary = got.summary()
     assert "epochs comparison" in summary and "restart round" in summary
-    # The offsets of the two components reach the epochs only as their light-weighted sum,
-    # so their pairs are grouped into one line rather than listed as degeneracies.
+    # The offsets of the two components affect the epochs only through their light-weighted
+    # sum, so their pairs are grouped into one line rather than listed as degeneracies.
     offset_pairs = [
         (a, b)
         for a, b, _ in got.flagged_correlations()
@@ -678,7 +684,7 @@ def test_the_epoch_fit_recovers_labels_and_light_from_a_poor_start(rendered_fine
 
 @pytest.mark.slow
 def test_the_rotation_restart_leaves_the_plateau(plain, library):
-    """Started at v sin i = 0 the objective is exactly flat in rotation; the scan escapes."""
+    """At v sin i = 0 the objective is exactly flat in rotation. The restart leaves the plateau."""
     fit, _ = plain
     stats = fit.epoch_statistics()
     options = {"mh": ab.Between(-1.0, 0.5), "scan_vsini": [0.0], "top_k": 1, "statistics": stats}

@@ -3,12 +3,12 @@
 albireo infers the orbital elements and the individual component spectra of double- and
 multiple-lined spectroscopic binaries from a time series of composite spectra, in JAX.
 The component spectra are marginalized analytically and only the nonlinear parameters
-are sampled; the equations are in ``docs/math.md``.
+are sampled. The equations are in ``docs/math.md``.
 
 albireo requires float64: the adjoint identities, log-determinants and sub-km/s velocity
 work are not reliable in float32, so importing the package enables JAX x64 mode. Setting
-the environment variable ``ALBIREO_DISABLE_X64`` before import opts out for experiments;
-the test suite does not pass without x64.
+the environment variable ``ALBIREO_DISABLE_X64`` before import disables this for
+experiments; the test suite does not pass without x64.
 """
 
 import os
@@ -224,7 +224,7 @@ _IO_EXPORTS = frozenset(
 )
 
 # albireo.plotting requires matplotlib (and arviz for the corner plot), so it is imported
-# on first use for the same reason, with an actionable error if the dependency is absent.
+# on first use for the same reason, with an error naming the missing extra.
 _PLOT_EXPORTS = frozenset(
     {
         "plot_corner",

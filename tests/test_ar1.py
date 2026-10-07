@@ -1,13 +1,13 @@
 """Tests for the AR(1) correlated-noise model (internal/design.md D34, math.md §1.4a).
 
-D31 measured why this exists: a rescaled diagonal noise model whitens the residual
-*scale* while the *structure* — here, adjacent-pixel correlation from pipeline
-resampling — keeps selecting a biased optimum. What is pinned here: the closed-form
-tridiagonal chain precision must equal a dense reference built independently from the
-chain correlation matrix (masked gaps included, where links carry ``phi**gap``); the
-whole marginal must match dense brute force under the correlated covariance; ``phi = 0``
-must reproduce the diagonal model; the chain whitener must remove the lag-1
-autocorrelation a diagonal whitener provably cannot; and the marginal must *recover* an
+The model follows from a measurement (D31). A rescaled diagonal noise model whitens the
+scale of the residuals, but their structure (here, adjacent-pixel correlation from
+pipeline resampling) still gives a biased optimum. Five properties are tested. The
+closed-form tridiagonal chain precision must equal a dense reference built independently
+from the chain correlation matrix, masked gaps included, where a link has correlation
+``phi**gap``. The whole marginal must match dense brute force under the correlated
+covariance. ``phi = 0`` must reproduce the diagonal model. The chain whitener must remove
+the lag-1 autocorrelation, which a diagonal whitener cannot. The marginal must recover an
 injected ``phi`` and noise-scale error jointly with the orbit.
 """
 
@@ -39,7 +39,7 @@ SMALL_KW = dict(velocities=SMALL_VEL, light_fractions=[0.6, 0.4], lsf_sigma_v={"
 
 
 def small_problem(cosmic_fraction=0.02):
-    """Three epochs, two instruments, response, and enough cosmics to make gaps."""
+    """Three epochs, two instruments, response, and enough cosmic-ray hits to make gaps."""
     comps = [synth(SMALL_GRID, n_lines=6, seed=s, margin=0.15) for s in (1, 2)]
     ds, truth = simulate_dataset(
         SMALL_GRID,
@@ -71,9 +71,9 @@ def _dense_epoch_precision(w_row, gap_row, phi, alpha):
 
     The chain correlation between observed pixels is the product of the stored link
     correlations along the path (``phi**gap`` per link, 0 where the cap restarted the
-    chain) — a Markov chain's correlation factorizes over links, which is the fact the
-    production code's tridiagonal closed form relies on. Building R densely and
-    inverting it with LAPACK shares nothing with that closed form.
+    chain). The correlation of a Markov chain factorizes over links, and the tridiagonal
+    closed form of the production code relies on this. Building R densely and inverting
+    it with LAPACK shares nothing with that closed form.
     """
     n = w_row.size
     good = w_row > 0
@@ -144,7 +144,7 @@ def dense_marginal_correlated(problem, prior):
 
 
 def test_marginal_matches_dense_brute_force_with_correlation_and_gaps():
-    """The gold test: chain closed forms == dense LAPACK, gaps and jitter included."""
+    """The chain closed forms must equal dense LAPACK, gaps and jitter included."""
     _, _, problem, prior = small_problem()
     correlated = with_jitter(with_ar1(problem, jnp.asarray([0.4, -0.3, 0.55])), [1.3, 0.8, 1.0])
     assert any(int(np.max(np.asarray(g.ar_gap))) > 1 for g in correlated.groups), (
@@ -161,14 +161,14 @@ def test_zero_phi_reproduces_the_diagonal_model():
     _, _, problem, prior = small_problem()
     base = marginal_loglikelihood(problem, prior, assembly="probe")
     same = marginal_loglikelihood(with_ar1(problem, 0.0), prior)
-    # Cross-path too, for the reason the d_hat comment below already gives.
+    # Cross-path too, for the reason given in the d_hat comment below.
     np.testing.assert_allclose(
         float(same.log_likelihood), float(base.log_likelihood), rtol=BAND_PROBE_RTOL
     )
-    # Since D35 this is also a cross-path comparison (the correlated problem runs the
-    # band assembly at a widened bandwidth, the base runs probing), so d_hat carries
-    # float-reordering noise amplified by solver conditioning — same tolerance story
-    # as the response swap's d_hat check (tests/test_response.py).
+    # This is also a cross-path comparison (D35: the correlated problem runs the band
+    # assembly at a widened bandwidth, the base runs probing), so d_hat has
+    # float-reordering noise amplified by solver conditioning. The tolerance follows the
+    # response swap's d_hat check (tests/test_response.py).
     np.testing.assert_allclose(
         np.asarray(same.d_hat), np.asarray(base.d_hat), rtol=1e-8, atol=1e-11
     )
@@ -189,12 +189,12 @@ def test_band_assembly_matches_probe_and_is_the_default():
 
 
 def test_correlated_band_epoch_chunk_invariance():
-    """The batched G pre-pass must thread the link weights exactly like the hoisted one.
+    """The batched G pre-pass must handle the link weights as the hoisted one does.
 
-    ``epoch_chunk`` batching pads the trailing chunk with zero-weight epochs; the AR
-    weight tuple (diagonal, link, gap table) must pad and slice together or a batched
-    run silently drops link terms. Mirrors the diagonal-path invariance test in
-    tests/test_assembly.py.
+    ``epoch_chunk`` batching pads the trailing chunk with zero-weight epochs. The AR
+    weight tuple (diagonal, link, gap table) must be padded and sliced together, or a
+    batched run silently drops link terms. The test mirrors the diagonal-path invariance
+    test in tests/test_assembly.py.
     """
     _, _, problem, prior = small_problem()
     correlated = with_jitter(with_ar1(problem, jnp.asarray([0.4, -0.3, 0.55])), [1.3, 0.8, 1.0])
@@ -206,7 +206,7 @@ def test_correlated_band_epoch_chunk_invariance():
 
 
 def test_band_and_probe_gradients_agree_in_phi():
-    """The traced link weights must carry d/dphi through the band assembly exactly."""
+    """The band assembly must give the exact d/dphi through the traced link weights."""
     _, _, problem, prior = small_problem()
     bandwidth = with_ar1(problem, 0.0).natural_half_bandwidth
     phi0 = jnp.asarray([0.4, -0.3, 0.55])
@@ -246,7 +246,7 @@ def test_gradient_matches_finite_differences():
 
 
 def test_gradient_is_finite_and_exact_at_phi_zero():
-    """The gap-1 branch must carry the exact d/dphi at phi = 0 (pow's nan-grad trap)."""
+    """The gap-1 branch must give the exact d/dphi at phi = 0 (pow's nan gradient)."""
     _, _, problem, prior = small_problem()
     bandwidth = with_ar1(problem, 0.0).natural_half_bandwidth
 
@@ -266,11 +266,11 @@ def test_gradient_is_finite_and_exact_at_phi_zero():
 
 
 def test_chain_whitener_removes_lag1_autocorrelation():
-    """The discriminator a diagonal model cannot see.
+    """The chain whitener removes the lag-1 autocorrelation that a diagonal whitener leaves.
 
-    AR(1) noise has unit marginal variance, so diagonally-whitened residuals still
-    have sd 1 — the scale diagnostic is blind to it. The lag-1 autocorrelation is
-    not: it reads ~phi under diagonal whitening and ~0 under the chain whitener.
+    AR(1) noise has unit marginal variance, so diagonally-whitened residuals still have
+    sd 1 and the scale diagnostic does not detect the correlation. The lag-1
+    autocorrelation is ~phi under diagonal whitening and ~0 under the chain whitener.
     """
     phi_true = 0.5
     comps = [synth(SMALL_GRID, n_lines=6, seed=s, margin=0.15) for s in (1, 2)]
@@ -321,7 +321,7 @@ ALPHA_TRUE = 1.5  # the supplied ivar will overstate precision by this factor
 
 @pytest.mark.slow
 def test_closed_loop_recovers_phi_alpha_and_orbit():
-    """The D34 gate: injected correlation and scale error inferred jointly with the orbit."""
+    """D34 acceptance test: injected correlation and scale error inferred jointly with the orbit."""
     rng = np.random.default_rng(42)
     comps = [
         synth(GATE_GRID, n_lines=30, depth_range=(0.1, 0.7), sigma_v_range=(9.0, 20.0), seed=1),
@@ -345,7 +345,7 @@ def test_closed_loop_recovers_phi_alpha_and_orbit():
         ar1_phi=PHI_TRUE,
         seed=11,
     )
-    # Overstate the supplied inverse variances so the jitter has something to find.
+    # Overstate the supplied inverse variances to give the jitter a scale error to recover.
     epochs = [
         EpochData(
             wave=ep.wave,
@@ -412,10 +412,10 @@ def test_closed_loop_recovers_phi_alpha_and_orbit():
         )
     }
     z = data_residual_zscores(model.problem_at(theta_hat), model.marginal(theta_hat).d_hat)
-    # Residuals are taken about the *fitted* spectra, so their sd reads low by
-    # sqrt(1 - p_eff/N) even at a perfect noise model (math.md §3.2a; measured 0.944
-    # here, i.e. p_eff/N ~ 0.11 at gate scale) — that shortfall is the D31 dof effect,
-    # not a miscalibration, and the marginal's own alpha-hat above is unbiased anyway.
+    # Residuals are taken about the fitted spectra, so their sd is lower by a factor
+    # sqrt(1 - p_eff/N) even with a perfect noise model (math.md §3.2a; measured 0.944
+    # here, i.e. p_eff/N ~ 0.11 at the scale of this test). The shortfall is the D31 dof
+    # effect, not a miscalibration, and the marginal's alpha-hat above is unbiased.
     assert 0.88 < float(np.std(z)) < 1.02
     assert abs(float(np.corrcoef(z[:-1], z[1:])[0, 1])) < 0.1
 

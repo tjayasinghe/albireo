@@ -1,8 +1,8 @@
-"""Tests for the marginalized likelihood: dense brute-force equivalence, the M2
-closed-loop acceptance gate, mask invariance, and the Fourier degeneracy theory.
+"""Tests for the marginalized likelihood: dense brute-force equivalence, the closed-loop
+acceptance test, mask invariance, and the Fourier degeneracy theory.
 
 The dense reference implements ``docs/math.md`` §3.1 with plain NumPy linear algebra on
-an explicitly assembled design matrix — an independent path that shares only the
+an explicitly assembled design matrix. It is an independent path that shares only the
 elementary operators with the production code.
 """
 
@@ -28,24 +28,22 @@ from albireo.simulate import synthetic_deviation_spectrum as synth
 
 RNG = np.random.default_rng(31)
 
-# Tolerance for "the band assembly and the probe assembly agree on the marginal
-# log-likelihood". These are two *different algorithms* for the same number — a banded
-# Cholesky against operator probing — so they sum the same terms in different orders and
-# the last digits are free to disagree. The bound therefore has to be a statement about
-# float64 accumulation, not about the platform it was first measured on.
+# Tolerance within which the band assembly and the probe assembly must agree on the
+# marginal log-likelihood. They are two different algorithms for the same number (a
+# banded Cholesky and operator probing), so they sum the same terms in different orders
+# and the last digits can differ. The bound therefore has to allow for float64
+# accumulation on any platform.
 #
-# It was 1e-12, which held on the Windows development machine and failed on ubuntu-latest
-# the first time CI ran: test_arbitrary_asymmetric_bank_band_matches_probe[True] came back
-# at 1.204e-12 relative on a log-likelihood of -27.15, i.e. 20% over the line. Different
-# BLAS, different SIMD width and different XLA fusion decisions are enough to move a
-# reduction by that much, and the random-asymmetric-kernel case is deliberately the
-# worst-conditioned one in the suite.
+# A bound of 1e-12 was met on the Windows development machine and exceeded on
+# ubuntu-latest, where test_arbitrary_asymmetric_bank_band_matches_probe[True] gave
+# 1.204e-12 relative on a log-likelihood of -27.15, 20% above the bound. Differences in
+# BLAS, SIMD width and XLA fusion decisions are enough to change a reduction by that
+# much, and the random-asymmetric-kernel case is the worst-conditioned one in the suite.
 #
 # 1e-10 is the tolerance these same tests already use for band-against-dense, and it is
-# still ten significant figures. What the assertion exists to catch — a transposed tap, a
-# reversed kernel, a mis-ordered component block — moves the answer in the first digits,
-# not the eleventh, so nothing is given up by quoting a bound that is about arithmetic
-# rather than about a machine.
+# still ten significant figures. The errors the assertion exists to detect (a transposed
+# tap, a reversed kernel, a mis-ordered component block) change the result in the first
+# digits, so the wider tolerance still detects them.
 BAND_PROBE_RTOL = 1e-10
 
 
@@ -148,7 +146,7 @@ def test_masked_pixel_values_do_not_affect_anything():
     ds, truth, problem, prior = small_problem()
     res = marginal_loglikelihood(problem, prior)
 
-    # rewrite the garbage at masked pixels and rebuild everything from scratch
+    # overwrite the flux at masked pixels and rebuild the dataset and the problem
     epochs = []
     for ep in ds:
         flux = np.where(ep.good, ep.flux, 1234.5)
@@ -182,11 +180,12 @@ def test_masked_pixel_values_do_not_affect_anything():
 
 
 def unguarded_marginal(problem, prior):
-    """The marginal log-likelihood as it was written before the sign guard.
+    """The marginal log-likelihood without the sign guard.
 
-    The same operations on the same inputs in the same order, run eagerly as
-    :func:`marginal_loglikelihood` runs them here, so a healthy value and its gradient
-    are bit-identical to the guarded ones unless the guard has changed the arithmetic.
+    The operations, their inputs and their order are those of
+    :func:`marginal_loglikelihood`, and both functions run eagerly here. A healthy value
+    and its gradient are therefore bit-identical to the guarded ones unless the guard has
+    changed the arithmetic.
     """
     n_comp, n_pix = problem.n_components, problem.grid.n
     b_nat = max(problem.natural_half_bandwidth, prior.half_bandwidth)
@@ -230,13 +229,13 @@ def test_sign_guard_leaves_a_healthy_evaluation_and_its_gradient_untouched():
 def test_negative_chi_square_is_rejected_with_a_finite_gradient(monkeypatch):
     """``zwz - quad`` is ``z^T (W^-1 + A Lambda_p^-1 A^T)^-1 z``, positive definite.
 
-    A negative value is therefore a destroyed evaluation rather than a fit, and it is
-    destroyed in the direction that flatters it: the diverging ML-II run that motivated
-    the guard accepted a trial whose quadratic form exceeded ``zwz`` by 417,000, which
-    the unguarded expression reported as 216,000 nats of improvement. Here the same
-    corruption is imposed on an otherwise healthy problem by inflating ``quad``, so
-    every intermediate stays finite and the gradient at the rejected point can be
-    checked: the line search must get a number back, not a nan.
+    A negative value therefore indicates a failed evaluation, and the failure increases
+    the reported log-likelihood. The diverging ML-II run that motivated the guard
+    accepted a trial whose quadratic form exceeded ``zwz`` by 417,000, which the
+    unguarded expression reported as 216,000 nats of improvement. Here the same error is
+    imposed on an otherwise healthy problem by inflating ``quad``, so every intermediate
+    stays finite and the gradient at the rejected point can be checked. The gradient
+    returned to the line search must be a number, not a nan.
     """
     _, _, problem, prior = small_problem()
     log_tau = jnp.log(jnp.asarray(prior.tau))
@@ -256,13 +255,12 @@ def test_negative_chi_square_is_rejected_with_a_finite_gradient(monkeypatch):
 
 
 def test_absurd_tau_is_rejected_rather_than_reported_as_an_improvement():
-    """Beyond a stiffness ratio of about 1e13 the assembled arithmetic is dead.
+    """Beyond a stiffness ratio of about 1e13 the assembled arithmetic loses every digit.
 
     ``tau/eta`` here is ``exp(log_tau) / 1e-3``, so every entry of the sweep is past
     :data:`albireo.inference._LOG_TAU_ETA_MAX`, the bound the model applies to keep the
-    optimizer out of this region. What the guard has to deliver is that no evaluation in
-    it looks better than the healthy one: a value of ``-inf``, or at worst a finite
-    number no larger.
+    optimizer out of this region. The guard must ensure that no evaluation in this region
+    exceeds the healthy one: each is ``-inf`` or a finite number no larger.
     """
     _, _, problem, prior = small_problem()
     healthy = float(_loglike_at_log_tau(problem, prior, jnp.log(jnp.asarray(prior.tau))))
@@ -276,28 +274,28 @@ def test_absurd_tau_is_rejected_rather_than_reported_as_an_improvement():
 
 
 # ---------------------------------------------------------------------------
-# M2 closed-loop acceptance gate (design.md §8)
+# M2 closed-loop acceptance test (design.md §8)
 # ---------------------------------------------------------------------------
 
 
 def test_closed_loop_recovery_snr100_30_epochs():
-    # Truth lines are kept broader than the LSF (8 vs 4 km/s): pixel-level recovery of
-    # the DECONVOLVED spectrum below the instrument resolution is genuinely ill-posed
-    # (the LSF transfer function suppresses the data precision at sub-LSF modes below
-    # any weak prior), and the posterior honestly reports that as large flat variance.
-    # The prior must encode the spectra's true smoothness — here set by hand, in M3 by
-    # ML-II optimization of the marginal likelihood.
+    # The injected lines are kept broader than the LSF (8 vs 4 km/s), because pixel-level
+    # recovery of the deconvolved spectrum below the instrument resolution is ill-posed.
+    # The LSF transfer function suppresses the data precision at sub-LSF modes below any
+    # weak prior, and the posterior reports that as large flat variance. The prior must
+    # encode the true smoothness of the spectra. It is set manually here, and by ML-II
+    # optimization of the marginal likelihood in joint inference.
     grid = ab.LogGrid.from_wavelength_range(4500.0, 4580.0, dv_kms=2.5)
     comps = [synth(grid, seed=s, margin=0.08, sigma_v_range=(8.0, 20.0)) for s in (1, 2)]
     orbit = OrbitParams(period=11.3, t_peri=2.0, ecc=0.2, omega=0.7, k=(45.0, 70.0))
 
     # Per-epoch light fractions with four eclipse epochs. Without them the k = 0
-    # "difference of mean depressions" direction is invisible IN PRINCIPLE (the classic
-    # additive indeterminacy of disentangling, math.md §5.2): each component's mean
-    # absorption depression differs, the data only see the light-weighted sum, and the
-    # continuum anchor shrinks the invisible difference to zero — a ~1.5% systematic
-    # no method can avoid. Eclipse epochs are the documented breaker (design.md D13),
-    # and with them the recovery becomes noise-limited.
+    # difference of the mean depressions is unconstrained in principle (the classic
+    # additive indeterminacy of disentangling, math.md §5.2). The components differ in
+    # mean absorption depression, the data constrain only the light-weighted sum, and the
+    # continuum anchor shrinks the unconstrained difference to zero, which is a ~1.5%
+    # systematic that no method can avoid. Eclipse epochs remove the indeterminacy
+    # (design.md D13), and with them the recovery becomes noise-limited.
     n_ep = 30
     ell = np.tile(np.array([[0.6], [0.4]]), (1, n_ep))
     ell[:, [3, 10, 17, 24]] = np.array([[0.75], [0.25]])
@@ -323,10 +321,10 @@ def test_closed_loop_recovery_snr100_30_epochs():
         lsf_sigma_v={"H": 4.0},
     )
     # tau = 1e3: prior curvature scale 1/sqrt(tau) ~ 0.03/px^2, matching the true line
-    # smoothness, so the sub-LSF band carries neither signal nor posterior variance.
-    # eta = 20 is the continuum anchor (docs/math.md §2, §5.1): the exact k=0 difference
-    # mode is invisible to the data and its posterior std per pixel is
-    # ~ sqrt(1/eta)/sqrt(2n) ~ 0.3% here; line-depth bias from both terms is <~1e-3
+    # smoothness, so the sub-LSF band has neither signal nor posterior variance.
+    # eta = 20 is the continuum anchor (docs/math.md §2, §5.1). The exact k=0 difference
+    # mode is unconstrained by the data and its posterior std per pixel is
+    # ~ sqrt(1/eta)/sqrt(2n) ~ 0.3% here. The line-depth bias from both terms is <~1e-3
     # because the data precision at line scales is ~1e4-1e5.
     prior = SmoothnessPrior(tau=[1e3, 1e3], eta=[20.0, 20.0])
     res = marginal_loglikelihood(problem, prior, validate=True)
@@ -334,16 +332,17 @@ def test_closed_loop_recovery_snr100_30_epochs():
     d_hat = np.asarray(res.d_hat)
     std = np.asarray(spectra_std(res))
 
-    # <1% RMS recovery in line regions (the M2 gate)
+    # <1% RMS recovery in line regions (the acceptance criterion)
     for i, d_true in enumerate(truth.components):
         lines = np.abs(d_true) > 0.05
         assert lines.sum() > 100
         rms = np.sqrt(np.mean((d_hat[i] - d_true)[lines] ** 2))
         assert rms < 0.01, f"component {i}: line-region RMS {rms:.4f}"
 
-    # reported uncertainties are conservative-consistent: the truth is a fixed draw
-    # (smoother than the prior at high k), so whitened errors must not be OVERconfident
-    # (var >> 1) but may be < 1. Strict prior-drawn calibration (SBC) is the M3 gate.
+    # The reported uncertainties must be consistent or conservative. The injected spectra
+    # are a fixed draw (smoother than the prior at high k), so the whitened errors may
+    # have var < 1 but must not have var >> 1 (overconfident). Strict prior-drawn
+    # calibration (SBC) is the acceptance criterion for joint inference.
     zspec = (d_hat - np.stack(truth.components)) / std
     assert abs(zspec.mean()) < 0.1
     assert zspec.var() < 1.3
@@ -366,7 +365,7 @@ def test_closed_loop_recovery_snr100_30_epochs():
 
 
 def test_low_frequency_degeneracy_matches_theory():
-    """Posterior variance of the per-mode 'difference' direction follows
+    """Posterior variance of the per-mode difference direction follows
     1 / (w l^2 (J - |g(k)|) + tau (2 - 2 cos k)^2 + eta) with g(k) = sum_j e^{ik dDelta_j}."""
     n = 256
     grid = ab.LogGrid(x0=float(np.log(5000.0)), dx=1.0007e-5, n=n)
@@ -407,8 +406,8 @@ def test_low_frequency_degeneracy_matches_theory():
 
     # Hann-windowed modes: the discrete Hann window's DFT has support {-1, 0, +1}
     # exactly, so a windowed mode m mixes only modes m-1, m, m+1 with power weights
-    # (1, 4, 1)/6 — no leakage into the near-singular k ~ 0 directions, and the
-    # window suppresses the non-periodic edge effects the theory ignores.
+    # (1, 4, 1)/6. There is no leakage into the near-singular k ~ 0 directions, and the
+    # window suppresses the non-periodic edge effects that the theory neglects.
     hann = 0.5 - 0.5 * np.cos(2 * np.pi * np.arange(n) / n)
     measured, predicted = [], []
     for m in range(4, 25):

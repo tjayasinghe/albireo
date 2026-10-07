@@ -9,8 +9,8 @@ the D28/D29 fast path (closed-form solve VJP included) for correlated problems.
 This script measures ``value`` and ``value+grad`` of the correlated marginal, the
 work of one L-BFGS step with gradients taken in velocities, phi and the jitter, at
 HR-window scale (51 epochs, ~9.8k model px, ~374k native px, the HR runs'
-half-bandwidth) on one assembly path per invocation: the peak-working-set counter is
-per-process and monotone, so the two paths must not share a process.
+half-bandwidth). Each invocation runs one assembly path. The peak-working-set counter
+is per-process and monotone, so the two paths must not share a process.
 
 Run:  python scripts/d35_ar1_band_bench.py --assembly probe
       python scripts/d35_ar1_band_bench.py --assembly band

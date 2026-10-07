@@ -116,16 +116,16 @@ def test_non_finite_flux_at_weighted_pixel_raises():
 
 
 def test_garbage_flux_at_zero_ivar_pixels_is_accepted():
-    # Deliberate: a masked pixel's flux is never read, so cosmic-ray spikes and pipeline
-    # NaNs are allowed to sit there rather than forcing the user to scrub their arrays.
+    # A masked pixel's flux is never read, so cosmic-ray spikes and pipeline NaNs are
+    # accepted there and the user does not have to clean the arrays.
     epoch = make_epoch(4, flux=[1.0, np.nan, 1e30, 1.0], ivar=[100.0, 0.0, 0.0, 100.0])
     assert epoch.good.tolist() == [True, False, False, True]
     assert np.all(np.isfinite(epoch.effective_ivar))
 
 
 def test_mask_false_does_not_license_non_finite_flux():
-    # Resolution of a spec ambiguity: the finite-flux rule is keyed on ivar > 0 alone, so
-    # `mask` (a convenience layer folded in only by effective_ivar) cannot excuse a NaN.
+    # This resolves a spec ambiguity: the finite-flux rule is keyed on ivar > 0 alone, so
+    # `mask` (a convenience layer applied only by effective_ivar) does not permit a NaN.
     with pytest.raises(ValueError, match="finite wherever ivar > 0"):
         make_epoch(
             3,
@@ -167,7 +167,7 @@ def test_good_and_effective_ivar_with_mask():
     assert epoch.mask.dtype == np.bool_
     np.testing.assert_array_equal(epoch.good, [True, False, False, True])
     np.testing.assert_allclose(epoch.effective_ivar, [100.0, 0.0, 0.0, 49.0])
-    # the mask is folded in *only* by effective_ivar: raw ivar is untouched
+    # the mask is applied only by effective_ivar: raw ivar is unchanged
     np.testing.assert_allclose(epoch.ivar, [100.0, 0.0, 25.0, 49.0])
 
 

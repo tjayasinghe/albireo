@@ -1,24 +1,23 @@
-"""The `Disentangler` façade: a declaration compiles to the expert path (D46).
+"""The `Disentangler` interface: a declaration compiles to the expert path (D46).
 
-The façade's value is not that it is shorter — it is that four things it derives are
-things users get wrong, and that the things it refuses to derive are the ones where a
-default would be a scientific claim rather than a convenience. Both halves are tested
-here, and the refusals get as much attention as the derivations.
+The interface derives four quantities that users get wrong. It does not derive the
+quantities for which a default would be a scientific claim rather than a convenience.
+Both are tested here, in equal detail.
 
-**The velocity budget is derived, not defaulted.** It bounds the largest relative velocity
-any two components can reach under the *priors*, which is where the information already
-was. Too small and the sampler stalls against a guard it cannot see.
+**The velocity budget is derived.** It bounds the largest relative velocity any two
+components can reach under the priors, which already contain that information. If the
+budget is too small, the sampler stalls at a guard that raises no error.
 
-**The `priors` and `init` dicts cannot disagree**, because a spec carries both. In the
-low-level path they are two dicts a user writes twice and an assert checks.
+**The `priors` and `init` dicts cannot disagree**, because a spec defines both. In the
+low-level path they are two dicts that a user writes separately and an assert checks.
 
 **A circular orbit is exact, not approximate.** The `(sqrt(e)cos w, sqrt(e)sin w)`
-parameterization is singular at exactly `e = 0` — NaN gradient, and numpyro reports only
-"Cannot find valid initial parameters" — so a declared circular orbit does not sample
-those sites at all, and a free eccentricity never starts at the origin.
+parameterization is singular at `e = 0`: the gradient is NaN, and numpyro reports only
+"Cannot find valid initial parameters". A declared circular orbit therefore does not
+sample those sites, and a free eccentricity never starts at the origin.
 
-**Light fractions are required.** With constant light fractions the likelihood sees only
-`l_i * d_i`, so the value is an assumption the data cannot contradict.
+**Light fractions are required.** With constant light fractions the likelihood depends
+only on `l_i * d_i`, so the value is an assumption the data cannot contradict.
 """
 
 import importlib
@@ -58,11 +57,11 @@ def _dis(dataset, **kwargs):
     return ab.Disentangler(dataset, **{**options, **kwargs})
 
 
-# -- what it refuses to guess -------------------------------------------------
+# -- what it does not derive --------------------------------------------------
 
 
 def test_light_fractions_are_required_and_must_sum_to_one(dataset):
-    """Only l_i * d_i is observable, so this is an assumption, not a default."""
+    """Only l_i * d_i is observable, so the light fraction is an assumption with no default."""
     with pytest.raises(TypeError):
         ab.Star("primary")  # no light=
     with pytest.raises(ValueError, match="sum to 1"):
@@ -75,7 +74,8 @@ def test_every_instrument_needs_a_declared_lsf(dataset):
 
 
 def test_a_nebular_component_refuses_an_undeclared_wavelength_scale(dataset):
-    """Nebular and telluric components are keyed to absolute line positions: 83 km/s."""
+    """Nebular and telluric components are keyed to absolute line positions, and air and
+    vacuum wavelengths differ by 83 km/s."""
     with pytest.raises(ValueError, match="air or vacuum"):
         _dis(dataset, components=[*_stars(), ab.Nebular(v_kms=10.0)])
 
@@ -112,19 +112,19 @@ def test_narrowing_the_priors_narrows_the_budget(dataset):
 
 
 def test_a_budget_override_may_not_shrink_below_what_the_priors_reach(dataset):
-    """Sampling stalls against that guard rather than failing, which is worse."""
+    """Sampling stalls at the guard rather than failing, which is worse."""
     with pytest.raises(ValueError, match="smaller than"):
         assert _dis(dataset, velocity_budget_kms=50.0).velocity_budget
 
 
 def test_a_period_prior_wide_enough_to_be_a_search_warns(dataset):
-    """The scan resolves phase at one period — the prior's midpoint — not a period."""
+    """The scan resolves phase at one period (the prior's midpoint), not a period."""
     with pytest.warns(RuntimeWarning, match="not a period search"):
         _dis(dataset, orbit=_orbit(period=ab.Between(2.0, 12.0))).fit(max_steps=1, k_scan=False)
 
 
 def test_a_normal_period_prior_does_not_warn(dataset):
-    """The quickstart's own prior must stay quiet, or the warning trains people to ignore it."""
+    """The quickstart's own prior must not warn, or users learn to ignore the warning."""
     import warnings as _warnings
 
     with _warnings.catch_warnings():
@@ -153,7 +153,7 @@ def test_smoothness_is_always_fitted_by_empirical_bayes(dataset):
 
 
 def test_per_component_smoothness_reaches_the_prior(dataset):
-    """A rotationally broad star wants a tau five orders of magnitude from a sharp one."""
+    """A rotationally broad star needs a tau five orders of magnitude from a sharp one."""
     dis = _dis(
         dataset,
         components=[
@@ -181,7 +181,7 @@ def test_explain_names_every_derivation_and_every_assumption(dataset):
 
 
 def test_a_circular_orbit_does_not_sample_the_singular_sites(dataset):
-    """At exactly e = 0 the gradient is NaN; not sampling means never visiting it."""
+    """At exactly e = 0 the gradient is NaN; with the sites not sampled it is never evaluated."""
     dis = _dis(dataset, orbit=_orbit(ecc=ab.Fixed(0.0)))
     assert "secosw" not in dis.priors and "sesinw" not in dis.priors
     assert float(np.asarray(dis.fixed["secosw"])) == 0.0
@@ -215,7 +215,7 @@ def test_a_free_eccentricity_may_start_where_a_table_put_it():
     e1 = float(started["secosw"].start()) ** 2 + float(started["sesinw"].start()) ** 2
     w1 = np.arctan2(float(started["sesinw"].start()), float(started["secosw"].start()))
     assert e1 == pytest.approx(0.6) and w1 == pytest.approx(1.2)
-    # A start on the bound is pulled inside it, and one at the origin off it.
+    # A start on the bound is moved inside it, and one at the origin off it.
     edge = dict(
         _ecc_sites(
             ab.Orbit(period=6.0, k=ab.Between(10.0, 90.0), ecc=ab.Between(0.0, 0.5, start_at=0.5)),
@@ -248,7 +248,7 @@ def test_an_eccentricity_above_the_solver_clip_is_refused():
         _ecc_sites(orbit, 0.95)
 
 
-# -- things an adversarial review of this module caught -----------------------
+# -- defects found by a review of this module ---------------------------------
 
 
 def _air(dataset):
@@ -260,9 +260,9 @@ def _air(dataset):
 def test_component_order_follows_the_model_not_the_declaration(dataset):
     """The model orders rows stars-telluric-nebular whatever order they were declared in.
 
-    Assembling the smoothness rows in declaration order instead is silent: the vectors are
-    still the right length, so the only guard downstream (a length check) passes, and a
-    rotationally broadened star gets a sharp-lined star's curvature penalty.
+    Assembling the smoothness rows in declaration order raises no error: the vectors are
+    still the right length, so the only downstream check (a length check) passes, and a
+    rotationally broadened star is given a sharp-lined star's curvature penalty.
     """
     dis = ab.Disentangler(
         _air(dataset),
@@ -306,7 +306,7 @@ def test_a_sampled_semi_amplitude_must_declare_its_own_reach(dataset):
 
 
 def test_the_conjunction_prior_is_anchored_on_the_data(dataset):
-    """Real epochs sit near BJD 2.46e6; a prior centred on the origin excludes them all."""
+    """Real epochs are near BJD 2.46e6; a prior centred on the origin excludes them all."""
     dis = _dis(dataset)
     prior = dis.priors["t_conj"]
     first = float(np.min(np.asarray(dataset.bjd)))
@@ -314,7 +314,7 @@ def test_the_conjunction_prior_is_anchored_on_the_data(dataset):
 
 
 def test_the_model_grid_follows_the_finest_epoch_not_the_median(dataset):
-    """A grid coarser than a contributing epoch throws that epoch's resolution away."""
+    """A grid coarser than a contributing epoch discards that epoch's resolution."""
     dis = _dis(dataset)
     finest = min(
         float(np.median(np.diff(np.asarray(e.wave)) / np.asarray(e.wave)[:-1]) * ab.C_KMS)
@@ -346,7 +346,7 @@ def test_a_light_fraction_of_zero_is_not_a_component(dataset):
 
 
 def test_a_hierarchical_triple_says_it_is_not_in_v1(dataset):
-    """The model supports it; the façade's vocabulary does not, and does not pretend to."""
+    """The model supports it; the `Disentangler` interface does not and raises an error."""
     outer = ab.Orbit(period=ab.Fixed(400.0), k=ab.Fixed([5.0, 20.0]), t_conj=ab.Fixed(0.0))
     with pytest.raises(NotImplementedError, match="expert"):
         _dis(dataset, orbit=_orbit(outer=outer))
@@ -361,10 +361,10 @@ def test_a_scan_declaration_will_not_pretend_to_be_a_fit(dataset):
 
 
 def test_a_fixed_period_still_gets_its_conjunction_scanned(dataset):
-    """The period lives in `fixed`, not `init`, and the scan has to look in both."""
+    """The period is in `fixed`, not `init`, and the scan must read both."""
     dis = _dis(dataset, orbit=_orbit(period=ab.Fixed(6.0)))
     assert "period" in dis.fixed
-    fit = dis.fit(max_steps=1, k_scan=False)  # the joint scan is the slow test's
+    fit = dis.fit(max_steps=1, k_scan=False)  # the joint scan is covered by the slow test
     assert fit.phase_scan is not None
 
 
@@ -385,7 +385,7 @@ def test_an_anchored_lsf_is_refused_by_the_scan_rather_than_truncated(dataset):
 
 
 def test_nebular_windows_move_onto_a_vacuum_grid(dataset):
-    """NEBULAR_LINES are air wavelengths; unconverted they sit 83 km/s off a vacuum grid."""
+    """NEBULAR_LINES are air wavelengths; unconverted they are 83 km/s off a vacuum grid."""
     from albireo.preprocess import _replace
 
     centres = {}
@@ -404,7 +404,7 @@ def test_nebular_windows_move_onto_a_vacuum_grid(dataset):
 
 
 def test_a_nebular_component_with_no_lines_on_the_grid_is_refused(dataset):
-    """A component pinned to the continuum everywhere is one that can do nothing."""
+    """A component confined to the continuum everywhere has no effect."""
     from albireo.preprocess import _replace
 
     ds = ab.Dataset(tuple(_replace(e, medium="air") for e in dataset), frame=dataset.frame)
@@ -422,9 +422,9 @@ def test_a_vector_site_may_be_one_spec_or_one_spec_per_star():
 
 
 def test_a_vector_site_keeps_each_entry_starting_value():
-    """Dropping start_at silently started every component at its midpoint -- and equal
-    starts are exactly the symmetric configuration in which the conjunction scan cannot
-    tell the declared component assignment from its mirror."""
+    """If start_at is dropped, every component starts at its midpoint without an error.
+    Equal starts are the symmetric configuration in which the conjunction scan cannot
+    distinguish the declared component assignment from its mirror."""
     spec = _vector_spec([ab.Between(10.0, 90.0, 30.0), ab.Between(10.0, 90.0, 60.0)], 2, "k")
     np.testing.assert_allclose(np.asarray(spec.start()), [30.0, 60.0])
     plain = _vector_spec([ab.Between(10.0, 90.0), ab.Between(10.0, 90.0)], 2, "k")
@@ -473,7 +473,7 @@ def test_a_scan_needs_a_scanned_companion(dataset):
 
 @pytest.mark.slow
 def test_a_scan_finds_the_companion_it_was_pointed_at(dataset, truth):
-    """The same declaration drives the scan, so its arguments cannot drift out of step."""
+    """The same declaration is used for the scan, so its arguments cannot become inconsistent."""
     dis = ab.Disentangler(
         dataset,
         components=[ab.Star("primary", light=0.97), ab.Star("companion", light=0.03)],
@@ -481,7 +481,7 @@ def test_a_scan_finds_the_companion_it_was_pointed_at(dataset, truth):
             period=ab.Fixed(float(truth["period"])),
             t_conj=ab.Fixed(0.73171),
             ecc=ab.Fixed(0.0),
-            # Known, not Fixed: K1 is marginalized, which is the only thing that catches a
+            # Known, not Fixed: K1 is marginalized, which is the only protection against a
             # wrong K1 inflating the detection statistic rather than blurring it.
             k=[ab.Known(float(truth["k"][0]), 1.5), ab.Scanned(np.arange(20.0, 90.0, 10.0))],
         ),
@@ -543,7 +543,7 @@ def test_the_conjunction_grid_contains_the_antipode_of_every_trial(dataset):
     """For a near-equal pair the phase likelihood is near-mirror-symmetric under a shift
     of half a period, so the scan can only choose between the two mirrors when both are
     on its grid. An odd trial count leaves every antipode midway between two trials, and
-    on one benchmark star the antipode it could not reach was better by 672 nats (D63).
+    on one benchmark star the antipode that was off the grid was better by 672 nats (D63).
     """
     scanner = _dis(dataset)._scan_declaration()
     scan = scanner._scan_phase(dict(scanner.init))
@@ -555,7 +555,7 @@ def test_the_conjunction_grid_contains_the_antipode_of_every_trial(dataset):
     gap = np.abs(antipodes[:, None] - offsets[None, :]).min(axis=1)
     tol = 64.0 * float(np.spacing(float(np.max(np.abs(trials)))))
     assert gap.max() < tol, (gap.max(), tol)
-    # The tolerance has to be far below the grid step, or the assertion has no teeth.
+    # The tolerance must be far below the grid step, or the assertion tests nothing.
     assert tol < 1e-6 * period / len(trials)
 
 
@@ -594,7 +594,7 @@ def test_the_scan_is_skipped_when_no_semi_amplitude_is_a_range(dataset):
 
 @pytest.mark.slow
 def test_the_semi_amplitude_scan_finds_the_basin_the_start_missed(dataset, truth):
-    """Started at a fifth of the truth, the scan lands within a grid step of it."""
+    """Started at a fifth of the injected values, the scan ends within a grid step of them."""
     starts = [ab.Between(5.0, 120.0, start_at=6.0), ab.Between(5.0, 120.0, start_at=11.0)]
     dis = _dis(dataset, orbit=_orbit(k=starts))
     scanner = dis._scan_declaration()
@@ -613,9 +613,9 @@ def test_the_semi_amplitude_scan_finds_the_basin_the_start_missed(dataset, truth
         assert np.isclose(fit.star(name)["k"], k_true, atol=0.5), name
 
     # -- the closed loop ----------------------------------------------------------
-    # The conjunction window handed to L-BFGS is one period wide and centred on the start
-    # the fit carried, so the fitted conjunction lies strictly inside it (a start on the
-    # window's edge has an infinite unconstrained coordinate; D63).
+    # The conjunction window passed to L-BFGS is one period wide and centred on the start
+    # the fit used, so the fitted conjunction lies strictly inside it. A start on the
+    # window's edge has an infinite unconstrained coordinate (D63).
     window = fit.priors_used["t_conj"]
     t_fit = float(fit.orbit()["t_conj"])
     assert float(window.low) < t_fit < float(window.high)
@@ -624,7 +624,7 @@ def test_the_semi_amplitude_scan_finds_the_basin_the_start_missed(dataset, truth
 
 @pytest.mark.slow
 def test_the_facade_recovers_the_injected_orbit(dataset, truth):
-    """Twelve lines to the same answer the fifty-nine-line expert path gives."""
+    """Twelve lines give the same result as the fifty-nine-line expert path."""
     dis = _dis(dataset)
     fit = dis.fit(max_steps=150)
 
@@ -632,7 +632,7 @@ def test_the_facade_recovers_the_injected_orbit(dataset, truth):
     for name, k_true in zip(("primary", "secondary"), truth["k"], strict=True):
         assert np.isclose(fit.star(name)["k"], k_true, atol=0.2), name
     assert np.isclose(float(fit.orbit()["ecc"]), truth["ecc"], atol=0.02)
-    # The phase scan is what makes a cold start work at all.
+    # The phase scan is what makes a cold start work.
     assert fit.phase_scan is not None and fit.phase_scan.contrast > 1e3
     assert 0.8 < fit.z_rms < 1.2, f"noise model mismatch: z RMS {fit.z_rms}"
 
@@ -647,7 +647,7 @@ def test_the_hyperparameters_come_back_keyed_by_component_name(dataset):
 
 @pytest.mark.slow
 def test_the_free_velocity_table_threads_the_keplerian(dataset):
-    """Fit free velocities, then ask whether a Keplerian still goes through them."""
+    """Fit free velocities, then check that a Keplerian still goes through them."""
     keplerian = _dis(dataset).fit(max_steps=150)
     table = keplerian.free_velocities(max_steps=60)
     assert table.mode == "velocity"
@@ -670,13 +670,13 @@ def test_sampling_freezes_the_hyperparameters_and_says_so(dataset, truth):
 
 # -- declaring measured velocities instead of an orbit ------------------------
 #
-# The ordering an unsolved system forces: the free table is what produces the period, so
-# it cannot require a period to reach. These cover the declaration, the budget it derives
-# from a source with no `k` priors in it, and the refusals that keep the mode honest.
+# In an unsolved system the free table is what produces the period, so reaching the table
+# cannot require a period. These tests cover the declaration, the budget it derives from
+# a source with no `k` priors in it, and the cases that raise an error.
 
 
 def _measured(truth, *, scatter=0.0, systemic=0.0, seed=3):
-    """Velocities as an external pipeline would report them: noisy, and zero-pointed anywhere."""
+    """Velocities as an external pipeline would report them: noisy, with an arbitrary zero point."""
     v = np.asarray(truth["velocities"], dtype=float)
     if scatter:
         v = v + np.random.default_rng(seed).normal(0.0, scatter, v.shape)
@@ -698,7 +698,7 @@ def test_declared_velocities_are_checked_for_shape_and_finiteness(dataset, truth
 
 
 def test_a_cold_declaration_is_refused_rather_than_discovered(dataset):
-    """Equal velocities at every epoch *is* the cold start D42 measured failing."""
+    """Equal velocities at every epoch are the cold start, which D42 measured to fail."""
     with pytest.raises(ValueError, match="never separate the components"):
         _dis(dataset, orbit=None, velocities=np.zeros((2, dataset.n_epochs)))
 
@@ -712,7 +712,7 @@ def test_velocities_inside_the_lsf_width_warn(dataset):
 
 
 def test_the_budget_comes_from_the_velocities_when_there_is_no_orbit(dataset, truth):
-    """No `k` priors to read, so the bound is the declared table — centred, with headroom."""
+    """There are no `k` priors, so the bound is the declared table, centred and with headroom."""
     v = _measured(truth, systemic=150.0)
     dis = _dis(dataset, orbit=None, velocities=v)
     centred = v - v.mean(axis=1, keepdims=True)
@@ -724,8 +724,8 @@ def test_the_budget_comes_from_the_velocities_when_there_is_no_orbit(dataset, tr
     assert dis.velocity_budget.terms[0][1] == pytest.approx(reach)
     assert dis.velocity_budget.total > reach
 
-    # The systemic offset is unidentified and removed before the model sees it, so it must
-    # not be paid for in bandwidth: +150 km/s on every velocity changes nothing.
+    # The systemic offset is unidentified and removed before it enters the model, so it
+    # must not increase the bandwidth: +150 km/s on every velocity changes nothing.
     plain = _dis(dataset, orbit=None, velocities=_measured(truth))
     assert dis.velocity_budget.total == pytest.approx(plain.velocity_budget.total)
 
@@ -740,7 +740,7 @@ def test_a_velocity_declaration_samples_no_orbital_sites(dataset, truth):
 
 
 def test_a_velocity_declaration_still_carries_the_nebular_amplitudes(dataset, truth):
-    """Dropping them would pin the component static at amplitude 1 without saying so."""
+    """Dropping them would silently hold the component static at amplitude 1."""
     epochs = [
         ab.EpochData(
             wave=e.wave,
@@ -774,12 +774,11 @@ def test_a_scan_needs_an_orbit_and_says_which(dataset, truth):
 
 @pytest.mark.slow
 def test_measured_velocities_warm_start_the_table_as_well_as_a_keplerian(dataset, truth):
-    """The point of the mode: no period is needed, and the answer is not worse for it.
+    """No period is needed, and the result is not worse without one.
 
-    The declared velocities carry 3 km/s of scatter *and* a 150 km/s systemic offset the
-    fit cannot see — which is what an external pipeline actually hands you — and the
-    recovered table still has to land on the injected one and keep its zero point out of
-    the answer.
+    The declared velocities have 3 km/s of scatter and a 150 km/s systemic offset that the
+    fit does not identify, which is what an external pipeline provides. The recovered table
+    must still match the injected one, and its zero point must not enter the result.
     """
     dis = _dis(dataset, orbit=None, velocities=_measured(truth, scatter=3.0, systemic=150.0))
     fit = dis.fit(max_steps=120)
@@ -790,7 +789,7 @@ def test_measured_velocities_warm_start_the_table_as_well_as_a_keplerian(dataset
     assert got.shape == want.shape
     rms = np.sqrt(np.mean((got - want) ** 2, axis=1))
     assert np.all(rms < 1.0), f"per-epoch RV rms {rms} km/s"
-    # The systemic offset must not reach the answer: the spans are what is identified.
+    # The systemic offset must not enter the result: the spans are what is identified.
     assert np.allclose(np.ptp(got, axis=1), np.ptp(want, axis=1), rtol=0.05)
     assert fit.velocity_errors().shape == got.shape
     with pytest.raises(ValueError, match="no orbital elements"):
@@ -799,11 +798,11 @@ def test_measured_velocities_warm_start_the_table_as_well_as_a_keplerian(dataset
 
 # -- the correlation search window --------------------------------------------
 #
-# `measure_velocities` hands `todcor` a search window derived from the fitted velocities.
+# `measure_velocities` passes `todcor` a search window derived from the fitted velocities.
 # `todcor` searches each template's own rest frame and reports the shift composed with
 # that template's zero point, so one shared window searches a different interval of
-# reported velocity for every component whose zero point differs. What the window rule
-# has to do is tested here without running either the optimizer or the correlation: the
+# reported velocity for every component whose zero point differs. The window rule is
+# tested here without running either the optimizer or the correlation, because the
 # rule needs only the fitted velocities and the templates' zero points.
 
 
@@ -815,7 +814,7 @@ def _velocity_mode_fit(dataset, velocities):
 
 
 def _flat_templates(dis, zero_points):
-    """One template per star at the given zero points; the deviation is never looked at."""
+    """One template per star at the given zero points; the deviation is never used."""
     from albireo.todcor import Template
 
     return [
@@ -853,7 +852,7 @@ def test_the_search_window_follows_each_template_zero_point(dataset, truth, capt
     common = np.array([fitted.min() - 40.0, fitted.max() + 40.0])
     np.testing.assert_allclose(ranges[0], common - 30.0)  # zero point above the median
     np.testing.assert_allclose(ranges[1], common + 30.0)
-    # Templates with no zero point at all are all in the fit's own frame: one window.
+    # Templates with no zero point are all in the fit's own frame: one window.
     fit.measure_velocities(templates=_flat_templates(fit.dis, (None, None)))
     np.testing.assert_allclose(np.asarray(captured_todcor["v_range"]), [common, common])
 
@@ -861,11 +860,11 @@ def test_the_search_window_follows_each_template_zero_point(dataset, truth, capt
 def test_zero_points_that_move_a_window_off_its_own_velocities_are_refused(
     dataset, truth, captured_todcor
 ):
-    """The failure that produced a table of velocities pinned to the edge of the search.
+    """The failure guarded against is a table of velocities at the edge of the search.
 
-    A label fit whose frame-offset scan stopped at its bound reports a zero point that
-    disagrees with the other component's by more than the fitted velocities span. No
-    interval of reported velocity then holds both components, and searching one anyway
+    A label fit whose frame-offset scan stopped at its bound returns a zero point that
+    differs from the other component's by more than the fitted velocities span. No
+    interval of reported velocity then contains both components, and a search of one
     measures nothing while returning a full table.
     """
     fit = _velocity_mode_fit(dataset, _measured(truth))
@@ -876,6 +875,6 @@ def test_zero_points_that_move_a_window_off_its_own_velocities_are_refused(
     assert "zero points disagree" in message
     assert "v_range=" in message and "v_zero_kms=None" in message
     assert not captured_todcor  # nothing was searched
-    # A declared window is obeyed as it always was, whatever the zero points say.
+    # A declared window is used as given, whatever the zero points are.
     fit.measure_velocities(templates=templates, v_range=(-300.0, 300.0))
     assert captured_todcor["v_range"] == (-300.0, 300.0)

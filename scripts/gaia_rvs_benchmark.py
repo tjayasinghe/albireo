@@ -9,8 +9,8 @@ The population comes from the parametric generator (``--n``), from DEBCat's ``de
 (``--debcat``), from the Gaia DR3 double-lined orbits (``--gaia-sb2``, network), or from a
 population written by an earlier run (``--population``). Every system is simulated with
 albireo's Gaia RVS model and run through the pipeline under the requested knowledge
-tiers; the report (``report.md`` with figures, ``rows.csv``, ``summary.json``) lands in
-``--out``. An interrupted run resumes when started again with the same directory.
+tiers. The report (``report.md`` with figures, ``rows.csv``, ``summary.json``) is written
+to ``--out``. An interrupted run resumes when started again with the same directory.
 """
 
 from __future__ import annotations
@@ -35,10 +35,10 @@ from albireo.population import (
 def inside_library(systems, library):
     """Split the systems into those the library can render and the names of the rest.
 
-    A catalogue row can name a star hotter than the library box (Gaia masses of 1.9 solar
-    put a primary at 8600 K); the parametric draw never does. The population module
-    refuses to clamp a temperature, so the benchmark leaves such systems out and names
-    them.
+    A catalogue row can describe a star hotter than the library box (Gaia masses of 1.9
+    solar give a primary at 8600 K). The parametric draw never does. The population module
+    does not clamp a temperature, so the benchmark leaves such systems out and reports
+    their names.
     """
     bounds = library.bounds
     kept, outside = [], []

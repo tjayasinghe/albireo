@@ -1,13 +1,13 @@
 """Smoke tests for the figure helpers.
 
-These assert structure — that a figure is produced, that it has the panels and labels it
-claims, that the data plotted are the data passed in — not pixels. Image comparison would
-be brittle across matplotlib versions for no real gain; what actually breaks in plotting
-code is an API drift or a shape bug, and both show up here.
+These tests assert structure, not pixels: that a figure is produced, that it has the
+expected panels and labels, and that the data plotted are the data passed in. Image
+comparison would be brittle across matplotlib versions for no real gain. Plotting code
+fails through an API change or a shape error, and both are detected here.
 
-The one piece of real numerics in this module, :func:`albireo.plotting._lag1`, is tested
-against a known answer rather than smoke-tested: it is the statistic the AR(1) diagnostic
-turns on, so it has to be right rather than merely present.
+The one numerical routine in this module, :func:`albireo.plotting._lag1`, is tested
+against a known answer rather than smoke-tested. The AR(1) diagnostic depends on this
+statistic, so its value must be correct.
 """
 
 from __future__ import annotations
@@ -125,12 +125,12 @@ def test_plot_spectra_rejects_a_grid_mismatch(small_grid):
 
 
 def test_plot_spectra_rejects_a_truth_on_a_different_grid(small_grid):
-    """A simulation's truth lives on the grid it was generated on, not the model's.
+    """A simulation's injected truth is defined on the grid it was generated on, not the model's.
 
-    Nothing downstream can catch this: the arrays are both (n_comp, n_pix)-shaped and only
-    the pixel count differs, so an unchecked overlay either dies inside matplotlib with a
-    message about x and y, or -- if the counts happen to agree -- silently plots the truth
-    against the wrong wavelengths.
+    No downstream code detects the mismatch. Both arrays have shape (n_comp, n_pix) and
+    only the pixel count differs. An unchecked overlay therefore either fails inside
+    matplotlib with a message about x and y or, if the counts happen to agree, plots the
+    truth against the wrong wavelengths without an error.
     """
     mean = np.zeros((2, small_grid.n))
     with pytest.raises(ValueError, match="Resample it first"):
@@ -149,7 +149,7 @@ def test_plot_spectra_rejects_a_bad_rank(small_grid):
 
 def test_lag1_recovers_a_known_autocorrelation():
     # An AR(1) series with a large phi must show a clearly positive lag-1 coefficient,
-    # and white noise must not. This is the discriminator the AR(1) work turns on.
+    # and white noise must not. The AR(1) diagnostic depends on this distinction.
     rng = np.random.default_rng(11)
     white = rng.normal(size=4000)
     correlated = np.empty_like(white)
@@ -185,7 +185,7 @@ def test_data_residual_zscores_per_epoch_partitions_the_flat_array(fitted_proble
 
     assert len(per_epoch) == len(list(small_dataset))
     assert sum(r.size for r in per_epoch) == flat.size
-    # Same pixels, just grouped — so the multisets agree.
+    # The same pixels are grouped by epoch, so the multisets agree.
     np.testing.assert_allclose(np.sort(np.concatenate(per_epoch)), np.sort(flat))
 
 
@@ -277,14 +277,14 @@ def test_plot_detection_limit_draws_the_null_and_the_completeness_curve():
     assert "null distribution" in ax_null.get_title()
     labels = [t.get_text() for t in ax_null.get_legend().get_texts()]
     assert any("threshold" in label for label in labels)
-    # An observed peak *inside* the null range is drawn, not annotated.
+    # An observed peak inside the null range is drawn, not annotated.
     assert any("observed" in label for label in labels)
     assert ax_comp.get_ylim()[1] > 1.0
     assert "completeness" in ax_comp.get_title()
 
 
 def test_plot_detection_limit_annotates_an_off_scale_detection():
-    """A real companion sits orders of magnitude above the null; the axis must not chase it."""
+    """A real companion is orders of magnitude above the null; the axis must not extend to it."""
     limit = _limit(completeness=[0.3, 0.97, 1.0])
     _, (ax_null, _) = plotting.plot_detection_limit(limit, observed=4.0e4)
 
@@ -375,7 +375,7 @@ def test_plot_forecast_without_a_baseline_drops_the_comparison(small_grid, small
 
 @pytest.fixture(scope="module")
 def toy_idata():
-    """A tiny posterior carrying orbital sites plus a nuisance site."""
+    """A tiny posterior with orbital sites plus a nuisance site."""
     pytest.importorskip("arviz")
     import jax
     import jax.numpy as jnp
@@ -394,8 +394,9 @@ def toy_idata():
 
 
 def test_default_corner_vars_selects_the_orbit_and_drops_nuisances(toy_idata):
-    # This is albireo's logic rather than arviz's, so it is tested directly: it survives
-    # the arviz 0.x -> 1.x change that made the plot's return type version-dependent.
+    # This is albireo's logic rather than arviz's, so it is tested directly. The test is
+    # unaffected by the arviz 0.x -> 1.x change that made the plot's return type
+    # version-dependent.
     assert plotting._default_corner_vars(toy_idata) == ["period", "k"]
 
 
@@ -404,15 +405,15 @@ def test_default_corner_vars_falls_back_when_nothing_matches():
         def __init__(self):
             self.posterior = {"log_tau": None, "log_eta": None}
 
-    # None means "let arviz decide" — better than plotting an empty figure.
+    # None leaves the choice to arviz, which is better than plotting an empty figure.
     assert plotting._default_corner_vars(OnlyNuisances()) is None
     assert plotting._default_corner_vars(object()) is None
 
 
 def test_plot_corner_runs(toy_idata):
     # A smoke test only: arviz 1.x returns its own PlotMatrix rather than an axes array,
-    # so there is no version-stable structure to assert on. What this catches is the
-    # failure that actually happened — passing styling kwargs that a newer arviz rejects.
+    # so there is no version-stable structure to assert on. The test guards against
+    # passing styling kwargs that a newer arviz rejects.
     assert plotting.plot_corner(toy_idata) is not None
 
 
@@ -422,7 +423,7 @@ def test_plot_corner_runs(toy_idata):
 
 
 def test_plotting_names_are_exported_lazily():
-    # Reached through the package's __getattr__, exactly as albireo.read_dataset is.
+    # Reached through the package's __getattr__, as albireo.read_dataset is.
     assert ab.plot_spectra is plotting.plot_spectra
     assert "plot_spectra" in dir(ab)
     with pytest.raises(AttributeError):

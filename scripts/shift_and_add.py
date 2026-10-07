@@ -3,10 +3,10 @@
 Provenance. The implementation follows the published algorithm, González & Levato (2006),
 A&A 448, 283, §2.1 Eqs. (1)-(2) and §2.3, with the identical recurrence restated
 independently by Quintero et al. (2020). No source code was consulted. The widely used
-existing implementation (the one behind the LB-1 and HR 6819 companion identifications)
-carries no license file, so it cannot be copied into an open-source package; nothing here was
+existing implementation (the one used for the LB-1 and HR 6819 companion identifications)
+has no license file, so it cannot be copied into an open-source package. Nothing here was
 derived from reading it. Where the papers do not specify a detail, the choice made below is
-marked as ours and is not attributed to the method.
+marked as this module's and is not attributed to the method.
 
 The module supports the benchmark record, ``docs/benchmarks.md``, which compares albireo
 against the technique in widest use on identical data. It is not part of the albireo package
@@ -23,7 +23,7 @@ The iteration is Gauss-Seidel, not Jacobi. The second line uses ``A_j``, the est
 produced by the first line in the same sweep, not ``A_{j-1}``. The Jacobi variant is a
 different algorithm with a different convergence rate.
 
-The observation is shifted into the component's rest frame, and the companion is then pushed
+The observation is shifted into the component's rest frame, and the companion is then shifted
 to the relative velocity it has in that frame. González & Levato state it in prose: "The
 first step is to shift the spectrum B to match the lines of the secondary component in the
 i-th spectrum. Then we compute the differences S_i(x) - B(x - v_b,i), which correspond to the
@@ -37,34 +37,33 @@ therefore the plain rest-frame co-add.
 The published convergence statement is an iteration count, not a threshold: "the residuals of
 the secondary lines still present in the A spectrum are reduced approximately by a factor
 1/n... rarely more than 5-7 iterations are needed." There is no published stopping rule, so
-``tol`` below is ours and is off by default.
+``tol`` below is this module's choice and is off by default.
 
 The error diffuses rather than vanishing. §2.3 gives the error recursion
-``DeltaA_{j+1}(x) = < DeltaA_j(x - d_i + d_k) >_{i,k}`` with ``d_i = v_b,i - v_a,i``: each
+``DeltaA_{j+1}(x) = < DeltaA_j(x - d_i + d_k) >_{i,k}`` with ``d_i = v_b,i - v_a,i``. Each
 sweep convolves the residual with ``f(x) = n^-2 sum_ik delta(x - d_i + d_k)``. When the
 relative velocities cover their range densely, after *m* sweeps the residual has been smeared
 by a Gaussian of ``sigma = sqrt(2m) * sigma_d``. That prediction is checked against this
 implementation in ``tests/test_shift_and_add.py``, which is the available evidence that the
 recurrence here is the one in the paper.
 
-The same analysis states the method's hard limit. In Fourier space the per-mode factor has
-modulus exactly 1 at zero frequency, so the DC level of each component is a fixed point:
+The same analysis gives a limit of the method. In Fourier space the per-mode factor has
+modulus exactly 1 at zero frequency, so the DC level of each component is a fixed point, and
 shift-and-add cannot determine it from constant-light data. This is the low-frequency null
-space of ``docs/math.md`` §5.1, and the one fd3 exhibits: three independent methods, one
-degeneracy.
+space of ``docs/math.md`` §5.1, which fd3 also exhibits. The three independent methods have
+the same degeneracy.
 
-Choices the papers leave open, made here and flagged as ours:
+Choices the papers leave open, made here and marked as this module's:
 
-* Interpolation. González & Levato used IRAF's ``dopcor``; no kernel is specified anywhere.
-  This module uses albireo's own linear shift operator, so that sharing the interpolation
-  between the two codes isolates the algorithmic difference instead of measuring two
-  interpolators against each other.
+* Interpolation. González & Levato used IRAF's ``dopcor``. No kernel is specified anywhere.
+  This module uses albireo's own linear shift operator, so that the two codes share the
+  interpolation and the comparison isolates the algorithmic difference.
 * Weights. The paper permits "any combination algorithm... weights or some rejection
   algorithm" but publishes no formula. The default here is the plain mean, which is the
-  published default; ``weights`` accepts a per-epoch/per-pixel array.
+  published default. ``weights`` accepts a per-epoch/per-pixel array.
 * Convergence tolerance, as above.
 * No clipping to the continuum. Some applications force the disentangled spectra below the
-  continuum; no source states the exact form, so it is omitted rather than guessed.
+  continuum. No source states the exact form, so it is omitted.
 
 References
 ----------
@@ -81,7 +80,7 @@ __all__ = ["disentangle", "smearing_sigma_pix"]
 def _shift(flux: np.ndarray, shift_pix: float) -> np.ndarray:
     """Sample ``flux`` at ``p - shift_pix`` by linear interpolation, zero outside.
 
-    Matches :func:`albireo.operators.shift_spectrum`, so both codes in the benchmark carry
+    Matches :func:`albireo.operators.shift_spectrum`, so both codes in the benchmark have
     the same interpolation error and the comparison is of the algorithms.
     """
     n = flux.size
@@ -125,8 +124,9 @@ def disentangle(
         Apply the published ``n/(n-1)`` rescaling of ``B`` before the second ``A`` update,
         which the paper suggests for samples of 2-3 spectra.
     tol
-        Stop when the largest change in either component falls below this. Ours: the paper
-        publishes an iteration count and no threshold. ``None`` runs ``n_iter`` sweeps.
+        Stop when the largest change in either component falls below this. This module's
+        choice: the paper publishes an iteration count and no threshold. ``None`` runs
+        ``n_iter`` sweeps.
     return_history
         Also return the per-sweep max change, for convergence studies.
 
@@ -140,9 +140,9 @@ def disentangle(
 
     Notes
     -----
-    The DC level of each output is not determined by the data (see the module docstring);
-    with ``B = 0`` as the start, the split of the common continuum between the two components
-    is a property of the initialization rather than a measurement.
+    The DC level of each output is not determined by the data (see the module docstring).
+    With ``B = 0`` as the start, the split of the common continuum between the two components
+    is set by the initialization.
 
     References
     ----------
@@ -167,7 +167,7 @@ def disentangle(
     wsum = np.where(wsum > 0.0, wsum, 1.0)
 
     va, vb = shifts_pix[0], shifts_pix[1]
-    comp = np.zeros((2, n_pix))  # B_0 = 0; A is never seeded (A_1 falls out of Eq. 1)
+    comp = np.zeros((2, n_pix))  # B_0 = 0; A is never seeded (A_1 follows from Eq. 1)
     history = []
 
     for sweep in range(n_iter):

@@ -12,28 +12,28 @@ The module does no synthesis: no line list, no model atmosphere, no radiative tr
 no individual abundances. Those remain with GSSP, iSpec, Korg.jl and PySME, reached through
 :mod:`albireo.handoff`. The target accuracy is that at which the template stops limiting the
 velocities: roughly 2-3% in Teff, 0.15 dex in log g and [M/H], and 10% in v sin i
-(``docs/math.md`` §9.6). A label from this mode is a template coordinate, not an entry in an
-abundance table.
+(``docs/math.md`` §9.6). The labels are intended for selecting a template, not for an
+abundance analysis.
 
 Three model choices follow. First, dilution is fitted jointly. Disentangling returns
 component spectra in the common continuum, scaled by assumed light fractions, and the
-likelihood constrains only the products ``l_i d_i``, so an error in the assumed ``l``
+likelihood constrains only the products ``l_i d_i``. An error in the assumed ``l`` therefore
 rescales every line depth and is degenerate with Teff. The components are fitted together
-with one shared scalar per companion (a radius ratio), and the wavelength dependence of the
-light fractions is taken from the grids' own continua, so they sum to one at every
+with one shared scalar per companion (a radius ratio). The wavelength dependence of the
+light fractions is taken from the grids' continua, so the fractions sum to one at every
 wavelength by construction. This is the binary mode of GSSP (Tkachenko 2015), where a
 wavelength-independent dilution was measured to shift a secondary's Teff by 275 K.
 
 Second, the zero point is modelled explicitly. Each component's constant offset, and very
-nearly its slope, lies in the null space of the disentangling problem and is held only by
-the smoothness prior's ridge (``docs/math.md`` §5.1); left unmodelled it lands on the line
-depths and returns as a Teff error. Each component carries a low-order additive Chebyshev
-nuisance whose zeroth term is that zero point, fitted and reported (``docs/math.md`` §9.1).
-The nuisance is additive because the null space lives in the continuum, where the deviation
-spectrum is zero and a multiplicative term has no effect.
+nearly its slope, is in the null space of the disentangling problem and is constrained only
+by the smoothness prior's ridge (``docs/math.md`` §5.1). Left unmodelled, it is absorbed
+into the line depths and causes a Teff error. Each component has a low-order additive
+Chebyshev nuisance whose zeroth term is that zero point, fitted and reported
+(``docs/math.md`` §9.1). The nuisance is additive because the null space is confined to the
+continuum, where the deviation spectrum is zero and a multiplicative term has no effect.
 
 Third, two uncertainties are reported. Disentangling residuals are correlated, and formal
-errors on this problem run five to ten times optimistic: Gebruers et al. (2022) report 70 K
+errors on this problem are five to ten times too small. Gebruers et al. (2022) report 70 K
 formal against 425 K realistic for B stars at S/N 150. The Laplace covariance is quoted
 beside the spread from refitting joint posterior draws of the component spectra
 (:func:`refit_draws`), and :meth:`LabelMatch.summary` prints both (``docs/math.md`` §9.5).
@@ -41,13 +41,13 @@ beside the spread from refitting joint posterior draws of the component spectra
 Three comparisons are offered. ``"native"`` and ``"matched"`` compare the template with the
 disentangled component ``d_hat`` under a diagonal likelihood, which is mis-specified, since
 ``d_hat`` is a smoothed partial deconvolution whose errors are correlated across pixels.
-``"epochs"`` compares the template composite with the epoch spectra themselves, through the
-disentangling's own sufficient statistics at its MAP (:class:`EpochStatistics`,
-``docs/math.md`` §9.2a). Its chi-square is exact for the declared noise model and does not
-depend on the declared light fractions; it is minimised by a bounded Levenberg-Marquardt
-with restarts rather than by L-BFGS. It is the default of :meth:`albireo.Fit.match_labels`.
+``"epochs"`` compares the template composite with the epoch spectra, through the sufficient
+statistics of the disentangling at its MAP (:class:`EpochStatistics`, ``docs/math.md``
+§9.2a). Its chi-square is exact for the declared noise model, does not depend on the
+declared light fractions, and is minimised by a bounded Levenberg-Marquardt with restarts
+rather than by L-BFGS. This comparison is the default of :meth:`albireo.Fit.match_labels`.
 On simulated Gaia RVS binaries it halved the temperature error of the native comparison
-converged the same way, and cut the light-fraction error by a factor of three
+converged the same way, and reduced the light-fraction error by a factor of three
 (``docs/benchmarks.md``, Gaia RVS, after the third run).
 
 References
@@ -103,9 +103,9 @@ def _quadrature_width(sigma_kms, library_resolving_power, where: str) -> np.ndar
     """The width a template at the library's resolving power still needs: elementwise
     ``sqrt(sigma^2 - sigma_lib^2)``, or ``sigma`` itself for an intrinsic library (``None``).
 
-    A published grid already carries a Gaussian of ``sigma_lib``, so convolving it with the
-    whole instrument profile broadens it twice. A library at or below the instrument's
-    resolving power cannot be brought to it by any convolution, and is refused.
+    A published grid is already broadened by a Gaussian of ``sigma_lib``, so convolving it
+    with the whole instrument profile broadens it twice. A library at or below the
+    instrument's resolving power cannot be brought to it by any convolution, and is rejected.
     """
     sigma = np.atleast_1d(np.asarray(sigma_kms, dtype=np.float64))
     if library_resolving_power is None:
@@ -146,8 +146,8 @@ def _grid_compensated_widths(sigma_q_kms, dv_kms: float) -> tuple[np.ndarray, np
     """Operator widths with the grid's own smoothing removed, and which of them were floored.
 
     Elementwise ``sqrt(sigma_q^2 - (7/12) dv^2)``, floored at half a model pixel, or at
-    ``sigma_q`` itself when that is narrower, so that the compensation never widens the
-    operator. See :meth:`albireo.Fit.epoch_statistics` for the derivation.
+    ``sigma_q`` when that is narrower, so that the compensation never widens the operator.
+    See :meth:`albireo.Fit.epoch_statistics` for the derivation.
     """
     sigma_q = np.atleast_1d(np.asarray(sigma_q_kms, dtype=np.float64))
     floor = np.minimum(_OPERATOR_FLOOR_PIXELS * float(dv_kms), sigma_q)
@@ -201,25 +201,25 @@ def _grid_compensation_notes(floored: dict, narrow: dict, dv_kms: float) -> list
 class StarLabels:
     """The declaration for one component: what is fitted, and what is assumed.
 
-    Each label accepts the declaration vocabulary of the façade
+    Each label accepts the declaration vocabulary of :mod:`albireo.facade`
     (:class:`~albireo.facade.Fixed`, :class:`~albireo.facade.Known`,
     :class:`~albireo.facade.Between`, :class:`~albireo.facade.Sampled`) or a bare float,
     which is treated as fixed. The specs are duck-typed, so this module does not depend on
-    the façade and can be driven from another code's output.
+    :mod:`albireo.facade` and can be used with another code's output.
 
     ``logg`` requires a decision before the fit. Teff and log g correlate at about 0.98 when
     both are free (Tamajo et al. 2011). For an eclipsing binary the light curve and the orbit
     give log g to 0.01 dex, and fixing it there makes the analysis well posed. A
-    non-eclipsing SB2 has no such anchor: the fit is run free and fixed, and the spread is
-    reported as the uncertainty.
+    non-eclipsing SB2 has no such constraint, so the fit is run free and fixed and the spread
+    is reported as the uncertainty.
 
-    ``macro_kms`` is a fixed Gaussian macroturbulence folded into the intrinsic broadening.
+    ``macro_kms`` is a fixed Gaussian macroturbulence included in the intrinsic broadening.
     It is not fitted because it is not separable from ``vsini`` at survey resolution. With
     the default of zero, a fitted ``vsini`` measures all broadening beyond the instrument
     profile, which is what a template requires.
 
-    ``None`` for ``teff``, ``logg`` or ``vsini`` adopts the library's own range (0-300 km/s
-    for ``vsini``), a starting point rather than a considered prior.
+    ``None`` for ``teff``, ``logg`` or ``vsini`` adopts the library's range (0-300 km/s for
+    ``vsini``), a starting point rather than a considered prior.
 
     References
     ----------
@@ -239,10 +239,10 @@ class RadiusRatio:
     """Wavelength-dependent dilution from one shared scalar per companion (the default).
 
     The light fractions are ``w_i(lambda) = A_i C_i(lambda) / sum_j A_j C_j(lambda)`` with
-    ``A_1 = 1`` and ``A_i = r_i^2``, where ``C`` is each grid's own continuum and ``r_i`` the
+    ``A_1 = 1`` and ``A_i = r_i^2``, where ``C`` is each grid's continuum and ``r_i`` the
     radius ratio relative to the first star. The fractions sum to one at every wavelength by
-    construction, so no constraint site or penalty is needed and none can drift. Their
-    wavelength dependence comes from the model atmospheres, not from a fitted polynomial.
+    construction, so no constraint site or penalty is needed. Their wavelength dependence
+    comes from the model atmospheres, not from a fitted polynomial.
 
     This is the ``gssp_binary`` parameterization (Tkachenko 2015), which makes a
     spectroscopic light ratio measurable. Published spectroscopic ratios agree with
@@ -261,10 +261,10 @@ class RadiusRatio:
 class ScalarDilution:
     """One free wavelength-independent factor per component: the single-star fallback.
 
-    The ``gssp_single`` parameterization (Tkachenko 2015), for a single component, or when
-    two grids' continua cannot be trusted on a common scale. It is strictly weaker than
-    :class:`RadiusRatio`: nothing ties the components together, nothing enforces the sum to
-    one, and the wavelength dependence that carries the light-ratio information is
+    This is the ``gssp_single`` parameterization (Tkachenko 2015), for a single component,
+    or when two grids' continua cannot be trusted on a common scale. It is strictly weaker
+    than :class:`RadiusRatio`: the components are not coupled, the sum to one is not
+    enforced, and the wavelength dependence that contains the light-ratio information is
     discarded. :meth:`LabelMatch.summary` records that a fit used it.
 
     References
@@ -279,14 +279,14 @@ class ScalarDilution:
 class FixedDilution:
     """Hold the light fractions at their assumed values: ``w_i == l0_i``.
 
-    A diagnostic, not a recommended configuration. It gives the labels with no dilution
-    freedom, so the shift between this and a :class:`RadiusRatio` fit measures how far the
-    assumed light fractions move the answer.
+    This is a diagnostic, not a recommended configuration. It gives the labels with no
+    dilution freedom, so the shift between this and a :class:`RadiusRatio` fit measures how
+    much the assumed light fractions change the labels.
     """
 
 
 # ---------------------------------------------------------------------------
-# Spec handling (duck-typed against the façade vocabulary)
+# Spec handling (duck-typed against the albireo.facade vocabulary)
 # ---------------------------------------------------------------------------
 
 
@@ -352,17 +352,17 @@ def _is_fixed(spec) -> bool:
 @jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True)
 class LabelProblem:
-    """Everything the label likelihood needs, as one traced pytree argument.
+    """The inputs of the label likelihood, as one traced pytree argument.
 
-    Passed to the numpyro model through ``model_args`` rather than captured in a closure:
-    the interpolated grids run to tens of megabytes, and XLA constant-folds closure constants
-    into the compiled executable.
+    It is passed to the numpyro model through ``model_args`` rather than captured in a
+    closure, because the interpolated grids occupy tens of megabytes and XLA constant-folds
+    closure constants into the compiled executable.
 
     ``lsf_kernel`` is the declared instrument profile, which ``"matched"`` applies to
     ``d_hat``. ``model_lsf_kernels`` holds, per star, the profile applied to that star's
     template in ``"matched"`` mode: the quadrature width
     ``sqrt(sigma_inst^2 - sigma_lib^2)`` when its library declares a resolving power, and the
-    instrument profile otherwise. The other modes carry no LSF in the template rows.
+    instrument profile otherwise. The other modes apply no LSF to the template rows.
     """
 
     interpolators: tuple
@@ -421,11 +421,11 @@ class LabelProblem:
 def _broadening_kernel(problem: LabelProblem, index: int, vsini):
     """Rotation, any fixed macroturbulence, and the instrument profile when matched.
 
-    Convolved in ``full`` mode so that no wing is truncated. Every length is static, since
-    only the kernel values depend on the traced ``v sin i``. The rotational profile is the
-    limb-darkened profile of Gray (2005), built by
+    Convolution is in ``full`` mode so that no wing is truncated. Every length is static,
+    since only the kernel values depend on the traced ``v sin i``. The rotational profile is
+    the limb-darkened profile of Gray (2005), built by
     :func:`albireo.operators.rotational_kernel_traced`. In matched mode the instrument
-    profile is the star's entry of ``model_lsf_kernels``, which carries only the width its
+    profile is the star's entry of ``model_lsf_kernels``, which has only the width its
     library does not already have.
 
     References
@@ -445,9 +445,9 @@ def _broadening_kernel(problem: LabelProblem, index: int, vsini):
 def _component_model(problem: LabelProblem, index: int, labels, vsini, v_kms):
     """One component's broadened, shifted deviation spectrum, and its continuum.
 
-    The chain of ``docs/math.md`` §9.1: interpolate, subtract the continuum, broaden, then
-    Doppler shift. Every operator is stationary on the uniform log grid, so they commute and
-    the order affects readability only.
+    This is the chain of ``docs/math.md`` §9.1: interpolate, subtract the continuum, broaden,
+    then Doppler shift. Every operator is stationary on the uniform log grid, so they commute
+    and the order affects readability only.
     """
     normalized, log_continuum = problem.interpolators[index](labels)
     deviation = jnp.convolve(
@@ -460,15 +460,15 @@ def _component_model(problem: LabelProblem, index: int, labels, vsini, v_kms):
 def _light_fractions(log_continua, amplitudes):
     """Light fractions that sum to one at every pixel, evaluated in the log.
 
-    ``w_i = A_i C_i / sum_j A_j C_j`` as a softmax over ``log C_i + log A_i``. The continua
-    span decades across a Teff range, and this form cannot overflow.
+    ``w_i = A_i C_i / sum_j A_j C_j`` is evaluated as a softmax over ``log C_i + log A_i``.
+    The continua span decades across a Teff range, and this form cannot overflow.
     """
     stacked = jnp.stack(log_continua) + jnp.log(amplitudes)[:, None]
     return jnp.exp(stacked - jax.scipy.special.logsumexp(stacked, axis=0, keepdims=True))
 
 
 def _model_rows(problem: LabelProblem, labels, vsini, v_kms, amplitudes, offsets):
-    """The full ``(n_star, n_pix)`` model, in the deviation space the data live in."""
+    """The full ``(n_star, n_pix)`` model, in the deviation space of the data."""
     parts = [
         _component_model(problem, i, labels[i], vsini[i], v_kms[i]) for i in range(problem.n_star)
     ]
@@ -491,8 +491,8 @@ def _model_rows(problem: LabelProblem, labels, vsini, v_kms, amplitudes, offsets
 def label_model(problem: LabelProblem, specs: dict, config: dict):
     """Build the numpyro model for a label fit.
 
-    ``specs`` holds the declared priors, which are small enough to be closure constants;
-    the arrays travel in ``problem`` as a traced model argument.
+    ``specs`` holds the declared priors, which are small enough to be closure constants.
+    The arrays are passed in ``problem`` as a traced model argument.
     """
 
     names = config["names"]
@@ -546,9 +546,9 @@ def label_model(problem: LabelProblem, specs: dict, config: dict):
         )
 
         if config["hull_guard"]:
-            # A soft barrier rather than a rejection: outside the hull the simplex
+            # A soft barrier is used rather than a rejection. Outside the hull the simplex
             # interpolator extrapolates flat, which is finite but meaningless, so the
-            # potential must slope back inside rather than sit on a plateau.
+            # potential needs a gradient that points back inside.
             margin = jnp.stack(
                 [problem.interpolators[i].hull_margin(labels[i]) for i in range(len(names))]
             )
@@ -568,14 +568,14 @@ def label_model(problem: LabelProblem, specs: dict, config: dict):
 @jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True)
 class EpochStatistics:
-    """What the epoch comparison needs from a disentangling, fixed at its MAP.
+    """The inputs the epoch comparison takes from a disentangling, fixed at its MAP.
 
-    With the orbit, the declared light fractions ``l0``, the LSF and the noise model held at
-    the disentangling's MAP, write ``z`` for the stacked epoch data in deviation space,
-    ``W`` for its noise precision (diagonal, or the AR(1) chain precision of
-    ``docs/math.md`` §1.4a, jitter included) and ``A`` for the stacked operator of §1.4,
-    which shifts, weights by ``l0``, convolves with the LSF, rebins and multiplies by the
-    response. For stacked component rows ``m`` the epoch chi-square is
+    The orbit, the declared light fractions ``l0``, the LSF and the noise model are held at
+    the disentangling's MAP. Let ``z`` be the stacked epoch data in deviation space and
+    ``W`` its noise precision (diagonal, or the AR(1) chain precision of ``docs/math.md``
+    §1.4a, jitter included). Let ``A`` be the stacked operator of §1.4, which shifts,
+    weights by ``l0``, convolves with the LSF, rebins and multiplies by the response. For
+    stacked component rows ``m`` the epoch chi-square is
 
     ``L_data(m) = ||z - A m||_W^2 = z^T W z - 2 m^T h + m^T G m``,
     ``h = A^T W z``, ``G = A^T W A``,
@@ -587,30 +587,30 @@ class EpochStatistics:
     from the exact likelihood of ``d_hat`` under its own posterior only by the prior term and
     a constant (``docs/math.md`` §9.2a).
 
-    The declared light cancels. The label rows scale each template by ``w_i / l0_i``
-    (§9.1) and ``A`` multiplies row ``i`` by ``l0_i``, so ``A m`` carries the absolute
-    ``w_i t_i``; redeclaring ``l0_i -> c l0_i`` (with the smoothness scales that go with it)
-    leaves ``L_data`` unchanged to rounding. The fit measures the light fraction, not a
-    ratio to the declaration.
+    The declared light fractions cancel. The label rows scale each template by
+    ``w_i / l0_i`` (§9.1) and ``A`` multiplies row ``i`` by ``l0_i``, so ``A m`` contains
+    the absolute ``w_i t_i``. Redeclaring ``l0_i -> c l0_i`` (with the smoothness scales that
+    go with it) leaves ``L_data`` unchanged to rounding. The fit measures the light fraction,
+    not a ratio to the declaration.
 
     Components that are not stars (a telluric or nebular row) are conditioned on at their
-    posterior mean: their predicted contribution ``A_e d_hat_e`` is subtracted from ``z``
+    posterior mean. Their predicted contribution ``A_e d_hat_e`` is subtracted from ``z``
     before ``h`` and ``z^T W z`` are formed: ``L_data(m) = ||z - A_e d_hat_e -
     A_s m||_W^2``. With one operator for all rows this is ``h_s - G_se d_hat_e`` and the
     corresponding correction of ``z^T W z``.
 
     A synthetic library is already broadened to its own resolving power, so the stellar
-    operator carries only the quadrature width ``sigma_q = sqrt(sigma_inst^2 - sigma_lib^2)``
-    (:attr:`library_resolving_power`), while the conditioned rows keep the declared
-    profile under which their posterior mean was solved. The template's path to the epoch
-    pixels also runs through five discrete steps on the model grid, which together smooth it
-    by ``(7/12) dv^2`` in variance, so by default the stellar operator carries
+    operator applies only the quadrature width ``sigma_q = sqrt(sigma_inst^2 - sigma_lib^2)``
+    (:attr:`library_resolving_power`). The conditioned rows keep the declared profile under
+    which their posterior mean was solved. The template also passes through five discrete
+    steps on the model grid before it reaches the epoch pixels. Together they smooth it by
+    ``(7/12) dv^2`` in variance, so by default the stellar operator applies
     ``sqrt(sigma_q^2 - (7/12) dv^2)`` instead (:attr:`grid_variance_kms2`,
     :attr:`operator_sigma_kms`; derivation in :meth:`albireo.Fit.epoch_statistics`).
 
-    Built by :meth:`albireo.Fit.epoch_statistics`, or by :meth:`from_problem` from a
-    :class:`~albireo.forward.Problem` that already carries the operator and data. Passed to
-    :func:`match_labels` with ``compare="epochs"``.
+    It is built by :meth:`albireo.Fit.epoch_statistics`, or by :meth:`from_problem` from a
+    :class:`~albireo.forward.Problem` that already holds the operator and data, and passed
+    to :func:`match_labels` with ``compare="epochs"``.
 
     Attributes
     ----------
@@ -634,7 +634,7 @@ class EpochStatistics:
     medium
         The wavelength scale of the epochs.
     light_fractions
-        The declared ``l0`` of the stars, which ``A`` carries.
+        The declared ``l0`` of the stars, which ``A`` applies.
     lsf_sigma_kms
         ``((instrument, widths), ...)``, one entry per epoch group: the declared Gaussian
         widths in km/s reduced for the library's resolving power, ``sigma_q``, before any
@@ -652,7 +652,7 @@ class EpochStatistics:
         the stellar operator applies, ``sqrt(sigma_q^2 - grid_variance_kms2)`` floored at
         half a model pixel. Equal to :attr:`lsf_sigma_kms` without the compensation.
     notes
-        What the compensation could not do: a width floored at half a model pixel, or a
+        Where the compensation was incomplete: a width floored at half a model pixel, or a
         model grid coarser than ``sigma_q``. Each was also raised as a ``UserWarning``.
     """
 
@@ -782,8 +782,8 @@ class EpochStatistics:
     ) -> EpochStatistics:
         """Assemble ``h``, ``z^T W z`` and the band of ``G`` from a fixed problem.
 
-        ``problem`` must already carry the operator and the data the comparison is to use:
-        the stellar LSF reduced for the library's resolving power and for the grid's own
+        ``problem`` must already hold the operator and the data that the comparison uses:
+        the stellar LSF reduced for the library's resolving power and for the grid's
         smoothing, and the data with any non-stellar contribution subtracted.
         :meth:`albireo.Fit.epoch_statistics` prepares both. ``G`` is assembled by
         :func:`albireo.assembly.band_block_tridiagonal` with a null smoothness prior, at the
@@ -798,7 +798,7 @@ class EpochStatistics:
         medium
             ``"air"`` or ``"vacuum"``, the scale of the epochs.
         light_fractions
-            The ``l0`` the problem's operator carries, one per star.
+            The ``l0`` the problem's operator applies, one per star.
         half_bandwidth, block_size
             As for the disentangling's own band assembly (``MarginalOrbitModel``).
         lsf_sigma_kms, library_resolving_power, conditioned, grid_variance_kms2, notes
@@ -905,15 +905,15 @@ def _scan_component(problem: LabelProblem, index: int, nodes, vsini_trials, v_tr
 def _default_scan_vsini(lower: float, upper: float) -> list[float]:
     """The warm-start scan's trial rotations: slow, moderate, and a fraction of the bound.
 
-    Late-type binary components mostly rotate at a few km/s; a start at the prior's midpoint
-    with a quarter and six tenths of its upper bound (37.5 km/s or more on a 0-150 km/s
-    prior) began every D65 benchmark fit there, including components injected at 0.6 to
-    10 km/s (``d65_converged_labels.md``). The set is 1 km/s, standing for every rotation the
+    Late-type binary components mostly rotate at a few km/s. With trials at the prior's
+    midpoint, a quarter and six tenths of its upper bound (37.5 km/s or more on a 0-150 km/s
+    prior), every D65 benchmark fit started there, including components injected at 0.6 to
+    10 km/s (``d65_converged_labels.md``). The trial at 1 km/s represents every rotation the
     model grid cannot resolve (the pixel-integrated kernel is an exact delta below half a
-    model pixel, so all such values give the same template); 5 and 10 km/s for slow rotators
-    a survey resolution can separate from the instrument profile; and a fifth and a half of
-    the upper bound for fast ones. Five values keep the scan within 5/3 of the three-value
-    cost. Each is clipped into ``[lower, upper]`` and duplicates are dropped.
+    model pixel, so all such values give the same template). Trials at 5 and 10 km/s are for
+    slow rotators a survey resolution can separate from the instrument profile, and a fifth
+    and a half of the upper bound for fast ones. Five values keep the scan within 5/3 of the
+    three-value cost. Each is clipped into ``[lower, upper]`` and duplicates are dropped.
     """
     upper = float(upper)
     lower = min(max(float(lower), 0.0), upper)
@@ -935,9 +935,9 @@ def _spec_bounds(spec):
 def _allowed_nodes(table, axes, specs, name, shared_mh):
     """Which library nodes the declared priors permit.
 
-    Without it the warm start can hand the optimizer a node the prior excludes, and numpyro
+    Without it the warm start can pass the optimizer a node the prior excludes, and numpyro
     rejects the fit with the opaque "cannot find valid initial parameters". A fixed label is
-    narrowed to the nearest node value, since a fixed Teff rarely lands on a grid point.
+    narrowed to the nearest node value, since a fixed Teff rarely coincides with a grid point.
     """
     allowed = np.ones(table.shape[0], dtype=bool)
     for column, label in enumerate(axes):
@@ -992,7 +992,7 @@ def _combine_scans(scans, node_tables, label_axes, shared_mh, top_k):
             if picks is not None and np.isfinite(total):
                 candidates.append((total, tuple(picks)))
     else:
-        # Independent metallicities (or none): each star is ranked on its own.
+        # Independent metallicities (or none): each star is ranked separately.
         orders = [np.argsort(scan[:, 0]) for scan in scans]
         candidates = [
             (
@@ -1018,9 +1018,9 @@ def _combine_scans(scans, node_tables, label_axes, shared_mh, top_k):
 def _chebyshev_basis(n_pix: int, order: int | None) -> np.ndarray:
     """``T_m`` evaluated on the grid, mapped to ``[-1, 1]``, shape ``(n_pix, order + 1)``.
 
-    ``order=None`` returns a zero-column basis (no additive nuisance): the control case
-    against which the nuisance is judged, not a recommended configuration; see
-    ``docs/math.md`` §5.1.
+    ``order=None`` returns a zero-column basis (no additive nuisance). This is the control
+    case against which the nuisance is judged, not a recommended configuration (see
+    ``docs/math.md`` §5.1).
     """
     if order is None:
         return np.zeros((n_pix, 0))
@@ -1068,75 +1068,76 @@ def match_labels(
     Parameters
     ----------
     grid
-        The model grid the components are defined on (``fit.dis.grid`` for a façade fit).
+        The model grid the components are defined on (``fit.dis.grid`` for a
+        ``Disentangler`` fit).
     d_hat
-        Component *deviation* spectra, shape ``(n_star, n_pix)``: what ``Fit.spectra()``
+        Component deviation spectra, shape ``(n_star, n_pix)``: what ``Fit.spectra()``
         returns for the stellar rows, in units of the common continuum. Telluric and
-        nebular rows must be dropped before calling. In ``"epochs"`` mode they serve only
-        the warm-start scan.
+        nebular rows must be dropped before calling. In ``"epochs"`` mode only the
+        warm-start scan uses the spectra.
     stars
         Mapping of component name to :class:`StarLabels`. Order sets the reference star
         for :class:`RadiusRatio` (the first is ``r = 1``).
     medium
-        ``"air"`` or ``"vacuum"``: the scale the data are on, taken from the dataset's own
+        ``"air"`` or ``"vacuum"``: the scale the data are on, taken from the dataset's
         declaration. Required: an incorrect choice is an 83 km/s error, so no default is
         safe.
     light_fractions
         The light fractions assumed at disentangling time, one per star: what ``d_hat`` was
         scaled against, not a measurement.
     lsf_sigma_kms
-        The declared instrumental Gaussian width, in km/s. Fixed, never fitted: a
-        stationary LSF is exactly absorbed by the free component spectra, so disentangling
-        cannot identify it (``docs/math.md`` §1.3), and fitting it here would relocate that
-        degeneracy rather than resolve it.
+        The declared instrumental Gaussian width, in km/s. It is never fitted: a stationary
+        LSF is exactly absorbed by the free component spectra, so disentangling cannot
+        identify it (``docs/math.md`` §1.3), and fitting it here would not resolve that
+        degeneracy.
     std
         Per-pixel posterior standard deviations, ``Fit.std()``. Defaults to a flat scale,
-        with the jitter site carrying all of the weighting; real per-pixel uncertainties
-        are preferable.
+        with all the weighting set by the jitter site. Real per-pixel uncertainties are
+        preferable.
     mh
-        Metallicity spec, shared across components by default (one binary, one composition).
-        A mapping of name to spec frees them independently. Defaults to the range the
-        libraries cover, or to ``Fixed`` when a library has no metallicity axis.
+        Metallicity spec, shared across components by default (a binary has one
+        composition). A mapping of name to spec frees them independently. Defaults to the
+        range the libraries cover, or to ``Fixed`` when a library has no metallicity axis.
     dilution
         :class:`RadiusRatio` (default for two or more stars), :class:`ScalarDilution`
         (default for one), or :class:`FixedDilution`.
     compare
         ``"native"`` (the default here) compares the intrinsic model against ``d_hat``
-        directly. ``"matched"`` convolves both sides with the declared LSF first; when a
+        directly. ``"matched"`` convolves both sides with the declared LSF first. When a
         star's library declares a resolving power
-        (:attr:`albireo.SpectralLibrary.resolving_power`) its template is convolved only
+        (:attr:`albireo.SpectralLibrary.resolving_power`), its template is convolved only
         with the quadrature width ``sqrt(sigma_inst^2 - sigma_lib^2)``, since the library
-        already carries the rest, and a library at or below the instrument's resolving
-        power is refused. ``"epochs"`` compares the template composite with the epoch
-        spectra through ``statistics`` (``docs/math.md`` §9.2a) and is the default of
+        already has the rest, and a library at or below the instrument's resolving power
+        is rejected. ``"epochs"`` compares the template composite with the epoch spectra
+        through ``statistics`` (``docs/math.md`` §9.2a) and is the default of
         :meth:`albireo.Fit.match_labels`, which builds them.
 
         In ``"matched"``, convolving the residuals correlates them over the kernel width
-        while the likelihood stays diagonal, so the mis-specification costs a factor of
-        ``1 / sum(k^2)`` in chi-square and ``v sin i`` absorbs it. On AI Phe (HARPS,
-        R = 115,000) matched drove both components to the ``v sin i`` floor and inflated
+        while the likelihood stays diagonal, so the mis-specification inflates chi-square
+        by a factor of ``1 / sum(k^2)`` and ``v sin i`` absorbs it. On AI Phe (HARPS,
+        R = 115,000) matched put both components at the ``v sin i`` floor and inflated
         chi-square by 4.26x against native, where the kernel predicts 4.91x. Neither
-        ``d_hat`` comparison is correctly specified: converged the same way on simulated
-        Gaia RVS binaries, native returned temperatures twice as far from the truth as
-        ``"epochs"`` and formal errors too small by a factor of three to thirty-five
-        (``docs/math.md`` §9.2a).
+        ``d_hat`` comparison is correctly specified. Converged the same way on simulated
+        Gaia RVS binaries, native returned temperatures twice as far from the injected
+        values as ``"epochs"`` and formal errors too small by a factor of three to
+        thirty-five (``docs/math.md`` §9.2a).
     statistics
         The disentangling's :class:`EpochStatistics`, required by ``compare="epochs"`` and
-        refused by the other modes, which would ignore them. Their stars, grid, medium,
-        declared light fractions and library resolving power must match this call, and
-        their operator widths must be the declared instrument width ``lsf_sigma_kms`` (the
+        rejected by the other modes, which would ignore them. Their stars, grid, medium,
+        declared light fractions and library resolving power must match this call. Their
+        operator widths must be the declared instrument width ``lsf_sigma_kms`` (the
         widest, where there are several) reduced for that resolving power and, when
-        :attr:`EpochStatistics.grid_variance_kms2` is set, for the grid's own smoothing. An
-        operator narrowed by any other route, such as a resolving power that is not the
-        library's, is refused.
+        :attr:`EpochStatistics.grid_variance_kms2` is set, for the grid's smoothing. An
+        operator narrowed in any other way, such as a resolving power that is not the
+        library's, is rejected.
     offset_order
         Degree of the additive Chebyshev nuisance per component. The ``m = 0`` term is the
-        unconstrained zero point of ``docs/math.md`` §5.1; the default of 2 also absorbs
-        the slope and curvature that the low-``k`` exchange modes leave behind.
+        unconstrained zero point of ``docs/math.md`` §5.1. The default of 2 also absorbs
+        the slope and curvature left by the low-``k`` exchange modes.
     jitter
-        Whether each component carries a bounded noise-scale site. Defaults to ``True``
-        for the ``d_hat`` comparisons and ``False`` for ``"epochs"``, whose chi-square is
-        exact in data units and which refuses one.
+        Whether each component has a bounded noise-scale site. Defaults to ``True`` for
+        the ``d_hat`` comparisons and ``False`` for ``"epochs"``, whose chi-square is
+        exact in data units and which rejects one.
     exclude_angstrom
         Wavelength ranges to drop: nebular cores, detector gaps, and any region the
         disentangling could not model. Not available in ``"epochs"`` mode, where the
@@ -1147,25 +1148,25 @@ def match_labels(
         so that slow rotation is tried (reasoning in ``_default_scan_vsini``);
         ``scan_velocities`` to five velocities spanning the ``v_kms`` prior.
     top_k
-        How many of the scan's best starting points to optimise from. More than one, since
-        a label surface with two basins is common; the report states when the runners-up
-        were close.
+        How many of the scan's best starting points to optimise from. The default is more
+        than one because a label surface with two basins is common. The report states when
+        the runners-up were close.
     max_steps
         L-BFGS steps per start for ``"native"`` and ``"matched"``, and the iteration cap of
         each Levenberg-Marquardt run for ``"epochs"``, which converges in a median of four.
         ``tol`` is an absolute gradient-norm threshold on a potential whose scale grows
-        with the pixel count, so it is unreachable on real data and ``converged`` reads
+        with the pixel count. It is unreachable on real data, and ``converged`` is
         ``False`` however good an L-BFGS fit is (the same caveat as :func:`albireo.run_map`).
         Convergence is judged from the chi-square against its nulls, which
         :meth:`LabelMatch.summary` prints. ``"epochs"`` ignores ``tol`` and stops when the
         undamped Gauss-Newton step predicts a decrease below 0.001 in chi-square.
     restart_rounds
-        ``"epochs"`` only: the most restart rounds run after the warm-started fits. Each
-        round scans every component's ``v sin i``, then the faintest component's
+        ``"epochs"`` only: the maximum number of restart rounds after the warm-started
+        fits. Each round scans every component's ``v sin i``, then the faintest component's
         ``(Teff, log g)`` library nodes, and, when that component's light has collapsed,
-        a coarse joint grid in its dilution, rotation, temperature and gravity; it refits
-        from the best distinct points. The rounds stop once one gains less than 1 in
-        chi-square. ``0`` disables them.
+        a coarse joint grid in its dilution, rotation, temperature and gravity. It refits
+        from the best distinct points. The rounds stop once a round lowers chi-square by
+        less than 1. ``0`` disables them.
 
     Returns
     -------
@@ -1281,8 +1282,8 @@ def match_labels(
     model_kernels = tuple(jnp.asarray(lsf_kernel) for _ in names)
     if matched:
         # The data side is d_hat, a partial deconvolution to intrinsic resolution, so it
-        # takes the whole instrument profile; a template drawn from a library at its own
-        # resolving power takes only the width the library does not already carry.
+        # takes the whole instrument profile. A template drawn from a library at its own
+        # resolving power takes only the width the library does not already have.
         model_kernels = tuple(
             jnp.asarray(
                 gaussian_kernel(
@@ -1295,8 +1296,8 @@ def match_labels(
         # Convolve both sides, so the comparison happens in the space the data
         # constrained.
         data = np.stack([np.convolve(row, lsf_kernel, mode="same") for row in data])
-        # Convolution correlates the noise; this is the scale of the smoothed residual,
-        # and the jitter site carries whatever the approximation misses.
+        # Convolution correlates the noise. This is the scale of the smoothed residual,
+        # and the jitter site absorbs what the approximation omits.
         sigma = np.sqrt(
             np.stack([np.convolve(row**2, lsf_kernel**2, mode="same") for row in sigma])
         )
@@ -1309,7 +1310,7 @@ def match_labels(
         raise ValueError("exclude_angstrom removed every pixel")
 
     # -- specs -------------------------------------------------------------
-    from albireo.facade import Between, Fixed  # local: the façade imports this module lazily
+    from albireo.facade import Between, Fixed  # local: albireo.facade imports this module lazily
 
     specs: dict[str, Any] = {}
     shared_mh = not isinstance(mh, dict)
@@ -1333,12 +1334,12 @@ def match_labels(
         specs[f"v_{name}"] = _as_spec(star.v_kms, f"v_kms for {name}", Between(-50.0, 50.0))
         if offset_order is not None:
             specs[f"offset_{name}"] = _normal_spec(offset_order + 1, offset_scale)
-        # Bounded rather than a wide normal. The jitter's maximum-likelihood point is the
-        # RMS residual, so as a fit approaches perfect the scale runs to zero and the
-        # log-determinant term grows without limit; with a normal prior the likelihood wins
-        # by a factor of the pixel count, the site diverges, the gradient norm reaches 1e6
-        # and L-BFGS stalls. The bound states that the quoted per-pixel errors are wrong by
-        # at most a factor of five.
+        # The prior is bounded rather than a wide normal. The jitter's maximum-likelihood
+        # point is the RMS residual, so as a fit approaches perfect the scale tends to zero
+        # and the log-determinant term grows without limit. With a normal prior the
+        # likelihood outweighs it by a factor of the pixel count, the site diverges, the
+        # gradient norm reaches 1e6 and L-BFGS stalls. The bound allows the quoted
+        # per-pixel errors to be wrong by at most a factor of five.
         specs[f"log_jitter_{name}"] = Between(float(np.log(0.2)), float(np.log(5.0)), start_at=0.0)
         if not shared_mh:
             specs[f"mh_{name}"] = _as_spec(
@@ -1549,7 +1550,7 @@ class _NormalSpec:
 
 
 def _clip_to_support(spec, value: float) -> float:
-    """Nudge a starting value strictly inside a bounded prior.
+    """Move a starting value strictly inside a bounded prior.
 
     A start exactly on a Uniform's boundary maps to an infinite unconstrained coordinate,
     which numpyro reports only as "cannot find valid initial parameters".
@@ -1596,8 +1597,8 @@ def _laplace(model, result, seed):
 
     The row labels are built from the sites' shapes, not their names: the Chebyshev offsets
     are vectors, so a covariance row is not a site. Zipping sorted site names against the
-    diagonal shifts every entry after the first vector site, which presents as an
-    implausibly small uncertainty rather than as an error.
+    diagonal shifts every entry after the first vector site, which gives an implausibly
+    small uncertainty and raises no error.
     """
     flat = {key: np.atleast_1d(np.asarray(value)) for key, value in result.unconstrained.items()}
     labels: list[str] = []
@@ -1643,12 +1644,12 @@ def _close(a, b, rel: float = 1e-9) -> bool:
 
 
 def _check_statistics(statistics, names, grid, medium, ell0, resolving, lsf_sigma_kms) -> None:
-    """Refuse statistics built for different stars, grid, medium, light or operator.
+    """Reject statistics built for different stars, grid, medium, light or operator.
 
-    The operator is checked through its recorded widths: the grid variance must be none or
+    The operator is checked through its recorded widths. The grid variance must be none or
     ``(7/12) dv^2`` of this grid, each applied width must follow from its quadrature width
     and that variance, and the widest quadrature width with the library's own width restored
-    must be the declared instrument width. The last test refuses an operator narrowed by
+    must be the declared instrument width. The last test rejects an operator narrowed by
     declaring a resolving power that is not the library's.
     """
     if tuple(statistics.names) != tuple(names):
@@ -1913,14 +1914,14 @@ def _layout_light(layout: _Layout, phi, problem):
 class _EpochObjective:
     """``F(phi) = L_data(m(phi)) - 2 log prior``, its gradient and Gauss-Newton matrix.
 
-    In the constrained space and in chi-square units, with no Jacobian term: bounded
-    parameters are held by the optimiser's active set rather than by a transform. With
-    ``J = dm/dphi`` from forward-mode differentiation of the rows, the gradient of
-    ``L_data`` is ``-2 J^T (h - G m)`` and its Gauss-Newton matrix ``2 J^T G J``, exact up
+    It is in the constrained space and in chi-square units, with no Jacobian term, because
+    bounded parameters are held by the optimiser's active set rather than by a transform.
+    With ``J = dm/dphi`` from forward-mode differentiation of the rows, the gradient of
+    ``L_data`` is ``-2 J^T (h - G m)``, and its Gauss-Newton matrix ``2 J^T G J`` is exact up
     to the neglected curvature of ``m(phi)`` because ``L_data`` is quadratic in ``m``. The
-    prior and the hull guard add their exact gradient and Hessian by autodiff; each prior is
-    evaluated on its own slice of ``phi``, so no masked branch can put ``inf * 0`` into the
-    Hessian.
+    prior and the hull guard add their exact gradient and Hessian by autodiff. Each prior is
+    evaluated on its own slice of ``phi``, so no masked branch can introduce ``inf * 0`` into
+    the Hessian.
     """
 
     def __init__(self, layout: _Layout, terms):
@@ -1930,7 +1931,7 @@ class _EpochObjective:
                 value = phi[start] if size == 1 else phi[start : start + size]
                 if isinstance(distribution, dist.Normal):
                     # the quadratic itself, without the normalising constant, so that the
-                    # objective reads as L_data plus the offsets' chi-square
+                    # objective is L_data plus the offsets' chi-square
                     z = (value - distribution.loc) / distribution.scale
                     total = total + jnp.sum(z**2)
                 else:
@@ -2033,8 +2034,8 @@ def _damped_step(gn, grad, free, lam, dscale):
     """Solve ``(H_F + lam D_F) s_F = -g_F`` with Marquardt's diagonal scaling ``D``.
 
     Scaling by the running maximum of the Gauss-Newton diagonal makes the step invariant
-    to a rescaling of the parameters: over its prior, [M/H] moves the chi-square by 1e4
-    while a faint component's log g moves it by a few tens.
+    to a rescaling of the parameters: over its prior, [M/H] changes the chi-square by 1e4
+    while a faint component's log g changes it by a few tens.
     """
     idx = np.flatnonzero(free)
     step = np.zeros_like(grad)
@@ -2058,8 +2059,8 @@ def _levenberg_marquardt(
 ) -> _LMRun:
     """Bounded, damped Gauss-Newton in the constrained space (``d65_converged_labels.md``).
 
-    A parameter on a bound whose gradient points outward is held (the active set), the
-    trial step is projected onto the bounds, a step is accepted when the actual decrease
+    A parameter on a bound whose gradient points outward is held (the active set), and the
+    trial step is projected onto the bounds. A step is accepted when the actual decrease
     exceeds 1e-4 of the quadratic model's prediction, and the damping follows Nielsen's
     gain-ratio update. The run stops when the undamped step predicts a decrease below
     ``_LM_PRED_TOL`` with the active set unchanged ("converged"), when no damping yields a
@@ -2119,8 +2120,8 @@ def _plateau_mask(layout: _Layout, phi, dv_kms: float) -> np.ndarray:
     """``v sin i`` sites below half a model pixel, where the rotation kernel is a delta.
 
     :func:`albireo.operators.rotational_kernel_traced` integrates the profile over pixels, so
-    below half a pixel it is exactly one tap: the objective is exactly flat in ``v sin i``
-    there, its Gauss-Newton row is zero, and the label is unresolved rather than measured.
+    below half a pixel it is exactly one tap. The objective is then exactly flat in
+    ``v sin i``, its Gauss-Newton row is zero, and the label is unresolved.
     """
     mask = np.zeros(layout.n, dtype=bool)
     for name in layout.names:
@@ -2134,8 +2135,8 @@ def _formal_covariance(run: _LMRun, lo, hi, flat) -> tuple[np.ndarray, np.ndarra
     """``(cov, excluded)``: ``2 H^-1`` over the parameters neither at a bound nor flat.
 
     Excluded parameters are conditioned on and their rows are NaN. A matrix that cannot be
-    inverted leaves NaN rather than a pseudo-inverse, which reports a zero variance for a
-    parameter on the rotation plateau.
+    inverted leaves NaN. A pseudo-inverse would give a zero variance for a parameter on the
+    rotation plateau.
     """
     tol = _bound_tol(lo, hi)
     excluded = (run.phi <= lo + tol) | (run.phi >= hi - tol) | (np.diag(run.gn) <= 0.0)
@@ -2162,9 +2163,9 @@ def _vsini_starts(objective, problem, stats, layout, lo, hi, phi, index, n_best=
     """Starts along one component's ``v sin i``, every other parameter held.
 
     The objective is exactly flat below half a model pixel, so a gradient method that starts
-    or lands there cannot leave, even when a lower minimum lies at a few km/s (on the first
-    D65 product all four warm-started fits stopped there, 1.67 in chi-square above the
-    optimum at 11.8 km/s).
+    or arrives there does not leave, even when a lower minimum exists at a few km/s. On the
+    first D65 product all four warm-started fits stopped there, 1.67 in chi-square above the
+    optimum at 11.8 km/s.
     """
     name = layout.names[index]
     j = layout.index(f"vsini_{name}")
@@ -2285,11 +2286,11 @@ def _dilution_trials(layout: _Layout, lo, hi, phi, index):
 def _joint_starts(objective, problem, stats, layout, lo, hi, phi, index, node_tables, n_best=3):
     """Starts from a coarse joint grid in one component's light, rotation and labels.
 
-    A component whose light has collapsed has no labels, so no single-direction move lowers
-    the objective: on the one D65 product where this happened every such restart returned
-    to the collapsed basin, while a joint grid of six radius ratios, five rotations and
-    every other temperature node at three gravities escaped it under one prior
-    configuration (``d65_converged_labels.md``).
+    The labels of a component whose light has collapsed are unconstrained, so no
+    single-direction move lowers the objective. On the one D65 product where this happened,
+    every such restart returned to the collapsed basin. A joint grid of six radius ratios,
+    five rotations and every other temperature node at three gravities left it under one
+    prior configuration (``d65_converged_labels.md``).
     """
     name = layout.names[index]
     axes = layout.label_axes[index]
@@ -2347,7 +2348,7 @@ def _joint_starts(objective, problem, stats, layout, lo, hi, phi, index, node_ta
 def _collapse(layout: _Layout, lo, hi, phi, light, index) -> str | None:
     """Why one component's fit looks collapsed, or ``None``.
 
-    Collapsed means its light fraction is below one percent, or its dilution scalar sits at
+    Collapsed means its light fraction is below one percent, or its dilution scalar is at
     the bottom of its prior, or at least two of its free labels are on their bounds.
     """
     name = layout.names[index]
@@ -2432,8 +2433,8 @@ class EpochFit:
         Whether a run from another start stopped within 9 in chi-square of the optimum with
         some free label more than three formal sigma away.
     notes
-        Anything the restarts could not resolve, such as a collapse that survived the joint
-        restart.
+        Anything the restarts could not resolve, such as a collapse that remained after the
+        joint restart.
     seconds
         Wall time of the optimisation, restarts included.
     """
@@ -2716,23 +2717,22 @@ def _fit_epochs(
 class LabelMatch:
     """Labels for each component, with the nulls against which they should be read.
 
-    Each number is reported against a reference. The chi-square is quoted against a fit with
-    no template at all and against the best raw grid node. Each label's posterior width is
-    quoted against its prior width, since a parameter returned at its prior width was not
-    measured. The Laplace error is quoted against the spread from refitting the
-    disentangling posterior's own draws, because on correlated residuals the formal error
-    runs five to ten times optimistic (Gebruers et al. 2022).
+    The chi-square is quoted against a fit with no template and against the best raw grid
+    node. Each label's posterior width is quoted against its prior width, since a parameter
+    returned at its prior width was not measured. The Laplace error is quoted against the
+    spread from refitting draws from the disentangling posterior, because on correlated
+    residuals the formal error is five to ten times too small (Gebruers et al. 2022).
 
-    In ``"epochs"`` mode (``assumptions["compare"]``) the quantities keep their names and
-    change their space. :attr:`chi2` and both nulls are epoch chi-squares ``L_data`` over
-    :attr:`n_pixels_used` epoch pixels; ``result`` is a :class:`~albireo.MAPResult` whose
-    ``potential`` is half the objective and whose ``num_steps`` are Levenberg-Marquardt
-    iterations; ``covariance`` is ``2 H^-1`` from the Gauss-Newton matrix, in the
-    constrained parameters, with NaN rows for the sites in :attr:`at_bounds`; and
+    In ``"epochs"`` mode (``assumptions["compare"]``) the quantities keep their names but
+    have different definitions. :attr:`chi2` and both nulls are epoch chi-squares ``L_data``
+    over :attr:`n_pixels_used` epoch pixels. ``result`` is a :class:`~albireo.MAPResult`
+    whose ``potential`` is half the objective and whose ``num_steps`` are
+    Levenberg-Marquardt iterations. ``covariance`` is ``2 H^-1`` from the Gauss-Newton
+    matrix, in the constrained parameters, with NaN rows for the sites in :attr:`at_bounds`.
     ``epoch_fit`` (:class:`EpochFit`) records the restarts and any unresolved collapse.
     The formal errors of this mode were measured close to calibrated for Teff, log g and
-    [M/H] and too small by about three for ``v sin i`` and the light fraction
-    (``docs/math.md`` §9.5); :func:`refit_draws` does not apply to it.
+    [M/H] and about three times too small for ``v sin i`` and the light fraction
+    (``docs/math.md`` §9.5). :func:`refit_draws` does not apply to this mode.
 
     References
     ----------
@@ -2776,8 +2776,8 @@ class LabelMatch:
     def flux_ratio_errors(self) -> dict[str, float]:
         """Formal errors of :attr:`flux_ratio` in ``"epochs"`` mode; empty otherwise.
 
-        Measured too small by about three on simulated Gaia RVS binaries, where the
-        remaining light error is carried by the label and orbit errors that the formal
+        They were measured about three times too small on simulated Gaia RVS binaries. The
+        remaining light error is due to the label and orbit errors that the formal
         covariance at a fixed orbit does not include (``docs/math.md`` §9.5).
         """
         return {} if self.epoch_fit is None else dict(self.epoch_fit.light_sigma)
@@ -2825,11 +2825,11 @@ class LabelMatch:
 
     @property
     def radius_ratio(self) -> dict[str, float]:
-        """Fitted radius ratios R_i / R_first, where the dilution model carries them.
+        """Fitted radius ratios R_i / R_first, where the dilution model has them.
 
-        The shared scalar that converts the grids' own continua into light fractions is a
-        radius ratio, so radii known from eclipses give an external check. Empty for the
-        other dilution models, which carry no such scalar.
+        The shared scalar that converts the grids' continua into light fractions is a
+        radius ratio, so radii known from eclipses give an external check. The result is
+        empty for the other dilution models, which have no such scalar.
         """
         if self.problem.dilution != "radius_ratio":
             return {}
@@ -2841,12 +2841,12 @@ class LabelMatch:
         """Label uncertainties.
 
         ``"laplace"`` is the curvature at the MAP, projected to the constrained
-        parameterization by the delta method; in ``"epochs"`` mode it is ``2 H^-1`` from the
+        parameterization by the delta method. In ``"epochs"`` mode it is ``2 H^-1`` from the
         Gauss-Newton matrix, already in the constrained parameters, and a label in
         :attr:`at_bounds` has no entry. ``"draws"`` is the spread over refits of the
         component-spectrum posterior draws (:func:`refit_draws`), which is typically several
         times wider. The difference is the part of the error budget that formal curvature
-        cannot see (``docs/math.md`` §9.5).
+        does not include (``docs/math.md`` §9.5).
         """
         if method == "draws":
             if self.draws is None:
@@ -2893,8 +2893,8 @@ class LabelMatch:
         """d(constrained)/d(unconstrained) at the MAP, for the delta method.
 
         numpyro optimizes bounded sites through a logistic transform, so the unconstrained
-        standard deviation must be pushed back through it. The ``"epochs"`` covariance is
-        already in the constrained parameters.
+        standard deviation must be transformed back through it. The ``"epochs"`` covariance
+        is already in the constrained parameters.
         """
         if self.epoch_fit is not None:
             return 1.0
@@ -2925,7 +2925,7 @@ class LabelMatch:
         """Site pairs the fit could not separate, worst first.
 
         A Teff / log g pair near 0.98 with both free is the published behaviour of this
-        problem (Tamajo et al. 2011) rather than a defect; the remedy is to fix log g from
+        problem (Tamajo et al. 2011) rather than a defect. The remedy is to fix log g from
         the eclipsing solution.
 
         References
@@ -2988,7 +2988,7 @@ class LabelMatch:
 
         For L-BFGS the criterion is an absolute gradient norm that real data rarely reach;
         for the ``"epochs"`` Levenberg-Marquardt it is a predicted decrease below 0.001 in
-        chi-square, which a converged fit does reach.
+        chi-square, which a converged fit reaches.
         """
         if self.epoch_fit is not None:
             return self.epoch_fit.status in ("iteration_budget", "evaluation_budget")
@@ -3047,7 +3047,7 @@ class LabelMatch:
 
     @property
     def chi2(self) -> float:
-        """Chi-square at the MAP, without the jitter rescaling, so the nulls compare.
+        """Chi-square at the MAP, without the jitter rescaling, comparable with the nulls.
 
         In ``"epochs"`` mode, the epoch chi-square ``L_data`` at the optimum.
         """
@@ -3058,11 +3058,11 @@ class LabelMatch:
 
     @property
     def chi2_continuum(self) -> float:
-        """The null with no template at all: the additive nuisance alone, profiled.
+        """The null with no template: the additive nuisance alone, profiled.
 
-        A fitted chi-square not well below this means the spectrum carried no label
-        information and the reported labels are the priors. In ``"epochs"``
-        mode it is the epoch chi-square of the nuisance alone.
+        A fitted chi-square not well below this means the spectrum contained no label
+        information and the reported labels are the priors. In ``"epochs"`` mode it is the
+        epoch chi-square of the nuisance alone.
         """
         if self.epoch_fit is not None:
             return float(self.epoch_fit.chi2_continuum)
@@ -3106,9 +3106,9 @@ class LabelMatch:
     def light_fractions(self, wave=None):
         """Fitted light fractions per component, shape ``(n_star, n_pix)``.
 
-        The spectroscopic light ratio is a deliverable in its own right: published values
-        match light-curve ratios to a few percent, and downstream cross-correlation codes are
-        more sensitive to an incorrect flux ratio than to an incorrect temperature. A
+        The spectroscopic light ratio is itself a result of the fit. Published values match
+        light-curve ratios to a few percent, and downstream cross-correlation codes are more
+        sensitive to an incorrect flux ratio than to an incorrect temperature. A
         :class:`FixedDilution` fit returns the assumed fractions unchanged.
         """
         rows = self._light_fraction_rows()
@@ -3154,8 +3154,8 @@ class LabelMatch:
     def template(self, name: str) -> np.ndarray:
         """The MAP model spectrum for one component, as flux on the fit's grid.
 
-        Broadened and shifted as fitted, and undiluted: a template is the star, not the
-        star's share of the system's light. :mod:`albireo.handoff` writes it to a file.
+        It is broadened and shifted as fitted, and undiluted, since a template represents
+        the star alone. :mod:`albireo.handoff` writes it to a file.
         """
         if name not in self.names:
             raise ValueError(f"unknown component {name!r}; declared: {', '.join(self.names)}")
@@ -3181,9 +3181,9 @@ class LabelMatch:
     def nearest_node(self, name: str) -> dict[str, float]:
         """The closest library node to the fitted labels.
 
-        Pipelines that take a menu choice rather than arbitrary labels (HERMES's fixed
-        masks, Gaia's ``rv_template_*`` grid) need the answer snapped to a node they hold;
-        the grid's own step is the appropriate granularity.
+        Pipelines that select from a fixed set rather than accept arbitrary labels (HERMES's
+        fixed masks, Gaia's ``rv_template_*`` grid) need the fitted labels rounded to a node
+        they hold. The grid's step is the appropriate granularity.
         """
         index = self.names.index(name)
         table = self.node_tables[index]
@@ -3310,11 +3310,12 @@ def _degenerate_lines(flagged, *, epochs: bool) -> list[str]:
     """The "Degenerate pairs" block of :meth:`LabelMatch.summary`.
 
     In the ``"epochs"`` comparison the additive offsets of different components are
-    degenerate by construction: the operator multiplies each component's row by its declared
-    light fraction, and a low-order polynomial is barely changed by the shifts, so only the
-    light-weighted sum of the offsets of each order reaches the epoch spectra, and their
-    correlations run near -0.99 on every fit. Listed one by one they hide the real pairs, so
-    they are grouped into one line; a pair of an offset with a label stays listed.
+    degenerate by construction. The operator multiplies each component's row by its declared
+    light fraction, and a low-order polynomial is nearly unchanged by the shifts, so the
+    epoch spectra depend only on the light-weighted sum of the offsets of each order. The
+    offsets' correlations are near -0.99 on every fit. Listed individually they would
+    obscure the other pairs, so they are grouped into one line. A pair of an offset with a
+    label stays listed.
     """
     if not flagged:
         return []
@@ -3355,9 +3356,9 @@ def refit_draws(match: LabelMatch, draws, *, max_steps: int = 60, seed: int = 0)
     """Refit the labels once per posterior draw of the component spectra.
 
     The Laplace covariance measures the curvature of the likelihood at the optimum, which
-    on correlated residuals understates the uncertainty. This function measures how far the
-    labels move when the component spectra move as the disentangling posterior permits,
-    including the exchange modes that trade flux between components (``docs/math.md``
+    on correlated residuals understates the uncertainty. This function measures how much the
+    labels change when the component spectra vary within the disentangling posterior,
+    including the exchange modes that transfer flux between components (``docs/math.md``
     §9.5). It is the loop that :func:`albireo.handoff.export_draws` documents for an
     external code, run internally.
 
@@ -3371,7 +3372,7 @@ def refit_draws(match: LabelMatch, draws, *, max_steps: int = 60, seed: int = 0)
         rows. They must be joint: independent per-component draws would omit the correlation
         this function propagates.
     max_steps
-        L-BFGS steps per draw, starting from the MAP, which is normally very close.
+        L-BFGS steps per draw, starting from the MAP, which is normally close.
 
     Returns
     -------

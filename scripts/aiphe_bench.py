@@ -1,10 +1,10 @@
 """AI Phoenicis: the three disentangling codes on real archival spectra.
 
 The simulated benchmark in ``fd3_bench.py`` compares albireo, fd3 and shift-and-add against
-an injected truth spectrum. This script runs the comparison on real data, where no truth
+an injected truth spectrum. This script runs the comparison on real data, where no reference
 spectrum exists but the orbit is known to a precision no disentangling code approaches.
 
-AI Phe (HD 6980) eclipses, so its geometry is pinned by the TESS light curve, and its
+AI Phe (HD 6980) eclipses, so its geometry is determined by the TESS light curve, and its
 spectroscopic semi-amplitudes are published from several independent studies agreeing to
 0.1 per cent:
 
@@ -13,31 +13,31 @@ spectroscopic semi-amplitudes are published from several independent studies agr
     omega = 110.30 +/- 0.06 deg     T0 = BJD_TDB 2458362.82847  (primary eclipse)
     -- Maxted et al. (2020), MNRAS 498, 332, Tables 2-3, except the period, which Maxted
        quotes rounded to 24.5924 d from Kirkby-Kent et al. (2016), A&A 591, A124. The
-       unrounded value is carried here: the 8.3e-5 d difference accumulates to 0.0089 d
-       over the 107 cycles back to the first epoch, worth up to 0.107 km/s where the
-       velocity curve is steepest. The K fit absorbs it in its free period; the runs that
+       unrounded value is used here. The 8.3e-5 d difference accumulates to 0.0089 d
+       over the 107 cycles back to the first epoch, or up to 0.107 km/s where the
+       velocity curve is steepest. The K fit absorbs it in its free period. The runs that
        hold the velocities fixed, including the label fit, do not.
 
-The external ground truth is therefore the orbit rather than the component spectra: recover
-K1 and K2 from 36 archival HARPS spectra and compare against values good to 0.014 and
-0.020 per cent.
+The external ground truth is therefore the orbit rather than the component spectra. K1 and
+K2 are recovered from 36 archival HARPS spectra and compared against values good to 0.014
+and 0.020 per cent.
 
-The light ratio is not supplied by the eclipse. The eclipse pins the fractional radii, the
-inclination and the surface-brightness ratio in the photometric band, TESS, centred near
+The light ratio is not supplied by the eclipse. The eclipse determines the fractional radii,
+the inclination and the surface-brightness ratio in the photometric band, TESS, centred near
 7860 A. The light ratio in the spectroscopic window is a different quantity and has to be
-computed from the radii and the two temperatures. It is also strongly wavelength dependent:
-for AI Phe's 6310 K + 5010 K pair with R2/R1 = 1.624, a blackbody estimate gives l2 = 0.375
+computed from the radii and the two temperatures. It is also strongly wavelength dependent.
+For AI Phe's 6310 K + 5010 K pair with R2/R1 = 1.624, a blackbody estimate gives l2 = 0.375
 at 4000 A and 0.510 at 6500 A. The light ratio is far better constrained here than for a
 non-eclipsing system, but quoting the TESS-band value at 5200 A would be a 10 per cent error
 in the quantity every recovered line depth scales by.
 
 Data: 36 HARPS spectra (ESO programme archive, 3782-6913 A), SNR 41-129, covering all
 ten phase bins. Fetched with :mod:`albireo.archive`. Thirty are high-accuracy-mode
-exposures at R = 115,000 and six are high-efficiency (EGGS) exposures at R = 80,000; all
-36 say ``INSTRUME = 'HARPS'``. Until 2026-09-03 every epoch was modelled at the first
-width, because the line-spread function was keyed by instrument name; the width now comes
+exposures at R = 115,000 and six are high-efficiency (EGGS) exposures at R = 80,000. All
+36 have ``INSTRUME = 'HARPS'``. Until 2026-09-03 every epoch was modelled at the first
+width, because the line-spread function was keyed by instrument name. The width now comes
 from each file's own ``SPEC_RES`` (``lsf_sigma_v={"HARPS": ab.PER_EPOCH}``), and
-``scripts/aiphe_offset_tests.py`` measures what the pooling cost.
+``scripts/aiphe_offset_tests.py`` measures the effect of that pooling.
 
 Run:  python scripts/aiphe_bench.py --data DIR [--fd3 PATH] [--fit]
 """
@@ -71,18 +71,18 @@ R1_FRAC, R2_FRAC = 0.037724, 0.061253  # r = R/a, run C
 
 # --- the analysis window -----------------------------------------------------
 # 5150-5250 A: metal-rich, no telluric bands (those start beyond ~6270 A), and it
-# carries the Mg I b triplet, which both an F7 V and a K0 IV show strongly.
+# contains the Mg I b triplet, which both an F7 V and a K0 IV show strongly.
 WINDOW = (5150.0, 5250.0)
 # The disjoint cross-check window, passed with --window. HARPS's inter-CCD gap is
 # 5304.67-5337.61 A, and a window is widened by region_pad_angstrom = 3.0 before pixels are
-# selected, so any start below 5341 A reaches into the gap. mask_flux_gaps removes those
-# pixels (the runs are far longer than its threshold of 8), but clearing the gap is cheaper
-# than masking it. The record in docs/benchmarks.md was taken with a start of 5340 A.
+# selected, so a window starting below 5341 A overlaps the gap. mask_flux_gaps removes those
+# pixels (the runs are far longer than its threshold of 8), but starting beyond the gap is
+# cheaper than masking it. The record in docs/benchmarks.md was taken with a start of 5340 A.
 WINDOW_2 = (5341.0, 5440.0)
 DV_KMS = 0.8  # native HARPS sampling is 0.577 km/s; the narrowest LSF sigma is 1.107
 LSF_SIGMA_V = 299792.458 / 115000.0 / 2.3548  # R = 115,000, the high-accuracy mode
 LSF_SIGMA_EGGS = 299792.458 / 80000.0 / 2.3548  # R = 80,000, the six EGGS-mode epochs
-# Each epoch is modelled at the width its own header declares (D59); the widest sets the
+# Each epoch is modelled at the width given in its own header (D59). The widest sets the
 # grid margin.
 LSF = {"HARPS": ab.PER_EPOCH}
 TAU, ETA = 300.0, 5.0
@@ -91,10 +91,9 @@ TAU, ETA = 300.0, 5.0
 def light_fractions(wave_angstrom: float) -> np.ndarray:
     """Blackbody light ratio at ``wave_angstrom`` from the published radii and Teffs.
 
-    An estimate, not a measurement: real stars are not blackbodies, and the error on this
-    is several per cent. Every recovered line depth scales as 1/l_i, so the value is an
-    assumption the results inherit; ``scripts/m5_light_ratio_demo.py`` quantifies that
-    systematic.
+    The value is an estimate. Real stars are not blackbodies, and the error on this is
+    several per cent. Every recovered line depth scales as 1/l_i, so the results depend on
+    this assumed value. ``scripts/m5_light_ratio_demo.py`` quantifies that systematic.
     """
     h, c, kb = 6.62607015e-34, 2.99792458e8, 1.380649e-23
     lam = wave_angstrom * 1e-10
@@ -123,7 +122,7 @@ def published_velocities(bjd: np.ndarray) -> np.ndarray:
 
     The systemic velocity is absent: albireo's gamma is identically zero (D14), because a
     common shift of both components is exactly degenerate with translating the component
-    spectra. The disentangling does not see it.
+    spectra. The disentangling does not depend on it.
     """
     omega = np.radians(OMEGA_PUB_DEG)
     tperi = float(t_peri_from_t_conj(T0_PUB, period=P_PUB, ecc=ECC_PUB, omega=omega))
@@ -226,7 +225,7 @@ def main() -> None:
             f"(mean-aligned {np.std(diff):.4f}, {core.sum()} px)"
         )
 
-    # ---- the orbit, which carries the external ground truth -------------------
+    # ---- the orbit, which is the external ground truth ------------------------
     if args.fit:
         print("\n--- fitting the orbit, and holding it against the published values ---")
         model = ab.MarginalOrbitModel(
@@ -249,7 +248,7 @@ def main() -> None:
         init = {
             "period": P_PUB,
             "t_conj": T0_PUB,
-            # Start away from the published solution, so agreement is not an echo of the init.
+            # Start away from the published solution, so that agreement is not due to the init.
             "secosw": float(np.sqrt(ECC_PUB) * np.cos(omega)) * 0.85,
             "sesinw": float(np.sqrt(ECC_PUB) * np.sin(omega)) * 0.85,
             "k": jnp.array([K1_PUB * 0.92, K2_PUB * 1.08]),
@@ -260,7 +259,7 @@ def main() -> None:
         fit = ab.run_map(model.model(priors), init=init, max_steps=args.steps)
         print(f"  {fit.num_steps} L-BFGS steps in {time.perf_counter() - t0:.1f} s")
         # A fit that stopped at max_steps has not found the optimum, so convergence is
-        # printed: semi-amplitudes from an unconverged fit cannot be compared with a
+        # printed. Semi-amplitudes from an unconverged fit cannot be compared with a
         # published value good to 0.02%.
         print(f"  converged: {bool(fit.converged)}   |grad| = {float(fit.grad_norm):.3e}")
         if not bool(fit.converged):

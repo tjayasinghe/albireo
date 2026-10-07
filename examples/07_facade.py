@@ -1,37 +1,37 @@
-"""The same fit twice: the expert path, and the `Disentangler` façade over it.
+"""The same fit twice: the expert path, and the `Disentangler` interface over it.
 
-This script is the before/after for ``internal/design.md`` D46. Both halves fit the packaged
-example (a simulated SB2 with a known injected truth), and the two results are asserted to
-agree with each other and with the truth.
+This script compares the two fits (``internal/design.md`` D46). Both halves fit the packaged
+example (a simulated SB2 with known injected values), and the two results are asserted to
+agree with each other and with those values.
 
     python examples/07_facade.py
 
-What the façade derives
------------------------
+What the `Disentangler` interface derives
+-----------------------------------------
 The expert path requires four quantities to be supplied correctly, and an error in any of
-them produces a converged fit with a wrong answer:
+them produces a converged fit with a wrong result:
 
 * Velocity budget (``v_rel_max_kms``). It must bound the largest relative velocity the
   priors allow, not the value the fit converges to. Too small a budget stalls the sampler
-  against a guard it cannot see; through ``log_likelihood`` directly, too small a budget
-  returns a wrong value with no error. The information is already in the ``k`` priors.
-* Grid margin. It must cover that budget plus the LSF kernel radius. Short of it, the
-  shifted model runs off the end of the grid and the fit silently loses flux.
+  at the solver's guard. Through ``log_likelihood`` directly, too small a budget returns a
+  wrong value with no error. The information is already in the ``k`` priors.
+* Grid margin. It must cover that budget plus the LSF kernel radius. Otherwise the shifted
+  model extends beyond the end of the grid and the fit loses flux with no error.
 * Conjunction phase. It must be located before optimizing. The marginal likelihood is
   sharply multimodal in phase (the scan below spans 10⁵ nats), and L-BFGS started in the
-  wrong trough converges to the wrong answer.
-* Smoothness hyperparameters. They are fitted by ML-II and must then be carried into every
-  downstream call; omitting them raises no error.
+  wrong mode converges to the wrong solution.
+* Smoothness hyperparameters. They are fitted by ML-II and must then be passed to every
+  downstream call. Omitting them raises no error.
 
-A fifth difference is structural: in the expert path ``priors`` and ``init`` are two dicts
-that must be kept consistent by hand. A façade spec carries both.
+A fifth difference is structural. In the expert path ``priors`` and ``init`` are two dicts
+that must be kept consistent manually. One `Disentangler` specification defines both.
 
-What the façade does not derive
--------------------------------
-The light fractions. With constant light fractions the likelihood depends only on the
-products ``l_i * d_i`` (``docs/math.md`` §5.2), so every recovered depth scales as
-``1 / l_i`` and no diagnostic in the fit can detect a wrong value. ``Star(light=...)`` is
-required, and every summary repeats it under ``Assumed, not measured``.
+What the `Disentangler` interface does not derive
+-------------------------------------------------
+The light fractions are not derived. With constant light fractions the likelihood depends
+only on the products ``l_i * d_i`` (``docs/math.md`` §5.2), so every recovered depth scales
+as ``1 / l_i`` and no diagnostic in the fit can detect a wrong value. ``Star(light=...)``
+is required, and every summary repeats it under ``Assumed, not measured``.
 
 Usage
 -----
@@ -54,11 +54,11 @@ LSF_SIGMA = 6.5
 
 
 def expert_path(dataset, *, max_steps: int) -> dict:
-    """The fit through the low-level API: grid, model, priors, scan and MAP by hand."""
-    # 1. The velocity budget, by hand. The k priors below reach 90 km/s each, at up to
-    #    e = 0.64 (the secosw/sesinw bounds), on topocentric data, so the bound is
+    """The fit through the low-level API: grid, model, priors, scan and MAP set up manually."""
+    # 1. The velocity budget, set manually. The k priors below reach 90 km/s each, at up
+    #    to e = 0.64 (the secosw/sesinw bounds), on topocentric data, so the bound is
     #    (90 + 90) * 1.64 + 2 * 30 = 355. A smaller value such as 160 truncates the prior
-    #    against the solver's guard instead of raising an error.
+    #    at the solver's guard instead of raising an error.
     v_rel_max = 355.0
     grid = ab.LogGrid.covering(dataset, dv_kms=4.0, v_margin_kms=v_rel_max, lsf_sigma_kms=LSF_SIGMA)
     model = ab.MarginalOrbitModel(
@@ -70,7 +70,7 @@ def expert_path(dataset, *, max_steps: int) -> dict:
         prior=ab.SmoothnessPrior(tau=np.full(2, 300.0), eta=np.full(2, 5.0)),
     )
 
-    # 2. The priors and the starting values: two dicts whose keys must agree.
+    # 2. The priors and the starting values are two dicts whose keys must agree.
     priors = {
         "period": dist.Uniform(5.5, 6.5),
         "t_conj": dist.Uniform(-0.5, 6.0),
@@ -83,8 +83,8 @@ def expert_path(dataset, *, max_steps: int) -> dict:
     init = {
         "period": 6.0,
         "t_conj": 0.0,
-        # Not exactly (0, 0): the parameterization is singular there, the gradient is
-        # NaN, and numpyro reports only "Cannot find valid initial parameters".
+        # The start is offset from (0, 0), where the parameterization is singular, the
+        # gradient is NaN, and numpyro reports only "Cannot find valid initial parameters".
         "secosw": 0.2,
         "sesinw": 0.1,
         "k": jnp.array([50.0, 50.0]),
@@ -111,7 +111,7 @@ def expert_path(dataset, *, max_steps: int) -> dict:
         model_args=(model.problem,),
     )
 
-    # 5. Carry the fitted hyperparameters downstream, by hand.
+    # 5. Pass the fitted hyperparameters downstream manually.
     params = ab.orbit_parameters(fit.params)
     return {
         "period": float(params["period"]),
@@ -122,7 +122,7 @@ def expert_path(dataset, *, max_steps: int) -> dict:
 
 
 def facade_path(dataset, *, max_steps: int):
-    """The same fit through the façade declaration."""
+    """The same fit through a `Disentangler` declaration."""
     dis = ab.Disentangler(
         dataset,
         components=[ab.Star("primary", light=LIGHT[0]), ab.Star("secondary", light=LIGHT[1])],
@@ -168,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
     print(fit.summary())
     print(f"\n[{time.time() - t0:5.1f}s] elapsed")
 
-    # The check this example exists for: the two paths must agree.
+    # The example's main check is that the two paths agree.
     got = np.asarray([fit.star(n)["k"] for n in ("primary", "secondary")])
     print()
     print("=" * 78)

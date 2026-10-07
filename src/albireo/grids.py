@@ -1,8 +1,8 @@
 """Log-wavelength grids and the mapping between radial velocity and log-wavelength shift.
 
 The model grid is uniform in ``x = ln(lambda)``, so a Doppler shift is a pure translation in
-``x`` (``docs/math.md`` §1.1). All velocity and pixel conversions go through
-:func:`log_doppler_shift`, which is the single place the Doppler convention is defined.
+``x`` (``docs/math.md`` §1.1). All velocity and pixel conversions use
+:func:`log_doppler_shift`, the only place where the Doppler convention is defined.
 
 The module also provides the IAU-adopted air/vacuum conversions, :func:`vacuum_to_air` and
 :func:`air_to_vacuum`.
@@ -71,8 +71,9 @@ def vacuum_to_air(wave_vacuum):
     Most optical spectrographs and optical line lists use air wavelengths; vacuum is used in
     the UV and the IR and by ESPRESSO and Gaia RVS. The difference is 0.87 Angstrom at
     3000 A, rising to 2.74 A at 10000 A. As a velocity it is nearly constant at 83 km/s
-    across the optical (87.4 at 3000 A, 82.8 at Halpha, 82.2 at 10000 A), the same order as
-    the orbital semi-amplitudes albireo measures, and it does not average out over epochs.
+    across the optical (87.4 at 3000 A, 82.8 at Halpha, 82.2 at 10000 A). This is the same
+    order as the orbital semi-amplitudes albireo measures, and it does not average out over
+    epochs.
 
     The conversion uses the IAU-adopted Edlén (1966) refractivity in the Birch & Downs (1994)
     parameterization, evaluated at the vacuum wavenumber: the convention Morton (2000)
@@ -108,8 +109,8 @@ def air_to_vacuum(wave_air):
     """Convert standard-air wavelengths [Angstrom] to vacuum, the inverse of :func:`vacuum_to_air`.
 
     The refractivity is defined at the vacuum wavenumber, so the inverse has no closed form;
-    two fixed-point iterations are used. The refractivity changes by ~1e-8 over the 0.03% by
-    which the wavelength moves, so the first iteration is correct to ~1e-11 Angstrom and the
+    two fixed-point iterations are used. The refractivity changes by ~1e-8 over the 0.03%
+    change in wavelength, so the first iteration is correct to ~1e-11 Angstrom and the
     second makes the round trip exact to float64. The tests verify the round trip to
     1e-10 Angstrom over 3000-10000 Angstrom.
 
@@ -173,7 +174,7 @@ class LogGrid:
     ) -> LogGrid:
         """Build a grid covering ``[wave_min, wave_max]`` with pixel width ``dv_kms``.
 
-        The first pixel sits exactly at ``wave_min``; the last pixel is at or just above
+        The first pixel is exactly at ``wave_min``; the last pixel is at or just above
         ``wave_max``.
         """
         if not (wave_min > 0 and wave_max > wave_min):
@@ -202,13 +203,14 @@ class LogGrid:
         The margin beyond the data is set by two effects, plus a few pixels of slack:
 
         - Velocity. A component shifted by ``v`` maps model pixel ``q`` onto data at
-          ``q + xi(v)/dx``, so the grid must extend beyond the data by the largest shift any
-          component takes: the orbital semi-amplitudes, plus the barycentric motion when the
-          data are topocentric or a telluric component is present. Otherwise the shifted
-          model runs off the end of the grid and the flux there is lost without a warning.
+          ``q + xi(v)/dx``. The grid must therefore extend beyond the data by the largest
+          shift of any component: the orbital semi-amplitudes, plus the barycentric motion
+          when the data are topocentric or a telluric component is present. Otherwise the
+          shifted model extends past the end of the grid and the flux there is lost without
+          a warning.
         - The LSF. Convolution mixes a further ``truncate * sigma`` pixels in from each side.
-          A margin smaller than the kernel radius lets the convolution address columns off
-          the model grid, which the shift operators would then read back.
+          With a margin smaller than the kernel radius, the convolution would address columns
+          outside the model grid, which the shift operators would then read back.
 
         Parameters
         ----------
@@ -286,7 +288,7 @@ class LogGrid:
     def velocity_to_pixels(self, v_kms):
         """Shift in pixels corresponding to radial velocity ``v_kms``.
 
-        This is the quantity consumed by the shift operators. Differentiable under JAX.
+        This is the quantity used by the shift operators. Differentiable under JAX.
         """
         return log_doppler_shift(v_kms, relativistic=self.relativistic) / self.dx
 

@@ -1,10 +1,10 @@
 """Tests for the binary populations (``albireo.population``).
 
-Three kinds of claim: the physics helpers reproduce known numbers (the notebook's
-semi-amplitudes, the solar main sequence, the eclipse geometry); the parametric draw is
-reproducible, respects its declared ranges and produces systems whose semi-amplitudes,
-light ratios and inclinations are consistent with each other; and the catalogue adapters
-map every column they are given and fill the rest.
+Three kinds of claim are tested. The physics helpers reproduce known numbers (the
+notebook's semi-amplitudes, the solar main sequence, the eclipse geometry). The parametric
+draw is reproducible, respects its declared ranges and produces systems whose
+semi-amplitudes, light ratios and inclinations are consistent with each other. The
+catalogue adapters map every column they are given and fill the rest.
 """
 
 from __future__ import annotations
@@ -101,14 +101,14 @@ def test_the_twin_excess_is_the_fraction_of_the_wide_companions():
     pdf = _mass_ratio_pdf(m1, logp, grid)
     twins = grid >= 0.95
     # The power law continues under the twin box at the amplitude it has at q = 0.9 (the
-    # density is tabulated, and its last cell before the box carries the edge's ramp);
-    # what stands above it is the excess, a fraction of the unit mass on 0.3 < q < 1.
+    # density is tabulated, and its last cell before the box contains the edge's ramp).
+    # The density above it is the excess, a fraction of the unit mass on 0.3 < q < 1.
     at = int(np.argmin(np.abs(grid - 0.9)))
     amplitude = pdf[at] / (grid[at] / 0.3) ** -0.5
     power = amplitude * (grid / 0.3) ** -0.5
     excess = np.trapezoid((pdf - power)[twins], grid[twins])
     assert excess == pytest.approx(_f_twin(m1, logp), abs=0.01)
-    # A grid cut at 0.4 sees the conditional density: the same excess, renormalised.
+    # A grid cut at 0.4 gives the conditional density: the same excess, renormalised.
     cut = np.linspace(0.4, 1.0, 6001)
     pdf_cut = _mass_ratio_pdf(m1, logp, cut)
     frac_full = np.trapezoid(pdf[grid >= 0.4], grid[grid >= 0.4])
@@ -118,7 +118,7 @@ def test_the_twin_excess_is_the_fraction_of_the_wide_companions():
 
 
 def test_the_magnitude_limited_draw_favours_the_bright_and_the_separated():
-    """A magnitude-limited draw reaches further for the luminous, and keeps the resolvable."""
+    """A magnitude-limited draw reaches further for luminous systems and keeps the resolvable."""
     common = dict(seed=5, mass_range=(0.6, 1.5), period_range=(0.8, 200.0))
     field = draw_population(150, mass_weighting="volume", **common)
     bright = draw_population(150, mass_weighting="magnitude", min_separation_kms=40.0, **common)
@@ -195,15 +195,14 @@ def test_populations_round_trip_through_json(tmp_path, library):
 
 
 def test_the_ecliptic_rotation_agrees_with_astropy():
-    """The hand-written rotation against the reference implementation of the frames.
+    """The rotation formula against the reference implementation of the frames.
 
-    astropy is not a dependency of albireo; this test runs where it happens to be
-    installed. ``BarycentricTrueEcliptic`` adds the nutation of the equinox and of the
-    obliquity to the mean J2000 frame the rotation uses, and ``GeocentricTrueEcliptic``
-    places the origin at the Earth rather than the barycentre; both differences stay well
-    inside an arcminute, and a position enters this module only through the ecliptic
-    latitude that sets the transit count and through the position a transit forecast is
-    requested for.
+    astropy is not a dependency of albireo, so this test runs only where it is installed.
+    ``BarycentricTrueEcliptic`` adds the nutation of the equinox and of the obliquity to
+    the mean J2000 frame the rotation uses, and ``GeocentricTrueEcliptic`` places the
+    origin at the Earth rather than the barycentre. Both differences are well below an
+    arcminute. A position enters this module only through the ecliptic latitude that sets
+    the transit count and through the position for which a transit forecast is requested.
     """
     astropy_coordinates = pytest.importorskip("astropy.coordinates")
     units = pytest.importorskip("astropy.units")
@@ -242,7 +241,7 @@ def test_drawn_systems_carry_the_position_their_latitude_belongs_to():
     # Uniform in longitude means uniform in right ascension: no quadrant is left empty.
     counts = np.histogram([s.ra_deg for s in systems], bins=4, range=(0.0, 360.0))[0]
     assert counts.min() > 0
-    # A record written before there were positions is still a record: they default to None.
+    # A record written without positions is still read: the positions default to None.
     older = {k: v for k, v in systems[0].to_dict().items() if k not in ("ra_deg", "dec_deg")}
     bare = BinarySystem.from_dict(older)
     assert bare.ra_deg is None and bare.dec_deg is None
@@ -328,7 +327,7 @@ def test_gaia_rows_are_completed(library):
     assert first.m1 == 1.1 and first.m2 == 0.6 and first.n_transits == 21
     assert first.g_mag == 9.5 and first.g_rp == pytest.approx(0.5)
     assert first.ecl_lat_deg == 33.0 and np.isfinite(first.grvs)
-    # The inclination reconciles the catalogue's K with the masses.
+    # The inclination is set so that the masses reproduce the catalogue's K.
     k1, _ = semi_amplitudes(first.m1, first.m2, first.period, first.ecc, first.incl)
     assert float(k1) == pytest.approx(30.0, rel=1e-6)
     second = systems[1]

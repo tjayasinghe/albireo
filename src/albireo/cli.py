@@ -1,15 +1,15 @@
 """The ``albireo`` command: ``init``, ``run``, ``demo`` and ``fetch``.
 
 The command is a thin layer over :mod:`albireo.pipeline`, whose configuration schema is
-the façade's own vocabulary plus the label and velocity stages. ``albireo init`` writes an
-annotated TOML configuration; ``albireo run`` passes such a file to
-:func:`albireo.pipeline.run_pipeline`; ``albireo demo`` runs the same pipeline on two
-simulated stars with known answers; and ``albireo fetch`` downloads a BLOeM star's public
-epochs and prints the ``[[stars]]`` entry that would analyse them.
+that of the ``Disentangler`` interface plus the label and velocity stages. ``albireo init``
+writes an annotated TOML configuration. ``albireo run`` passes such a file to
+:func:`albireo.pipeline.run_pipeline`. ``albireo demo`` runs the same pipeline on two
+simulated stars with known injected values. ``albireo fetch`` downloads a BLOeM star's
+public epochs and prints the ``[[stars]]`` entry that would analyse them.
 
 No scientific decision is made here. Every default the pipeline applies is stated in the
 template it writes, and the quantities the pipeline cannot infer (a light fraction, a
-wavelength medium) are required by the schema rather than defaulted by the command.
+wavelength medium) are required by the schema and have no default.
 """
 
 from __future__ import annotations

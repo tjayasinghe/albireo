@@ -1,16 +1,16 @@
 """M3 injection-coverage study: calibration of the marginal orbital posterior.
 
-For each injection, a truth θ* is drawn from the *sampling priors* (including the
+For each injection, a value θ* is drawn from the sampling priors (including the
 disk constraint and the bandwidth-guard truncation, replicated exactly), a dataset is
 simulated at θ*, hyperparameters are refit by ML-II (MAP), and NUTS samples the
-orbital posterior. Recorded per site: the SBC rank of the truth among the posterior
-draws, the z-score of the posterior mean, and central-interval coverage hits.
+orbital posterior. Recorded per site: the SBC rank of the injected value among the
+posterior draws, the z-score of the posterior mean, and central-interval coverage hits.
 
-This is not strict SBC over the full joint model: the injected spectra are random line
+This is not strict SBC over the full joint model. The injected spectra are random line
 lists rather than draws from the smoothness prior, so the spectral prior is
 realistically misspecified and (tau, eta) are refit per injection. Rank uniformity for
-the orbital sites remains the calibration target; a plug-in (empirical Bayes) optimism
-of a few percent in coverage is the documented trade (math.md §7.3).
+the orbital sites remains the calibration target. A plug-in (empirical Bayes) optimism
+of a few percent in coverage is the documented trade-off (math.md §7.3).
 
 Usage:  python scripts/m3_coverage.py --n-inj 24 --out coverage.json
 """
@@ -40,7 +40,7 @@ from albireo.kepler import t_peri_from_t_conj
 from albireo.simulate import InstrumentSpec, OrbitParams, simulate_dataset
 from albireo.simulate import synthetic_deviation_spectrum as synth_spectrum
 
-# Observing setup (matches the gate test in tests/test_inference.py)
+# Observing setup (matches the acceptance test in tests/test_inference.py)
 GRID = ab.LogGrid.from_wavelength_range(5000.0, 5045.0, dv_kms=5.5)
 P0, T0 = 6.31, 2.05
 ELL = np.array([0.62, 0.38])
@@ -93,8 +93,8 @@ def one_injection(i: int, seed: int, warmup: int, samples: int) -> dict:
     ]
     spec = InstrumentSpec(wave=np.arange(5003.0, 5042.0, 0.11), sigma_v_lsf=7.0, snr=130.0)
 
-    # A scaffold model on a placeholder dataset supplies the static geometry for
-    # truth rejection; the real model is rebuilt on the simulated data below.
+    # A scaffold model on a placeholder dataset supplies the static geometry for the
+    # rejection in draw_truth. The real model is rebuilt on the simulated data below.
     ds0, _ = simulate_dataset(
         GRID,
         comps,

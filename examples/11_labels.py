@@ -7,27 +7,28 @@ values.
 
 It runs offline. The synthetic grid is a toy built in this file, because the published
 libraries (BOSZ, POLLUX) are hundreds of megabytes and the example must run in CI and
-without a network. Everything above the grid (interpolation, broadening, the dilution
+without a network. Everything that uses the grid (interpolation, broadening, the dilution
 model, the nuisance, the optimizer, the two error estimates) is the production code path.
 
-Three results to check in the output.
+Three results should be checked in the output.
 
 1. A wrong assumed light fraction is absorbed by the dilution, not by the temperature. The
    disentangler is given light fractions that are wrong by a factor of about 1.3. The
-   likelihood sees only the products ``l_i d_i`` (``docs/math.md`` §5.2), so the error
-   rescales every line depth and is indistinguishable from a temperature error unless the
-   fit has a dilution parameter to absorb it. The run compares a joint radius-ratio fit
-   against one with the dilution frozen; the temperatures differ.
+   likelihood depends only on the products ``l_i d_i`` (``docs/math.md`` §5.2), so the
+   error rescales every line depth and is indistinguishable from a temperature error unless
+   the fit has a dilution parameter to absorb it. The run compares a joint radius-ratio fit
+   against one with the dilution frozen, and the temperatures differ.
 
 2. The k = 0 zero point is fitted and reported. Each component's constant offset lies in
    the null space of the disentangling problem (§5.1). The additive Chebyshev nuisance
-   absorbs it, and the fitted value is printed, because a large value is a statement about
-   the disentangling.
+   absorbs it, and the fitted value is printed, because a large value indicates a large
+   zero-point offset in the disentangled component.
 
-3. Two error bars and the ratio between them. The formal Laplace error is the curvature at
-   the optimum, which underestimates the error on correlated residuals; the literature finds
-   it optimistic by five to ten times. The second estimate refits the labels once per joint
-   posterior draw of the component spectra. Both are printed side by side.
+3. Two error bars are reported, with the ratio between them. The formal Laplace error is
+   the curvature at the optimum, which underestimates the error on correlated residuals.
+   The literature finds it five to ten times too small. The second estimate refits the
+   labels once per joint posterior draw of the component spectra. Both are printed side by
+   side.
 
 The accuracy target is that of §9.6: Teff to 2-3%, log g and [M/H] to 0.15 dex, v sin i to
 10%. Beyond that, the epoch velocities are insensitive to the choice of template. Labels
@@ -55,7 +56,7 @@ TRUTH = {
     "B": {"teff": 4460.0, "logg": 4.55, "mh": -0.15, "vsini": 27.0},
 }
 TRUE_LIGHT = np.array([0.62, 0.38])
-# The light fractions given to the disentangling. They are wrong by design: without eclipses
+# The light fractions given to the disentangling. They are wrong by design. Without eclipses
 # a light ratio is an assumption, and the example shows that the error is recoverable.
 ASSUMED_LIGHT = np.array([0.72, 0.28])
 
@@ -69,13 +70,12 @@ MH_AXIS = np.arange(-1.0, 0.51, 0.25)
 
 
 def toy_spectrum(teff, logg, mh, wave):
-    """A stand-in for a synthetic spectrum, with each label driving its own lines.
+    """A stand-in for a synthetic spectrum, with each label controlling its own lines.
 
-    If two labels moved the same lines in the same way they would be interchangeable, and a
-    fit would drive the chi-square to zero along a curve through label space without
-    recovering the injected values. Here Teff, log g and [M/H] each control their own lines,
-    so the map from labels to spectrum is invertible and the recovery below tests the code
-    rather than the fixture.
+    If two labels changed the same lines in the same way they would be interchangeable, and
+    a fit would reach zero chi-square along a curve through label space without recovering
+    the injected values. Here Teff, log g and [M/H] each control their own lines, so the map
+    from labels to spectrum is invertible and the recovery below tests the code.
     """
     t = (teff - 4800.0) / 600.0
     g = logg - 4.0
@@ -90,8 +90,8 @@ def toy_spectrum(teff, logg, mh, wave):
     flux = np.ones_like(wave)
     for center, depth in lines:
         flux = flux - depth * np.exp(-0.5 * ((wave - center) / 0.25) ** 2)
-    # A real grid's continuum falls with Teff across the optical; that wavelength
-    # dependence is what makes the light ratio measurable.
+    # The continuum of a real grid falls with Teff across the optical, and that wavelength
+    # dependence makes the light ratio measurable.
     log_continuum = 30.0 + 4.0 * np.log(teff / 5000.0) - 0.025 * (wave - wave[0]) / 100.0
     return flux, log_continuum
 
@@ -113,10 +113,10 @@ def build_library():
         normalized=np.asarray(normalized),
         log_continuum=np.asarray(continua),
         wave=wave,
-        # Required, with no default: air and vacuum differ by ~83 km/s, and the upstream
-        # documentation is not reliable (BOSZ changed convention between 2017 and 2024
-        # under one name). For a real library, `line_core_medium` measures it before it is
-        # declared.
+        # The medium has no default, because air and vacuum differ by ~83 km/s and the
+        # upstream documentation is not reliable (BOSZ changed convention between 2017 and
+        # 2024 under one name). For a real library, `line_core_medium` measures it before
+        # it is declared.
         medium="air",
         meta={"grid": "toy (examples/11_labels.py)", "vmicro": "n/a", "citation": "none"},
     )
@@ -132,7 +132,7 @@ def inject(library, grid):
         kernel = np.asarray(ab.rotational_kernel(labels["vsini"] / grid.dv_kms))
         broadened = np.convolve(deviation, kernel, mode="same")
         # The disentangler recovers (w / l0) * t: the true light fraction over the assumed
-        # one (math.md §9.1). This scaling is what makes the ratio recoverable.
+        # one (math.md §9.1). This scaling makes the ratio recoverable.
         rows.append(broadened * TRUE_LIGHT[i] / ASSUMED_LIGHT[i])
     rows = np.stack(rows)
     return rows + np.random.default_rng(20260827).normal(0.0, NOISE, rows.shape)

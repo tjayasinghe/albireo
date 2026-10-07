@@ -1,25 +1,25 @@
 """fd3 comparison harness (M5): export, run both codes, compare (internal/design.md §1).
 
-Simulates an SB2 on a common ln-lambda grid (fd3's required sampling; the native
-grid is the model grid here, so neither code resamples), writes fd3 v3.1 input
-files (format verified against the official examples; see docs/benchmarks.md M5),
-runs the albireo fixed-orbit solve, and, when an fd3 binary is available, runs
-fd3 in separation mode on identical data and compares recovered component spectra
-and wall time.
+The script simulates an SB2 on a common ln-lambda grid (fd3's required
+sampling). The native grid is the model grid, so neither code resamples. It
+writes fd3 v3.1 input files (format verified against the official examples; see
+"fd3 comparison harness" in docs/benchmarks.md) and runs the albireo fixed-orbit
+solve. When an fd3 binary is available, it runs fd3 in separation mode on identical
+data and compares recovered component spectra and wall time.
 
 Without an fd3 binary the export and the albireo side still run and write
-everything needed; point --fd3 at the binary once built (source:
+everything needed. Pass the built binary with --fd3 (source:
 http://sail.zpf.fer.hr/fdbinary/fd3.tar.gz, ~1.9 MB, needs GSL; no license stated
 on the page, so contact the author before redistribution).
 
-fd3 format facts this exporter respects (all verified against the fd3 v3.1 source
+fd3 format facts used by this exporter (all verified against the fd3 v3.1 source
 and official example files):
 - master file header "# <ncols> X <nrows>", '#' at byte 0, uppercase X;
-- column 1 is ln(wavelength), *exactly* equidistant, ascending (fd3 derives the
+- column 1 is ln(wavelength), exactly equidistant, ascending (fd3 derives the
   step from the two endpoints only and never checks uniformity);
-- control stream is a flat whitespace token list with NO comments: master, z0, z1,
+- control stream is a flat whitespace token list with no comments: master, z0, z1,
   root, 3 component switches, M x (t[d], rv_corr[km/s], sigma, lf per enabled
-  component), 13 (value, step) orbital pairs (wide orbit first; omega in DEGREES;
+  component), 13 (value, step) orbital pairs (wide orbit first, omega in degrees,
   step 0 = fixed), nruns, niter, stoprat;
 - component B's RV gets the opposite sign internally (matches albireo's omega+pi
   convention for component 2), K's are entered positive;
@@ -68,7 +68,7 @@ def simulate():
     tperi = float(t_peri_from_t_conj(TCONJ, period=P, ecc=ECC, omega=OMEGA))
     orbit = ab.OrbitParams(period=P, t_peri=tperi, ecc=ECC, omega=OMEGA, k=(K1, K2))
     # native grid = model grid interior (fd3 needs the common log grid; edge pixels
-    # are dropped so shifted spectra stay clear of the zero-padded boundary)
+    # are dropped so shifted spectra do not reach the zero-padded boundary)
     interior = GRID.wave[60:-60]
     spec = ab.InstrumentSpec(wave=interior, sigma_v_lsf=LSF_V, snr=SNR)
     ds, truth = ab.simulate_dataset(
@@ -154,12 +154,12 @@ def run_albireo(ds, truth):
 def _time_in_fresh_process(obs: np.ndarray, shifts_pix: np.ndarray, n_iter: int) -> float:
     """Wall time for ``disentangle`` measured in a child interpreter.
 
-    Timed in this process, after the XLA solve, the identical call reads 40-80% slower: the
+    Timed in this process after the XLA solve, the identical call is 40-80% slower. The
     solve's allocations leave the Windows CRT heap serving shift-and-add's ~35 kB temporaries
     through microsecond free-list walks, so allocating ufuncs slow by ~4x while their ``out=``
-    counterparts are unchanged (measured; docs/benchmarks.md "D50 re-run"). Both previously
-    recorded walls were taken through that convention. A child process starts with a clean
-    heap and never imports jax.
+    counterparts are unchanged (measured; docs/benchmarks.md, "Re-run of the three-code
+    comparison on one machine", D50). Both previously recorded wall-clock times were measured
+    in that way. A child process starts with a clean heap and never imports jax.
     """
     child = (
         "import sys, time\n"
@@ -191,12 +191,12 @@ def _time_in_fresh_process(obs: np.ndarray, shifts_pix: np.ndarray, n_iter: int)
 def run_shift_and_add(ds, truth, truth_d, n_iter: int = 7):
     """The third code: the clean-room shift-and-add of ``scripts/shift_and_add.py``.
 
-    Run on the same data, with the same velocities and with the same linear shift operator
-    albireo uses, so that what is compared is the algorithm rather than two interpolators.
+    Run on the same data, with the same velocities and the same linear shift operator that
+    albireo uses, so that the comparison is of the algorithms.
     """
     from shift_and_add import disentangle  # local module, not part of the package
 
-    # The observations live on the model grid's interior, so a velocity is a pure pixel
+    # The observations are on the model grid's interior, so a velocity is a pure pixel
     # shift: xi(v) / dx on a uniform ln-lambda grid.
     shifts_pix = np.asarray(
         [[float(ab.log_doppler_shift(v) / GRID.dx) for v in truth.velocities[i]] for i in range(2)]
@@ -209,7 +209,7 @@ def run_shift_and_add(ds, truth, truth_d, n_iter: int = 7):
     print(f"\nshift-and-add (clean-room, {n_iter} sweeps):")
     for i in range(2):
         # The iteration's fixed point is the light-weighted l_i * d_i, because that is what
-        # the composite contains. Undilute before comparing with the undiluted truth.
+        # the composite contains. Undilute before comparing with the injected spectra.
         comp = rec[i] / ELL[i]
         spectrum_metrics(comp, truth_d[i], f"shift-and-add comp {i + 1}")
     print(f"  shift-and-add wall (fresh process, min of 5): {wall:.3f} s")
@@ -274,7 +274,7 @@ def main():
     wall_fd3 = time.time() - t0
     run_shift_and_add(ds, truth, truth_d)
     mod = read_fd3_matrix(Path(f"{root_fixed}.mod"))
-    # fd3 components are normalized flux; ours are deviations. Interpolate fd3's
+    # fd3 components are normalized flux; albireo's are deviations. Interpolate fd3's
     # output (its ln-lambda column) onto the interior pixel grid for comparison.
     i0 = 60
     lnlam = GRID.x0 + GRID.dx * (i0 + np.arange(truth_d.shape[1]))

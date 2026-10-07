@@ -1,16 +1,16 @@
 """HR 6819 with the per-epoch response site (D33).
 
-The D30 record (docs/benchmarks.md, "HR 6819") names three follow-ups: a better noise
-model, a wider window, and a check of whether the period offset survives a per-epoch
-continuum treatment. D31 built the noise-scale site and measured it relocating the
-period by 174 formal sigmas. This script is the continuum check: both windows, MAP with
-and without an order-2 per-epoch multiplicative response site
-(``albireo.forward.with_response``, D33), everything else held at the D30 configuration
-so the comparison is against the recorded numbers.
+The D30 record (docs/benchmarks.md, "HR 6819") lists three follow-ups: a better noise
+model, a wider window, and a check of whether a per-epoch continuum treatment removes
+the period offset. D31 added the noise-scale site, which moved the period by 174 formal
+sigmas. This script runs the continuum check: MAP fits of both windows with and without
+an order-2 per-epoch multiplicative response site (``albireo.forward.with_response``,
+D33), everything else held at the D30 configuration so the comparison is against the
+recorded numbers.
 
 Uncertainties are conditional-orbit Laplace: curvature over the orbit sites only, with
-hyperparameters (and response coefficients, where fitted) held at their MAP values and
-pushed to constrained space by sampling. They are statistical only; the D30/D31 record
+hyperparameters (and response coefficients, where fitted) held at their MAP values, and
+mapped to constrained space by sampling. They are statistical only. The D30/D31 record
 states that window-to-window and noise-model-to-noise-model spread is the realistic
 error bar on this dataset.
 
@@ -128,11 +128,11 @@ def priors_and_init(t_conj0: float, n_epochs: int, *, response: bool):
 def conditional_orbit_sigmas(model, priors, fit_params, *, seed=0, n_draws=4096):
     """Laplace curvature over the orbit sites, nuisances fixed at MAP, constrained std.
 
-    The unconstrained covariance is pushed to constrained space by sampling and
-    applying the sites' bijections directly (the k sites live behind a sigmoid, so the
-    delta method would need its jacobian anyway), and not via numpyro's postprocess,
-    which replays the whole model (marginal likelihood included) per draw.
-    Deterministic given the seed.
+    The unconstrained covariance is mapped to constrained space by sampling and
+    applying the sites' bijections directly (the k sites are transformed by a sigmoid,
+    so the delta method would need its jacobian). numpyro's postprocess would rerun the
+    whole model (marginal likelihood included) per draw. The result is deterministic
+    given the seed.
     """
     fixed = {s: fit_params[s] for s in fit_params if s in ("log_tau", "log_eta", "response")}
     orbit_priors = {s: d for s, d in priors.items() if s in ORBIT_SITES}

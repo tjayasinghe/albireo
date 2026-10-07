@@ -1,13 +1,13 @@
-"""Design-target scale ladder: jitted marginal eval + gradient timings (M5 gate).
+"""Design-target scale ladder: jitted marginal eval + gradient timings (M5 acceptance test).
 
 Reproduces the benchmark ladder of ``docs/benchmarks.md`` (SB2, 50 epochs, fixed
 per-component half-bandwidth 256 => stacked p = 513): four problem sizes up to the
 design target of ~2x10^5 model pixels. The problem is passed to ``jax.jit`` as a
-pytree argument, never closed over (design ledger D27), and the marginal is
+pytree argument, never closed over (decision record D27), and the marginal is
 assembled by the direct band path (D28).
 
 Run:  python scripts/m5_scale_bench.py [--rows 0 3] [--reps 2]
-On GPU the script runs unchanged; JAX picks up the accelerator. x64 stays on (the
+On GPU the script runs unchanged; JAX detects the accelerator. x64 stays on (the
 solver contract).
 """
 

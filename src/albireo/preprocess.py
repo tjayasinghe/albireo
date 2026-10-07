@@ -1,22 +1,22 @@
 """Turning a reduced spectrum into an :class:`~albireo.data.EpochData`.
 
 The disentangling model is ``1 + sum_i l_i d_i`` with ``d_i`` a deviation from a unit
-continuum (``docs/math.md`` §1.4), and every weight is an inverse variance, so a
-pipeline-reduced archival spectrum requires three operations before it can enter a
-:class:`~albireo.data.Dataset`.
+continuum (``docs/math.md`` §1.4), and every weight is an inverse variance. A
+pipeline-reduced archival spectrum therefore requires three operations before it can enter
+a :class:`~albireo.data.Dataset`.
 
 1. Continuum normalization (:func:`fit_continuum`, :func:`normalize`). Merged echelle spectra
-   carry the blaze and the instrument response and are routinely delivered unnormalized; ESO
+   retain the blaze and the instrument response and are routinely delivered unnormalized; ESO
    Phase 3 marks this with ``CONTNORM = False``. albireo's response term ``r_j`` is fixed at
    build time rather than inferred, so the normalization done here is the normalization the
    model uses.
-2. An inverse variance (:func:`estimate_ivar`). Many archival products ship no usable error
-   array: the ESO Phase 3 FEROS spectra, for instance, carry an ``ERR`` column that is
-   entirely ``NaN``. The noise must then be estimated from the spectrum itself, in a way that
-   deep absorption lines cannot bias.
+2. An inverse variance (:func:`estimate_ivar`). Many archival products have no usable error
+   array: the ESO Phase 3 FEROS spectra, for instance, have an ``ERR`` column that is
+   entirely ``NaN``. The noise must then be estimated from the spectrum, in a way that
+   deep absorption lines do not bias.
 3. Region selection and masking (:func:`select_region`, :func:`mask_ranges`,
    :func:`mask_tellurics`, :func:`mask_spikes`). Masking is always ``ivar = 0`` rather than
-   deletion; :func:`mask_ranges` records the reason.
+   deletion; :func:`mask_ranges` gives the reason.
 
 Everything here is pure NumPy, as in :mod:`albireo.data`, so the preprocessing is inspectable
 without JAX. Nothing here reads a file; see :mod:`albireo.io` for that.
@@ -53,12 +53,12 @@ __all__ = [
 
 
 # Main telluric absorption complexes in the optical, as (lambda_min, lambda_max) in
-# Angstrom (air). The O2 gamma, B and A bands are sharp and deep; the H2O complexes are
+# Angstrom (air). The O2 gamma, B and A bands are sharp and deep. The H2O complexes are
 # forests of weaker lines whose strength tracks the precipitable water vapour, so they
-# vary between exposures in a way no static telluric component can absorb. The ranges are
-# generous: masking loses one pixel per pixel masked, while a telluric line left in the
-# data produces a spurious component. Not exhaustive below 5800 A, where telluric
-# absorption is weak enough to ignore at typical SNR.
+# vary between exposures in a way that a static telluric component cannot model. The
+# ranges are wide: masking loses one pixel per pixel masked, while a telluric line left
+# in the data produces a spurious component. The list is not exhaustive below 5800 A,
+# where telluric absorption is weak enough to ignore at typical SNR.
 TELLURIC_BANDS: tuple[tuple[float, float], ...] = (
     (5870.0, 6000.0),  # H2O
     (6270.0, 6330.0),  # O2 gamma
@@ -86,11 +86,11 @@ def _finite_weights(flux: np.ndarray, weights: np.ndarray | None) -> np.ndarray:
     return np.where(np.isfinite(flux), w, 0.0)
 
 
-# Knots per half-power smoothing length. Eight is comfortably more than the two a
-# piecewise-linear basis needs to represent a feature of that width, and it fixes the
-# penalty weight at (8 / 2pi)^4 ~ 2.6 (see _KnotBasis). A per-pixel smoother would instead
-# need lam ~ (L_pixels / 2pi)^4, which is ~1e12 at the 5000-pixel smoothing lengths a merged
-# echelle spectrum calls for; there the weight term is lost to rounding and the nominally
+# Knots per half-power smoothing length. Eight is well above the two a piecewise-linear
+# basis needs to represent a feature of that width, and it fixes the penalty weight at
+# (8 / 2pi)^4 ~ 2.6 (see _KnotBasis). A per-pixel smoother would instead need
+# lam ~ (L_pixels / 2pi)^4, which is ~1e12 at the 5000-pixel smoothing lengths a merged
+# echelle spectrum requires. There the weight term is lost to rounding and the nominally
 # positive-definite matrix factorizes as singular.
 _KNOTS_PER_LENGTH = 8.0
 
@@ -103,10 +103,10 @@ class _KnotBasis:
         ``sum_p w_p (y_p - z(p))^2 + lam * sum_k (D2 z_knots)_k^2``
 
     The normal matrix is ``B^T W B + lam D2^T D2``. ``B`` has two nonzeros per row at adjacent
-    knots, so ``B^T W B`` is tridiagonal and the sum is pentadiagonal: one ``solveh_banded``,
-    ``O(m)``. Reducing the unknowns from pixels to knots keeps the system well conditioned at
-    long smoothing lengths (see :data:`_KNOTS_PER_LENGTH`) and keeps the iteration cheap; a
-    continuum with a 150 A scale does not require 20000 free parameters.
+    knots, so ``B^T W B`` is tridiagonal and the sum is pentadiagonal, solved by one
+    ``solveh_banded`` call in ``O(m)``. Reducing the unknowns from pixels to knots keeps the
+    system well conditioned at long smoothing lengths (see :data:`_KNOTS_PER_LENGTH`) and the
+    iteration cheap. A continuum with a 150 A scale does not require 20000 free parameters.
     """
 
     def __init__(self, n: int, smooth_pixels: float):
@@ -115,7 +115,7 @@ class _KnotBasis:
         u = np.linspace(0.0, m - 1.0, n)
         self.i0 = np.clip(np.floor(u).astype(np.intp), 0, m - 2)
         self.frac = u - self.i0
-        # Half-power scale in knots; ~_KNOTS_PER_LENGTH except where m hit a clamp.
+        # Half-power scale in knots; ~_KNOTS_PER_LENGTH except where m was clamped.
         self.lam = float(((smooth_pixels * (m - 1) / max(n - 1, 1)) / (2.0 * math.pi)) ** 4)
 
     def evaluate(self, z_knots: np.ndarray) -> np.ndarray:
@@ -166,52 +166,50 @@ def fit_continuum(
     """Fit a smooth continuum through the upper envelope of a spectrum.
 
     The fit is performed on ``log(flux)``. A continuum is a multiplicative factor (blaze,
-    throughput, extinction) and on a merged echelle spectrum it is large: over 3850-4750 A a
-    FEROS exposure of a B star falls by a factor of 20. A curvature penalty applied to the
-    flux itself cannot track that, since a stiff smoother lags a steep exponential and the
-    normalized spectrum comes out 30% wrong. In the log the same fall is nearly a straight
+    throughput, extinction) that varies strongly across a merged echelle spectrum: over
+    3850-4750 A a FEROS exposure of a B star falls by a factor of 20. A curvature penalty
+    applied to the flux cannot follow that, since a stiff smoother lags a steep exponential
+    and the normalized spectrum is wrong by 30%. In the log the same fall is nearly a straight
     line, and straight lines lie in the null space of the second-difference penalty, so they
-    cost nothing to represent. Absorption depths are additive in the log, so the rejection
-    thresholds below are fractional.
+    are not penalized. Absorption depths are additive in the log, so the rejection thresholds
+    below are fractional.
 
     The fit proceeds in two stages, both penalized least-squares fits on a knot grid
     (:class:`_KnotBasis`).
 
     Stage 1, asymmetric envelope. The fit is iteratively reweighted with weight ``asymmetry``
-    above the current curve and ``1 - asymmetry`` below it, which moves the curve up out of
-    the absorption lines. On its own it sits about one noise sigma high, because it fits the
-    upper envelope of the noise as well as of the lines.
+    above the current curve and ``1 - asymmetry`` below it, which raises the curve above
+    the absorption lines. This stage alone leaves the curve about one noise sigma high,
+    because it fits the upper envelope of the noise as well as of the lines.
 
     Stage 2, asymmetric sigma clipping. Pixels more than ``low_reject`` sigma below or
     ``high_reject`` sigma above the curve are given zero weight and the smoother is refit on
-    the survivors, with sigma re-estimated robustly at each pass. The thresholds are
+    the remaining pixels, with sigma re-estimated robustly at each pass. The thresholds are
     asymmetric because absorption lines are deep and one-sided while cosmic rays are high and
-    rare. The surviving pixels are then continuum, so the curve centres on them instead of on
-    their upper envelope.
+    rare. The remaining pixels are then continuum, so the curve is centred on them instead of
+    on their upper envelope.
 
     Parameters
     ----------
     wave : array_like
         Wavelengths, shape ``(n,)``, strictly increasing. Used only to convert
-        ``smooth_angstrom`` into pixels (via the median spacing); the fit itself runs on the
-        pixel index, so on a non-uniform grid the smoothing scale is correct on average
-        rather than everywhere.
+        ``smooth_angstrom`` into pixels (via the median spacing). The fit runs on the pixel
+        index, so on a non-uniform grid the smoothing scale is correct only on average.
     flux : array_like
         Observed flux, shape ``(n,)``. Non-finite and non-positive samples are given zero
         weight, since the log is undefined there. They need not be removed beforehand; the
         smoother interpolates across them, so the returned continuum is strictly positive
         everywhere.
     smooth_angstrom : float, optional
-        Half-power smoothing scale. Structure much broader than this is continuum; structure
-        much narrower is signal. Default: one eighth of the wavelength span. It must be
-        wider than the widest line to be preserved, or the continuum absorbs that line.
-        Broad lines are handled mainly by the rejection stage rather than by stiffness, so a
-        scale that follows the blaze is preferable.
+        Half-power smoothing scale. Structure much broader than this is treated as continuum
+        and structure much narrower as signal. Default: one eighth of the wavelength span.
+        It must be wider than the widest line to be preserved, or that line is fitted as
+        continuum. Broad lines are handled mainly by the rejection stage rather than by
+        stiffness, so a scale that follows the blaze is preferable.
     weights : array_like, optional
-        Prior per-pixel weights, shape ``(n,)``, non-negative. A 0/1 mask keeps known-bad
-        pixels out of the fit entirely. Default: all ones. These weight the log residuals,
-        so passing ``ivar`` (which weights flux residuals) is not statistically exact; use
-        it as a mask.
+        Prior per-pixel weights, shape ``(n,)``, non-negative. A 0/1 mask excludes known-bad
+        pixels from the fit. Default: all ones. These weight the log residuals, so passing
+        ``ivar`` (which weights flux residuals) is not statistically exact; use it as a mask.
     asymmetry : float, optional
         Stage-1 weight given to pixels above the curve; ``1 - asymmetry`` below.
         Must lie in ``(0.5, 1)``. Default 0.97.
@@ -219,7 +217,7 @@ def fit_continuum(
         Stage-2 clipping thresholds in robust sigma, below and above the curve.
         Defaults 1.5 and 3.0.
     envelope_iterations, clip_iterations : int, optional
-        Iteration counts for the two stages; both stop early once the fit stops moving.
+        Iteration counts for the two stages; both stop early once the fit stops changing.
         Defaults 12 and 6.
 
     Returns
@@ -230,7 +228,7 @@ def fit_continuum(
     Raises
     ------
     ValueError
-        If the arrays disagree in shape, fewer than 5 samples are supplied, no pixel has
+        If the arrays differ in shape, fewer than 5 samples are supplied, no pixel has
         both positive flux and positive weight, or a parameter is out of range.
 
     See Also
@@ -326,13 +324,13 @@ def der_snr_sigma(flux) -> float:
     ``sigma = 1.482602 / sqrt(6) * median(|2 f_i - f_{i-2} - f_{i+2}|)``
 
     The lag-2 stencil annihilates any locally linear signal, so a spectral line contributes
-    only through its curvature, and the median makes even that contribution robust: the
-    estimate reflects the noise rather than the lines. Skipping the immediate neighbours also
-    limits the bias when a pipeline has resampled the spectrum and correlated adjacent pixels,
-    as a merged, rebinned echelle product has.
+    only through its curvature. The median is robust to that contribution, so the estimate
+    reflects the noise. Skipping the immediate neighbours also limits the bias when a
+    pipeline has resampled the spectrum and correlated adjacent pixels, as a merged,
+    rebinned echelle product has.
 
-    This is the recipe ESO uses for the ``SNR`` keyword of its Phase 3 spectra, so an estimate
-    made here is directly comparable with the archive's own.
+    This is the estimator ESO uses for the ``SNR`` keyword of its Phase 3 spectra, so an
+    estimate made here is directly comparable with the archive's value.
 
     Parameters
     ----------
@@ -343,7 +341,7 @@ def der_snr_sigma(flux) -> float:
     -------
     float
         The noise standard deviation in the units of ``flux``; ``nan`` if fewer than
-        five finite samples survive.
+        five samples are finite.
 
     References
     ----------
@@ -369,9 +367,9 @@ def estimate_ivar(
 ) -> np.ndarray:
     """Estimate per-pixel inverse variances from the spectrum itself.
 
-    For archival products with no usable error array. The noise is measured with
+    Intended for archival products with no usable error array. The noise is measured with
     :func:`der_snr_sigma` (Stoehr et al. 2008) in ``n_bins`` wavelength bins, and the binned
-    estimates are turned into a per-pixel ``sigma(lambda)`` by one of the ``scaling`` rules
+    estimates are converted to a per-pixel ``sigma(lambda)`` by one of the ``scaling`` rules
     below. The estimate is binned because a per-pixel noise estimate is itself noisy, and
     noisy weights bias a maximum-likelihood fit, whereas a smooth ``sigma(lambda)`` does not.
 
@@ -393,7 +391,7 @@ def estimate_ivar(
         - ``"poisson"`` (default): fit ``sigma^2 = s^2 / continuum`` for a single constant
           ``s``. In a photon-limited spectrum the normalized flux has variance inversely
           proportional to the collected counts, so this one-parameter law has the correct
-          shape and averages every bin into it. Falls back to ``"interpolate"``, with a
+          shape and is determined by all the bins. Falls back to ``"interpolate"``, with a
           warning, if the continuum is not everywhere positive.
         - ``"interpolate"``: linearly interpolate the binned sigmas over wavelength. This
           makes no assumption about the origin of the noise; it applies when the throughput
@@ -419,13 +417,13 @@ def estimate_ivar(
 
     Notes
     -----
-    The result estimates the noise of the delivered product and inherits whatever the
-    reduction pipeline did to it. Resampling in particular correlates neighbouring pixels, so
-    the diagonal inverse-variance model albireo uses is an approximation for any archival
-    product that has been rebinned onto a common wavelength grid (``docs/math.md`` §1.1 gives
-    the same reason for not resampling in albireo, but an archive may already have done it).
-    The lag-2 stencil keeps the amplitude approximately right; the neglected correlation makes
-    formal uncertainties mildly optimistic.
+    The result estimates the noise of the delivered product and includes the effects of the
+    reduction pipeline. Resampling in particular correlates neighbouring pixels, so the
+    diagonal inverse-variance model albireo uses is an approximation for any archival product
+    that has been rebinned onto a common wavelength grid. ``docs/math.md`` §1.1 gives the
+    same reason for not resampling in albireo, but an archive may already have done it. The
+    lag-2 stencil keeps the amplitude approximately right; the neglected correlation makes
+    formal uncertainties slightly too small.
 
     References
     ----------
@@ -517,11 +515,10 @@ def normalize(
 ):
     """Divide out a fitted continuum; return ``(flux_norm, ivar_or_None, continuum)``.
 
-    A composition of :func:`fit_continuum` with the division, plus one guard: where the fitted
-    continuum falls to a small fraction of its own median (the far blue end of a merged
-    echelle spectrum, a dead order, the edge of a chip) the ratio diverges, so those pixels are
-    marked bad (``nan`` flux, ``ivar = 0``) instead of entering the model as large spurious
-    deviations.
+    Composes :func:`fit_continuum` with the division and adds one guard. The ratio diverges
+    where the fitted continuum falls to a small fraction of its median (the far blue end of a
+    merged echelle spectrum, a dead order, the edge of a chip). Those pixels are marked bad
+    (``nan`` flux, ``ivar = 0``) instead of entering the model as large spurious deviations.
 
     Parameters
     ----------
@@ -529,7 +526,7 @@ def normalize(
         Wavelengths and the observed (unnormalized) flux, shape ``(n,)``.
     err : array_like, optional
         Observed flux uncertainties in the same units, shape ``(n,)``. When supplied, the
-        returned inverse variance is ``(continuum / err) ** 2``, the pipeline's own error
+        returned inverse variance is ``(continuum / err) ** 2``, the pipeline's error
         propagated through the division. When ``None`` the second return value is ``None``
         and :func:`estimate_ivar` should be called on the result.
     smooth_angstrom, weights, **continuum_kwargs
@@ -575,9 +572,9 @@ def normalize(
 def _replace(epoch: EpochData, **changes) -> EpochData:
     """Rebuild an epoch with some fields replaced, re-running its validation.
 
-    ``dataclasses.replace`` would do the same, but going through the constructor explicitly
-    revalidates every derived epoch, so a slicing or masking error surfaces as a
-    ``ValueError`` naming the field rather than as a distorted fit.
+    ``dataclasses.replace`` would do the same, but calling the constructor explicitly
+    revalidates every derived epoch, so a slicing or masking error raises a ``ValueError``
+    naming the field instead of distorting a fit.
     """
     return EpochData(
         wave=changes.get("wave", epoch.wave),
@@ -588,8 +585,8 @@ def _replace(epoch: EpochData, **changes) -> EpochData:
         instrument=changes.get("instrument", epoch.instrument),
         mask=changes.get("mask", epoch.mask),
         # Every field of EpochData is listed explicitly. A field added there and not added
-        # here is dropped when an epoch is trimmed or masked, without any error: `medium`
-        # must be carried through so that trimming does not discard the wavelength scale.
+        # here is dropped when an epoch is trimmed or masked, with no error raised: `medium`
+        # must be copied so that trimming does not discard the wavelength scale.
         medium=changes.get("medium", epoch.medium),
         lsf_sigma_kms=changes.get("lsf_sigma_kms", epoch.lsf_sigma_kms),
     )
@@ -599,8 +596,8 @@ def select_region(epoch: EpochData, wave_min: float, wave_max: float) -> EpochDa
     """Return the contiguous slice of ``epoch`` inside ``[wave_min, wave_max]``.
 
     Reduces a full echelle spectrum to the region to be modelled. Cutting the ends off a
-    spectrum is safe; removing interior pixels distorts the bin edges of the survivors, so
-    interior removals go through :func:`mask_ranges`.
+    spectrum is safe. Removing interior pixels distorts the bin edges of the remaining
+    pixels, so interior pixels are masked with :func:`mask_ranges`.
 
     Parameters
     ----------
@@ -641,11 +638,11 @@ def mask_ranges(epoch: EpochData, ranges: Iterable[Sequence[float]]) -> EpochDat
 
     The pixels remain in the array. albireo takes bin edges at the midpoints between
     neighbouring samples (:func:`albireo.operators.bin_edges_from_centers`), so deleting an
-    interior block makes the two pixels bracketing the hole absorb half the gap each. The
-    rebin row support is a maximum over pixels and it sets the solver half-bandwidth, whose
-    cost is quadratic, so a few deleted telluric windows can multiply the runtime of the whole
-    fit. Setting ``ivar = 0`` leaves the sampling regular and the bandwidth unchanged;
-    :func:`albireo.forward.build_problem` warns if it detects the other pattern.
+    interior block widens the two pixels beside the gap by half the gap each. The rebin row
+    support is a maximum over pixels and it sets the solver half-bandwidth, whose cost is
+    quadratic, so a few deleted telluric windows can multiply the runtime of the whole fit.
+    Setting ``ivar = 0`` leaves the sampling regular and the bandwidth unchanged;
+    :func:`albireo.forward.build_problem` warns if it detects a deleted block.
 
     Parameters
     ----------
@@ -707,7 +704,7 @@ def mask_tellurics(
         Wavelength ranges to mask. Default :data:`TELLURIC_BANDS`.
     velocity_pad_kms : float, optional
         Extra width added to each side of every band, expressed as a velocity.
-        Default 40 km/s, which covers the full barycentric swing with margin.
+        Default 40 km/s, which covers the full barycentric velocity range with margin.
 
     Returns
     -------
@@ -791,18 +788,17 @@ def mask_flux_gaps(epoch: EpochData, *, min_run: int = 8, warn: bool = True) -> 
     """Zero the inverse variance across contiguous runs of non-positive flux.
 
     A detector gap is not a measurement of zero flux, but nothing in a Phase 3 product states
-    that. The pixels arrive finite and unflagged, and for the many pipelines that ship no
+    that. The pixels are finite and unflagged, and for the many pipelines that provide no
     error array the inverse variance estimated from the local scatter is small across a flat
     run of zeros, so the gap is weighted like good data. HARPS spectra are one case: the two
-    CCDs leave a 32.9 A hole at 5304.7-5337.6 A, and a 100 A window placed across it arrives
-    33% zeros at full weight, which yields disentangled component spectra with negative flux.
+    CCDs leave a 32.9 A gap at 5304.7-5337.6 A, so a 100 A window placed across it is 33%
+    zeros at full weight, which yields disentangled component spectra with negative flux.
 
     Only contiguous runs are treated as gaps. :attr:`RawSpectrum.bad_pixels` does not treat
     zero flux as missing: a single zero may be a saturated core, a clipped cosmic ray or a
-    genuine measurement, and no generic rule separates those from a gap. Real spectra do not
-    hold exactly zero for eight consecutive pixels. Isolated non-positive pixels are left
-    alone, following the readers' quality-flag policy: they may decline to answer but may
-    not guess.
+    valid measurement, and no general rule separates those from a gap. A measured spectrum
+    is not exactly zero for eight consecutive pixels. Isolated non-positive pixels are left
+    unmasked, as in the readers' quality-flag policy: an ambiguous value is not interpreted.
 
     Parameters
     ----------
@@ -863,23 +859,23 @@ def share_wavelength_grid(
     """Put epochs that differ only by sub-pixel offsets onto one shared wavelength array.
 
     Some pipelines apply the barycentric correction by shifting before resampling onto a fixed
-    step, so each exposure lands on its own grid: the ESO Phase 3 FEROS spectra of one target
-    have the same 0.03 A step but start wavelengths spread over 0.78 A and lengths differing
-    by tens of pixels. albireo handles that correctly by giving each distinct grid its own
-    rebin operator (:func:`albireo.forward._epoch_groups`), but every group's assembly pre-pass
-    is live in the same compiled graph: one group per exposure was measured at several times
+    step, so each exposure has its own grid. The ESO Phase 3 FEROS spectra of one target have
+    the same 0.03 A step but start wavelengths spread over 0.78 A and lengths differing by
+    tens of pixels. albireo handles that correctly by giving each distinct grid its own rebin
+    operator (:func:`albireo.forward._epoch_groups`), but every group's assembly pre-pass is
+    part of the same compiled graph. One group per exposure was measured at several times
     the memory of one shared grid, with a much larger program to compile.
 
-    When the grids agree to well within a pixel, this function collapses them to one. The
+    When the grids agree to well within a pixel, this function replaces them with one. The
     operation is a relabelling, not a resampling: no flux value is modified and the ``ivar``
     model stays diagonal. Only the wavelength assigned to each sample changes, by at most
     ``atol_kms``. Epochs are trimmed to their common overlap, so the shared array is exact
     for all of them.
 
-    Alignment is by index, ``round((wave[0] - reference[0]) / step)``, never by value
-    comparison: a search for the nearest wavelength at a window edge can land one native pixel
-    out, and one FEROS pixel is 1.4 km/s, a radial-velocity error far larger than the
-    sub-pixel mismatch being repaired.
+    Alignment is by index, ``round((wave[0] - reference[0]) / step)``, not by value
+    comparison. A search for the nearest wavelength at a window edge can be off by one native
+    pixel, and one FEROS pixel is 1.4 km/s, a radial-velocity error far larger than the
+    sub-pixel mismatch being corrected.
 
     Parameters
     ----------
@@ -897,7 +893,7 @@ def share_wavelength_grid(
     -------
     list of EpochData
         Aligned epochs, in the input order. Each shares one ``wave`` array object with the
-        others of its instrument, which is what makes them a single operator group.
+        others of its instrument, which makes them a single operator group.
 
     Raises
     ------

@@ -1,9 +1,9 @@
-"""Forward-model regressions found by putting archival spectra through the stack.
+"""Regression tests of the forward model on configurations from archival spectra.
 
-Every configuration here comes from real ESO Phase-3 FEROS data (``internal/design.md`` D30)
-and none of them is produced by the simulator, which is why each survived until the first
-observed dataset went through: per-exposure wavelength grids, non-finite flux at masked
-pixels, and epochs that extend past the model grid.
+Every configuration here occurs in ESO Phase-3 FEROS data (``internal/design.md`` D30):
+per-exposure wavelength grids, non-finite flux at masked pixels, and epochs that extend
+past the model grid. The simulator produces none of them, so tests on simulated data do
+not cover them.
 """
 
 from __future__ import annotations
@@ -59,10 +59,10 @@ def _loglike(dataset):
 def test_epochs_with_different_grids_are_grouped_not_rejected():
     """A pipeline that shifts before resampling gives one grid per exposure.
 
-    ``build_problem`` used to require bit-identical ``wave`` arrays within an instrument.
-    Real archival data does not satisfy that — 51 ESO FEROS spectra of one target sit on
-    28 distinct grids — and the documented workaround, relabelling epochs as separate
-    *instruments*, would fork the LSF and response tables along with them.
+    ``build_problem`` must not require bit-identical ``wave`` arrays within an instrument.
+    Archival data does not satisfy that: 51 ESO FEROS spectra of one target are on 28
+    distinct grids. The documented workaround, relabelling epochs as separate
+    instruments, would also split the LSF and response tables.
     """
     ds = _dataset([0.0, 1e-4, 0.02], lengths=[400, 398, 401])
     problem = build_problem(
@@ -119,7 +119,7 @@ def test_split_groups_give_the_same_answer_as_one_group():
 
 
 def test_marginal_orbit_model_deduplicates_instruments_across_groups():
-    """The ``lsf_sigma`` site is per instrument; one entry per *group* would be wrong."""
+    """The ``lsf_sigma`` site is per instrument; one entry per group would be wrong."""
     ds = _dataset([0.0, 1e-4, 0.02])
     model = ab.MarginalOrbitModel(
         GRID,
@@ -133,18 +133,18 @@ def test_marginal_orbit_model_deduplicates_instruments_across_groups():
     assert model.instruments == ("A",), "one entry per instrument, not per operator group"
 
 
-# ------------------------------------------------------- garbage at zero-weight pixels
+# -------------------------------------------------- invalid flux at zero-weight pixels
 
 
 @pytest.mark.parametrize("garbage", [np.nan, np.inf, -np.inf, 1e300])
 def test_non_finite_flux_at_zero_weight_pixels_is_ignored(garbage):
-    """``data.py`` documents that a masked pixel's flux is never read. It has to be true.
+    """A masked pixel's flux must never be read, as ``data.py`` documents.
 
-    ``z = flux - r * base`` was formed unmasked, and every consumer multiplies ``z`` by
-    the weight — but ``0 * nan`` is ``nan``, so one such pixel took the entire marginal
-    log-likelihood to ``nan``. :func:`albireo.preprocess.normalize` writes exactly this
-    input wherever the fitted continuum collapses, which on a merged echelle spectrum is
-    routine rather than exotic.
+    Every consumer multiplies ``z = flux - r * base`` by the weight, but ``0 * nan`` is
+    ``nan``. If ``z`` were formed unmasked, one such pixel would make the entire marginal
+    log-likelihood ``nan``. :func:`albireo.preprocess.normalize` writes this input
+    wherever the fitted continuum falls to a small fraction of its median, which is
+    routine on a merged echelle spectrum.
     """
     n = 400
     flux = 1.0 + 0.01 * RNG.standard_normal(n)
@@ -161,7 +161,7 @@ def test_non_finite_flux_at_zero_weight_pixels_is_ignored(garbage):
 
 
 def test_a_fully_masked_epoch_does_not_poison_the_likelihood():
-    """The degenerate end of the same case: an exposure with no usable pixel at all."""
+    """The limiting case of the above: an exposure with no usable pixel."""
     n = 400
     flux = np.full(n, np.nan)
     ivar = np.zeros(n)
@@ -180,12 +180,12 @@ def test_a_fully_masked_epoch_does_not_poison_the_likelihood():
 
 
 def test_row_support_warning_is_not_triggered_by_a_narrow_model_grid():
-    """Regression: the support statistic used to include rows the operator never touched.
+    """The support statistic must exclude rows that have no entries in the operator.
 
-    Native pixels lying entirely outside the model grid have no rebin entries, and their
-    "support" was computed as ``0 - int64_max + 1``. Once more than half the epoch lay
-    outside, the reported median was int64 minimum and the warning fired with every number
-    in it wrong — and a warning that cries wolf gets tuned out before the real one arrives.
+    Native pixels lying entirely outside the model grid have no rebin entries, and
+    including them gives a support of ``0 - int64_max + 1``. With more than half the epoch
+    outside, the reported median is then the int64 minimum and every number in the
+    warning is wrong. False warnings lead users to ignore valid ones.
     """
     n = 2000
     wave = 4470.0 + 0.05 * np.arange(n)  # 4470-4570 A: most of it outside GRID
@@ -209,9 +209,9 @@ def test_row_support_warning_is_not_triggered_by_a_narrow_model_grid():
 
 
 def test_a_region_disjoint_from_the_model_grid_says_so():
-    """Picking a window the grid does not reach used to fail as 'empty rebin operator'."""
+    """A window disjoint from the grid must be reported as such, not as 'empty rebin operator'."""
     n = 500
-    wave = 4300.0 + 0.05 * np.arange(n)  # 4300-4325 A, nowhere near GRID's 4500-4530
+    wave = 4300.0 + 0.05 * np.arange(n)  # 4300-4325 A, disjoint from GRID's 4500-4530
     ds = ab.Dataset(
         [
             ab.EpochData(
@@ -228,7 +228,7 @@ def test_a_region_disjoint_from_the_model_grid_says_so():
 
 
 def test_weighted_pixels_outside_the_model_grid_warn():
-    """Silently dropping weighted data is the failure this guard exists to surface."""
+    """The guard reports weighted data that would otherwise be dropped silently."""
     n = 1000
     wave = 4490.0 + 0.05 * np.arange(n)  # starts 10 A blueward of the grid
     ds = ab.Dataset(
@@ -256,7 +256,7 @@ def test_log_grid_covering_leaves_the_shift_and_lsf_margin():
     margin_px = np.log(data_lo / grid.wave[0]) / grid.dx
     needed = abs(grid.velocity_to_pixels(v_margin)) + np.ceil(4.0 * sigma / grid.dv_kms)
     assert margin_px >= needed
-    # And a grid built that way must not trip the coverage warning.
+    # A grid built that way must not trigger the coverage warning.
     with warnings.catch_warnings():
         warnings.simplefilter("error", RuntimeWarning)
         build_problem(
@@ -269,11 +269,11 @@ def test_log_grid_covering_leaves_the_shift_and_lsf_margin():
 
 @pytest.mark.parametrize("log_eta", [-30.0, -40.0, -60.0])
 def test_prior_logdet_stays_finite_at_tiny_eta(log_eta):
-    """ML-II has no lower bound on ``log_eta`` and will walk into the rounding floor.
+    """ML-II has no lower bound on ``log_eta`` and will reach the rounding floor.
 
-    The pentadiagonal Cholesky pivot is a difference of like-sized terms; below
-    ``eta/tau ~ 1e-13`` it rounded non-positive and ``sqrt`` returned ``nan``, taking the
-    whole likelihood with it.
+    The pentadiagonal Cholesky pivot is a difference of like-sized terms. Below
+    ``eta/tau ~ 1e-13`` it rounds non-positive, where ``sqrt`` would return ``nan`` and
+    make the whole likelihood ``nan``.
     """
     from albireo.assembly import prior_logdet
 

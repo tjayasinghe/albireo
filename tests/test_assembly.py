@@ -1,14 +1,14 @@
 """Tests for direct band assembly (``albireo.assembly``) and the custom-VJP solve stage.
 
 The band path assembles the posterior precision per epoch from the static rebin pair
-tables (``docs/math.md`` §4.2 read backwards: the *same* matrix, summed in a different
+tables (``docs/math.md`` §4.2 read backwards: the same matrix, summed in a different
 order). Its reference here is the original global comb probing (``assembly="probe"``),
-which ``test_likelihood.py`` in turn pins to dense brute-force linear algebra — so the
-chain reaches ground truth without ever assembling a dense matrix at this size. The two
-assemblies must agree to floating-point summation order for every model variant, under
-``jax.jit`` with traced velocities and LSF widths, and in reverse mode.
+which ``test_likelihood.py`` checks against dense brute-force linear algebra. The band
+path is thus verified against ground truth without assembling a dense matrix at this
+size. The two assemblies must agree to floating-point summation order for every model
+variant, under ``jax.jit`` with traced velocities and LSF widths, and in reverse mode.
 
-The second half checks the pieces the band path leans on: the analytic prior diagonals,
+The second half checks the parts the band path depends on: the analytic prior diagonals,
 the block Takahashi selected inverse (against a dense inverse), the rebin pair tables
 (against a dense ``R^T diag(w) R``), and the closed-form reverse pass of
 ``likelihood._solve_stage`` against plain autodiff through the Cholesky/solve scans.
@@ -190,14 +190,14 @@ CASES = _equivalence_cases()
 
 
 def test_equivalence_cases_have_the_topologies_they_claim():
-    """Guard the fixtures themselves — a degenerate one tests nothing, silently.
+    """Check the fixtures themselves; a degenerate one tests nothing and raises no error.
 
-    ``two_instruments`` in particular is only meaningful if the epochs actually carry
-    both labels: ``simulate_dataset`` defaults every epoch to the first instrument, so
+    ``two_instruments`` in particular is meaningful only if the epochs have both
+    labels. ``simulate_dataset`` defaults every epoch to the first instrument, so
     omitting ``epoch_instruments`` builds the second instrument's operators and never
-    uses them, leaving a numerically identical copy of the plain SB2 case. Groups carry
+    uses them, leaving a numerically identical copy of the plain SB2 case. Groups have
     per-instrument rebin support and kernel radii, and the band layout is sized from a
-    single global bandwidth, so multi-group really is a distinct code path.
+    single global bandwidth, so multi-group is a distinct code path.
     """
     by_id = {c[0]: c[1] for c in CASES}
     assert len(by_id["two_instruments"].groups) == 2
@@ -230,12 +230,12 @@ def test_band_matches_probe(problem, prior):
 
 @pytest.mark.parametrize(("problem", "prior"), [c[1:] for c in CASES], ids=[c[0] for c in CASES])
 def test_band_matches_probe_entrywise(problem, prior):
-    """Every *entry* of the assembled precision, not just the scalars it feeds.
+    """Every entry of the assembled precision, not only the scalars derived from it.
 
     ``test_band_matches_probe`` compares a log-determinant and a solve, both of which
-    average over the matrix; a defect confined to a few dozen rows at the model-grid
-    boundary moves them by ~1e-7 relative and can slip under a loose threshold. This
-    compares the dense matrices directly, which is only affordable at fixture size.
+    average over the matrix. A defect confined to a few dozen rows at the model-grid
+    boundary changes them by ~1e-7 relative and can pass a loose threshold. This test
+    compares the dense matrices directly, which is affordable only at fixture size.
     """
     nc, n_pix = problem.n_components, problem.grid.n
     n = nc * n_pix
@@ -257,19 +257,19 @@ def test_band_matches_probe_entrywise(problem, prior):
 def test_band_matches_probe_with_model_grid_inside_the_data():
     """The worst boundary case: zero margin between data coverage and grid edge.
 
-    Choosing a model grid *narrower* than the observed range is the documented way to
-    fit a sub-region, and it drives the data-coverage margin to zero. The band image of
+    Choosing a model grid narrower than the observed range is the documented way to
+    fit a sub-region, and it reduces the data-coverage margin to zero. The band image of
     ``G`` is nonzero for a strip of ``kernel_radius`` columns past each grid edge (the
-    LSF smears in-grid mass outward), and only the *row* index of the T-sandwich is
-    zero-filled, so before the column mask this configuration was wrong by tens of nats
-    — and asymmetric, which the symmetric probe reference is not. The trigger is
-    ``coverage margin < kernel radius``, so it is also reachable at a fixed grid simply
-    by fitting a wider LSF.
+    LSF spreads in-grid mass outward), and only the row index of the T-sandwich is
+    zero-filled. Without the column mask this configuration is wrong by tens of nats
+    and asymmetric, which the symmetric probe reference is not. The condition is
+    ``coverage margin < kernel radius``, so it is also met at a fixed grid by fitting a
+    wider LSF.
     """
     ds, truth, ell = simulate(native=(5001.0, 5039.0))
     inner = ab.LogGrid.from_wavelength_range(5004.0, 5036.0, dv_kms=5.5)
-    # build_problem warns about exactly this configuration (weighted native pixels off the
-    # grid); the point of the test is that the assembly is right anyway.
+    # build_problem warns about this configuration (weighted native pixels off the grid).
+    # The test checks that the assembly is nevertheless correct.
     with pytest.warns(RuntimeWarning, match="outside the model grid"):
         problem = build_problem(
             inner, ds, velocities=truth.velocities, light_fractions=ell, lsf_sigma_v={"a": 7.0}
@@ -288,7 +288,7 @@ def test_band_matches_probe_with_model_grid_inside_the_data():
     )
     scale = float(np.abs(probe).max())
     assert float(np.abs(band - probe).max()) / scale < 1e-12
-    # only the column side ever leaked, so asymmetry is the sharpest discriminator
+    # the defect affects only the column side, so asymmetry is the most sensitive check
     assert float(np.abs(band - band.T).max()) / scale < 1e-12
 
     ll_band = marginal_loglikelihood(problem, PRIOR2, assembly="band").log_likelihood
@@ -355,7 +355,7 @@ def test_solve_stage_vjp_matches_autodiff():
     log_tau = jnp.log(jnp.asarray([200.0, 200.0]))
     log_eta = jnp.log(jnp.asarray([4.0, 4.0]))
 
-    # The custom VJP must not perturb the primal at all: same operations, same order.
+    # The custom VJP must not perturb the primal: same operations, same order.
     assert float(ll_custom(VEL, log_tau, log_eta)[0]) == float(ll_ref(VEL, log_tau, log_eta)[0])
 
     g_custom = jax.grad(lambda v, t, e: ll_custom(v, t, e)[0], argnums=(0, 1, 2))(
@@ -383,13 +383,13 @@ def test_solve_stage_vjp_matches_autodiff():
 
 
 def test_factor_derived_gradients_are_not_silently_zero():
-    """Gradients through the Cholesky factor must be real, not the custom rule's zero.
+    """Gradients through the Cholesky factor must not be the custom rule's zero.
 
-    ``_solve_stage``'s reverse rule cannot carry a cotangent on the factorization, so
-    if ``MarginalResult`` handed back *that* factor, every gradient of a factor-derived
-    quantity — the posterior spectral uncertainties, the draws — would come out
-    identically zero with no error. The factor is therefore rebuilt outside the custom
-    boundary; this checks the resulting gradient against central differences.
+    ``_solve_stage``'s reverse rule does not propagate a cotangent on the factorization.
+    If ``MarginalResult`` returned that factor, every gradient of a factor-derived
+    quantity (the posterior spectral uncertainties, the draws) would be identically
+    zero with no error. The factor is therefore rebuilt outside the custom boundary.
+    This test checks the resulting gradient against central differences.
     """
 
     def total_std(v):
@@ -435,7 +435,7 @@ def test_prior_logdet_matches_blocked_cholesky(n_pix):
     want = float(logdet(block_cholesky(prior_block_tridiagonal(prior, n_pix, nc, max(2 * nc, 16)))))
     assert abs(got - want) / (abs(want) + 1.0) < 1e-12, f"{got!r} vs {want!r}"
 
-    # ... and the dense determinant, so both routes are pinned to ground truth.
+    # ... and the dense determinant, so both routes are checked against ground truth.
     sign, dense_ld = np.linalg.slogdet(prior.dense(n_pix))
     assert sign > 0
     assert abs(got - float(dense_ld)) / (abs(float(dense_ld)) + 1.0) < 1e-10
@@ -526,8 +526,9 @@ def test_selected_inverse_cotangent_matches_unfused(block_size):
     """Fusing the cotangent into the Takahashi sweep changes nothing numerically.
 
     The unfused form materializes ``Sigma`` and then contracts it; the fused form
-    forms each block as the recursion produces it. Same arithmetic, 2K-1 fewer live
-    blocks — this pins them together, including the k == 1 single-block branch.
+    forms each block as the recursion produces it. The arithmetic is the same, with
+    2K-1 fewer live blocks. This test asserts that the two forms agree, including in
+    the k == 1 single-block branch.
     """
     n, p = 24, 4
     rng = np.random.default_rng(19)
@@ -562,12 +563,12 @@ def test_selected_inverse_cotangent_matches_unfused(block_size):
 
 @pytest.mark.parametrize("chunk", [1, 3, N_EP])
 def test_band_epoch_chunk_invariance(chunk):
-    """Batching the velocity-independent G pre-pass must not move any number.
+    """Batching the velocity-independent G pre-pass must not change any value.
 
-    ``epoch_chunk`` only decides how many epochs' worth of G is live at once (and
-    whether the backward recomputes it), so the assembled matrix, the likelihood and
-    the gradient are all invariant — including when the batch size does not divide
-    the epoch count and the last batch is zero-weight padded.
+    ``epoch_chunk`` sets only how many epochs' worth of G is live at once (and
+    whether the backward pass recomputes it), so the assembled matrix, the likelihood
+    and the gradient are all invariant. This includes the case in which the batch size
+    does not divide the epoch count and the last batch is zero-weight padded.
     """
 
     def ll(v, epoch_chunk):
@@ -591,10 +592,10 @@ def test_band_epoch_chunk_invariance(chunk):
 
 
 def test_band_rejects_too_small_half_bandwidth():
-    """A bandwidth below the kernel+rebin floor is refused, not silently mis-assembled.
+    """A bandwidth below the kernel+rebin floor is rejected, not silently mis-assembled.
 
     The per-epoch block is written into the band with a clamped ``dynamic_update_slice``,
-    so a bandwidth that cannot hold one block would land the window at the wrong offset.
+    so a bandwidth too small for one block would place the window at the wrong offset.
     """
     g = PROBLEM.groups[0]
     floor = g.row_support + 2 * ((g.kernel.shape[-1] - 1) // 2)  # zero-shift containment
@@ -606,14 +607,14 @@ def test_band_rejects_too_small_half_bandwidth():
 def test_deleted_native_samples_warn_about_bandwidth():
     """Deleting samples (rather than masking them) inflates the solver bandwidth.
 
-    Edges sit at midpoints, so removing a block of native samples makes the two
+    Edges are at midpoints, so removing a block of native samples makes the two
     bracketing pixels each absorb half the gap. ``row_support`` is a max, so those two
-    pixels set the bandwidth for the entire run — cost grows quadratically. Real spectra
-    hit this constantly (telluric windows, order gaps), hence a warning that names the
-    pixel and the remedy.
+    pixels set the bandwidth for the entire run, and the cost grows quadratically. This
+    occurs routinely in real spectra (telluric windows, order gaps), hence a warning
+    that names the pixel and the remedy.
     """
     wave = np.arange(5002.0, 5038.0, 0.105)
-    gap = (wave > 5015.0) & (wave < 5019.0)  # a "removed" telluric window
+    gap = (wave > 5015.0) & (wave < 5019.0)  # a removed telluric window
     ds, truth = ab.simulate_dataset(
         GRID,
         [ab.synthetic_deviation_spectrum(GRID, n_lines=10, seed=s) for s in (1, 2)],
@@ -632,7 +633,7 @@ def test_deleted_native_samples_warn_about_bandwidth():
             light_fractions=np.array([0.6, 0.4]),
             lsf_sigma_v={"a": 7.0},
         )
-    # and the warning is about something real: the bandwidth actually did blow up
+    # the warning is justified: the bandwidth did increase
     assert gappy.groups[0].row_support > 4 * PROBLEM.groups[0].row_support
 
 
@@ -643,7 +644,7 @@ def test_rebin_pair_tables():
     reb = rebin_operator(x_in=x_in, x_out=x_out)
     pair_val, pair_sid, pair_row, h = rebin_pair_tables(reb)
     n_in, n_out = reb.n_in, reb.n_out
-    assert h > 2  # rows genuinely overlap, so the band is wider than the diagonal
+    assert h > 2  # rows overlap, so the band is wider than the diagonal
 
     rng = np.random.default_rng(3)
     w = rng.uniform(0.2, 3.0, n_out)
@@ -671,16 +672,16 @@ def test_rebin_pair_tables():
 def test_second_order_reverse_matches_plain_autodiff():
     """``jacrev(jacrev(...))`` through the custom VJP equals the plain-autodiff Hessian.
 
-    Regression for the forward-rule re-entry defect: with ``_solve_stage_fwd`` calling
-    the custom function itself, the outer reverse pass re-entered the custom boundary,
-    hit the dropped Cholesky cotangent, and lost the chol-mediated second-order terms
-    (8e-3 relative, measured). The forward rule now recomputes its primal inline, and
-    Hessians agree to machine precision. Forward mode stays unsupported by
-    construction (`custom_vjp`), so ``laplace_inverse_mass`` uses rev-over-rev.
+    Regression test for forward-rule re-entry. If ``_solve_stage_fwd`` calls the custom
+    function itself, the outer reverse pass re-enters the custom boundary, meets the
+    dropped Cholesky cotangent, and loses the chol-mediated second-order terms (8e-3
+    relative, measured). The forward rule recomputes its primal inline, and Hessians
+    agree to machine precision. Forward mode is unsupported by construction
+    (`custom_vjp`), so ``laplace_inverse_mass`` uses rev-over-rev.
     """
     nc, n_pix = PROBLEM.n_components, GRID.n
     n = nc * n_pix
-    v0 = VEL[:, 0]  # wiggle epoch-0 velocities only: a 2x2 Hessian keeps this fast
+    v0 = VEL[:, 0]  # vary epoch-0 velocities only: a 2x2 Hessian keeps this fast
 
     def f_custom(v0_):
         v = VEL.at[:, 0].set(v0_)
@@ -713,15 +714,15 @@ def test_second_order_reverse_matches_plain_autodiff():
 def test_band_accumulate_matches_nested_slices_bit_for_bit():
     """The closed-form band accumulate reproduces the nested-slice route exactly.
 
-    ``band + place(f)`` is the identity in ``band``, but reverse mode does not see
-    that: it transposes the ``dynamic_update_slice`` and the ``dynamic_slice``
+    ``band + place(f)`` is the identity in ``band``, but reverse mode does not use
+    that. It transposes the ``dynamic_update_slice`` and the ``dynamic_slice``
     separately and rebuilds the identity as
-    ``dus(out_bar, 0, idx) + dus(zeros, ds(out_bar, idx), idx)`` — three passes over
-    the whole band tensor per (i, j) block per epoch, measured at 3.5 s of a 5.9 s
-    backward at the benchmark ladder's first row (D49). The replacement must be
-    *exact*, not close, so this asserts bit equality of both the value and both
-    cotangents. The weight array makes the output cotangent non-uniform, which is
-    what makes a wrong slice offset in the reverse rule observable.
+    ``dus(out_bar, 0, idx) + dus(zeros, ds(out_bar, idx), idx)``. That is three passes
+    over the whole band tensor per (i, j) block per epoch, measured at 3.5 s of a 5.9 s
+    backward pass at the benchmark ladder's first row (D49). The replacement must be
+    exact, so this test asserts bit equality of the value and of both cotangents. The
+    weight array makes the output cotangent non-uniform, so that a wrong slice offset
+    in the reverse rule is observable.
     """
     rng = np.random.default_rng(0)
     n_pix, nc, n_k, w_f = 17, 2, 11, 5
@@ -749,7 +750,7 @@ def test_band_accumulate_matches_nested_slices_bit_for_bit():
     g_new = jax.grad(scalar(custom), argnums=(0, 1))(band0, f0)
     for ref, new in zip(g_ref, g_new, strict=True):
         assert np.array_equal(np.asarray(ref), np.asarray(new))
-    # f's cotangent must be a *slice* of the output's, not the whole thing summed:
+    # f's cotangent must be a slice of the output's, not the sum over all of it:
     # a rule that ignored `start` would still pass a uniform-cotangent check.
     assert np.count_nonzero(np.asarray(g_new[1])) > 0
 
@@ -759,15 +760,15 @@ def test_column_application_is_a_contraction():
 
     The first application shifts rows and stays a tap loop; the second adds
     ``kernel[s] * u`` at column offset ``2r - s``, which is a contraction against the
-    banded matrix ``Q[k', k] = kernel[k' + 2r - k]`` (D49). This pins that index
-    algebra — an off-by-one in the tap offset is otherwise invisible until the
+    banded matrix ``Q[k', k] = kernel[k' + 2r - k]`` (D49). This test checks that index
+    algebra. An off-by-one in the tap offset is otherwise undetected until the
     assembled matrix is compared against probing, which the equivalence set above
     does at a coarser granularity.
 
-    Agreement is to summation order, not to the bit: increasing ``k'`` is increasing
-    ``s``, so the two ideal orders coincide, but XLA is free to block a GEMM's
-    accumulation (0.5 ulp here, while the benchmark configurations happened to come
-    out bit-identical). The tolerance is one rounding step of the largest entry.
+    Agreement is to summation order, not to the bit. Increasing ``k'`` is increasing
+    ``s``, so the two ideal orders coincide, but XLA may block a GEMM's accumulation
+    (0.5 ulp here, while the benchmark configurations happened to be bit-identical).
+    The tolerance is one rounding step of the largest entry.
     """
     rng = np.random.default_rng(1)
     n_pix, w_h, r = 23, 7, 4

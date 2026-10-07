@@ -1,10 +1,11 @@
 """Tests for the Gaia RVS simulator (``albireo.gaia``).
 
-Three kinds of claim. The photometric and signal-to-noise relations reproduce the reference
-implementation's numbers (Rowan's ``synthetic_rvs_spectra.ipynb``). The delivery step does
-to the noise exactly what it says: the propagated variance and the lag-one correlation are
-what the delivered pixels show. And the one-call simulator declares what Gaia delivers
-(vacuum, barycentric, the RVS width) and closes the loop through the disentangler.
+Three kinds of claim are tested. The photometric and signal-to-noise relations reproduce
+the reference implementation's numbers (Rowan's ``synthetic_rvs_spectra.ipynb``). The
+delivery step treats the noise as declared: the propagated variance and the lag-one
+correlation equal those measured in the delivered pixels. The one-call simulator declares
+what Gaia delivers (vacuum, barycentric, the RVS width) and is tested in a closed loop
+through the disentangler.
 """
 
 from __future__ import annotations
@@ -71,8 +72,8 @@ def test_grvs_prediction_reproduces_the_notebook():
 def test_snr_reproduces_the_notebook_and_its_window_classes():
     assert np.round(rvs_snr_per_pixel(10.54), 1) == 13.1
     assert np.round(rvs_snr_per_pixel(10.54, 30), 1) == 71.6
-    # Brighter than the window-class limit, every across-scan pixel pays read noise; the
-    # S/N therefore jumps *up* just past G_RVS = 7 (fewer samples, less read noise).
+    # Brighter than the window-class limit, every across-scan pixel adds read noise. The
+    # S/N therefore increases just past G_RVS = 7 (fewer samples, less read noise).
     assert rvs_snr_per_pixel(7.0) < rvs_snr_per_pixel(7.01)
     # Monotonic in magnitude elsewhere, and vectorised.
     mags = np.array([8.0, 9.0, 10.0, 11.0, 12.0])
@@ -172,7 +173,7 @@ def test_transit_counts_follow_the_archive_distribution():
 # real transit times: GOST
 # ---------------------------------------------------------------------------
 
-# The recorded answer of https://gaia.esac.esa.int/gost/ObjVisSAP/gaiaobjvisap for
+# The recorded response of https://gaia.esac.esa.int/gost/ObjVisSAP/gaiaobjvisap for
 # s_ra = 45, s_dec = +20, t_min = 56800, t_max = 60800, MAXREC = 10000, fetched on
 # 2026-09-10: 142 field-of-view crossings over the whole mission, 32 kB. Every test below
 # reads it instead of the network.
@@ -182,10 +183,10 @@ GOST_QUERY = dict(t_min_mjd=56800.0, t_max_mjd=60800.0, max_records=10000)
 
 @pytest.fixture
 def offline_gost(monkeypatch, tmp_path):
-    """The fixture in place of the network, and a cache directory of its own.
+    """The fixture in place of the network, and a separate cache directory.
 
-    Returns the list the calls are recorded in, so a test can assert that the cache
-    spared the second one.
+    Returns the list in which the calls are recorded, so a test can assert that the
+    second call was served from the cache.
     """
     calls = []
 
@@ -212,7 +213,7 @@ def test_the_gost_votable_parses_into_transits(offline_gost):
     assert transits.scan_angle_deg is None
     assert transits.ra_deg == 45.0 and transits.dec_deg == 20.0
     assert transits.source.startswith(GOST_ENDPOINT) and "s_ra=45" in transits.source
-    # The gap ladder of the scanning law, unmodelled and simply there: the 106.5-minute
+    # The gap ladder of the scanning law is present without being modelled: the 106.5-minute
     # field-of-view pair, the 4.23-hour complement of a spin, and the spin itself.
     gaps = np.diff(transits.bjd) * 24.0
     close = gaps[gaps < 7.0]
@@ -234,7 +235,7 @@ def test_gost_reads_its_cache_before_the_network_and_says_where_it_looked(
 
     second = gost_transits(45.0, 20.0, **GOST_QUERY)
     np.testing.assert_array_equal(second.bjd, first.bjd)
-    assert len(offline_gost) == 1  # the cache answered
+    assert len(offline_gost) == 1  # served from the cache
 
     # A different query is a different file, and cache=False stores nothing.
     gost_transits(45.0, 20.0, **{**GOST_QUERY, "max_records": 50})
@@ -275,7 +276,7 @@ def test_rvs_times_from_gost_cut_the_span_the_rows_and_the_losses(offline_gost):
         assert kept.size <= inside.size
         assert np.all((kept >= start) & (kept <= start + span))
         assert np.all(np.isin(kept, transits.bjd))
-    # 2. The CCD rows, when the table carries them: the RVS occupies four of the seven.
+    # 2. The CCD rows, when the table has them: the RVS occupies four of the seven.
     start, _ = RVS_SPANS["dr4"]
     rows = np.arange(14) % 7 + 1
     labelled = GostTransits(
@@ -292,7 +293,7 @@ def test_rvs_times_from_gost_cut_the_span_the_rows_and_the_losses(offline_gost):
         rvs_transit_times_from_gost(transits, release="dr4", seed=s).size / 89.0 for s in range(200)
     ]
     assert abs(float(np.mean(fractions)) - 4.0 / 7.0 * GOST_USABLE_FRACTION) < 0.02
-    # 3. Determinism, and the arguments that are refused.
+    # 3. Determinism, and the arguments that are rejected.
     once = rvs_transit_times_from_gost(transits, seed=3)
     np.testing.assert_array_equal(once, rvs_transit_times_from_gost(transits, seed=3))
     assert not np.array_equal(once, rvs_transit_times_from_gost(transits, seed=4))
@@ -335,8 +336,6 @@ def test_delivery_propagates_the_variance_and_records_the_correlation(product):
     assert ep.instrument == "RVS" and ep.medium == "vacuum"
     assert ep.lsf_sigma_kms == pytest.approx(rvs_lsf_sigma_kms())
     assert ep.wave.size == product.n_pixels
-    # The last delivered pixel lies beyond the last detector pixel (8699.855 A) and is
-    # masked rather than filled.
     # Delivered samples beyond the last detector pixel (8699.855 A) are masked rather
     # than filled: two on the DR3 grid (869.9 and 870.0 nm), one on the DR4 grid.
     outside = product.wave > rvs_detector_grid()[-1]
@@ -372,14 +371,15 @@ def test_delivery_propagates_the_variance_and_records_the_correlation(product):
 def test_the_delivered_width_is_the_second_moment_the_interpolation_adds(product):
     """``sigma_eff^2 - sigma_R^2`` against the second moment ``deliver`` adds to narrow lines.
 
-    Gaussian lines of 0.35 A sigma are sampled at the detector pixel centres and delivered;
-    the same lines sampled directly on the product grid are the reference, so that the
-    discrete sampling and the window cancel and what is left is the interpolation. The 49
+    Gaussian lines of 0.35 A sigma are sampled at the detector pixel centres and delivered.
+    The same lines sampled directly on the product grid are the reference, so that the
+    discrete sampling and the window cancel and only the interpolation remains. The 49
     lines are 4.25 A apart, 17/49 of the DR4 grid's 12.25 A beat period, so their centres
     fall at every phase of the beat once. Each line's excess is converted to km/s at its own
-    wavelength. On the DR3 grid every line gains ``Delta^2 / 6`` to within a few percent; on
-    the DR4 grid a line gains from a quarter of that to about one and a half times it with
-    its phase (``Delta^2 / 4`` at ``t = 1/2``), and only the mean is the stationary width.
+    wavelength. On the DR3 grid every line gains ``Delta^2 / 6`` to within a few percent. On
+    the DR4 grid the gain of a line varies with its phase from a quarter of that to about
+    one and a half times it (``Delta^2 / 4`` at ``t = 1/2``), and only the mean is the
+    stationary width.
     """
     sigma_line = 0.35
     centres = 8474.0 + 4.25 * np.arange(49)
@@ -416,7 +416,7 @@ def test_the_delivered_width_is_the_second_moment_the_interpolation_adds(product
     step_kms = ab.C_KMS * 0.245 / 8580.0
     predicted = step_kms**2 / 6.0
     # The declared width also counts the detector pixel's width in place of the delivered
-    # one, which point samples on either grid do not see; it is measured in the next test.
+    # one. Point samples on either grid are insensitive to it, and the next test measures it.
     pixels = (step_kms**2 - (ab.C_KMS * product.step / 8580.0) ** 2) / 12.0
     assert rvs_delivered_sigma_kms(product) ** 2 - rvs_lsf_sigma_kms() ** 2 == pytest.approx(
         predicted + pixels, rel=1e-12
@@ -438,7 +438,7 @@ def test_the_delivered_width_is_the_second_moment_the_interpolation_adds(product
 
 
 # The line positions of the two moment tests below: 26 lines 7.9 A (276 km/s) apart, so that
-# a line's +-110 km/s moment window holds no wing of its neighbour.
+# a line's +-110 km/s moment window contains no wing of its neighbour.
 _LINE_CENTRES = 8478.0 + 7.9 * np.arange(26)
 _MOMENT_HALF_KMS = 110.0
 
@@ -546,16 +546,16 @@ def _line_library(sigma_line_kms=2.0):
 
 
 def test_the_simulation_adds_five_twelfths_of_its_model_pixel_squared():
-    """The simulator's own discretisation, measured through the shipped chain (D65).
+    """The simulator's discretisation, measured through the shipped chain (D65).
 
     Narrow lines rendered by ``rvs_components`` and ``simulate_rvs_dataset`` on the 2 km/s
-    model grid, at 26 positions and 32 epoch velocities, against the continuous line
-    convolved with the applied width and integrated over the detector pixels. Without
-    rotation three steps act (the box average onto the grid, the shift interpolation and the
-    model pixel in the rebin), ``(4/12) dv^2``, less the 0.050 km^2/s^2 by which the Gaussian
-    kernel truncated at four sigma falls short of ``sigma^2``; the rotation kernel's pixel
-    integration adds up to ``dv^2 / 12`` more (0.28 at 11 km/s), and the declaration takes
-    the ``(5/12) dv^2`` of a rotation that the grid resolves.
+    model grid, at 26 positions and 32 epoch velocities, are compared with the continuous
+    line convolved with the applied width and integrated over the detector pixels. Without
+    rotation three steps contribute (the box average onto the grid, the shift interpolation
+    and the model pixel in the rebin), ``(4/12) dv^2`` in total, less the 0.050 km^2/s^2 by
+    which the Gaussian kernel truncated at four sigma falls short of ``sigma^2``. The
+    rotation kernel's pixel integration adds up to ``dv^2 / 12`` more (0.28 at 11 km/s),
+    and the declaration uses the ``(5/12) dv^2`` of a rotation that the grid resolves.
     """
     from albireo.operators import bin_edges_from_centers, gaussian_kernel
 
@@ -580,7 +580,7 @@ def test_the_simulation_adds_five_twelfths_of_its_model_pixel_squared():
             snr=1.0e6,
             library=library,
         )
-        assert truth.library_resolving_power is None  # an intrinsic library takes it all
+        assert truth.library_resolving_power is None  # an intrinsic library gets the full width
         sigma = float(truth.quadrature_sigma_kms[0])
         assert sigma == pytest.approx(rvs_lsf_sigma_kms())
         rotation = 0.225 * vsini**2  # the limb-darkened profile at epsilon 0.6
@@ -628,7 +628,7 @@ def test_the_simulator_reads_the_resolving_power_from_the_library():
     _, truth = simulate_rvs_dataset(components, grid, library=published, **common)
     assert truth.library_resolving_power == 20000.0
     np.testing.assert_allclose(truth.quadrature_sigma_kms, quadrature_sigma_kms(20_000.0))
-    # an explicit declaration still works on its own, and must agree with a library given too
+    # an explicit declaration works without a library, and must agree with one that is given
     _, truth = simulate_rvs_dataset(components, grid, library_resolving_power=20_000.0, **common)
     assert truth.library_resolving_power == 20000.0
     with pytest.raises(ValueError, match="contradicts the library"):

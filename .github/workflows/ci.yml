@@ -1,19 +1,19 @@
 name: CI
 
-# The routine loop: one job, one runner, one Python. It catches the failures that can occur
-# on every commit: a lint slip, a broken import, a failing fast test. It is not the whole
-# test plan. The matrix, the acceptance gates and the example scripts live in `full.yml`,
+# The routine workflow: one job on one runner with one Python version. It catches the
+# failures that can occur on any commit: a lint error, a broken import, a failing fast test.
+# The platform matrix, the acceptance tests and the example scripts are in `full.yml`,
 # which is run on demand.
 #
-# The reason is billing. Actions minutes are free and unlimited on public repositories, but
-# metered on private ones (2,000/month on the free tier), where Windows runners bill at 2x
-# and macOS at 10x. The previous shape of this file was eight jobs including a four-way
-# matrix, about 120 billed minutes per push, or sixteen pushes a month. This is one job,
-# on Linux, at about a seventh of that.
+# The split exists because of billing. Actions minutes are free and unlimited on public
+# repositories, but metered on private ones (2,000/month on the free tier), where Windows
+# runners bill at 2x and macOS at 10x. This file previously held eight jobs including a
+# four-way matrix, about 120 billed minutes per push, or sixteen pushes a month. It now
+# holds one Linux job at about a seventh of that.
 #
-# Linux specifically, because development happens on Windows: local runs already supply the
-# Windows signal, so CI covers the platform that is not tested by hand, which is also the
-# one most users will install on.
+# The job runs on Linux because development happens on Windows. Local runs already test
+# Windows, so CI covers the platform that is not tested locally, which is also the one
+# most users will install on.
 
 on:
   push:
@@ -36,11 +36,11 @@ jobs:
   check:
     name: Lint, guards, fast tests
     runs-on: ubuntu-latest
-    # The cap guards against hangs, so it sits well clear of the real runtime. The fast
-    # suite alone measures 12-16 minutes on the development machine, and this job also pays
-    # for two cold `uv pip install` runs (the second venv for the bare-install guard) and an
-    # uncached mypy pass, on a 4-vCPU runner that is slower per core. 25 was inside that
-    # envelope, and a timeout kill reports no test output at all.
+    # The cap guards against hangs, so it is set well above the real runtime. The fast
+    # suite alone takes 12-16 minutes on the development machine. This job also runs two
+    # cold `uv pip install` steps (the second venv is for the bare-install check) and an
+    # uncached mypy pass, on a 4-vCPU runner that is slower per core. A cap of 25 minutes
+    # was within that range, and a job killed by the timeout reports no test output.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
@@ -70,19 +70,18 @@ jobs:
           uv run --no-sync ruff check .
           uv run --no-sync ruff format --check .
 
-      # Not gating yet: the codebase has never been type-checked end to end and JAX
-      # annotations will produce a backlog. Visible now, enforced once the backlog is
-      # cleared.
+      # Advisory for now: the codebase has never been type-checked end to end, and JAX
+      # annotations will produce a backlog of errors. The step becomes required once the
+      # backlog is cleared.
       - name: Mypy (advisory)
         continue-on-error: true
         run: uv run --no-sync mypy src/albireo
 
       # A second environment with no extras, so astropy and matplotlib are absent. This
-      # checks that the optional-dependency guards hold: `import albireo` must work, and
-      # the optional surfaces must raise an actionable error naming the extra rather than
-      # an ImportError from somewhere inside a figure or a FITS writer. It is a separate
-      # venv but not a separate job, since the checkout and the uv setup are already paid
-      # for here.
+      # checks the optional-dependency guards: `import albireo` must work, and the optional
+      # functions must raise an error that names the missing extra, not an ImportError from
+      # inside a figure or a FITS writer. It is a second venv in the same job, which reuses
+      # the checkout and the uv setup.
       - name: Bare install (no extras)
         run: |
           uv venv --python 3.13 /tmp/bare
@@ -120,7 +119,7 @@ jobs:
           print("bare install OK")
           PY
 
-      # The acceptance gates (real NUTS sampling, the multi-minute closed-loop fits) and
+      # The acceptance tests (real NUTS sampling, the multi-minute closed-loop fits) and
       # the example scripts are in `full.yml`.
       - name: Fast tests
         run: uv run --no-sync pytest --no-slow --no-network

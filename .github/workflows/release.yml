@@ -63,9 +63,9 @@ jobs:
             exit 1
           fi
 
-      # A wheel that cannot be installed and imported is worse than no release. This
-      # installs the built artifact itself, not the source tree, and checks that the
-      # packaged example data made it in, since that is the quickstart's first line.
+      # The built wheel must install and import. This step installs the built artifact
+      # itself, not the source tree, and checks that the packaged example data are
+      # included, since the quickstart loads them in its first line.
       - name: Smoke-test the built wheel
         run: |
           uv venv --python 3.13 /tmp/relcheck

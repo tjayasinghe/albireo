@@ -1,20 +1,19 @@
 """HR 6819, one wide window: 4120-4600 A with the Hgamma core masked (D36).
 
-The last recorded lever on this dataset. D30 fitted two separated windows
-(A 4380-4600, B 4120-4330) bracketing Hgamma, whose core carries the Be disc's
-variable emission, a time-variable feature that violates the
+The wide window is the last recorded option on this dataset. D30 fitted two
+separated windows (A 4380-4600, B 4120-4330) bracketing Hgamma, whose core contains
+the Be disc's variable emission, which violates the
 one-static-spectrum-per-component assumption. D34 measured the windows' AR(1)
-orbits 0.0016 d apart in period. This run joins the two regions into one fit,
-2.3x window A's pixels with every line constraining one orbit, and masks the
-Balmer core (``preprocess.mask_ranges``: ivar = 0, pixels stay, so the AR(1) chain
-restarts across the hole and the solver bandwidth is unchanged). The broad Hgamma
+orbits 0.0016 d apart in period. This run joins the two regions into one fit, 2.3x
+window A's pixels with every line constraining one orbit, and masks the Balmer core.
+``preprocess.mask_ranges`` sets ivar = 0 and keeps the pixels, so the AR(1) chain
+restarts across the gap and the solver bandwidth is unchanged. The broad Hgamma
 absorption wings are static stellar features and stay in.
 
 Noise model and procedure are the D34 configuration exactly (per-epoch jitters and
 shared ar1_phi, conjunction scan, literature init), so the A/B AR(1) records are
-the comparison baselines. The run uses the D35 band assembly, and is affordable
-where the probe path was not: that path's gradient alone peaked at 23.7 GiB at half
-this size.
+the comparison baselines. The run uses the D35 band assembly. The probe path is not
+affordable here, since its gradient alone peaked at 23.7 GiB at half this size.
 
 Run:  python scripts/hr6819_wide_run.py [--max-steps 200]
       (expects the FEROS FITS under data/hr6819 or $ALBIREO_HR6819_DATA)

@@ -1,27 +1,28 @@
-"""Gaia RVS spectra of a synthetic double-lined binary, and what albireo makes of them.
+"""Gaia RVS spectra of a synthetic double-lined binary, analysed with albireo.
 
 This is the reference implementation's example (Rowan's ``synthetic_rvs_spectra.ipynb``,
-``SyntheticSB2(**GAIA_RVS, ...)``) rebuilt on albireo: the same two stars, the same orbit,
-the same S/N of 40 per detector pixel, the same ten epochs evenly spaced over one period,
-and the same delivered 0.01 nm grid with its correlated noise. Where the notebook
-synthesises the components with Korg, this example renders them from the BOSZ 2024 grid in
-the RVS band (``fetch_library("bosz2024-fgk-rvs")``; 621 MB downloaded once, 5 MB cached),
-because albireo synthesises nothing.
+``SyntheticSB2(**GAIA_RVS, ...)``) reproduced with albireo. It uses the same two stars,
+orbit, S/N of 40 per detector pixel, ten epochs evenly spaced over one period, and
+delivered 0.01 nm grid with its correlated noise. Where the notebook synthesises the
+components with Korg, this example computes them from the BOSZ 2024 grid in the RVS band
+(``fetch_library("bosz2024-fgk-rvs")``; 621 MB downloaded once, 5 MB cached), because
+albireo does not synthesise spectra.
 
-Four results to check in the output.
+Four results should be checked in the output.
 
-1. The semi-amplitudes from the masses: K1 = 87.7 and K2 = 95.0 km/s, as the notebook
-   prints, and the velocities at the epoch of largest separation (76.05 / -119.88 km/s).
-2. TODCOR at that epoch against the library templates. The notebook's two-dimensional
-   correlation gives 79.69 / -122.08 km/s with its own templates; the one-dimensional CCF
-   against the primary alone gives 73.93 / -117.32. Both carry the blend bias the
-   two-template fit removes (``docs/math.md`` §10); albireo's velocities should land
-   within their errors of the truth.
-3. The disentangling of the ten epochs, with the period held at the photometric value and
-   everything else free: K1 and K2 back to about a percent at this S/N.
-4. The delivery record: 2.45 delivered pixels per detector pixel and a lag-one noise
+1. The semi-amplitudes from the masses are K1 = 87.7 and K2 = 95.0 km/s, as the notebook
+   prints, and the velocities at the epoch of largest separation are
+   76.05 / -119.88 km/s.
+2. TODCOR is run at that epoch against the library templates. The notebook's
+   two-dimensional correlation gives 79.69 / -122.08 km/s with its own templates, and the
+   one-dimensional CCF against the primary alone gives 73.93 / -117.32. Both have the
+   blend bias that the two-template fit removes (``docs/math.md`` §10). albireo's
+   velocities should agree with the injected values within their errors.
+3. The ten epochs are disentangled with the period held at the photometric value and
+   everything else free. K1 and K2 are recovered to about a percent at this S/N.
+4. The delivery record gives 2.45 delivered pixels per detector pixel and a lag-one noise
    correlation above 0.5, which the diagonal ``flux_error`` of the archive product does
-   not express. The DR4 epoch grid (``--dr4``) has a weaker, periodic correlation.
+   not represent. The DR4 epoch grid (``--dr4``) has a weaker, periodic correlation.
 
     python examples/14_gaia_rvs.py            # the notebook's DR3-shaped product
     python examples/14_gaia_rvs.py --dr4      # the DR4 epoch grid instead
@@ -114,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
         orbit=orbit,
         snr=SNR,
         product=product,
-        library=library,  # the components carry the library's R = 20,000 already
+        library=library,  # the components are already at the library's R = 20,000
         seed=SEED,
     )
     print(
@@ -122,10 +123,10 @@ def main(argv: list[str] | None = None) -> int:
         f" delivered {truth.delivery.pixel_ratio:.2f} px per detector px,"
         f" lag-1 noise correlation {np.mean(truth.delivery.lag1):.2f}"
     )
-    # The width these epochs carry, which is what the analyses below declare: the nominal
-    # R = 11,500, the delivery's interpolation from the detector pixels and the simulation's
-    # own 2 km/s model grid (albireo.gaia.rvs_delivered_sigma_kms). The epochs themselves
-    # state the nominal width, as the archive does.
+    # The line-spread width of these epochs, which the analyses below declare, combines the
+    # nominal R = 11,500, the delivery's interpolation from the detector pixels and the
+    # simulation's 2 km/s model grid (albireo.gaia.rvs_delivered_sigma_kms). The epochs
+    # record the nominal width, as the archive does.
     delivered = rvs_delivered_sigma_kms(product, simulation_dv_kms=grid.dv_kms)
     print(
         f"declared line-spread sigma {delivered:.2f} km/s "
@@ -180,8 +181,9 @@ def main(argv: list[str] | None = None) -> int:
         ),
         lsf={"RVS": ab.LSF(sigma_kms=delivered)},
         dv_kms=3.0,
-        # What the delivery did to the noise, declared like the LSF: AR(1) along the pixel
-        # index at the recorded lag-one correlation, which the archive errors do not carry.
+        # The effect of the delivery on the noise is declared like the LSF: AR(1) along the
+        # pixel index at the recorded lag-one correlation, which the archive errors do not
+        # include.
         noise_correlation={"RVS": float(np.mean(truth.delivery.lag1))},
     )
     t0 = time.perf_counter()
@@ -200,7 +202,7 @@ def main(argv: list[str] | None = None) -> int:
         f"{rms[0]:.2f} / {rms[1]:.2f} km/s (after removing each component's zero point)"
     )
 
-    # ---- the gate ---------------------------------------------------------------------
+    # ---- assertions -------------------------------------------------------------------
     assert abs(k1 - 87.7) < 0.05 and abs(k2 - 95.0) < 0.05
     assert abs(two_d.velocity[0, 0] - v1) < 3.0 * two_d.sigma[0, 0] + 1.0
     assert abs(two_d.velocity[1, 0] - v2) < 3.0 * two_d.sigma[1, 0] + 1.0

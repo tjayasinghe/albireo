@@ -11,8 +11,8 @@ where ``Lt = Lp + A^T W A`` is the posterior precision of the stacked deviation 
 ``Lp`` the prior precision, ``z`` the data with the offset term removed
 (``docs/math.md`` §3.1), and ``b = A^T W z``. Both determinants come from
 block-tridiagonal Cholesky factorizations (``docs/math.md`` §4.2). The band of ``Lt`` is
-assembled per epoch from its analytic structure by default (``docs/math.md`` §4.5);
-exact comb probing of the matrix-free operators is retained as the reference path. The
+assembled per epoch from its analytic structure by default (``docs/math.md`` §4.5).
+Exact comb probing of the matrix-free operators is retained as the reference path. The
 pointwise posterior variance of the spectra, and the selected inverse required by the
 closed-form gradient, come from the Takahashi recursion on the block factor (Takahashi
 et al. 1973).
@@ -87,8 +87,8 @@ def _solve_stage(bt: BlockTridiagonal, b_pad):
     pass of both scans, whose memory is of the order of the factor itself, and costs
     about one extra Cholesky-equivalent instead of two to three.
 
-    The Cholesky factor is not an output. A cotangent on it could not be honoured by this
-    rule (propagating it is the reverse-mode pass through the factorization that the rule
+    The Cholesky factor is not an output. A cotangent on it could not be propagated by
+    this rule (that is the reverse-mode pass through the factorization that the rule
     avoids), and returning it would make gradients of any factor-derived quantity zero
     without warning. :attr:`MarginalResult.chol` therefore rebuilds the factor outside
     this boundary, where plain autodiff applies.
@@ -109,10 +109,10 @@ def _solve_stage(bt: BlockTridiagonal, b_pad):
 def _solve_stage_fwd(bt, b_pad):
     # Recompute inline rather than calling _solve_stage: the forward trace must contain
     # only plain operations, so that a second reverse differentiation (Hessians by
-    # jacrev-of-jacrev, as in laplace_inverse_mass) walks ordinary graphs instead of
-    # re-entering the custom boundary, where the chol cotangent is dropped by contract
+    # jacrev-of-jacrev, as in laplace_inverse_mass) traverses ordinary graphs instead of
+    # re-entering the custom boundary. There the chol cotangent is dropped by contract,
     # and second derivatives would lose the chol-mediated terms without warning
-    # (measured 8e-3 relative before this change; equal to plain autodiff after).
+    # (measured: 8e-3 relative with the custom call, equal to plain autodiff inline).
     chol = block_cholesky(bt)
     y = solve_lower(chol, b_pad)
     quad = jnp.sum(y * y)
@@ -166,17 +166,17 @@ class MarginalResult:
         """Cholesky factor of :attr:`precision`, built on demand.
 
         The likelihood's own factorization is computed inside a ``custom_vjp`` whose
-        reverse rule cannot carry a cotangent on the factor; returning that factor would
-        make gradients of anything derived from it (spectral uncertainties, draws) zero
-        without warning. Refactorizing here keeps those paths on plain autodiff at the
-        cost of one extra block Cholesky, paid only by callers that use the factor. The
-        sampling path reads :attr:`log_likelihood` and :attr:`d_hat` and never triggers
-        it.
+        reverse rule cannot propagate a cotangent on the factor. Returning that factor
+        would make gradients of anything derived from it (spectral uncertainties, draws)
+        zero without warning. Refactorizing here keeps those paths on plain autodiff at
+        the cost of one extra block Cholesky, incurred only by callers that use the
+        factor. The sampling path reads :attr:`log_likelihood` and :attr:`d_hat` and
+        never triggers it.
 
         Raises
         ------
         ValueError
-            If the result carries no precision, which happens only for a result read
+            If the result has no precision, which happens only for a result read
             back by :func:`albireo.results.load_fit` from a file saved without
             ``precision=True``.
         """
@@ -223,9 +223,9 @@ def marginal_loglikelihood(
     The log-likelihood is ``-inf`` wherever the chi-square term ``z^T W z - b^T Lt^-1 b``
     evaluates negative. That term equals ``z^T (W^-1 + A Lambda_p^-1 A^T)^-1 z`` and is
     positive definite, so a negative value means the forward substitution against ``Lt``
-    has lost every significant digit. This happens once the assembled pivots outrun the
-    data term (measured at a prior stiffness ratio ``tau/eta`` above about ``1e13``, which
-    :class:`albireo.inference.MarginalOrbitModel` bounds away).
+    has lost every significant digit. This happens once the assembled pivots far exceed
+    the data term (measured at a prior stiffness ratio ``tau/eta`` above about ``1e13``,
+    which :class:`albireo.inference.MarginalOrbitModel` excludes).
 
     Parameters
     ----------
@@ -344,10 +344,10 @@ def marginal_loglikelihood(
         -0.5 * chi2 - 0.5 * ld + 0.5 * ld_prior + 0.5 * logw - 0.5 * n_good * jnp.log(2.0 * jnp.pi)
     )
     # See the chi-square note in the docstring: the difference is a positive definite
-    # quadratic form, so a negative (or nan) value is a destroyed evaluation, not a fit,
-    # and reporting it would hand the optimizer an arbitrarily large improvement. The
-    # comparison also rejects a nan chi-square, since nan >= 0 is False. jnp.where keeps
-    # the valid branch's value and gradient exactly as they were.
+    # quadratic form, so a negative (or nan) value is a failed evaluation, and reporting
+    # it would give the optimizer an arbitrarily large improvement. The comparison also
+    # rejects a nan chi-square, since nan >= 0 is False. jnp.where keeps the valid
+    # branch's value and gradient exactly as they were.
     logp = jnp.where(chi2 >= 0.0, logp, -jnp.inf)
     return MarginalResult(
         log_likelihood=logp, d_hat=d_hat, precision=bt, n_components=n_comp, n_pixels=n_pix
@@ -366,7 +366,7 @@ def draw_spectra(result: MarginalResult, key, num_draws: int):
     Parameters
     ----------
     result
-        A :class:`MarginalResult` carrying its posterior precision.
+        A :class:`MarginalResult` with its posterior precision.
     key
         JAX PRNG key.
     num_draws

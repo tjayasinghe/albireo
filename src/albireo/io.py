@@ -22,16 +22,16 @@ Three header quantities determine the velocity frame of an epoch:
   ``frame`` of :class:`albireo.data.Dataset`.
 - The applied barycentric velocity, needed even when the correction has been applied,
   because the telluric component is at rest in the topocentric frame and therefore moves
-  in the barycentric one. It is read from the pipeline's own keyword where one exists
+  in the barycentric one. It is read from the pipeline's keyword where one exists
   (``ESO DRS BARYCORR`` for FEROS, ``ESO DRS BERV`` for HARPS, ...), since the pipeline's
-  value defines the frame of the delivered wavelengths; astropy recomputes it only as a
+  value defines the frame of the delivered wavelengths. astropy recomputes it only as a
   fallback. In albireo's sign convention a barycentric-frame wavelength is
   ``exp(xi(v_bary))`` times the topocentric one, the convention of every ``BERV``-style
   keyword: the correction is added to a measured radial velocity.
 - The mid-exposure time, converted to BJD_TDB. The barycentric light-travel correction
   varies by up to 8.3 minutes over a year. On a 40-day orbit with ``K = 60 km/s`` an
-  uncorrected time is a systematic radial-velocity error of about 0.05 km/s that does
-  not average down with more data, because it depends on the observing date.
+  uncorrected time causes a systematic radial-velocity error of about 0.05 km/s that
+  does not average down with more data, because it depends on the observing date.
 
 Requires ``astropy`` (``pip install "albireo[io]"``); the rest of albireo does not.
 """
@@ -73,7 +73,7 @@ __all__ = [
 _C_KMS = 299_792.458
 
 # Keywords under which a pipeline records the barycentric velocity correction it applied,
-# in the order they are trusted. All use the "add this to a measured RV" sign convention.
+# in order of precedence. All have the sign of a correction added to a measured RV.
 _BARYCORR_KEYS: tuple[str, ...] = (
     "ESO DRS BARYCORR",  # FEROS (FERN/MIDAS DRS), and the ESO DRS family generally
     "ESO DRS BERV",  # HARPS, HARPS-N
@@ -97,11 +97,11 @@ _ERR_COLUMNS = (
     "ERROR",
     "SIGMA",
     "FLUX_ERR",
-    # FLUX_ERROR is a distinct name, not a spelling of FLUX_ERR: `_find_column` matches the
-    # whole uppercased name. Gaia RVS products use FLUX_ERROR; without this entry the reader
+    # FLUX_ERROR is listed separately from FLUX_ERR because `_find_column` matches the
+    # whole uppercased name. Gaia RVS products use FLUX_ERROR. Without this entry the reader
     # would find no error column and estimate the weights from the scatter, replacing the
-    # archive's per-pixel uncertainties with an assumption (the same failure class as D45's
-    # zero-error-means-infinite-precision).
+    # archive's per-pixel uncertainties with an assumption (the same class of failure as
+    # D45, a zero error read as infinite precision).
     "FLUX_ERROR",
     "ERR_FLUX",
     "ERR_REDUCED",
@@ -109,24 +109,24 @@ _ERR_COLUMNS = (
     "UNCERTAINTY",
     "NOISE",
 )
-# MASK, FLAG and FLAGS are excluded: those names carry no agreed polarity (albireo's own
+# MASK, FLAG and FLAGS are excluded: those names have no agreed polarity (albireo's own
 # EpochData.mask uses True = good, the opposite of the SDP quality convention), and a mask
-# read with the wrong polarity keeps exactly the pixels the file rejected. A lost mask is
+# read with the wrong polarity keeps only the pixels the file rejected. A lost mask is
 # recoverable and an inverted one is not, so a column whose polarity is only guessable from
 # its name is ignored.
 _QUALITY_COLUMNS = ("QUAL", "QUAL_REDUCED", "QUALITY")
 
 # The IVOA Spectrum data model records each column's role in ``TUTYPn``, and that is the
 # only field in an ESO Phase 3 file that identifies a column unambiguously. Names do not:
-# across the seven instruments surveyed for this reader the flux column is variously FLUX,
-# FLUX_REDUCED or both at once. UCDs do not either: a UVES sky-background column carries
+# across the seven instruments surveyed for this reader the flux column is FLUX,
+# FLUX_REDUCED or both. UCDs do not either: a UVES sky-background column has the UCD
 # `phot.flux.density;em.wl;stat.uncalib`, byte-identical to the UCD on the HARPS flux
 # column, so a UCD-keyed reader would select the sky. The utype separates the two
 # (`BackgroundModel.Value` against `FluxAxis.Value`).
 #
-# Three properties of real files prevent a plain string comparison on the utype: the
+# Three properties of real files prevent a plain string comparison on the utype. The
 # namespace prefix is `spec:` in SDP v2, `Spectrum.` in v1 and `eso:` on ESO's own reduced
-# columns; ESPRESSO and GIRAFFE misspell `Accuracy` as `Accurancy`; and ESPRESSO leaves one
+# columns. ESPRESSO and GIRAFFE misspell `Accuracy` as `Accurancy`. ESPRESSO leaves one
 # utype empty. The reader therefore matches the suffix after `Data.`, case-insensitively,
 # and keeps the name tables above as a last-resort fallback.
 _ROLE_WAVE = "spectralaxis.value"
@@ -178,7 +178,7 @@ def _require_astropy():
 class RawSpectrum:
     """One spectrum as the file describes it, before any science decision is made.
 
-    Holds what the file says, in the file's own units, including values that
+    Holds the contents of the file in the file's units, including values that
     :class:`~albireo.data.EpochData` does not accept (an unnormalized flux, a missing or
     all-``NaN`` error array, negative fluxes). Converting it to an ``EpochData`` requires
     choosing a continuum, a noise model and a set of masks; :func:`to_epoch` makes those
@@ -195,7 +195,7 @@ class RawSpectrum:
         array or the one it has is entirely non-finite (as in ESO Phase-3 FEROS
         products, whose header states "Error spectrum not available").
     bjd : float
-        Mid-exposure time. BJD_TDB when :attr:`time_source` says so.
+        Mid-exposure time. BJD_TDB when :attr:`time_source` states it.
     v_bary : float
         Barycentric velocity correction in km/s, in albireo's sign convention.
     frame : {"topocentric", "barycentric"}
@@ -211,16 +211,16 @@ class RawSpectrum:
         since all components share one wavelength solution, but it affects any comparison
         with line lists or synthetic spectra.
     continuum_normalized : bool
-        The header's claim (``CONTNORM``). Not verified against the data.
+        The header's ``CONTNORM`` value. Not verified against the data.
     time_source : str
-        How :attr:`bjd` was obtained, e.g. ``"BJD_TDB from TMID"``. An uncorrected time is
-        a systematic error indistinguishable from orbital scatter.
+        How :attr:`bjd` was obtained, e.g. ``"BJD_TDB from TMID"``. An uncorrected time
+        causes a systematic error indistinguishable from orbital scatter.
     path : str
         The file the spectrum was read from.
     header : Mapping
         The primary FITS header, for anything this class does not model.
     quality : numpy.ndarray or None
-        The per-pixel quality flag column, if the file carries one (nonzero means bad).
+        The per-pixel quality flag column, if the file has one (nonzero means bad).
     specsys : str
         The raw ``SPECSYS`` value, kept even when it names a frame albireo does not model.
     v_bary_source : str
@@ -259,14 +259,14 @@ class RawSpectrum:
     def bad_pixels(self) -> np.ndarray:
         """Boolean mask of pixels that must not be fitted, ``True`` where bad.
 
-        The union of every way a Phase 3 product marks a pixel as carrying no measurement:
+        The union of the ways a Phase 3 product marks a pixel as having no measurement:
         a nonzero quality flag, a non-finite flux, and, where the file has an error array,
-        a non-finite, zero or negative uncertainty. A zero error is read as "no
-        measurement", as these pipelines write it, not as infinite precision.
+        a non-finite, zero or negative uncertainty. A zero error means no measurement, as
+        these pipelines write it, not infinite precision.
 
-        One case no generic rule can cover: UVES pads the ends of its merged spectra with
+        One case is not covered. UVES pads the ends of its merged spectra with
         ``flux = 0.0, err = 1.0`` exactly, which no column distinguishes from a measurement
-        of zero flux at unit uncertainty, and those files carry no quality column. The
+        of zero flux at unit uncertainty, and those files have no quality column. The
         caller must trim or mask the ends.
         """
         bad = ~np.isfinite(self.flux)
@@ -281,7 +281,7 @@ class RawSpectrum:
         """Gaussian LSF sigma in km/s implied by :attr:`resolving_power`, or ``None``.
 
         Assumes ``R`` quotes a FWHM, the usual convention:
-        ``sigma = c / (R * 2 sqrt(2 ln 2))``. A starting value only: the true LSF is
+        ``sigma = c / (R * 2 sqrt(2 ln 2))``. This is only a starting value. The true LSF is
         neither exactly Gaussian nor constant with wavelength, and albireo can infer the
         width (the ``lsf_sigma`` site of :class:`albireo.inference.MarginalOrbitModel`).
         """
@@ -339,7 +339,7 @@ def _find_column(columns: Sequence[str], candidates: Iterable[str]) -> str | Non
 
 @dataclass(frozen=True)
 class _Column:
-    """One table column, described as the IVOA Spectrum data model describes it."""
+    """One table column, in the terms of the IVOA Spectrum data model."""
 
     index: int  # 1-based, i.e. the n in TTYPEn
     name: str
@@ -365,7 +365,7 @@ class _TableRead:
 
 
 def _utype_parts(utype: object) -> tuple[str, str]:
-    """``(namespace, role)`` from a ``TUTYPn`` value; ``("", "")`` when it says nothing.
+    """``(namespace, role)`` from a ``TUTYPn`` value; ``("", "")`` when it is empty.
 
     The role is everything after the first ``Data.``, lowercased, with ESO's ``Accurancy``
     misspelling folded onto ``Accuracy`` so that ESPRESSO and GIRAFFE agree with X-shooter.
@@ -402,10 +402,10 @@ def _table_columns(hdu) -> list[_Column]:
 def _pick_wave(columns: Sequence[_Column]) -> _Column | None:
     """The spectral axis: by utype, else by UCD plus a known name, else by name alone.
 
-    ``SpectralAxis`` does not imply wavelength: the same utype carries a frequency or an
+    ``SpectralAxis`` does not imply wavelength: the same utype labels a frequency or an
     energy axis, distinguished only by the UCD (``em.freq``, ``em.energy``). Reading one
     of those as Angstrom would produce a strictly increasing but wrong grid, so an axis
-    whose UCD is not ``em.wl`` is refused rather than converted.
+    whose UCD is not ``em.wl`` is rejected rather than converted.
     """
     for column in columns:
         if column.role == _ROLE_WAVE:
@@ -424,24 +424,24 @@ def _pick_wave(columns: Sequence[_Column]) -> _Column | None:
 
 
 def _pick_flux(columns: Sequence[_Column]) -> _Column | None:
-    """The flux axis, preferring the calibrated column when a file carries two.
+    """The flux axis, preferring the calibrated column when a file has two.
 
     Candidates are the columns whose utype role is ``FluxAxis.Value``, which excludes a
     column typed ``BackgroundModel.Value``; the UCD then breaks ties among flux columns.
-    Files carrying both a calibrated and a raw flux (X-shooter, some UVES) label the
+    Files with both a calibrated and a raw flux (X-shooter, some UVES) label the
     calibrated one ``meta.main`` and the raw one ``stat.uncalib``, and that pair of keys
-    decides between them.
+    determines the choice.
 
-    The namespace is not a key. ESO's raw columns often sit in ``eso:`` beside a ``spec:``
-    calibrated column, but the association does not hold in general: XShootU products put
+    The namespace is not a key. ESO's raw columns are often in ``eso:`` beside a ``spec:``
+    calibrated column, but the association does not hold in general. XShootU products put
     the science flux in ``eso:Data.FluxAxis.Value`` and a derived telluric-corrected
-    column in ``spec:``, so ranking by namespace would prefer the derived one. The two UCD
+    column in ``spec:``, so ranking by namespace would select the derived one. The two UCD
     keys separate every case observed.
     """
     candidates = [c for c in columns if c.role == _ROLE_FLUX]
     if not candidates:
-        # No utype at all (a non-ESO file): fall back to names, but only for columns the
-        # file did not label as something else, so a declared background stays excluded.
+        # No utype (a non-ESO file): fall back to names, but only for columns the file did
+        # not label as something else, so a declared background stays excluded.
         candidates = [c for c in columns if c.role == "" and c.name.upper() in _FLUX_COLUMNS]
     if not candidates:
         return None
@@ -466,9 +466,9 @@ def _pick_err(columns: Sequence[_Column], flux: _Column | None) -> _Column | Non
 
     Matched to the flux by namespace, then by unit. Pairing X-shooter's calibrated
     ``FLUX`` (erg/cm2/s/A) with its ``ERR_REDUCED`` (adu) would give weights wrong by the
-    flux calibration while every value stayed finite and positive. This function ranks;
-    the caller rejects a candidate that matches on neither key, since that one is the
-    error on the file's other flux column.
+    flux calibration while every value stayed finite and positive. This function ranks the
+    candidates. The caller rejects one that matches on neither key, since it is the error
+    on the file's other flux column.
     """
     candidates = [c for c in columns if c.role == _ROLE_ERR]
     if not candidates:
@@ -488,7 +488,7 @@ def _pick_err(columns: Sequence[_Column], flux: _Column | None) -> _Column | Non
 
 
 def _pick_quality(columns: Sequence[_Column]) -> _Column | None:
-    """The per-pixel quality flag, if the product carries one. Nonzero means bad."""
+    """The per-pixel quality flag, if the product has one. Nonzero means bad."""
     for column in columns:
         if column.role == _ROLE_QUALITY:
             return column
@@ -506,7 +506,7 @@ def _medium_from_ucd(ucd: str) -> str:
 
     The ESO Science Data Product standard records the medium only in the UCD: an
     ``obs.atmos`` qualifier on ``em.wl`` means air wavelengths, and its absence means
-    vacuum. No file carries an ``AIR``/``VACUUM`` keyword, and the column comments
+    vacuum. No file has an ``AIR``/``VACUUM`` keyword, and the column comments
     contradict each other across collections, so the UCD is the sole source.
     """
     if "obs.atmos" in ucd:
@@ -520,8 +520,8 @@ def _spectrum_hdu(hdulist, path: str):
     """The HDU holding the spectrum, chosen by utype, then EXTNAME, then column names.
 
     Most ESO products write ``EXTNAME='SPECTRUM'``; the Gaia-ESO community release writes
-    ``phase3spectrum``. Taking the first table with columns called WAVE and FLUX would let
-    a small calibration or response table earlier in the file win over the spectrum.
+    ``phase3spectrum``. Taking the first table with columns called WAVE and FLUX would
+    select a small calibration or response table that precedes the spectrum in the file.
     """
     from astropy.io import fits
 
@@ -564,7 +564,7 @@ def _read_bintable(hdulist, path: str, wave_scale: float | None) -> _TableRead |
     wave_col = _pick_wave(columns)
     flux_col = _pick_flux(columns)
     if wave_col is None or flux_col is None:
-        # This HDU declared itself the spectrum. Falling back to the image reader could
+        # This HDU was selected as the spectrum. Falling back to the image reader could
         # return another array in the same file (a variance plane, a thumbnail) as the
         # science spectrum, so the missing column is reported instead.
         missing = "wavelength" if wave_col is None else "flux"
@@ -576,7 +576,7 @@ def _read_bintable(hdulist, path: str, wave_scale: float | None) -> _TableRead |
         )
 
     # Two layouts occur: the IVOA one, a single row whose cells are whole arrays, and the
-    # plain one, N rows of scalars (which albireo's own write_spectra emits).
+    # plain one, N rows of scalars (which albireo's write_spectra emits).
     vector = np.asarray(hdu.data[wave_col.name]).ndim > 1
     n_rows = len(hdu.data)
     if vector and n_rows > 1:
@@ -623,7 +623,7 @@ def _read_bintable(hdulist, path: str, wave_scale: float | None) -> _TableRead |
             err_note = f"the {err_col.name} column has {err.size} values for {wave.size} pixels"
             err, err_rejected = None, True
         elif not np.any(np.isfinite(err) & (err > 0)):
-            # FEROS and HARPS ship an all-NaN ERR: those pipelines produce no error
+            # FEROS and HARPS files have an all-NaN ERR: those pipelines produce no error
             # spectrum, and the header records this only in a comment card.
             err_note = f"the {err_col.name} column holds no finite positive value"
             err, err_rejected = None, True
@@ -636,10 +636,10 @@ def _read_bintable(hdulist, path: str, wave_scale: float | None) -> _TableRead |
         quality = None
     elif quality is not None and not np.any(quality == 0.0):
         # The SDP convention is 0 = good, so a flag column in which zero never occurs does
-        # not follow it. UVES_SQUAD's STATUS takes the values {-5, 1}; read at face value it
-        # marks every pixel of all 467 products bad. A column whose polarity cannot be
-        # determined is dropped rather than inverted. The -5 pixels there also carry
-        # err < 0 and are caught by that rule.
+        # not follow it. UVES_SQUAD's STATUS takes the values {-5, 1}; read under that
+        # convention it marks every pixel of all 467 products bad. A column whose polarity
+        # cannot be determined is dropped rather than inverted. The -5 pixels there also
+        # have err < 0, which flags them as bad.
         warnings.warn(
             f"{path}: the quality column {quality_col.name!r} never takes the value 0, so it "  # type: ignore[union-attr]
             f"is not using the standard 'zero means good' convention (it holds "
@@ -704,7 +704,7 @@ def _read_wcs_image(hdulist, path: str, wave_scale: float | None) -> _TableRead 
 
 
 def _observatory_location(header, path: str):
-    """An astropy ``EarthLocation`` from the header, or ``None`` if it does not say."""
+    """An astropy ``EarthLocation`` from the header, or ``None`` if it gives none."""
     from astropy import units as u
     from astropy.coordinates import EarthLocation
 
@@ -729,9 +729,9 @@ def _sexagesimal(value: object) -> float | None:
     """Decode ESO's packed ``[+-]DDMMSS.sss`` telescope coordinates to degrees.
 
     ``ESO TEL TARG ALPHA = 182703.542`` is 18h 27m 03.542s, not 182703 degrees. Read as
-    degrees it wraps modulo 360 to a plausible but wrong position, which moves the
+    degrees it wraps modulo 360 to a plausible but wrong position, which changes the
     barycentric light-travel correction by minutes and the barycentric velocity by km/s
-    without any error, since ``SkyCoord`` accepts any real number as a right ascension.
+    with no error raised, since ``SkyCoord`` accepts any real number as a right ascension.
     """
     try:
         packed = float(value)  # type: ignore[arg-type]
@@ -770,11 +770,11 @@ def _mid_exposure_mjd_utc(header, table_header, path: str) -> tuple[float, str]:
 
     ``TMID`` is authoritative and is written in the extension header of every ESO Phase 3
     product. The fallbacks are ordered because ``MJD-OBS + EXPTIME/2`` is the mid-point
-    only for a single-exposure product: where ``TELAPSE`` shows the product spanning much
+    only for a single-exposure product. Where ``TELAPSE`` shows the product spanning much
     longer than ``EXPTIME`` (one Gaia-ESO file stacks nine exposures over thirty days),
-    it puts the epoch a week early. ``MJD-END`` is used first where it exists, and the
-    ``EXPTIME`` fallback is refused when ``TELAPSE`` exceeds ``EXPTIME`` by more than a
-    factor of 1.5.
+    that formula puts the epoch a week early. ``MJD-END`` is used first where it exists,
+    and the ``EXPTIME`` fallback raises an error when ``TELAPSE`` exceeds ``EXPTIME`` by
+    more than a factor of 1.5.
     """
     if _header_get(header, ("M_EPOCH",)) in (True, "T", "True"):
         warnings.warn(
@@ -854,12 +854,12 @@ def _barycentric_time(mjd_utc: float, header, path: str) -> tuple[float, str]:
 
 
 def _barycentric_velocity(header, mjd_utc: float, path: str) -> tuple[float, str]:
-    """``(v_bary_kms, provenance)``: the pipeline's own value, else computed, else 0.
+    """``(v_bary_kms, provenance)``: the pipeline's value, else computed, else 0.
 
     The pipeline's keyword is preferred because its value defines the frame of the
     delivered wavelengths. The fallback is astropy's
     ``SkyCoord.radial_velocity_correction``, which implements the barycentric correction
-    of Wright & Eastman (2014); it requires the observatory location and the target
+    of Wright & Eastman (2014). It requires the observatory location and the target
     coordinates from the header.
 
     References
@@ -898,14 +898,14 @@ def _barycentric_velocity(header, mjd_utc: float, path: str) -> tuple[float, str
         return 0.0, "assumed 0 (no keyword, and too little header information to compute)"
     from astropy.time import Time
 
-    # The location goes on the Time, not on the call: astropy raises if it is given both.
+    # The location is set on the Time, not on the call: astropy raises if it is given both.
     time = Time(mjd_utc, format="mjd", scale="utc", location=location)
     v = coord.radial_velocity_correction("barycentric", obstime=time)
     return float(v.to("km/s").value), "computed with astropy"
 
 
 def _frame_from_specsys(header, table_header, path: str, declared: bool = False) -> tuple[str, str]:
-    """``(albireo_frame, raw_SPECSYS)``, warning when the header does not say.
+    """``(albireo_frame, raw_SPECSYS)``, warning when the header does not state it.
 
     albireo models two frames. A heliocentric spectrum is reported as barycentric because
     the difference is a few m/s, a hundredth of a pixel at any resolving power this
@@ -989,8 +989,8 @@ def read_spectrum(
         Override the barycentric velocity correction, km/s.
     resolving_power : float, optional
         Override ``R``; otherwise read from ``SPEC_RES``/``SPECRES``/``RESOLUTI``. A bare
-        ``R`` keyword is not consulted: a one-character card is ambiguous, and
-        ``R = 3.7`` would imply a 34,000 km/s line-spread function without any error.
+        ``R`` keyword is not read: a one-character card is ambiguous, and ``R = 3.7``
+        would imply a 34,000 km/s line-spread function with no error raised.
     wave_scale : float, optional
         Factor converting the file's wavelengths to Angstrom. Default: from the column
         or ``CUNIT1`` unit string.
@@ -1010,7 +1010,7 @@ def read_spectrum(
     Notes
     -----
     The mid-exposure time is converted to BJD_TDB with astropy following Eastman et al.
-    (2010). When the header carries no barycentric-velocity keyword, the correction is
+    (2010). When the header has no barycentric-velocity keyword, the correction is
     computed with astropy following Wright & Eastman (2014).
 
     References
@@ -1053,17 +1053,16 @@ barycentric, v_bary=-21.708 km/s, bjd=2453243.51... (BJD_TDB)
         )
 
     # A time is looked up only when needed. The error raised for a file with no time
-    # keyword tells the caller to pass bjd=, and that must succeed, including on a file
-    # albireo wrote itself.
+    # keyword advises passing bjd=, and that call must succeed, including on a file
+    # written by albireo.
     mjd_utc, time_key = 0.0, ""
     if bjd is None:
         mjd_utc, time_key = _mid_exposure_mjd_utc(header, table_header, path)
     elif v_bary is None:
         # A time is still needed, but only as the argument to an astropy-computed v_bary,
-        # itself the fallback for a file with no barycentric keyword. A caller who supplied
-        # the epoch is not blocked: the given BJD is used, which differs from MJD_UTC by at
-        # most the 8.3-minute light-travel term and moves a barycentric velocity by under
-        # 0.05 km/s.
+        # itself the fallback for a file with no barycentric keyword. If the header lookup
+        # fails, the supplied BJD is used, which differs from MJD_UTC by at most the
+        # 8.3-minute light-travel term and changes a barycentric velocity by under 0.05 km/s.
         try:
             mjd_utc, time_key = _mid_exposure_mjd_utc(header, table_header, path)
         except ValueError:
@@ -1084,8 +1083,8 @@ barycentric, v_bary=-21.708 km/s, bjd=2453243.51... (BJD_TDB)
         frame_value = frame
 
     if resolving_power is None:
-        # A bare "R" keyword is not consulted: a one-character card is ambiguous, and a
-        # stray R = 3.7 would imply a 34,000 km/s line-spread function without any error.
+        # A bare "R" keyword is not read: a one-character card is ambiguous, and an unrelated
+        # R = 3.7 would imply a 34,000 km/s line-spread function with no error raised.
         res = _header_get(header, ("SPEC_RES", "SPECRES", "RESOLUTI"))
         resolving_power = float(res) if res is not None else None
 
@@ -1156,7 +1155,7 @@ def to_epoch(
         of the region width.
     normalize_continuum : bool, optional
         Whether to fit and divide out a continuum. Default: ``True`` unless the header
-        already claimed the spectrum is normalized (``raw.continuum_normalized``).
+        declares the spectrum normalized (``raw.continuum_normalized``).
     smooth_angstrom : float, optional
         Continuum smoothing scale; see :func:`albireo.preprocess.fit_continuum`.
     ivar_scaling : {"poisson", "interpolate", "constant"}, optional
@@ -1205,10 +1204,10 @@ def to_epoch(
             )
         wave, flux, bad = wave[sel], flux[sel], bad[sel]
         err = None if err is None else err[sel]
-        # The guard below tests the pixels that survive the final trim, not the padded slice
-        # the continuum is fitted on. A region that is entirely flagged beside a live pad
-        # would otherwise pass and produce a zero-weight epoch that the solver accepts: the
-        # fit would report N epochs and be informed by N-1.
+        # The guard below tests the pixels that remain after the final trim, not the padded
+        # slice the continuum is fitted on. A fully flagged region beside a pad with good
+        # pixels would otherwise pass and produce a zero-weight epoch that the solver
+        # accepts: the fit would report N epochs and be constrained by N-1.
         core = (wave >= lo) & (wave <= hi)
     else:
         core = np.ones(bad.shape, dtype=bool)
@@ -1222,9 +1221,9 @@ def to_epoch(
 
     continuum_options = dict(continuum_kwargs or {})
     if normalize_continuum:
-        # Bad pixels are kept in place (albireo never resamples or drops samples) but carry
-        # zero weight in the continuum fit: a flagged cosmic ray pulls the upper envelope
-        # up, a dead column pulls it down, and either propagates into every line depth.
+        # Bad pixels are kept in place (albireo never resamples or drops samples) but have
+        # zero weight in the continuum fit: a flagged cosmic ray raises the upper envelope,
+        # a dead column lowers it, and either propagates into every line depth.
         continuum_options.setdefault("weights", (~bad).astype(np.float64))
         flux_norm, ivar, continuum = normalize(
             wave,
@@ -1248,7 +1247,7 @@ def to_epoch(
             scaling=ivar_scaling,
             mask=bad | ~np.isfinite(flux_norm),
         )
-    # EpochData tolerates non-finite flux at zero-weight pixels, but not a nonzero weight at
+    # EpochData accepts non-finite flux at zero-weight pixels, but not a nonzero weight at
     # a non-finite or flagged pixel.
     ivar = np.where(np.isfinite(flux_norm) & ~bad, ivar, 0.0)
 
@@ -1260,7 +1259,7 @@ def to_epoch(
         v_bary=raw.v_bary,
         instrument=raw.instrument,
         medium=None if raw.wave_medium == "unknown" else raw.wave_medium,
-        # The header's resolving power travels with the epoch. It is not applied here:
+        # The header's resolving power is stored on the epoch. It is not applied here:
         # the model takes the width the caller declares per instrument, or per epoch
         # when the instrument is declared PER_EPOCH (albireo.forward.build_problem).
         lsf_sigma_kms=raw.lsf_sigma_kms,
@@ -1282,10 +1281,10 @@ def to_epoch(
 def _read_many(paths: Sequence[str], *, instrument, frame, options) -> list[RawSpectrum]:
     """Read every file, collapsing warnings that repeat across files into one each.
 
-    Every warning in this module names its file, which suits one spectrum but not fifty:
-    the 51 FEROS epochs of HR 6819 would emit the same "no usable error array" warning 51
-    times, differing only in the path. Each distinct warning is therefore reported once,
-    naming the first file it applied to and the number of others.
+    Every warning in this module names its file, so a set of files repeats it: the 51
+    FEROS epochs of HR 6819 would emit the same "no usable error array" warning 51 times,
+    differing only in the path. Each distinct warning is therefore reported once, naming
+    the first file it applied to and the number of others.
     """
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
@@ -1294,7 +1293,7 @@ def _read_many(paths: Sequence[str], *, instrument, frame, options) -> list[RawS
     collapsed: dict[tuple, list] = {}
     for entry in caught:
         text = str(entry.message)
-        # The messages are formatted "<path>: <complaint>"; the complaint is the identity.
+        # Messages are formatted "<path>: <complaint>"; the complaint identifies the warning.
         _, _, complaint = text.partition(": ")
         key = (entry.category, complaint or text)
         collapsed.setdefault(key, [0, text])[0] += 1
@@ -1337,11 +1336,11 @@ def read_raw_spectra(
 ) -> list[RawSpectrum]:
     """Read a set of FITS spectra as :class:`RawSpectrum` objects, in path order.
 
-    The first half of :func:`read_dataset`, for callers that need the file-level facts
-    (the resolving power each header declares, the instrument key each file resolved to,
-    the wavelength medium) before committing to a :class:`~albireo.data.Dataset`; the
-    same objects then go to :func:`dataset_from_raw`. Repeated warnings are collapsed to
-    one per distinct complaint, as in :func:`read_dataset`.
+    This is the first half of :func:`read_dataset`, for callers that need the file-level
+    facts (the resolving power each header declares, the instrument key each file resolved
+    to, the wavelength medium) before building a :class:`~albireo.data.Dataset`. The same
+    objects are then passed to :func:`dataset_from_raw`. Repeated warnings are collapsed
+    to one per distinct message, as in :func:`read_dataset`.
 
     Parameters
     ----------
@@ -1378,15 +1377,15 @@ def dataset_from_raw(
 ) -> Dataset:
     """Turn already-read :class:`RawSpectrum` objects into one :class:`~albireo.data.Dataset`.
 
-    The second half of :func:`read_dataset`: the frame and wavelength-scale agreement
-    checks, the time ordering, and :func:`to_epoch` on every spectrum.
+    This is the second half of :func:`read_dataset`: the frame and wavelength-scale
+    agreement checks, the time ordering, and :func:`to_epoch` on every spectrum.
 
     Parameters
     ----------
     raws
         From :func:`read_raw_spectra` or :func:`read_spectrum`.
     medium : {"air", "vacuum"}, optional
-        Declare the wavelength scale for every epoch, overriding what the files say.
+        Declare the wavelength scale for every epoch, overriding what the files state.
     sort_by_time : bool, optional
         Order the epochs by ``bjd``. Default ``True``.
     **epoch_kwargs
@@ -1399,7 +1398,7 @@ def dataset_from_raw(
     Raises
     ------
     ValueError
-        If ``raws`` is empty, or the epochs disagree about the frame or the medium.
+        If ``raws`` is empty, or the epochs differ in the frame or the medium.
     """
     raws = list(raws)
     if not raws:
@@ -1440,11 +1439,11 @@ def read_dataset(
 ) -> Dataset:
     """Read a set of FITS spectra into one :class:`~albireo.data.Dataset`.
 
-    The single-call path from a directory of archival spectra to an input for
-    :func:`albireo.forward.build_problem`: :func:`read_raw_spectra` followed by
-    :func:`dataset_from_raw`. Call the two halves directly when the file-level facts (the
-    header's resolving power, the instrument each file resolved to) are needed before the
-    epochs are built.
+    Converts a directory of archival spectra to an input for
+    :func:`albireo.forward.build_problem` in one call: :func:`read_raw_spectra` followed
+    by :func:`dataset_from_raw`. Call the two halves directly when the file-level facts
+    (the header's resolving power, the instrument each file resolved to) are needed before
+    the epochs are built.
 
     Parameters
     ----------
@@ -1453,16 +1452,16 @@ def read_dataset(
         of paths.
     instrument : str, optional
         Instrument key for every epoch; overrides the header. Epochs that share an LSF
-        should share one key; they may still sit on different wavelength grids, which
+        should share one key; they may still be on different wavelength grids, which
         albireo splits into separate operator groups internally
         (:func:`albireo.forward._epoch_groups`).
     frame : {"topocentric", "barycentric"}, optional
         Override the frame for every epoch. All epochs must agree, since the frame is a
         property of the :class:`~albireo.data.Dataset`.
     medium : {"air", "vacuum"}, optional
-        Declare the wavelength scale for every epoch, overriding what the files say. It
+        Declare the wavelength scale for every epoch, overriding what the files state. It
         changes the label, not the wavelengths, so it is valid only after the files are
-        converted onto a common scale. Without it, files that disagree are refused.
+        converted onto a common scale. Without it, files on different scales are rejected.
     sort_by_time : bool, optional
         Order the epochs by ``bjd``. Default ``True``.
     read_kwargs : mapping, optional
@@ -1477,7 +1476,7 @@ def read_dataset(
     Raises
     ------
     ValueError
-        If no file matches, or the epochs disagree about the frame.
+        If no file matches, or the epochs differ in the frame.
 
     Examples
     --------
@@ -1545,11 +1544,11 @@ def write_spectra(
 
     Notes
     -----
-    The written flux is the *component* spectrum ``1 + d``, not its contribution to the
+    The written flux is the component spectrum ``1 + d``, not its contribution to the
     composite, which is ``l_i * d_i``. Where the smoothness prior dominates (between
-    lines, and wherever the epochs give little leverage) the values are set by the prior
-    rather than by the data; the ``ERR`` column indicates where. See ``docs/math.md``
-    §5.1.
+    lines, and wherever the epochs constrain the spectrum weakly) the values are set by
+    the prior rather than by the data; the ``ERR`` column indicates where. See
+    ``docs/math.md`` §5.1.
     """
     fmt = format.lower()
     if fmt not in {"fits", "ecsv"}:

@@ -1,9 +1,9 @@
 """Quickstart: load the packaged example, fit the orbit at MAP, and plot the spectra.
 
-This is the shortest complete analysis in albireo. It loads the example dataset that
-ships inside the package, fits the orbit with the component spectra marginalized, and
-writes two figures. It runs in about a minute on a laptop, most of which is JAX
-compiling the model on its first call.
+This is the shortest complete analysis in albireo. It loads the packaged example dataset,
+fits the orbit with the component spectra marginalized, and writes two figures. It runs
+in about a minute on a laptop, most of which is JAX compiling the model on its first
+call.
 
 The script stops at the maximum a posteriori fit. The posterior over the orbit, which is
 the purpose of the package, is sampled in ``examples/01_sb2_end_to_end.py``.
@@ -29,8 +29,8 @@ def main() -> None:
     print(f"albireo {ab.__version__}")
 
     # 1. Data. The example is packaged with albireo, so this works offline. With
-    #    `with_truth=True` the injected orbit and component spectra are returned as well,
-    #    which lets the script check its own result at the end.
+    #    `with_truth=True` the injected orbit and component spectra are also returned,
+    #    and the script checks its result against them at the end.
     dataset, truth = ab.load_example("sb2_sim", with_truth=True)
     print(dataset.summary())
 
@@ -42,8 +42,8 @@ def main() -> None:
     # 3. The model. Two quantities are not inferred and must be supplied: the light
     #    fractions (with a constant light ratio the data constrain only the products
     #    l_i * d_i; docs/math.md section 5.2) and the LSF width. `v_rel_max_kms` is the
-    #    velocity budget for which the static solver structure is built; orbits that
-    #    exceed it are rejected with a non-finite log density rather than mis-solved.
+    #    velocity budget for which the static solver structure is built. Orbits that
+    #    exceed it are rejected with a non-finite log density.
     model = ab.MarginalOrbitModel(
         grid,
         dataset,
@@ -52,12 +52,12 @@ def main() -> None:
         v_rel_max_kms=160.0,
     )
 
-    # 4. Priors. These are broad, as befits a demonstration. `secosw` and `sesinw` are
+    # 4. Priors. These are broad, as suits a demonstration. `secosw` and `sesinw` are
     #    sqrt(e) cos(omega) and sqrt(e) sin(omega), which sample better than (e, omega)
     #    because the pair has no boundary at e = 0 and no wrap in omega.
     #
     #    The parameterization is singular at exactly e = 0, where omega is undefined and
-    #    the gradient is not finite. Never initialize at secosw = sesinw = 0; start
+    #    the gradient is not finite. Never initialize at secosw = sesinw = 0. Start
     #    slightly off the origin, as here, even for a binary believed to be circular.
     #    numpyro reports the singular start as "Cannot find valid initial parameters".
     priors = {
@@ -91,8 +91,8 @@ def main() -> None:
     print(f"  K_2       {k_fit[1]:8.3f} km/s (truth {k_true[1]:.3f})")
 
     # 5. The component spectra conditional on the fitted orbit, with their pointwise
-    #    uncertainties. Where the epochs give no leverage the smoothness prior sets the
-    #    answer, and the uncertainty band identifies those regions.
+    #    uncertainties. Where the epochs do not constrain a spectrum the smoothness prior
+    #    determines it, and the uncertainty band identifies those regions.
     marginal = model.marginal(fit.params)
     d_hat = np.asarray(marginal.d_hat)
     std = np.asarray(ab.spectra_std(marginal))

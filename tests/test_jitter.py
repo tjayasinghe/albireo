@@ -1,11 +1,11 @@
 """Tests for the per-epoch noise-inflation factor (internal/design.md D15, math.md §1.4).
 
-The point of a jitter site is that archival inverse variances are usually *estimated*
-rather than measured, so their overall scale is unknown. Two properties have to hold for
-it to be worth having, and both are pinned here: it must be exactly equivalent to having
-been handed rescaled inverse variances in the first place, and maximizing the marginal
-likelihood over it must recover an injected scale error — including the effective-degrees-
-of-freedom correction that the naive "set chi-square per pixel to one" estimator misses.
+A jitter site is needed because archival inverse variances are usually estimated rather
+than measured, so their overall scale is unknown. Two properties are tested. The jitter
+must be exactly equivalent to supplying rescaled inverse variances. Maximizing the
+marginal likelihood over it must recover an injected scale error, including the
+effective-degrees-of-freedom correction that the naive estimator (chi-square per pixel
+set to one) omits.
 """
 
 from __future__ import annotations
@@ -85,7 +85,7 @@ def scaled_ivar_dataset(ds: Dataset, factor) -> Dataset:
 
 
 def test_unit_jitter_changes_nothing():
-    """alpha = 1 must be the identity to the last bit, not merely to a tolerance."""
+    """alpha = 1 must be the identity to the last bit."""
     _, _, problem, prior = small_problem()
     base = marginal_loglikelihood(problem, prior)
     same = marginal_loglikelihood(with_jitter(problem, 1.0), prior)
@@ -95,10 +95,10 @@ def test_unit_jitter_changes_nothing():
 
 @pytest.mark.parametrize("alpha", [0.5, 1.7, [1.0, 2.5, 0.8]])
 def test_jitter_equals_rescaling_the_inverse_variances(alpha):
-    """The defining identity: jitter alpha_j == being handed ivar_j / alpha_j^2.
+    """The defining identity: jitter alpha_j is equivalent to supplying ivar_j / alpha_j^2.
 
-    Everything in the likelihood that touches the weights has to agree, including the
-    ``sum log w`` term — which is computed by a different route with jitter (a per-epoch
+    Every term of the likelihood that depends on the weights has to agree, including the
+    ``sum log w`` term, which is computed by a different route with jitter (a per-epoch
     scalar correction) than without (a sum over pixels).
     """
     ds, truth, problem, prior = small_problem()
@@ -120,7 +120,7 @@ def test_jitter_equals_rescaling_the_inverse_variances(alpha):
 
 
 def test_jitter_leaves_the_raw_weights_alone_and_is_idempotent():
-    """`w` stays the measurement; applying a jitter twice replaces, never compounds."""
+    """`w` remains the measured weight, and a second jitter replaces the first."""
     _, _, problem, prior = small_problem()
     once = with_jitter(problem, 2.0)
     twice = with_jitter(once, 2.0)
@@ -133,7 +133,7 @@ def test_jitter_leaves_the_raw_weights_alone_and_is_idempotent():
 
 
 def test_band_and_probe_assembly_agree_under_jitter():
-    """The jitter enters band assembly through its own path (`wprime`); check both."""
+    """The jitter enters band assembly through a separate path (`wprime`), so both are checked."""
     _, _, problem, prior = small_problem()
     jittered = with_jitter(problem, [1.3, 0.7, 2.1])
     band = marginal_loglikelihood(jittered, prior, assembly="band", validate=True)
@@ -170,23 +170,23 @@ def test_jitter_is_differentiable_under_jit():
     np.testing.assert_allclose(grad, fd, rtol=2e-6, atol=1e-6)
 
 
-# --------------------------------------------------------- what ML-II actually estimates
+# ------------------------------------------------------------------ what ML-II estimates
 
-# A deliberately over-determined problem: 2400 weighted pixels against 2 x ~121 model
-# pixels, with a weak prior so most of those are data-determined. The residuals are then
-# close to the injected noise, and the effective parameter count is a visible ~9% of the
-# data — enough to separate the corrected estimator from the naive one (which lands 4.6%
-# low here) without making either of them meaningless.
+# An over-determined problem: 2400 weighted pixels against 2 x ~121 model pixels, with a
+# weak prior so that most of the model pixels are data-determined. The residuals are then
+# close to the injected noise, and the effective parameter count is ~9% of the data. That
+# is enough to separate the corrected estimator from the naive one, which is 4.6% low
+# here, without making either of them meaningless.
 BIG_GRID = ab.LogGrid.from_wavelength_range(5000.0, 5010.0, dv_kms=5.0)
 BIG_SNR = 60.0
 N_BIG_EPOCHS = 12
 
 
 def big_problem(ivar_inflation: float):
-    """Data at SNR 60, but told its inverse variances are ``ivar_inflation`` times larger.
+    """Data at SNR 60, supplied with inverse variances ``ivar_inflation`` times larger.
 
-    Claiming ``ivar * f^2`` is claiming errors smaller by ``f``, so the jitter that
-    restores the truth is ``alpha = f``.
+    Supplying ``ivar * f^2`` corresponds to errors smaller by ``f``, so the correct
+    jitter is ``alpha = f``.
     """
     comps = [synth(BIG_GRID, n_lines=25, seed=s, margin=0.1) for s in (3, 4)]
     rng = np.random.default_rng(5)
@@ -235,13 +235,13 @@ def test_ml2_recovers_an_injected_noise_inflation(injected):
 
 
 def test_the_marginal_supplies_the_effective_dof_correction():
-    """The maximizing alpha is *not* the residual standard deviation.
+    """The maximizing alpha is not the residual standard deviation.
 
     In the data-dominated limit the marginal's log-determinant terms contribute
     ``+p_eff log alpha`` against the weight term's ``-N log alpha``, so profiling gives
-    ``alpha^2 = chi2 / (N - p_eff)`` — the classical dof-corrected variance estimate —
-    where whitening the residuals by hand would give ``chi2 / N`` and land low by
-    ``sqrt(1 - p_eff/N)``. This test only passes if that correction is really there.
+    ``alpha^2 = chi2 / (N - p_eff)``, the classical dof-corrected variance estimate.
+    Whitening the residuals manually would give ``chi2 / N``, which is low by
+    ``sqrt(1 - p_eff/N)``. The test passes only if the correction is present.
     """
     injected = 2.0
     problem, _, prior = big_problem(injected)
@@ -249,22 +249,22 @@ def test_the_marginal_supplies_the_effective_dof_correction():
 
     fitted = with_jitter(problem, alpha_hat)
     d_hat = marginal_loglikelihood(fitted, prior).d_hat
-    # Residuals whitened by the *supplied* (optimistic) weights: their standard deviation
-    # is the naive estimator of the same quantity.
+    # The standard deviation of the residuals whitened by the supplied (optimistic)
+    # weights is the naive estimator of the same quantity.
     naive = float(np.std(data_residual_zscores(problem, d_hat)))
 
     # The naive estimator is biased low, and the profiled one is several times closer to
-    # the truth — so this is a real comparison, not two estimators tying.
+    # the injected value, so the test distinguishes the two estimators.
     assert naive < alpha_hat, (naive, alpha_hat)
     assert abs(alpha_hat - injected) < 0.5 * abs(naive - injected), (alpha_hat, naive)
 
-    # Read the implied effective parameter count back out of the two estimators; it should
-    # land near the model dimension (2 components x n_pix), since this prior is weak.
+    # The two estimators imply an effective parameter count. It should be near the model
+    # dimension (2 components x n_pix), since this prior is weak.
     n_data = int(sum(int(np.sum(np.asarray(g.w) > 0)) for g in problem.groups))
     p_eff = n_data * (1.0 - (naive / alpha_hat) ** 2)
     assert 0.5 * 2 * BIG_GRID.n < p_eff < 1.5 * 2 * BIG_GRID.n, (p_eff, n_data, BIG_GRID.n)
 
-    # And the residuals under the fitted weights are calibrated, which is the whole point.
+    # The residuals under the fitted weights are calibrated, which is the purpose of the jitter.
     z = data_residual_zscores(fitted, d_hat)
     assert 0.9 < float(np.std(z)) < 1.02
 
@@ -325,7 +325,7 @@ def test_problem_at_reflects_the_jitter():
 
 @pytest.mark.slow
 def test_log_jitter_is_a_sampleable_site():
-    """It has to survive numpyro's site-name validation and one MAP step."""
+    """The site must pass numpyro's site-name validation and run through one MAP step."""
     model, theta = orbit_model_and_theta()
     priors = {
         "period": dist.Normal(3.1, 0.05),

@@ -1,11 +1,11 @@
 """Find a faint companion with the K2 scan: SB1 + marginalized secondary (``docs/math.md`` §6).
 
-The faint-companion workflow. An SB1 solution is given (period, conjunction time,
-eccentricity vector and ``K_1`` from the single-lined orbit), and the question is whether
-a second set of lines is present in the composite spectra at some unknown ``K_2``.
+An SB1 solution is given (period, conjunction time, eccentricity vector and ``K_1`` from
+the single-lined orbit), and the scan tests whether a second set of lines is present in
+the composite spectra at some unknown ``K_2``.
 
 At each trial ``K_2`` the companion's deviation spectrum enters the model linearly, so it
-is marginalized analytically: one linear solve per grid point gives the matched filter
+is marginalized analytically. One linear solve per grid point gives the matched filter
 integrated over every possible companion spectrum, with no template library. The
 detection statistic is
 
@@ -13,22 +13,22 @@ detection statistic is
 
 The script runs the scan twice with everything else held fixed: once on a dataset with
 a companion injected at K_2 = 38 km/s, and once on a companion-free dataset. Both
-marginal likelihoods carry their ``1/2 log det`` Occam terms, so the extra marginalized
-component lowers the likelihood unless coherent signal compensates for it; on
-companion-free data D is therefore negative at every trial. That baseline is what gives
-a positive D its meaning.
+marginal likelihoods include their ``1/2 log det`` Occam terms, so the extra marginalized
+component lowers the likelihood unless coherent signal compensates for it. On
+companion-free data D is therefore negative at every trial. A positive D is interpreted
+relative to that baseline.
 
-Two limitations:
+Two limitations apply:
 
 * ``D`` is not asymptotically chi-squared. Its null distribution depends on the
   companion's prior scale ``(tau_2, eta_2)`` and must be calibrated by injection and
   recovery with :mod:`albireo.simulate` (``docs/math.md`` §6). The absolute D values
-  here are illustrative; the contrast between peak, edges and the null run is the result.
+  here are illustrative. The result is the contrast between peak, edges and the null run.
 * ``ell_2`` is assumed, not fitted. The observable is ``ell_2 * d_2``, so the companion's
-  light fraction trades exactly against its line depths (``docs/math.md`` §5.2), and at
-  ``ell_2 = 0.1`` the smooth envelope of the recovered spectrum is prior-dominated by a
-  factor of about ell_1/ell_2. The scan recovers the line pattern, not an absolute depth
-  scale.
+  light fraction is exactly degenerate with its line depths (``docs/math.md`` §5.2), and
+  at ``ell_2 = 0.1`` the smooth envelope of the recovered spectrum is prior-dominated by
+  a factor of about ell_1/ell_2. The scan recovers the line pattern, not an absolute
+  depth scale.
 
 Environment
 -----------
@@ -71,18 +71,19 @@ K2_GRID = np.arange(10.0, 70.0, K2_STEP)
 SEED = 7
 
 # The scan holds the spectral hyperparameters fixed (it is a profile over K_2, not a
-# joint fit): a stiffer, shallower prior for the faint companion than for the primary.
+# joint fit). The faint companion has a stiffer, shallower prior than the primary.
 PRIOR = ab.SmoothnessPrior(jnp.asarray([300.0, 30.0]), jnp.asarray([5.0, 5.0]))
 
-# (K_1 + max K_2)(1 + e) with headroom: the static solver bandwidth for the
-# two-component model. The null (one-component) model inherits it and needs less.
+# The static solver bandwidth for the two-component model is set by
+# (K_1 + max K_2)(1 + e) with headroom. The null (one-component) model uses it and
+# needs less.
 V_REL_MAX = 105.0
 
 
 def sb1_solution() -> dict:
     """The fixed SB1 orbit, in albireo's (period, t_conj, secosw, sesinw) parameterization.
 
-    ``k1`` is passed separately to :func:`albireo.k2_scan`: the scan profiles over the
+    ``k1`` is passed separately to :func:`albireo.k2_scan`. The scan profiles over the
     companion's semi-amplitude only, with the other elements fixed by the SB1 fit.
     """
     nu_conj = 0.5 * np.pi - OMEGA_TRUE
@@ -118,8 +119,8 @@ def simulate(*, with_companion: bool):
         )
         components, light = [primary, companion], ELL
     else:
-        # Identical primary, epochs and noise seed; only the companion is removed, so
-        # any difference in D is due to the companion.
+        # The primary, epochs and noise seed are identical. Only the companion is removed,
+        # so any difference in D is due to the companion.
         orbit = ab.OrbitParams(
             period=P_TRUE, t_peri=T_PERI_TRUE, ecc=ECC_TRUE, omega=OMEGA_TRUE, k=(K1_TRUE,)
         )
@@ -198,8 +199,8 @@ def main() -> None:
     print_curve(injected, f"companion injected at K_2 = {K2_TRUE:.0f} km/s  [{t_injected:.1f} s]")
 
     # The recovered companion spectrum is the conditional Gaussian mean at the peak. The
-    # comparison is of the line pattern: the mean level is set by the prior (math.md
-    # §5.2, §6).
+    # comparison is of the line pattern, because the mean level is set by the prior
+    # (math.md §5.2, §6).
     core = np.asarray(companion_truth) < -0.05
     margin = int(0.05 * GRID.n)  # ignore the zero-padded grid edges
     core[:margin] = False

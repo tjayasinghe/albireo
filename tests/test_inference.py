@@ -1,7 +1,7 @@
-"""Tests for joint inference (M3): θ-path exactness, gradients, MAP/ML-II, NUTS gate.
+"""Tests for joint inference: θ-path exactness, gradients, MAP/ML-II, NUTS acceptance test.
 
-The NUTS closed-loop test is the M3 acceptance gate: posterior means of K_1, K_2
-within 1% of truth with a converged, divergence-free chain (``internal/design.md`` §8).
+The NUTS closed-loop test is the acceptance test: posterior means of K_1, K_2 within 1%
+of the injected values with a converged, divergence-free chain (``internal/design.md`` §8).
 """
 
 import jax
@@ -33,7 +33,7 @@ from albireo.simulate import synthetic_deviation_spectrum as synth_spectrum
 RNG = np.random.default_rng(42)
 
 # ---------------------------------------------------------------------------
-# Gate-scale closed-loop configuration (shared by the MAP and NUTS tests)
+# Acceptance-test closed-loop configuration (shared by the MAP and NUTS tests)
 # ---------------------------------------------------------------------------
 
 GRID = ab.LogGrid.from_wavelength_range(5000.0, 5045.0, dv_kms=5.5)
@@ -202,7 +202,7 @@ def test_model_loglike_matches_m2_path(gate_data):
         GRID, ds, velocities=truth.velocities, light_fractions=ELL, lsf_sigma_v=LSF
     )
     ref = marginal_loglikelihood(prob_ref, prior, validate=True)
-    # different (but both sufficient) bandwidths: identical answers
+    # different (but both sufficient) bandwidths give identical results
     np.testing.assert_allclose(float(got.log_likelihood), float(ref.log_likelihood), rtol=1e-12)
     np.testing.assert_allclose(np.asarray(got.d_hat), np.asarray(ref.d_hat), atol=1e-8)
 
@@ -259,10 +259,10 @@ def test_bandwidth_guard_rejects_out_of_bound_orbits(gate_data):
     numpyro_model = model.model(PRIORS)
     ld, _ = log_density(numpyro_model, (), {}, {**INIT})
     assert np.isfinite(float(ld))
-    # The guard fires on the *realized* max relative shift at the observed epochs,
-    # not on a (K, e) envelope — so build a configuration whose relative velocity
-    # actually exceeds the shift budget at some epoch: max K's, e = 0.6, and omega
-    # scanned so a periastron passage lands on an epoch.
+    # The guard is triggered by the realized max relative shift at the observed epochs,
+    # not by a (K, e) envelope. The configuration is therefore built so that the relative
+    # velocity exceeds the shift budget at some epoch: maximum K values, e = 0.6, and
+    # omega scanned so that a periastron passage coincides with an epoch.
     budget_kms = model._shift_bound * GRID.dv_kms
     outside = None
     for omega in np.linspace(0.0, 2.0 * np.pi, 32, endpoint=False):
@@ -282,13 +282,13 @@ def test_bandwidth_guard_rejects_out_of_bound_orbits(gate_data):
 
 
 def test_smoothness_bound_rejects_extreme_stiffness_ratios(gate_data):
-    """``log_tau - log_eta`` past 30 is where the prior arithmetic stops working.
+    """The prior arithmetic fails for ``log_tau - log_eta`` above 30.
 
-    ML-II walks up ``log_tau`` on its own (the interior optimum is broad and nothing
-    bounds ``log_eta`` from below), and beyond this ratio the prior determinant's pivot
-    is floored and the posterior precision's Cholesky solve loses every digit, so the
-    marginal is arithmetic noise. Inside the bound the factor must contribute exactly
-    zero, so that the potential everywhere the fit actually runs is the one it was.
+    ML-II can raise ``log_tau`` until this ratio is exceeded (the interior optimum is
+    broad and nothing bounds ``log_eta`` from below). Beyond it the prior determinant's
+    pivot is floored and the posterior precision's Cholesky solve loses every digit, so
+    the marginal is arithmetic noise. Inside the bound the factor must contribute exactly
+    zero, so that it does not change the potential where a fit runs.
     """
     _, _, model = gate_data
     numpyro_model = model.model(PRIORS)
@@ -319,7 +319,7 @@ def test_smoothness_bound_rejects_extreme_stiffness_ratios(gate_data):
 
 
 # ---------------------------------------------------------------------------
-# MAP / ML-II and the NUTS gate
+# MAP / ML-II and the NUTS acceptance test
 # ---------------------------------------------------------------------------
 
 
@@ -330,7 +330,7 @@ def test_map_recovers_orbit_and_hyperparameters(map_fit):
     np.testing.assert_allclose(float(map_fit.params["ecc"]), ECC_TRUE, atol=0.02)
     np.testing.assert_allclose(float(map_fit.params["omega"]), OMEGA_TRUE, atol=0.05)
     assert np.isfinite(map_fit.potential)
-    # ML-II hyperparameters stay in a sane range (truth-ish scales: tau 1e3, eta 20)
+    # ML-II hyperparameters stay in a plausible range (true scales about tau 1e3, eta 20)
     assert np.all(np.asarray(map_fit.params["log_tau"]) > np.log(10.0))
     assert np.all(np.asarray(map_fit.params["log_eta"]) > np.log(0.1))
 
@@ -339,9 +339,9 @@ def test_map_recovers_orbit_and_hyperparameters(map_fit):
 def test_run_map_callback_reports_progress_and_can_stop_early(gate_data):
     """`run_map` is otherwise silent, and on real data it runs for hours.
 
-    Its `tol` is an *absolute* gradient-norm threshold on a potential whose scale grows
-    with the good-pixel count, so at survey sizes it is unreachable and `converged` says
-    nothing. Watching the parameters is the only way to know what the optimizer is doing.
+    Its `tol` is an absolute gradient-norm threshold on a potential whose scale grows
+    with the good-pixel count, so at survey sizes it is unreachable and `converged` is
+    uninformative. Monitoring the parameters is the only way to follow the optimizer.
     """
     _, _, model = gate_data
     seen = []
@@ -359,12 +359,12 @@ def test_run_map_callback_reports_progress_and_can_stop_early(gate_data):
 
 @pytest.mark.slow
 def test_problem_at_exposes_the_problem_for_residuals(gate_data, map_fit):
-    """Residual z-scores are the only check there is on estimated inverse variances.
+    """Residual z-scores are the only check on estimated inverse variances.
 
-    Getting at them used to need a private method. The scatter is not expected to be
-    exactly 1 even on simulated data — the smoothness prior pulls the conditional
-    spectra away from the pixels — but it is expected to be *of order* 1, and that is
-    what makes it a usable diagnostic for a real dataset whose ivar was estimated.
+    They must be available without a private method. The scatter is not expected to be
+    exactly 1 even on simulated data, because the smoothness prior pulls the conditional
+    spectra away from the pixels. It is expected to be of order 1, which makes it a
+    usable diagnostic for a real dataset whose ivar was estimated.
     """
     from albireo.forward import data_residual_zscores
 
@@ -384,7 +384,7 @@ def test_problem_at_exposes_the_problem_for_residuals(gate_data, map_fit):
 
 @pytest.mark.slow
 def test_nuts_gate_k_within_one_percent(nuts_fit):
-    """M3 acceptance gate: K_1, K_2 posterior means within 1%, healthy chain."""
+    """Acceptance test: K_1, K_2 posterior means within 1%, divergence-free chain."""
     mcmc, _ = nuts_fit
     samples = mcmc.get_samples()
     extra = mcmc.get_extra_fields()
@@ -392,11 +392,11 @@ def test_nuts_gate_k_within_one_percent(nuts_fit):
     for i in range(2):
         rel_err = abs(k_samples[:, i].mean() - K_TRUE[i]) / K_TRUE[i]
         assert rel_err < 0.01, f"K_{i + 1} off by {100 * rel_err:.2f}% (gate: < 1%)"
-        # truth inside the central 95% interval
+        # injected value inside the central 95% interval
         lo, hi = np.percentile(k_samples[:, i], [2.5, 97.5])
         assert lo < K_TRUE[i] < hi
     assert int(np.sum(np.asarray(extra["diverging"]))) == 0
-    # period and t_conj come along for free
+    # period and t_conj are recovered as well
     assert abs(np.asarray(samples["period"]).mean() - P_TRUE) / P_TRUE < 1e-4
     assert abs(np.asarray(samples["t_conj"]).mean() - TCONJ_TRUE) < 0.01
 
@@ -412,9 +412,10 @@ def test_posterior_spectra_from_samples(gate_data, nuts_fit):
     mean = np.asarray(draws).mean(axis=0)
     truth_d = np.stack([np.asarray(c) for c in truth.components])
     core = (truth_d[0] < -0.15) | (truth_d[1] < -0.15)
-    # With constant light fractions the k=0 additive indeterminacy (math.md §5.2,
-    # benchmarks.md M2) legitimately inflates each *component* in the invisible
-    # direction — the *observable* light-weighted combination must still be tight.
+    # With constant light fractions the k=0 additive indeterminacy (math.md §5.2;
+    # benchmarks.md, fixed-orbit linear solver) is expected to inflate each component in
+    # the unconstrained direction. The observable light-weighted combination must still
+    # be tight.
     visible_err = ELL @ mean - ELL @ truth_d
     assert np.sqrt(np.mean(visible_err[core] ** 2)) < 0.02
     for i in range(2):
@@ -440,12 +441,12 @@ def test_model_advertises_its_problem_as_model_args(gate_data):
 def test_potential_with_model_args_embeds_no_problem_constants(gate_data):
     """The numpyro potential must receive the problem as a traced argument.
 
-    Closure-captured, the problem's arrays become jaxpr constants, which jit bakes
-    into the HLO as literals — and at survey scale XLA's compile-time folding of
-    those literals allocates the multi-GB temporaries D27 documents for the direct
-    `marginal` path. The consts are directly observable on the jaxpr, so assert on
-    them: with the problem passed as an argument nothing problem-sized may remain,
-    and the closure build must show the leak (proving the probe can see it).
+    When a closure captures the problem, its arrays become jaxpr constants, which jit
+    embeds in the HLO as literals. At survey scale XLA's compile-time folding of those
+    literals allocates the multi-GB temporaries documented in D27 for the direct
+    `marginal` path. The constants are observable on the jaxpr, so the test asserts on
+    them. With the problem passed as an argument no problem-sized constant may remain,
+    and the closure build must contain one, which shows that the check detects it.
     """
     _, _, model = gate_data
     numpyro_model = model.model(PRIORS)
@@ -485,7 +486,7 @@ def test_run_map_closure_and_argument_paths_agree(gate_data):
 
 @pytest.mark.slow
 def test_laplace_closure_and_argument_paths_agree(gate_data, map_fit):
-    """Both paths run the same eager ops on the same arrays — exact agreement."""
+    """Both paths run the same eager ops on the same arrays, so they agree exactly."""
     _, _, model = gate_data
     numpyro_model = model.model(PRIORS)
     via_args = laplace_inverse_mass(numpyro_model, map_fit.params)

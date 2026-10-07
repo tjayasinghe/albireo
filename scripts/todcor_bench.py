@@ -1,4 +1,4 @@
-"""What the TODCOR mode delivers, and what it costs (D56).
+"""Measure the accuracy and cost of the TODCOR mode (D56).
 
 Produces the numbers ``docs/benchmarks.md`` records for ``albireo.todcor``:
 

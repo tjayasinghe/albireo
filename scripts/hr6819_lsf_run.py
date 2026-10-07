@@ -1,24 +1,24 @@
 """HR 6819, wide window, wavelength-dependent LSF fitted jointly (D37).
 
-The 0.041 d literature period offset survived four configurations (D30-D36); the
-recorded suspects are the Gaussian LSF stand-in, disc variability, and the published
-CCF blending. This run opens D8's tabulated-LSF seam on the first of them. FEROS's
-resolution is not constant across the merged echelle spectrum, varying along and
-between orders, so the LSF width becomes a per-anchor θ-site (one Gaussian width
-every ~40 A, the order scale, linearly interpolated across the grid) fitted jointly
-with the D36 configuration (wide window, Hgamma masked, per-epoch jitters and shared
-ar1_phi).
+The 0.041 d offset from the literature period persisted through four configurations
+(D30-D36). The recorded candidate causes are the Gaussian LSF approximation, disc
+variability, and the published CCF blending. This run tests the first through D8's
+tabulated-LSF interface. FEROS's resolution varies along and between orders of the
+merged echelle spectrum. The LSF width is therefore a per-anchor θ-site (one
+Gaussian width every ~40 A, the order scale, linearly interpolated across the grid),
+fitted jointly with the D36 configuration (wide window, Hgamma masked, per-epoch
+jitters and shared ar1_phi).
 
-What is and is not identified: a stationary width change commutes with the component
-shifts on the log grid, so the free spectra absorb it, and on this data with ML-II
-hyperparameters the absolute width level is close to degenerate by construction. The
-identified content is the anchor-to-anchor variation, which breaks the commutation
-through the epoch-dependent shifts, and the orbit's response. If the fitted width
-profile moves P toward the literature value, the LSF-width hypothesis stands; if the
-orbit does not move, a wavelength-dependent width joins the continuum (D33) and the
-noise model (D34) on the exonerated list, and the surviving LSF suspect narrows to
-profile asymmetry (a tabulated non-Gaussian bank, which the operator already accepts;
-only the θ-parameterization would be new).
+A stationary width change commutes with the component shifts on the log grid, so the
+free spectra absorb it, and on this data with ML-II hyperparameters the absolute
+width level is close to degenerate. The identified quantities are the
+anchor-to-anchor variation, which does not commute with the epoch-dependent shifts,
+and the orbit's response. If the fitted width profile moves P toward the literature
+value, the LSF-width hypothesis is supported. If the orbit does not move, a
+wavelength-dependent width is ruled out, as the continuum (D33) and the noise model
+(D34) have been. The remaining LSF candidate is then profile asymmetry (a tabulated
+non-Gaussian bank, which the operator already accepts; only the θ-parameterization
+would be new).
 
 Build widths are 3.5 km/s at every anchor, the strict upper bound that fixes the
 kernel radius (nominal FEROS sigma is 2.652; +32% headroom, +2 px half-bandwidth).

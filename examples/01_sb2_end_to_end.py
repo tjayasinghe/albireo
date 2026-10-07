@@ -1,8 +1,9 @@
 """Disentangle an SB2 end to end: simulate, fit, and compare with the injected truth.
 
-The shortest complete path through albireo. A synthetic SB2 is generated with the
-features the forward model supports (topocentric wavelengths with per-epoch barycentric
-corrections, a chip gap, cosmic hits, finite SNR) and passed to the inference pipeline:
+This is the shortest complete path through albireo. A synthetic SB2 is generated with
+the features the forward model supports (topocentric wavelengths with per-epoch
+barycentric corrections, a chip gap, cosmic-ray hits, finite SNR) and passed to the
+inference pipeline:
 
     MarginalOrbitModel        the marginal posterior over the orbit (spectra integrated out)
       -> run_map              MAP over theta and the spectral hyperparameters (ML-II)
@@ -10,8 +11,9 @@ corrections, a chip gap, cosmic hits, finite SNR) and passed to the inference pi
       -> run_nuts             sample the orbit with the hyperparameters held fixed
       -> posterior_spectra    component spectra drawn from the joint posterior
 
-The script prints the posterior mean +/- sd against the truth and ends in ``assert``
-statements (K_1 and K_2 within 2%), so it also serves as a slow smoke test of the stack.
+The script prints the posterior mean +/- sd against the injected values and ends in
+``assert`` statements (K_1 and K_2 within 2%), so it also serves as a slow smoke test of
+the stack.
 
 Two structural limitations apply (``docs/math.md`` §5):
 
@@ -61,17 +63,18 @@ N_EPOCHS = 10 if FAST else 12
 SEED = 20260811
 
 # The solver bandwidth is static. It is set from a bound on the largest relative velocity
-# of the two components, (K_1 + K_2)(1 + e), with headroom. Orbits that would exceed the
-# bound receive a log probability of -inf from the model instead of being mis-solved.
+# of the two components, (K_1 + K_2)(1 + e), with headroom. The model assigns a log
+# probability of -inf to orbits that would exceed the bound.
 V_REL_MAX = float(K_TRUE.sum()) * (1.0 + ECC_TRUE) * 1.35
 
 NUM_WARMUP, NUM_SAMPLES = (100, 150) if FAST else (150, 250)
 NUM_CHAINS = 1  # one chain keeps the example short; use >= 2 and check r_hat for science
 
 # Priors. The period and conjunction time come from an external ephemeris (tight
-# Gaussians, offset from the truth so that nothing is initialized at the answer);
-# (secosw, sesinw) carry the uniform prior on the unit disk that maps to a uniform prior
-# on e; the hyperparameter priors are weak and only keep the ML-II fit at plausible scales.
+# Gaussians, offset from the injected values so that nothing is initialized at them).
+# The pair (secosw, sesinw) has the uniform prior on the unit disk that maps to a
+# uniform prior on e. The hyperparameter priors are weak and only keep the ML-II fit
+# at plausible scales.
 PRIORS = {
     "period": dist.Normal(P_TRUE + 0.001, 0.003),
     "t_conj": dist.Normal(TCONJ_TRUE + 0.005, 0.02),
@@ -82,7 +85,7 @@ PRIORS = {
     "log_eta": dist.Normal(jnp.full(2, np.log(5.0)), 3.0),
 }
 
-# Starting point for L-BFGS: the ephemeris values, an eccentricity offset from the truth,
+# L-BFGS starts from the ephemeris values, an eccentricity offset from the injected value,
 # and semi-amplitudes of the right order of magnitude. The start must not be at
 # (secosw, sesinw) = (0, 0), the one point where the parameterization is not smooth.
 INIT = {
@@ -97,7 +100,7 @@ INIT = {
 
 
 def simulate():
-    """A 12-epoch (10 in fast mode) SB2 time series with gaps, cosmic hits and noise."""
+    """A 12-epoch (10 in fast mode) SB2 time series with gaps, cosmic-ray hits and noise."""
     rng = np.random.default_rng(SEED)
     components = [
         ab.synthetic_deviation_spectrum(
@@ -126,13 +129,13 @@ def simulate():
         v_bary=v_bary,
         frame="topocentric",
         gap_fraction=0.01,  # one contiguous chip gap per epoch (ivar = 0, flux unused)
-        cosmic_fraction=0.002,  # a few masked cosmic hits per epoch
+        cosmic_fraction=0.002,  # a few masked cosmic-ray hits per epoch
         seed=11,
     )
 
 
 def print_table(samples: dict) -> None:
-    """Posterior mean +/- sd against the truth for the orbital parameters."""
+    """Posterior mean +/- sd against the injected values for the orbital parameters."""
     rows = [
         ("P [d]", P_TRUE, np.asarray(samples["period"])),
         ("t_conj [d]", TCONJ_TRUE, np.asarray(samples["t_conj"])),
@@ -167,7 +170,10 @@ def plot_rv_curve(samples: dict, truth, bjd: np.ndarray, path: str) -> None:
 
 
 def plot_spectra(draws, truth, path: str) -> None:
-    """Joint-posterior component spectra against the truth; the k = 0 degeneracy is visible."""
+    """Joint-posterior component spectra against the injected spectra.
+
+    The k = 0 degeneracy is visible.
+    """
     import matplotlib
 
     matplotlib.use("Agg")
@@ -190,8 +196,8 @@ def main() -> None:
     dataset, truth = simulate()
     print(dataset.summary())
 
-    # 2. Build the marginal model. The component spectra do not appear as parameters:
-    #    they are integrated out analytically inside every likelihood evaluation.
+    # 2. Build the marginal model. The component spectra do not appear as parameters.
+    #    They are integrated out analytically inside every likelihood evaluation.
     model = ab.MarginalOrbitModel(
         GRID,
         dataset,
@@ -201,10 +207,10 @@ def main() -> None:
     )
 
     # 3. MAP and ML-II. With log_tau and log_eta among the sampled sites this
-    #    maximization is the empirical-Bayes hyperparameter fit: the spectra are already
+    #    maximization is the empirical-Bayes hyperparameter fit. The spectra are already
     #    marginalized, so their prior scales are the only remaining quantities to estimate.
-    #    (max_steps=300: the flat hyperparameter directions need about 215 L-BFGS steps
-    #    to reach the default |grad| < 1e-2 here, beyond the 200-step default cap.)
+    #    The flat hyperparameter directions need about 215 L-BFGS steps to reach the
+    #    default |grad| < 1e-2 here, beyond the 200-step default cap, hence max_steps=300.
     t0 = time.perf_counter()
     map_fit = ab.run_map(model.model(PRIORS), init=INIT, max_steps=300)
     t_map = time.perf_counter() - t0
@@ -224,8 +230,8 @@ def main() -> None:
     orbit_priors = {s: d for s, d in PRIORS.items() if s not in hyper}
     nuts_model = model.model(orbit_priors, fixed=hyper)
 
-    # The Laplace covariance at the MAP serves as the mass matrix: warmup then only
-    # has to tune the step size instead of estimating the parameter scales.
+    # The Laplace covariance at the MAP serves as the mass matrix, so warmup only has to
+    # tune the step size instead of estimating the parameter scales.
     t0 = time.perf_counter()
     inverse_mass = ab.laplace_inverse_mass(nuts_model, map_fit.params)
     t_laplace = time.perf_counter() - t0
@@ -256,9 +262,9 @@ def main() -> None:
     print("\n=== orbital posterior vs truth ===")
     print_table(samples)
 
-    # 6. The recovered spectra. Each draw picks a posterior theta and then draws once
-    #    from the conditional Gaussian over the spectra, so the scatter carries both
-    #    the spectral and the orbital uncertainty.
+    # 6. The recovered spectra. Each draw takes one posterior theta and one sample from
+    #    the conditional Gaussian over the spectra, so the scatter includes both the
+    #    spectral and the orbital uncertainty.
     t0 = time.perf_counter()
     spectra = ab.posterior_spectra(model, samples, jax.random.PRNGKey(9), num_draws=24, extra=hyper)
     spectra_np = np.asarray(spectra)

@@ -1,12 +1,12 @@
 """Writers for the atmosphere codes downstream (roadmap Tier 2 item 8).
 
-These tests are format transcriptions, not behaviour checks, and they are written that way
-on purpose: every assertion here corresponds to a sentence in GSSP's or iSpec's own
-documentation, because the failure mode of an adapter is not a crash but a file the other
-code reads *differently* than intended. The two that would cost a user the most are pinned
-hardest — iSpec's wavelengths are nanometres (an Angstrom value lands a factor of ten off
-every model grid and still fits *something*), and GSSP infers its synthetic step from the
-observation's spacing, so a log-wavelength grid must be resampled rather than dumped.
+These tests are format transcriptions, not behaviour checks. Every assertion here
+corresponds to a sentence in GSSP's or iSpec's own documentation, because the failure mode
+of an adapter is not a crash but a file the other code reads differently than intended.
+The two failures that would cost a user the most are tested most thoroughly. iSpec's
+wavelengths are nanometres: an Angstrom value is a factor of ten off every model grid, and
+a fit still returns a result. GSSP infers its synthetic step from the observation's
+spacing, so a log-wavelength grid must be resampled rather than written directly.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ def _spectra(n_comp=2, seed=3):
 
 
 def test_gssp_writes_two_columns_and_nothing_else(tmp_path):
-    """Appendix B.2: "a two-column ASCII file". No header, no error, no third column."""
+    """Appendix B.2: "a two-column ASCII file", with no header, no error and no third column."""
     paths = write_gssp(tmp_path / "c.dat", GRID, _spectra())
     assert len(paths) == 2
     text = paths[0].read_text()
@@ -39,11 +39,11 @@ def test_gssp_writes_two_columns_and_nothing_else(tmp_path):
 
 
 def test_gssp_grid_is_equidistant_even_though_albireos_is_not(tmp_path):
-    """The load-bearing one.
+    """The GSSP file is written on an equidistant wavelength grid.
 
     GSSP: "the step width in wavelength that will be used for the calculation of synthetic
     spectra is computed from the observations", so an equidistant scale is required. A
-    LogGrid is equidistant in *log* wavelength, so its linear spacing drifts across the
+    LogGrid is equidistant in log wavelength, so its linear spacing varies across the
     window and GSSP would take the first pair as the step for the whole spectrum.
     """
     source = np.asarray(GRID.wave)
@@ -53,17 +53,17 @@ def test_gssp_grid_is_equidistant_even_though_albireos_is_not(tmp_path):
 
     path = write_gssp(tmp_path / "one.dat", GRID, _spectra(n_comp=1))
     steps = np.diff(np.loadtxt(path)[:, 0])
-    # Equidistant to the precision the file is written at, and no better: `%.8f` rounds
-    # each wavelength independently, so consecutive differences jitter by up to ~2e-8 A.
-    # That is 0.7 mm/s at 4400 A — four orders below anything albireo models — whereas the
-    # source grid's own drift is a third of a per-cent. The comparison of those two numbers
-    # is the point of the resampling.
+    # The grid is equidistant only to the precision the file is written at: `%.8f` rounds
+    # each wavelength independently, so consecutive differences vary by up to ~2e-8 A.
+    # That is 0.7 mm/s at 4400 A, four orders below anything albireo models, whereas the
+    # source grid's own spacing varies by a third of a per-cent. The comparison of those two
+    # numbers justifies the resampling.
     assert np.ptp(steps) < 3e-8, np.ptp(steps)
     assert (np.ptp(steps) / steps.mean()) < src_drift / 1000.0
 
 
 def test_gssp_wavelengths_stay_in_angstrom(tmp_path):
-    """GSSP wants Angstrom; iSpec wants nm. Writing one for the other is the whole risk."""
+    """GSSP expects Angstrom and iSpec expects nm. Writing one for the other is the risk."""
     path = write_gssp(tmp_path / "a.dat", GRID, _spectra(n_comp=1))
     wave = np.loadtxt(path)[:, 0]
     assert 4400.0 <= wave[0] <= 4420.0, wave[0]
@@ -92,10 +92,10 @@ def test_gssp_refuses_a_step_that_leaves_no_spectrum(tmp_path):
 
 
 def test_ispec_wavelengths_are_nanometres(tmp_path):
-    """The single most likely silent failure in the module.
+    """A wavelength in the wrong unit is the most likely silent failure in the module.
 
     iSpec does no unit conversion on the text path and its whole internal scale, line lists
-    included, is nm. 4410 A written as 4410 lands ten times outside every model grid.
+    included, is nm. 4410 A written as 4410 is a factor of ten outside every model grid.
     """
     path = write_ispec(tmp_path / "i.txt", GRID, _spectra(n_comp=1))
     first = path.read_text().splitlines()[1].split("\t")
@@ -112,8 +112,8 @@ def test_ispec_header_and_three_tab_separated_columns(tmp_path):
 
 
 def test_ispec_file_has_no_trailing_newline(tmp_path):
-    """A final empty line splits to a 1-tuple, which drops the file into a legacy parser
-    that mangles it silently rather than refusing it."""
+    """A final empty line splits to a 1-tuple, which sends the file to a legacy parser that
+    misreads it without raising an error."""
     path = write_ispec(tmp_path / "i.txt", GRID, _spectra(n_comp=1))
     assert not path.read_text().endswith("\n")
 
@@ -127,7 +127,7 @@ def test_ispec_error_column_is_written_even_without_a_band(tmp_path):
 
 def test_ispec_floors_the_error_because_ispec_deletes_nonpositive_pixels(tmp_path):
     """iSpec discards ``err <= 0`` rather than down-weighting, so a posterior sd that has
-    relaxed to zero would remove exactly those pixels from the fit."""
+    gone to zero would remove those pixels from the fit."""
     d = _spectra(n_comp=1)
     std = np.zeros_like(d)
     std[0, 5] = 0.01
@@ -149,7 +149,7 @@ def test_ispec_error_is_absolute_not_relative(tmp_path):
 
 def test_ispec_grid_is_not_resampled(tmp_path):
     """Unlike GSSP, iSpec imposes no equidistance, so resampling would correlate the noise
-    for nothing."""
+    with no benefit."""
     path = write_ispec(tmp_path / "i.txt", GRID, _spectra(n_comp=1))
     wave = np.array([float(ln.split("\t")[0]) for ln in path.read_text().splitlines()[1:]])
     np.testing.assert_allclose(wave, np.asarray(GRID.wave) / 10.0, rtol=1e-9)
@@ -159,8 +159,8 @@ def test_ispec_grid_is_not_resampled(tmp_path):
 
 
 def test_export_draws_keeps_the_draw_index_paired_across_components(tmp_path):
-    """The jointness is the product. Draw i of A and draw i of B are one posterior sample,
-    so they must stay identifiable as a pair."""
+    """Draw i of A and draw i of B are one posterior sample, so they must stay identifiable
+    as a pair."""
     rng = np.random.default_rng(0)
     draws = rng.normal(0.0, 0.02, (5, 2, GRID.n))
     out = export_draws(tmp_path, GRID, draws, format="gssp")
@@ -184,7 +184,7 @@ def test_export_draws_writes_distinct_spectra(tmp_path):
 
 def test_export_draws_resamples_every_draw_onto_the_same_grid(tmp_path):
     """GSSP's step comes from the file, so draws that disagreed on the grid would be fitted
-    against different synthetic samplings and the spread would carry that."""
+    against different synthetic samplings and the spread would include that difference."""
     rng = np.random.default_rng(2)
     draws = rng.normal(0.0, 0.02, (4, 1, GRID.n))
     out = export_draws(tmp_path, GRID, draws, format="gssp")
@@ -204,7 +204,7 @@ def test_export_draws_rejects_an_unknown_format(tmp_path):
 
 
 def test_draws_from_a_real_fit_round_trip_to_disk(tmp_path):
-    """End to end on the packaged example: joint draws in, fittable files out."""
+    """End to end on the packaged example: joint draws are written to fittable files."""
     import jax
 
     from albireo.likelihood import draw_spectra, marginal_loglikelihood

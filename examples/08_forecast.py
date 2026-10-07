@@ -1,41 +1,41 @@
 """Observing-strategy forecast: which twelve nights to request (``docs/math.md`` §5.5).
 
-Every other example in this directory analyses data that exist. This one addresses the
-question that comes before the data: eight epochs are in hand, twelve more have been
+Every other example in this directory analyses data that exist. This one plans
+observations that have not yet been made. Eight epochs are in hand, twelve more have been
 allocated, and the phases have to be chosen and justified.
 
-The question is answerable exactly, because the posterior covariance of the component
-spectra
+The forecast is exact, because the posterior covariance of the component spectra
 
     Sigma = (Lambda_p + A^T W A)^-1
 
 contains no fluxes. It depends only on the epoch times (through the velocities, hence the
 shifts), the weights, the masks, the line-spread function, the light fractions and the
-prior. The observed fluxes move the posterior mean and the evidence; they never enter the
+prior. The observed fluxes change the posterior mean and the evidence but do not enter the
 covariance. An epoch that has not been observed therefore has a computable error bar.
 
 The script builds one system and evaluates three plans of twelve nights against it:
 
-* aliased: nights spaced at half the orbital period. This is what a direct reading of
-  ``docs/math.md`` §5.1 suggests, because it maximizes the spread of the differential
-  velocity ``Var_j(Delta)``. Those nights visit the two extreme values of ``Delta``
-  repeatedly, and two values leave the separation degenerate at a comb of feature scales.
+* aliased: nights spaced at half the orbital period. A direct reading of
+  ``docs/math.md`` §5.1 suggests this plan, because it maximizes the spread of the
+  differential velocity ``Var_j(Delta)``. Those nights sample the two extreme values of
+  ``Delta`` repeatedly, and two values leave the separation degenerate at a comb of
+  feature scales.
 * quadrature: nights spread evenly over orbital phase.
 * more of the same: twelve nights continuing the existing cadence.
 
-Three features of the output:
+The output has three features:
 
-1. The aliased plan wins on RMS differential velocity and loses on every other measure.
-   That is the correction to the reading of §5.1 above, and the reason albireo computes the
-   exact covariance rather than the closed-form proxy.
-2. The worst-determined mode barely moves under any plan and sits at ~1x the prior. It is
-   the ``k = 0`` exchange mode, degenerate for every design, and the forecast reports it
-   rather than dropping it. A good plan lowers the rest of the mode ladder.
-3. Every number is quoted against the same quantity under the prior alone. A forecast band
-   that has relaxed onto the prior is indistinguishable from one the data determined unless
-   that comparison is made.
+1. The aliased plan has the highest RMS differential velocity and is inferior on every
+   other measure. This corrects the reading of §5.1 above, and it is the reason albireo
+   computes the exact covariance rather than the closed-form proxy.
+2. The worst-determined mode changes little under any plan and remains at ~1x the prior.
+   It is the ``k = 0`` exchange mode, degenerate for every design, and the forecast
+   reports it. A good plan lowers the standard deviations of the other modes.
+3. Every number is quoted against the same quantity under the prior alone. Without that
+   comparison, a forecast band set by the prior is indistinguishable from one determined
+   by the data.
 
-The orbit is not forecast. The Fisher information for a velocity runs through the derivative
+The orbit is not forecast. The Fisher information for a velocity depends on the derivative
 of the component spectrum, so an error bar on K_2 requires the line depths, which have not
 been measured yet.
 
@@ -73,8 +73,8 @@ PRIOR = ab.SmoothnessPrior(tau=np.array([3e2, 3e2]), eta=np.array([1e-2, 1e-2]))
 N_MODES = 3 if FAST else 4
 N_PLANNED = 12
 
-# Eight nights already taken, in four tight pairs a fortnight apart: the cadence a
-# service-mode queue produces on its own, and it is aliased to the period.
+# Eight nights have already been taken, in four tight pairs a fortnight apart. This is
+# the cadence a service-mode queue produces by default, and it is aliased to the period.
 HAVE_BJD = np.array([0.1, 0.3, 6.9, 7.1, 13.8, 14.0, 20.7, 20.9])
 
 ORBIT = ab.OrbitParams(period=PERIOD, t_peri=T_PERI, ecc=ECC, omega=OMEGA, k=(K1, K2))
@@ -83,7 +83,7 @@ ORBIT = ab.OrbitParams(period=PERIOD, t_peri=T_PERI, ecc=ECC, omega=OMEGA, k=(K1
 def observed() -> ab.Dataset:
     """The eight epochs in hand.
 
-    Simulated here so that the example runs offline. Nothing below reads the flux: the
+    They are simulated so that the example runs offline. The flux is not read below. The
     forecast uses this dataset only for its wavelength grid, its inverse variances, its
     times and its barycentric velocities.
     """
@@ -142,7 +142,7 @@ def main() -> None:
     dataset = observed()
     n_have = dataset.n_epochs
 
-    # 1. What the eight nights in hand are worth on their own ---------------------------
+    # 1. The forecast for the eight nights in hand alone --------------------------------
     base = ab.sensitivity_forecast(
         GRID,
         dataset,
@@ -163,7 +163,7 @@ def main() -> None:
         print(f"\n=== {name} ===")
         print(results[name].summary())
 
-    # 3. The ranking, and the statistic that gets it wrong ------------------------------
+    # 3. The ranking, and the proxy that disagrees with it ------------------------------
     print(f"\n{'plan':<28} {'gain [nats]':>12} {'RMS dv [km/s]':>14} {'blind':>7} {'mode 2':>9}")
     for name, fc in results.items():
         print(
@@ -182,7 +182,7 @@ def main() -> None:
     else:
         print("\nmatplotlib not installed - skipping the figure (it is not a dependency)")
 
-    # 5. The gate ----------------------------------------------------------------------
+    # 5. Assertions --------------------------------------------------------------------
     quad = results["quadrature (even in phase)"]
     alias = results["aliased (P/2 spacing)"]
     assert quad.gain_nats > alias.gain_nats, "the aliased plan should not win on information"

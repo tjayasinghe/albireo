@@ -1,29 +1,30 @@
-"""Simulate, process and verify populations of Gaia RVS double-lined binaries; report.
+"""Simulate, process, verify and report on populations of Gaia RVS double-lined binaries.
 
 **Experimental.** The tiers, the metrics and the report layout may change.
 
-The harness measures how well albireo recovers the orbit, the epoch velocities, the
+The benchmark measures how well albireo recovers the orbit, the epoch velocities, the
 component spectra and the atmospheric labels of a double-lined binary from Gaia RVS epoch
-spectra, as a function of what the system is (brightness, transits, separation, light
-ratio, temperatures) and of what the analysis is told. Every system of a population
-(:mod:`albireo.population`) is simulated once (:mod:`albireo.gaia`), the same epochs are
-run through the pipeline (:mod:`albireo.pipeline`) under one or more knowledge tiers, the
-pipeline's own truth block is collected, and a Markdown report with figures is written.
-Nothing outside albireo is used at any stage.
+spectra. It does so as a function of the system's properties (brightness, transits,
+separation, light ratio, temperatures) and of the information given to the analysis.
+Every system of a population (:mod:`albireo.population`) is simulated once
+(:mod:`albireo.gaia`), and the same epochs are run through the pipeline
+(:mod:`albireo.pipeline`) under one or more knowledge tiers. The pipeline's truth block is
+then collected and a Markdown report with figures is written. Nothing outside albireo is
+used at any stage.
 
-The knowledge tiers state what the analysis is told; the truth is never told:
+The knowledge tiers state what the analysis is given; the injected truth is never given:
 
 - ``oracle``: period, conjunction, eccentricity, argument of periastron and the
   semi-amplitudes known (the latter to 15%), light fractions and narrow label priors
-  from the truth. The ceiling: it measures the disentangling and the velocity
-  extraction alone.
+  from the injected values. This is the upper bound: it measures the disentangling and
+  the velocity extraction alone.
 - ``eclipsing``: the ephemeris (period and time of primary eclipse) and the light ratio
   known, as a light curve gives them, with narrow label priors; elements free.
 - ``orbit``: the period known to a Gaia non-single-star solution's precision, everything
   else free, light fractions measured by correlation against library templates, labels
   from the library box. This is a Gaia double-lined orbit as published.
-- ``blind``: nothing known: the period is searched, the light fractions are measured, the
-  labels are the library box.
+- ``blind``: nothing known. The period is searched, the light fractions are measured, and
+  the labels are the library box.
 
 The tiers are declared in the pipeline's own vocabulary, so the benchmark runs exactly
 what a user runs.
@@ -109,7 +110,7 @@ phases over one period, and the real forecast of the Gaia Observation Forecast T
 
 @dataclasses.dataclass(frozen=True)
 class Tier:
-    """What the analysis is told about a system.
+    """The information given to the analysis about a system.
 
     Parameters
     ----------
@@ -125,15 +126,15 @@ class Tier:
         ``"known"`` (a Gaussian of width 1% of the period about the true primary
         conjunction, as an eclipse ephemeris gives it) or ``"scan"``.
     elements
-        ``"known"``: eccentricity and argument of periastron held at the truth, the
-        semi-amplitudes given as Gaussians of 15%; ``"free"``: fitted within the settings'
-        ranges.
+        ``"known"``: eccentricity and argument of periastron held at the injected values,
+        the semi-amplitudes given as Gaussians of 15%; ``"free"``: fitted within the
+        settings' ranges.
     light
         ``"truth"``: the injected fractions declared; ``"measure"``: measured by the
         pipeline against library templates.
     labels
-        ``"narrow"``: Teff within 300 K and log g within 0.3 dex of the truth (what a
-        photometric classification gives); ``"wide"``: the library box.
+        ``"narrow"``: Teff within 300 K and log g within 0.3 dex of the injected values
+        (what a photometric classification gives); ``"wide"``: the library box.
     eclipsing_only
         Whether the tier applies to eclipsing systems only.
     sample
@@ -179,7 +180,7 @@ TIERS: dict[str, Tier] = {
     "orbit": Tier("orbit", period="known", t_conj="scan", elements="free", light="measure"),
     "blind": Tier("blind", period="search", t_conj="scan", elements="free", light="measure"),
 }
-"""The four standard tiers, from the ceiling to the blind run."""
+"""The four standard tiers, from the upper bound to the blind run."""
 
 
 def resolve_tier(tier: str | Tier) -> Tier:
@@ -213,17 +214,18 @@ class BenchmarkConfig:
         ``"scanning-law"`` (default, :func:`albireo.gaia.rvs_transit_times`),
         ``"uniform-phase"`` (the notebook's evenly spaced epochs over one period), or
         ``"gost"`` (the transits the Gaia Observation Forecast Tool predicts for the
-        system's own position, cut to the release span, to the RVS CCD rows and to the
-        fraction that reaches the ground; the system must carry ``ra_deg`` and
-        ``dec_deg``, and the number of epochs is then the service's, not the record's
-        ``n_transits``).
+        system's position, restricted to the release span, to the RVS CCD rows and to the
+        fraction that reaches the ground). With the last, the system must have ``ra_deg``
+        and ``dec_deg``, and the number of epochs is the service's, not the record's
+        ``n_transits``.
     resolving_power
         ``"nominal"`` observes every transit at R = 11,500; ``"per-transit"`` draws each
         transit's resolving power from the in-flight measurements. Either way the analysis
-        declares the width the delivered epochs carry at the nominal resolving power,
-        including the smoothing of the archive's resampling and of the simulation's own
-        2 km/s model grid (:func:`albireo.gaia.rvs_delivered_sigma_kms`: 11.67 km/s on the
-        DR4 grid and 11.90 km/s on the DR3 grid, against 11.07 before delivery).
+        declares the width of the delivered epochs at the nominal resolving power,
+        including the smoothing of the archive's resampling and of the simulation's
+        2 km/s model grid (:func:`albireo.gaia.rvs_delivered_sigma_kms`). The width is
+        11.67 km/s on the DR4 grid and 11.90 km/s on the DR3 grid, against 11.07 before
+        delivery.
     dv_kms
         Model-grid pixel of the disentangling in km/s.
     k_min, k_max, ecc_max
@@ -235,8 +237,8 @@ class BenchmarkConfig:
     noise_model
         ``"correlated"`` (default) declares the delivered grid's lag-one noise correlation,
         as the simulation measured it, so the disentangling's noise model is AR(1) along
-        the pixel index and the velocity table's errors carry the correlation;
-        ``"diagonal"`` takes the pixels as independent, as the archive's errors state.
+        the pixel index and the velocity table's errors include the correlation.
+        ``"diagonal"`` takes the pixels as independent, as the archive's errors assume.
     min_transits
         Systems with fewer transits are left out (Gaia's own double-lined chain needs
         ten).
@@ -311,7 +313,7 @@ class BenchmarkConfig:
 
     @property
     def release(self) -> str:
-        """The release the product belongs to, which is the span a GOST cadence cuts to.
+        """The release the product belongs to, which sets the span of a GOST cadence.
 
         ``"dr3"`` for the mean-spectrum product, whose data span is 34 months, and
         ``"dr4"`` for the epoch product and for any other, whose span is 66
@@ -343,18 +345,17 @@ def system_transit_times(
 ) -> np.ndarray:
     """The epoch times of one system under a cadence model, sorted BJD.
 
-    ``"scanning-law"`` and ``"uniform-phase"`` place exactly the system's own
-    ``n_transits`` epochs. ``"gost"`` takes the Gaia Observation Forecast Tool's
-    prediction for the system's position (:func:`albireo.gaia.gost_transits`, cached
-    under ``cache_dir()``) and cuts it to the release span, to the CCD rows the RVS
-    covers and to the fraction that reaches the ground
-    (:func:`albireo.gaia.rvs_transit_times_from_gost`); the number of epochs is then the
-    service's, not the record's.
+    ``"scanning-law"`` and ``"uniform-phase"`` place exactly the system's ``n_transits``
+    epochs. ``"gost"`` takes the Gaia Observation Forecast Tool's prediction for the
+    system's position (:func:`albireo.gaia.gost_transits`, cached under ``cache_dir()``)
+    and restricts it to the release span, to the CCD rows the RVS covers and to the
+    fraction that reaches the ground (:func:`albireo.gaia.rvs_transit_times_from_gost`).
+    The number of epochs is then the service's, not the record's.
 
     Raises
     ------
     ValueError
-        Under ``"gost"``, if the system carries no position.
+        Under ``"gost"``, if the system has no position.
     """
     if cadence not in CADENCES:
         raise ValueError(f"cadence must be one of {', '.join(repr(c) for c in CADENCES)}")
@@ -386,9 +387,9 @@ def simulate_system(
 ) -> tuple[Dataset, RVSTruth, LogGrid, list[np.ndarray]]:
     """Simulate one system's RVS epochs from the library.
 
-    The components are rendered from the library at the system's labels and rotation,
+    The components are rendered from the library at the system's labels and rotation, and
     the epochs are placed by the cadence model (:func:`system_transit_times`, or the
-    ``bjd`` given), the S/N follows from G_RVS with one transit per epoch, and the
+    ``bjd`` given). The S/N follows from G_RVS with one transit per epoch, and the
     delivered product is the one requested.
 
     Returns
@@ -422,9 +423,9 @@ def simulate_system(
         grvs=system.grvs,
         product=product,
         # The library's own declaration: 20,000 for every BOSZ registry entry, and None for an
-        # intrinsic library, which takes the whole width. The fallback to 20,000 this replaced
-        # broadened an intrinsic toy library to 9.71 km/s after delivery where the analysis
-        # declares the delivered 11.67 (D65).
+        # intrinsic library, which takes the whole width. A fallback to 20,000 would broaden
+        # an intrinsic toy library to 9.71 km/s after delivery, where the analysis declares
+        # the delivered 11.67 (D65).
         library=library,
         resolving_power=r_ep,
         declare_lsf="nominal",
@@ -525,14 +526,14 @@ def build_star(
     overrides: dict[str, Any] = {"sample": bool(tier.sample)}
     if config.noise_model == "correlated":
         # An instrument property, declared like the LSF: the correlation the delivery
-        # onto the archive grid gives the noise, which the archive's errors do not carry.
+        # onto the archive grid gives the noise, which the archive's errors do not include.
         overrides["noise_correlation"] = {"RVS": float(np.nanmean(truth.delivery.lag1))}
-    # The width the simulated, delivered epochs carry: the nominal line-spread function, the
+    # The width of the simulated, delivered epochs: the nominal line-spread function, the
     # smoothing of the archive's linear resampling onto the product grid (Delta_det^2 / 6 in
     # variance, and the detector pixel's width in place of the delivered one), and the
-    # simulation's own discretisation on its model grid, (5/12) dv^2
-    # (albireo.gaia.rvs_delivered_sigma_kms). Declaring the nominal width alone left 3.7 km/s
-    # of broadening for v sin i and the component spectra to absorb (D65).
+    # simulation's discretisation on its model grid, (5/12) dv^2
+    # (albireo.gaia.rvs_delivered_sigma_kms). Declaring the nominal width alone leaves
+    # 3.7 km/s of broadening for v sin i and the component spectra to absorb (D65).
     lsf: dict[str, Any] = {
         "RVS": {"sigma_kms": rvs_delivered_sigma_kms(config.product, simulation_dv_kms=grid.dv_kms)}
     }
@@ -597,8 +598,8 @@ def build_stars(
     Returns the star declarations and, per system, a record of the simulation (S/N per
     epoch, delivered noise correlation, the resolving powers applied). A system whose
     cadence yields fewer epochs than ``min_transits`` is simulated no further and is
-    recorded with ``skipped`` set; this is where the minimum-transit rule takes effect
-    under the GOST cadence, whose epoch count is the service's.
+    recorded with ``skipped`` set. Under the GOST cadence, whose epoch count is the
+    service's, the minimum-transit rule is applied at this point.
     """
     library = _resolve_library(config.library)
     bounds = _bounds(library)
@@ -680,7 +681,7 @@ def build_stars(
 
 @dataclasses.dataclass
 class BenchmarkRun:
-    """A finished benchmark: where it is, its rows, and the report path."""
+    """A finished benchmark: its directory, its rows and the report path."""
 
     directory: Path
     rows: list[dict[str, Any]]
@@ -746,7 +747,7 @@ def run_benchmark(config: BenchmarkConfig, *, progress: bool = True) -> Benchmar
     """Simulate, run the pipeline under every tier, collect the truth blocks, and report.
 
     With ``resume`` (the default) stars whose ``result.json`` already exists in
-    ``output`` are not rerun, so an interrupted benchmark continues where it stopped;
+    ``output`` are not rerun, so an interrupted benchmark continues where it stopped.
     :func:`write_report` regenerates the report at any time.
     """
     t0 = time.perf_counter()
@@ -811,7 +812,7 @@ def _get(mapping, *keys, default=None):
 
 
 def collect(directory) -> list[dict[str, Any]]:
-    """One row per planned star: the truth, what the pipeline recovered, and the metrics.
+    """One row per planned star: the injected values, the recovered values, and the metrics.
 
     Reads ``population.json``, ``manifest.json`` and every star's ``result.json`` in
     ``directory``. Stars without a result are rows with ``status = "missing"``.
@@ -908,7 +909,7 @@ def collect(directory) -> list[dict[str, Any]]:
         row["ecc_err"] = _get(truth, "elements_table", "ecc")
         row["ecc_pull"] = _get(truth, "elements_table_pull", "ecc")
         # The argument of periastron is undefined for a circular orbit; below e = 0.05 the
-        # comparison would measure the noise's choice of direction.
+        # comparison would measure a direction set by the noise.
         eccentric = float(system.ecc) >= 0.05
         row["omega_err_deg"] = _get(truth, "elements_table", "omega_deg") if eccentric else None
         row["omega_pull"] = _get(truth, "elements_table_pull", "omega_deg") if eccentric else None
@@ -1321,7 +1322,7 @@ def _write_figures(
         fig.tight_layout()
         save("k_vs_transits_separation", fig)
 
-        # 4. Pulls: the quoted errors against the truth.
+        # 4. Pulls: the quoted errors against the injected values.
         fig, axes = plt.subplots(1, 2, figsize=(9, 3.4))
         grid = np.linspace(-5, 5, 200)
         for ax, keys, title in (
@@ -1571,9 +1572,9 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
 def write_report(directory, *, title: str | None = None) -> Path:
     """Collect the results in ``directory`` and write ``report.md`` with its figures.
 
-    Also writes ``rows.csv`` (one line per star with the truth and every metric) and
-    ``summary.json`` (the per-tier statistics). Can be re-run on a finished or partial
-    benchmark at any time.
+    Also writes ``rows.csv`` (one line per star with the injected values and every
+    metric) and ``summary.json`` (the per-tier statistics). Can be re-run on a finished or
+    partial benchmark at any time.
     """
     directory = Path(directory)
     manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))

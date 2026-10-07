@@ -1,13 +1,14 @@
 """Closed-loop MAP test with a telluric component (topocentric frame).
 
-Mirrors the M3 gate configuration of ``tests/test_inference.py`` but adds a third,
-static telluric component to the model. The telluric column is appended *last* by
-:func:`albireo.forward.build_problem`, so ``d_hat[2]`` is the telluric spectrum and
-the ``log_tau``/``log_eta`` sites carry batch shape (3,).
+The acceptance-test configuration of ``tests/test_inference.py`` is used, with a third,
+static telluric component added to the model. The telluric column is appended last by
+:func:`albireo.forward.build_problem`, so ``d_hat[2]`` is the telluric spectrum and the
+``log_tau``/``log_eta`` sites have batch shape (3,).
 
 In the topocentric frame the stellar shifts are ``xi(v_star) - xi(v_bary)`` while the
-telluric shift is zero, so the star-vs-telluric relative velocity picks up the full
-barycentric motion on top of the orbit — hence the enlarged ``v_rel_max_kms`` budget.
+telluric shift is zero, so the star-vs-telluric relative velocity includes the full
+barycentric motion in addition to the orbit. The ``v_rel_max_kms`` budget is enlarged
+accordingly.
 """
 
 import numpy as np
@@ -22,7 +23,7 @@ from albireo.simulate import synthetic_deviation_spectrum as synth_spectrum
 from albireo.simulate import synthetic_telluric_spectrum as synth_telluric
 
 # Every test here reads the same module-scoped MAP fit, so the whole module is one
-# acceptance gate: deselecting it with -m "not slow" skips the fit itself, not just the
+# acceptance test: deselecting it with -m "not slow" skips the fit as well as the
 # assertions on it.
 pytestmark = pytest.mark.slow
 
@@ -75,11 +76,11 @@ def telluric_fit():
         synth_spectrum(GRID, n_lines=30, depth_range=(0.1, 0.7), sigma_v_range=(9.0, 20.0), seed=1),
         synth_spectrum(GRID, n_lines=25, depth_range=(0.1, 0.7), sigma_v_range=(9.0, 20.0), seed=2),
     ]
-    # Narrow lines clustered in bands, but wide enough to be *representable* on a
-    # 5.5 km/s grid seen through a 7 km/s LSF (the default 1.5-4 km/s widths are
-    # sub-pixel: convolving the truth with the LSF alone already costs rms 0.20), and
-    # shallow enough not to pile up against the -0.95 saturation clip, whose
-    # flat-bottomed corners the curvature prior cannot represent.
+    # The lines are narrow and clustered in bands, but wide enough to be representable
+    # on a 5.5 km/s grid observed through a 7 km/s LSF. The default 1.5-4 km/s widths
+    # are sub-pixel, and convolving the injected spectrum with the LSF alone already
+    # changes it by 0.20 rms. The lines are also shallow enough not to saturate at the
+    # -0.95 clip, whose flat-bottomed corners the curvature prior cannot represent.
     tell = synth_telluric(GRID, depth_range=(0.02, 0.4), sigma_v_range=(6.0, 12.0), seed=3)
     t_peri = float(t_peri_from_t_conj(TCONJ_TRUE, period=P_TRUE, ecc=ECC_TRUE, omega=OMEGA_TRUE))
     orbit = OrbitParams(
@@ -151,16 +152,16 @@ def test_telluric_spectrum_recovered(telluric_fit, map_spectra):
 def test_stellar_combination_recovered(telluric_fit, map_spectra):
     """The observable light-weighted stellar combination is recovered.
 
-    Two k = 0 additive indeterminacies are in play here (``docs/math.md`` §5.1,
-    benchmarks.md M2 lesson 1). Constant light fractions make the *individual* stellar
-    components indeterminate, so only the light-weighted combination is observable —
-    as in ``test_inference.py``. The telluric component adds a second, exact one: since
-    the light fractions sum to 1 and a constant is shift-invariant, adding ``a`` to the
-    telluric while subtracting ``a`` from every stellar component leaves every epoch's
-    prediction unchanged. That single scalar is fixed only by the ridge ``eta``, which
-    ML-II sets weakly (it is honestly unconstrained), so it is removed before the
-    residual is measured — and its cancellation across the two blocks is asserted
-    directly, which is the sharper statement.
+    Two k = 0 additive indeterminacies apply here (``docs/math.md`` §5.1; item 1 of the
+    null-space analysis of the fixed-orbit solver in ``docs/benchmarks.md``). Constant
+    light fractions make the individual stellar components indeterminate, so only the
+    light-weighted combination is observable, as in ``test_inference.py``. The telluric
+    component adds a second, exact one. Since the light fractions sum to 1 and a constant
+    is shift-invariant, adding ``a`` to the telluric while subtracting ``a`` from every
+    stellar component leaves every epoch's prediction unchanged. That single scalar is
+    fixed only by the ridge ``eta``, which ML-II sets weakly (it is unconstrained), so it
+    is removed before the residual is measured. Its cancellation across the two blocks is
+    asserted directly, which is the stronger test.
     """
     truth, _, _ = telluric_fit
     truth_d = np.stack([np.asarray(c) for c in truth.components])

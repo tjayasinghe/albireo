@@ -4,14 +4,14 @@
 with inverse variances and masks already set) and, on request, the injected truth for a
 simulated example. :func:`example_info` reports the provenance of each entry.
 
-One example, ``sb2_sim``, ships inside the wheel and requires no network access, no
+One example, ``sb2_sim``, is included in the wheel and requires no network access, no
 astropy and no archive account. Larger examples are fetched on demand from a public
 archive and cached under ``$ALBIREO_DATA_DIR``, or under the platform cache directory
 (:func:`cache_dir`). Each download is moved into place only after it matches a recorded
-SHA-256 digest, so a truncated or altered file is rejected rather than read as a spectrum.
+SHA-256 digest, so a truncated or altered file is rejected.
 
 The cached files are ``.npz``, read with :func:`numpy.load`, so this module has no astropy
-dependency; FITS reading is in :mod:`albireo.io`.
+dependency. FITS reading is in :mod:`albireo.io`.
 """
 
 from __future__ import annotations
@@ -138,7 +138,7 @@ def load_example(name: str = "sb2_sim", *, with_truth: bool = False, progress: b
     -------
     Dataset, or (Dataset, dict)
         The dataset, and the truth dictionary when ``with_truth`` is set. Provenance is
-        reported by :func:`example_info`; a :class:`~albireo.data.Dataset` carries no
+        reported by :func:`example_info`; a :class:`~albireo.data.Dataset` has no
         provenance attribute.
 
     Raises
@@ -203,9 +203,9 @@ def _read_npz(path: Path):
 def cache_dir() -> Path:
     """Where downloaded examples are kept.
 
-    ``$ALBIREO_DATA_DIR`` takes precedence when set. Otherwise the platform convention:
-    ``%LOCALAPPDATA%\\albireo\\Cache`` on Windows, ``~/Library/Caches/albireo`` on macOS,
-    and ``$XDG_CACHE_HOME/albireo`` (default ``~/.cache/albireo``) elsewhere.
+    ``$ALBIREO_DATA_DIR`` takes precedence when set. Otherwise the platform convention is
+    used: ``%LOCALAPPDATA%\\albireo\\Cache`` on Windows, ``~/Library/Caches/albireo`` on
+    macOS, and ``$XDG_CACHE_HOME/albireo`` (default ``~/.cache/albireo``) elsewhere.
     """
     override = os.environ.get("ALBIREO_DATA_DIR")
     if override:

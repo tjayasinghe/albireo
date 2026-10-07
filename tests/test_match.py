@@ -1,19 +1,18 @@
 """Tests for the label-matching mode.
 
-The centrepiece is a closed loop: build a toy library, inject two components at *off-node*
-labels, add noise at a declared level, and fit. It is a real end-to-end exercise because the
-library, the interpolation, the rotation kernel, the dilution model, the nuisance and the
-optimizer all have to be right together for the injected labels to come back.
+The main test is a closed loop: build a toy library, inject two components at off-node
+labels, add noise at a declared level, and fit. It is an end-to-end test, because the
+injected labels are recovered only if the library, the interpolation, the rotation kernel,
+the dilution model, the nuisance and the optimizer are all correct.
 
-Two invariants carry most of the scientific weight and are tested directly rather than
-inferred from a good chi-square:
+Two invariants are tested directly:
 
-- adding a constant to a component leaves the labels alone *because* the additive nuisance
-  is there, and moves them when it is not — the k = 0 null space of ``docs/math.md`` §5.1;
-- a deliberately wrong assumed light fraction is recovered as a fitted radius ratio rather
-  than laundered into a wrong temperature.
+- adding a constant to a component leaves the labels unchanged when the additive nuisance
+  is fitted, and shifts them when it is not (the k = 0 null space of ``docs/math.md`` §5.1);
+- a wrong assumed light fraction is recovered as a fitted radius ratio and does not bias
+  the temperature.
 
-Everything here is offline and generated in-test; nothing downloads.
+All data are generated in the tests. Nothing is downloaded.
 """
 
 import jax
@@ -112,11 +111,11 @@ def baseline(library, grid):
 
 @pytest.mark.slow
 def test_closed_loop_recovers_injected_labels(baseline):
-    """Off-node injection, declared noise, labels back well inside the accuracy target.
+    """Labels injected off-node at declared noise are recovered well inside the accuracy target.
 
-    The tolerances are the ones the module documents as the point of the exercise: Teff to
-    2-3%, log g and [M/H] to 0.15 dex, v sin i to 10%. Past those, a template stops
-    limiting the radial velocities, which is what this mode exists to serve.
+    The tolerances are the target accuracy the module documents: Teff to 2-3%, log g and
+    [M/H] to 0.15 dex, v sin i to 10%. At that accuracy a template stops limiting the
+    radial velocities, which are the purpose of this mode.
     """
     for name, (teff, logg, mh, vsini) in TRUTH.items():
         got = baseline.labels[name]
@@ -128,9 +127,9 @@ def test_closed_loop_recovers_injected_labels(baseline):
 
 @pytest.mark.slow
 def test_fit_is_better_than_both_nulls(baseline):
-    """Every number quoted against a null: no template at all, and the nearest raw node."""
+    """The fit is compared with two nulls: no template, and the nearest raw node."""
     assert baseline.chi2 < baseline.chi2_nearest_node < baseline.chi2_continuum
-    # noise was injected at the declared level, so the reduced chi-square lands near one
+    # noise was injected at the declared level, so the reduced chi-square is near one
     assert 0.7 < baseline.chi2 / baseline.n_pixels_used < 1.4
 
 
@@ -165,7 +164,7 @@ def test_metallicity_can_be_freed_per_component(library, grid):
 
 
 # ---------------------------------------------------------------------------
-# the two invariants that carry the science
+# the two invariants tested directly
 # ---------------------------------------------------------------------------
 
 
@@ -173,10 +172,10 @@ def test_metallicity_can_be_freed_per_component(library, grid):
 def test_additive_nuisance_absorbs_the_unconstrained_zero_point(library, grid):
     """The k = 0 mode must not become a temperature error.
 
-    Each component's constant offset is in the null space of disentangling and is held
-    only by the smoothness ridge, so a real ``d_hat`` carries an arbitrary one. With the
-    additive nuisance the labels must not care; without it they must visibly move, which
-    is what makes the nuisance load-bearing rather than decorative.
+    Each component's constant offset is in the null space of disentangling and is
+    constrained only by the smoothness ridge, so a real ``d_hat`` has an arbitrary one.
+    With the additive nuisance the labels must be unchanged. Without it they must shift,
+    which shows that the nuisance is needed.
     """
     rows = noisy_rows(library, grid)
     shifted = rows + np.array([0.02, -0.015])[:, None]
@@ -190,17 +189,17 @@ def test_additive_nuisance_absorbs_the_unconstrained_zero_point(library, grid):
         without = abs(exposed.labels[name]["teff"] - teff)
         assert with_nuisance < 0.01 * teff, f"{name}: the nuisance failed to absorb the offset"
         assert without > with_nuisance, f"{name}: removing the nuisance should have hurt"
-    # and the fitted zero point reports the offset instead of hiding it
+    # and the offset appears in the fitted zero point
     assert np.max(np.abs(protected.result.params["offset_A"])) > 1e-3
 
 
 @pytest.mark.slow
 def test_wrong_assumed_light_fraction_is_recovered_as_a_radius_ratio(library, grid):
-    """A wrong ``l0`` must show up in the dilution, not in the temperatures.
+    """A wrong ``l0`` must appear in the dilution, not in the temperatures.
 
     The data are built with light fractions that differ from the ones declared at
-    disentangling time. A fit with no dilution freedom has nowhere to put that but the line
-    depths, i.e. Teff; a joint radius-ratio fit puts it where it belongs.
+    disentangling time. A fit with no dilution freedom can absorb the difference only in
+    the line depths, i.e. Teff. A joint radius-ratio fit absorbs it in the dilution.
     """
     true_weights = np.array([0.50, 0.50])
     rows = clean_rows(library, grid, weights=true_weights / ELL0)
@@ -256,13 +255,13 @@ def test_radius_ratio_needs_two_components(library, grid):
 
 
 # ---------------------------------------------------------------------------
-# declarations honoured exactly
+# declarations applied exactly
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.slow
 def test_a_fixed_label_never_moves(library, grid):
-    """Exact invariant: what was declared Fixed comes back bit-for-bit."""
+    """A label declared Fixed is returned bit-for-bit."""
     stars = {
         "A": StarLabels(
             library=library,
@@ -283,7 +282,7 @@ def test_a_fixed_label_never_moves(library, grid):
     assert got.labels["A"]["teff"] == 4750.0
     assert got.labels["B"]["logg"] == 4.5
     assert "teff" in got.fixed["A"] and "logg" in got.fixed["B"]
-    assert "teff_A" not in got.result.params  # no site was created at all
+    assert "teff_A" not in got.result.params  # no site was created
 
 
 def test_specs_reject_ambiguous_declarations(library, grid):
@@ -311,7 +310,7 @@ def test_specs_reject_ambiguous_declarations(library, grid):
 
 
 def test_priors_narrower_than_the_grid_are_honoured_not_crashed(library, grid):
-    """A prior tighter than the node spacing used to surface as numpyro's opaque error."""
+    """A prior tighter than the node spacing must not raise numpyro's opaque error."""
     got = fit(
         library,
         grid,
@@ -433,7 +432,7 @@ def test_excluded_ranges_drop_pixels(library, grid):
 
 @pytest.mark.slow
 def test_draws_refit_gives_a_wider_spread_than_the_curvature(library, grid, baseline):
-    """The honest error against the formal one — and the point of quoting both."""
+    """The spread over refitted draws exceeds the formal error, so both are quoted."""
     rng = np.random.default_rng(3)
     base = np.asarray(baseline.problem.data)
     draws = base[None, :, :] + rng.normal(0.0, NOISE, (8, *base.shape))
@@ -459,7 +458,7 @@ def test_refit_draws_validates_its_input(baseline):
 
 @pytest.mark.slow
 def test_identifiability_is_reported_not_hidden(library, grid):
-    """With Teff and log g both free the pair is expected to correlate, and to say so."""
+    """With Teff and log g both free the pair is expected to correlate, and the fit reports it."""
     got = fit(library, grid, noisy_rows(library, grid))
     report = got.correlation
     assert report["matrix"].shape == (len(report["sites"]),) * 2
@@ -470,11 +469,11 @@ def test_identifiability_is_reported_not_hidden(library, grid):
 
 
 def test_covariance_rows_line_up_with_their_sites(baseline):
-    """Vector sites make a covariance row not a site; the labels must expand with them."""
+    """With vector sites a covariance row is not a site, so the labels must expand with them."""
     assert baseline.covariance.shape[0] == len(baseline.site_order)
     assert "offset_A[0]" in baseline.site_order and "offset_A[2]" in baseline.site_order
     assert "teff_A" in baseline.site_order
-    # a misaligned diagonal is exactly how this went wrong: sanity-check the scale
+    # a misaligned diagonal would give an error on the wrong scale, so the scale is checked
     assert 0.05 < baseline.errors("laplace")["A"]["teff"] < 500.0
 
 
@@ -493,22 +492,22 @@ def test_matched_and_native_comparison_both_recover_the_labels(library, grid):
 
 
 def test_the_default_comparison_is_native(library, grid):
-    """The default is `native`, and D55 is why.
+    """The default is `native` (D55).
 
-    `matched` convolves both sides with the LSF, which reads like the careful choice and was
-    the default until AI Phe was fitted. Convolving the residuals correlates them while the
-    likelihood stays diagonal, so chi-square is over-counted by ~1/sum(k^2) and v sin i
-    absorbs the mis-specification -- on real HARPS data both components went to the floor of
-    their prior. The closed loop here cannot see any of that, because its rows never pass
-    through an LSF or a disentangling; this test pins the default so that the decision has to
-    be taken deliberately rather than drifting back.
+    `matched` convolves both sides with the LSF, which appears to be the more careful
+    choice. Convolving the residuals correlates them while the likelihood stays diagonal,
+    so chi-square is over-counted by ~1/sum(k^2) and v sin i absorbs the mis-specification.
+    On the HARPS spectra of AI Phe both components went to the lower bound of their
+    v sin i prior. The closed loop here does not detect this, because its rows never pass
+    through an LSF or a disentangling. This test asserts the default so that it is not
+    changed back unnoticed.
     """
     got = fit(library, grid, noisy_rows(library, grid))
     assert got.assumptions["compare"] == "native"
 
 
 def test_problem_is_a_traceable_pytree(baseline):
-    """It must survive a jit boundary as an argument, not be folded in as a constant."""
+    """It must pass a jit boundary as an argument, not be folded in as a constant."""
     leaves, structure = jax.tree.flatten(baseline.problem)
     assert all(isinstance(leaf, jax.Array) for leaf in leaves)
     rebuilt = jax.tree.unflatten(structure, leaves)
@@ -531,7 +530,7 @@ def test_template_and_nearest_node_are_usable_downstream(baseline):
 
 
 # ---------------------------------------------------------------------------
-# the facade hook
+# the hook in the Disentangler interface
 # ---------------------------------------------------------------------------
 
 
@@ -629,7 +628,7 @@ def facade_fit(small_dataset, blue_library):
 
 @pytest.mark.slow
 def test_facade_hook_fills_everything_in_from_the_fit(facade_fit, blue_library):
-    """`Fit.match_labels` must not need the grid, spectra, lights, LSF or medium again."""
+    """`Fit.match_labels` must not need the grid, spectra, light fractions, LSF or medium again."""
     got = facade_fit.match_labels(_labelled(blue_library), max_steps=30, mh=ab.Fixed(0.0))
     assert set(got.labels) == {"A", "B"}
     # every derived input came from the fit rather than from the caller
@@ -649,7 +648,7 @@ def test_facade_hook_refuses_a_partial_or_unknown_declaration(facade_fit, blue_l
 
 @pytest.mark.slow
 def test_facade_hook_refuses_an_undeclared_wavelength_scale(small_dataset, blue_library):
-    """An undeclared medium is an 83 km/s question, so it is refused rather than guessed."""
+    """An undeclared medium is an 83 km/s ambiguity, so it is rejected rather than guessed."""
     dis = _declaration(blue_library, _redeclared(small_dataset, None))
     fit = dis.fit(max_steps=10)
     with pytest.raises(ValueError, match="air or vacuum"):

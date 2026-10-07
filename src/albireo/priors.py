@@ -6,11 +6,11 @@ The default prior (``docs/math.md`` §2) on each deviation spectrum is
 
 where ``D2`` is the second-difference operator. The curvature penalty ``tau_i`` is a
 smoothness prior whose affine nullspace (constant plus slope per component) coincides
-with the low-frequency separation degeneracy of ``docs/math.md`` §5.1; the weak ridge
+with the low-frequency separation degeneracy of ``docs/math.md`` §5.1. The weak ridge
 ``eta_i`` makes those directions proper by anchoring the spectrum to the continuum.
 Precisions are banded (half-bandwidth 2); dense covariance kernels are not used.
 
-Either strength may carry a static per-pixel profile,
+Either strength may have a static per-pixel profile,
 
     Lambda_i = D2^T diag(tau_i * p^tau_i) D2 + diag(eta_i * p^eta_i),
 
@@ -46,13 +46,13 @@ __all__ = [
 # Astrophysics of Gaseous Nebulae and Active Galactic Nuclei, 2nd ed. (University Science
 # Books); NIST and the Atomic Line List for the recombination lines), rounded to 0.01 A,
 # far below the width of any window built around them. The list is not exhaustive: it
-# holds the features strong enough to matter in a normalized stellar spectrum. A window
+# contains the features strong enough to matter in a normalized stellar spectrum. A window
 # relaxes the prior locally without changing the precision bandwidth or the pixel count.
 # A different line set can be passed to :func:`nebular_windows`.
 NEBULAR_LINES: Mapping[str, float] = {
     "[O II] 3726": 3726.03,
     "[O II] 3729": 3728.82,
-    "H8": 3889.05,  # blended with He I 3888.65 in practice
+    "H8": 3889.05,  # blended with He I 3888.65
     "H-epsilon": 3970.07,
     "H-delta": 4101.73,
     "H-gamma": 4340.47,
@@ -114,10 +114,10 @@ def nebular_windows(
     """Wavelength windows around the nebular lines, merged and sorted.
 
     The windows are where a nebular component is allowed to have structure
-    (:func:`window_profile`), so they should be generous. A window that is too narrow
-    clips real emission and pushes the residual into the stellar components, the failure
-    the component exists to prevent; a window that is too wide only returns some of the
-    freedom the profile removes. The default half-width of 300 km/s covers
+    (:func:`window_profile`), so they should be wide. A window that is too narrow
+    truncates real emission, and the residual is absorbed into the stellar components,
+    the failure the component exists to prevent. A window that is too wide only restores
+    some of the freedom the profile removes. The default half-width of 300 km/s covers
     the nebular line, the velocity spread of an H II region, and a margin.
 
     Parameters
@@ -131,7 +131,7 @@ def nebular_windows(
     v_kms
         Velocity of the nebula in the frame of the model grid [km/s]. Windows are built
         at ``lambda * (1 + v_kms / c)``, so this value must equal the ``nebular_v_kms``
-        passed to :func:`albireo.forward.build_problem`: that shift decides where the
+        passed to :func:`albireo.forward.build_problem`: that shift determines where the
         component's lines fall on the model grid, and the profile must agree with it.
         Both default to 0, which places the component at the observed barycentric
         wavelengths, the convention the stellar components follow (their systemic
@@ -145,7 +145,7 @@ def nebular_windows(
     -------
     tuple[tuple[float, float], ...]
         ``(lambda_min, lambda_max)`` pairs, sorted, with overlaps merged (adjacent
-        doublets such as [O II] 3726/3729 or [S II] 6716/6731 return as one window).
+        doublets such as [O II] 3726/3729 or [S II] 6716/6731 give one window).
 
     Raises
     ------
@@ -186,17 +186,17 @@ def window_profile(
 ) -> np.ndarray:
     """Per-pixel prior multiplier: ``inside`` within any window, ``outside`` elsewhere.
 
-    The result is passed to :class:`SmoothnessPrior` as an ``eta_profile`` row. A ridge
-    scaled by ``outside`` pins the component to the continuum away from the windows with
-    prior standard deviation ``1/sqrt(eta * outside)`` per pixel. The default ``1e6`` is
-    a factor of 1000 in amplitude, negligible against any line, and leaves the precision
-    well conditioned. The confinement is soft: a hard zero would be a constraint, would
-    require different linear algebra, and would remove the model's ability to report a
-    disagreement with the windows (``docs/math.md`` §2).
+    The result is passed to :class:`SmoothnessPrior` as an ``eta_profile`` row. Away
+    from the windows, a ridge scaled by ``outside`` keeps the component close to the
+    continuum, with prior standard deviation ``1/sqrt(eta * outside)`` per pixel. The
+    default ``1e6`` is a factor of 1000 in amplitude, negligible against any line, and
+    leaves the precision well conditioned. The confinement is soft: a hard zero would be
+    a constraint, would require different linear algebra, and would prevent the fit from
+    showing a disagreement with the windows (``docs/math.md`` §2).
 
     The function is not specific to nebular emission: interstellar bands, diffuse
-    interstellar bands, or any component known a priori to be line-poor take the same
-    treatment.
+    interstellar bands, or any component known a priori to be line-poor can be treated
+    the same way.
 
     Parameters
     ----------
@@ -271,10 +271,10 @@ class SmoothnessPrior:
         strengths: the effective weights are ``tau[i] * tau_profile[i]`` and
         ``eta[i] * eta_profile[i]``. ``None`` (default) is a uniform profile, identical
         to the scalar prior. The scalars stay separate from the profiles, so the ML-II
-        hyperparameter fit is unchanged: a profile sets where the freedom is, the scalar
-        sets how much. :func:`window_profile` builds one. Curvature rows take
-        the weight of their center pixel, so ``tau_profile`` is indexed like the
-        spectrum.
+        hyperparameter fit is unchanged: a profile sets where the component may deviate,
+        and the scalar sets the strength. :func:`window_profile` builds one. Curvature
+        rows take the weight of their center pixel, so ``tau_profile`` is indexed like
+        the spectrum.
 
     Raises
     ------

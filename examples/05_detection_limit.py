@@ -1,40 +1,40 @@
-"""From a peak to a claim: false-alarm rates and detection limits (``docs/math.md`` §6).
+"""Calibrate a detection: false-alarm rates and detection limits (``docs/math.md`` §6).
 
-``examples/02_k2_scan.py`` finds a companion. This script answers the two questions that
+``examples/02_k2_scan.py`` finds a companion. This script computes the two results that
 turn a peak into a detection claim:
 
-1. How often would noise alone produce a peak of this height? The detection statistic
+1. The rate at which noise alone produces a peak of this height. The detection statistic
    ``D`` has no closed-form null distribution (it depends on the companion's prior
-   scale, on the epoch sampling and on the masks), so the distribution is measured: draw
+   scale, on the epoch sampling and on the masks), so the distribution is measured. Draw
    many datasets from the fitted no-companion model, scan each one exactly as the
    observed data were scanned, and record how large ``D`` becomes by chance.
-2. Which companions would have been detected? Inject a companion at a ladder of light
-   fractions, scan again, and count how often each rung clears the threshold. The light
-   fraction at which the completeness curve crosses 95% is the detection limit, the
-   quantity a Gaia black-hole or stripped-star study reports.
+2. The companions that would have been detected. Inject a companion at a ladder of light
+   fractions, scan again, and count how often the peak exceeds the threshold at each
+   one. The light fraction at which the completeness curve crosses 95% is the detection
+   limit, the quantity a Gaia black-hole or stripped-star study reports.
 
-Both loops run on the observed dataset's own operators
+Both loops reuse the operators of the observed dataset
 (:func:`albireo.simulate.resimulate`): the same epochs, barycentric velocities, chip
-gaps, weights and response. Only the noise and the injected spectra change. This makes
-a few hundred scans cost seconds rather than hours, and it makes the result specific to
-this dataset rather than to an approximation of it.
+gaps, weights and response. Only the noise and the injected spectra change. A few
+hundred scans then take seconds rather than hours, and the result is specific to this
+dataset.
 
 The script runs on the same simulated system twice:
 
-* an SB1 with no companion: the calibration states how faint a companion would have had
-  to be to escape detection;
-* the SB2: a real companion, whose peak is read against the null distribution from the
-  SB1 run.
+* an SB1 with no companion: the calibration determines how faint a companion would have
+  had to be to escape detection;
+* the SB2: a companion is present, and its peak is compared with the null distribution
+  from the SB1 run.
 
-Two properties of the result. First, the null peaks are negative: the marginal
-likelihood charges an Occam term for the companion's free spectrum, and with no
-companion present nothing compensates for it. The calibrated threshold is therefore
-negative too, and "D > 0" would have been a conservative test on this dataset; on another
-dataset it need not be, which is the reason for calibrating the threshold rather than
-assuming it. Second, the limit is conditional on the assumed companion spectrum: the
-observable is ``ell_2 * d_2``, so a companion with no lines is undetectable at any light
-fraction. The default template is the primary's own recovered spectrum, and that
-assumption should be reported with the limit.
+The result has two properties. First, the null peaks are negative. The Occam term of the
+marginal likelihood penalizes the companion's free spectrum, and with no companion
+present no signal offsets the penalty. The calibrated threshold is therefore also
+negative, and "D > 0" would have been a conservative test on this dataset. On another
+dataset it need not be, which is why the threshold is calibrated rather than assumed.
+Second, the limit is conditional on the assumed companion spectrum. The observable is
+``ell_2 * d_2``, so a companion with no lines is undetectable at any light fraction. The
+default template is the primary's recovered spectrum, and that assumption should be
+reported with the limit.
 
 Environment
 -----------
@@ -75,8 +75,8 @@ V_REL_MAX = 105.0
 SEED = 7
 
 # The ladder of injected companion light fractions, and the number of trials per rung.
-# n_null sets the finest false-alarm probability the calibration can resolve, at
-# 1 / (n_null + 1): 100 trials cannot substantiate a claim below about 1%.
+# n_null sets the finest false-alarm probability the calibration can resolve,
+# 1 / (n_null + 1). With 100 trials a probability below about 1% cannot be claimed.
 ELL2_LADDER = np.array([0.005, 0.01, 0.02, 0.04])
 N_NULL = 24 if FAST else 120
 N_TRIALS = 8 if FAST else 40
@@ -147,7 +147,7 @@ def scan_kwargs() -> dict:
 
 
 def ticker(total_hint: str):
-    """A progress callback that stays readable in a CI log: one line per 10%."""
+    """A progress callback that prints one line per 10%, readable in a CI log."""
     state = {"next": 0.0}
 
     def report(done: int, total: int) -> None:
@@ -160,8 +160,7 @@ def ticker(total_hint: str):
 
 
 def plot(limit, injected_scan, path: str) -> None:
-    """Both panels come from :func:`albireo.plot_detection_limit`; the figure is library
-    code, not example code."""
+    """Both panels are drawn by the library function :func:`albireo.plot_detection_limit`."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -221,7 +220,7 @@ def main() -> None:
         )
     print(f"\n  >>> {limit.summary()}\n")
 
-    # 2. The detection, read against that null distribution ---------------------------
+    # 2. The detection, compared with that null distribution --------------------------
     print("2. the SB2, scanned identically")
     t0 = time.perf_counter()
     injected = ab.k2_scan(GRID, sb2, **common)

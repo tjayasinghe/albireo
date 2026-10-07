@@ -1,14 +1,14 @@
 """Tests for synthetic spectral libraries and their differentiable interpolators.
 
-Interpolators are checked against scipy's own implementations — ``RegularGridInterpolator``
-for the box, ``LinearNDInterpolator`` for the scattered case — so the oracle is independent
-code rather than a second copy of the same arithmetic. Node reproduction is the invariant
-that lets the warm-start node scan and the continuous fit be compared on equal terms: the
-box interpolators return the stored spectrum bit-for-bit, and the simplex interpolator
-returns it to rounding, for the reason recorded at ``NODE_TOL_EPS`` below.
+Interpolators are checked against scipy's implementations (``RegularGridInterpolator`` for
+the box, ``LinearNDInterpolator`` for the scattered case), so the oracle is independent
+code. Node reproduction is the invariant that allows the warm-start node scan and the
+continuous fit to be compared on equal terms. The box interpolators return the stored
+spectrum bit-for-bit, and the simplex interpolator returns it to rounding, for the reason
+recorded at ``NODE_TOL_EPS`` below.
 
-Nothing here needs the network. Libraries are generated in-test from an analytic rule, and
-the air/vacuum measurement is exercised on spectra built with a known convention.
+Nothing here needs the network. Libraries are generated in the tests from an analytic rule,
+and the air/vacuum measurement is exercised on spectra built with a known convention.
 """
 
 import dataclasses
@@ -46,17 +46,16 @@ INTRINSIC_WIDTH = 0.25  # Angstrom; v sin i broadening is applied by a kernel, n
 def spectrum_rule(teff, logg, mh, wave=WAVE):
     """A smooth analytic stand-in for a synthetic spectrum.
 
-    Two properties are deliberate and load-bearing for the tests that use it.
+    The tests that use it depend on two properties.
 
-    *Each label drives its own lines.* An earlier version let Teff and [M/H] both scale a
-    single depth, which makes them exactly interchangeable — a fit then drives the
-    chi-square to zero on a curve through label space and "fails" to recover the injected
-    values while fitting perfectly. That is a degenerate fixture, not a broken fitter, and
-    it hides real errors. Here line 1 responds only to Teff, line 3 only to log g and line
-    5 only to [M/H], so the map from labels to spectrum is injective.
+    Each label controls its own lines. If Teff and [M/H] both scaled a single depth they
+    would be exactly interchangeable. A fit would then reach zero chi-square along a curve
+    in label space without recovering the injected values, and such a degenerate fixture
+    would leave real errors undetected. Here line 1 responds only to Teff, line 3 only to
+    log g and line 5 only to [M/H], so the map from labels to spectrum is injective.
 
-    *Nonlinear in every label*, so multilinear interpolation is not accidentally exact and
-    the cubic-versus-linear comparison means something.
+    The rule is nonlinear in every label, so multilinear interpolation is not exact and the
+    cubic-versus-linear comparison is meaningful.
     """
     t = (teff - 4800.0) / 600.0
     g = logg - 4.0
@@ -118,11 +117,11 @@ def test_library_reports_its_geometry(library):
 
 
 def test_resolving_power_is_read_from_the_metadata(library):
-    """A published grid is already broadened; the container must say to what (D65).
+    """A published grid is already broadened, and the container must report to what (D65).
 
-    ``resolving_power`` wins over the BOSZ ingest's ``resolution``, a library with neither
-    is intrinsic, and a value that is not a positive number is refused rather than read as
-    intrinsic, since that would broaden every template twice without a word.
+    ``resolving_power`` takes precedence over the BOSZ ingest's ``resolution``, and a
+    library with neither is intrinsic. A value that is not a positive number is rejected,
+    because reading it as intrinsic would broaden every template twice without warning.
     """
     assert library.resolving_power is None
     assert "intrinsic" in library.summary()
@@ -131,13 +130,13 @@ def test_resolving_power_is_read_from_the_metadata(library):
     assert "R = 20000" in bosz_like.summary()
     declared = library.replace(meta={"resolving_power": 115000.0, "resolution": 20000})
     assert declared.resolving_power == 115000.0
-    # every transform carries the metadata, so the value survives slicing and projection
+    # every transform keeps the metadata, so slicing and projection preserve the value
     assert bosz_like.sliced(5160.0, 5240.0).resolving_power == 20000.0
     assert bosz_like.in_medium("vacuum").resolving_power == 20000.0
     for bad in ("orig", -1.0, 0.0, float("nan")):
         with pytest.raises(ValueError, match="finite positive resolving power"):
             _ = library.replace(meta={"resolution": bad}).resolving_power
-    # the registry pins every BOSZ entry at R = 20,000, which the ingest records
+    # the registry fixes every BOSZ entry at R = 20,000, which the ingest records
     for name in lib_mod.library_names():
         info = lib_mod.library_info(name)
         if info["source"] == "bosz2024":
@@ -177,7 +176,7 @@ def test_in_medium_round_trips_against_the_grids_oracle(library):
     vacuum = library.in_medium("vacuum")
     assert vacuum.medium == "vacuum"
     np.testing.assert_allclose(vacuum.wave, np.asarray(ab.air_to_vacuum(WAVE)), rtol=0, atol=0)
-    # ~1.4 A in the green: the error class this exists to prevent
+    # ~1.4 A in the green, the class of error this conversion prevents
     assert 1.2 < float(np.mean(vacuum.wave - WAVE)) < 1.7
     np.testing.assert_allclose(vacuum.in_medium("air").wave, WAVE, atol=1e-9)
     assert library.in_medium("air") is library  # free to call unconditionally
@@ -209,7 +208,7 @@ def test_resampled_to_converts_medium_before_rebinning(library):
     grid = ab.LogGrid.from_wavelength_range(5175.0, 5225.0, dv_kms=6.0)
     vacuum = library.resampled_to(grid, medium="vacuum")
     assert vacuum.medium == "vacuum"
-    # the same feature must land ~1.4 A apart on the two scales, not on top of itself
+    # the same feature must be ~1.4 A apart on the two scales
     air = library.resampled_to(grid, medium="air")
     offset = (
         grid.wave[int(np.argmin(vacuum.normalized[0]))]
@@ -279,13 +278,13 @@ def test_box_cubic_matches_an_independent_catmull_rom(library):
         np.testing.assert_allclose(got, expected, rtol=1e-12, atol=1e-13)
 
 
-# The simplex path reproduces a node to rounding, not bit-for-bit: its weights come from
+# The simplex path reproduces a node to rounding, not bit-for-bit. Its weights come from
 # Qhull's affine transforms, so at a vertex they are 1 - eps and eps rather than 1 and 0, and
 # the error is eps times the spread of the rows across the simplex. The bound is written in
-# units of eps * max(|y|, 1), which is between one and two true ulp of y. Measured over 200
-# triangulations of each test grid (node order permuted; 105,600 node evaluations): a quarter
-# inexact, the worst 1.075 in these units. Four leaves 3.7x headroom on grids this smooth;
-# a rougher library would need more, which is a statement about that library.
+# units of eps * max(|y|, 1), which is between one and two true ulp of y. Over 200
+# triangulations of each test grid (node order permuted; 105,600 node evaluations), a quarter
+# were inexact and the worst was 1.075 in these units. Four leaves a 3.7x margin on grids
+# this smooth. A rougher library would need more, which would be a property of that library.
 NODE_TOL_EPS = 4
 
 
@@ -296,7 +295,7 @@ def _assert_reproduced_to_rounding(got, want):
 
 @pytest.mark.parametrize("method", ["linear", "cubic"])
 def test_box_interpolation_at_a_node_is_bit_exact(library, method):
-    """A node lands on weights that are exactly 1 and 0, so it comes back bit-for-bit."""
+    """At a node the weights are exactly 1 and 0, so the node is returned bit-for-bit."""
     interpolator = library_interpolator(library, method=method)
     for index in (0, 37, library.n_nodes - 1):
         normalized, log_continuum = interpolator(jnp.asarray(library.nodes[index]))
@@ -305,7 +304,7 @@ def test_box_interpolation_at_a_node_is_bit_exact(library, method):
 
 
 def test_simplex_interpolation_at_a_node_is_exact_to_rounding(library):
-    """The scattered path promises a few ulp, not bit-exactness; see ``NODE_TOL_EPS``."""
+    """The scattered path is accurate to a few ulp, not bit-exact; see ``NODE_TOL_EPS``."""
     interpolator = library_interpolator(library, method="simplex")
     for index in (0, 37, library.n_nodes - 1):
         normalized, log_continuum = interpolator(jnp.asarray(library.nodes[index]))
@@ -315,13 +314,13 @@ def test_simplex_interpolation_at_a_node_is_exact_to_rounding(library):
 
 @pytest.mark.parametrize("fixture", ["library", "punched_library"])
 def test_simplex_node_reproduction_does_not_depend_on_the_triangulation(request, fixture):
-    """Every node, under three triangulations of each grid, to the promised bound.
+    """Every node is reproduced to rounding under three triangulations of each grid.
 
-    Which nodes happen to come back bit-exact is a property of the triangulation Qhull
-    chose, and that choice differs between scipy builds: a Linux CI runner and a Windows
-    desktop disagreed. Permuting the node order changes the triangulation the same way, so
-    this exercises the invariant that is actually promised, on every platform. The punched
-    grid is the one that reaches the simplex path through ``method="auto"``.
+    Which nodes are returned bit-exact is a property of the triangulation Qhull chose, and
+    that choice differs between scipy builds: a Linux CI runner and a Windows desktop
+    differed. Permuting the node order changes the triangulation the same way, so this
+    exercises the guaranteed invariant on every platform. The punched grid is the one that
+    reaches the simplex path through ``method="auto"``.
     """
     base = request.getfixturevalue(fixture)
     rng = np.random.default_rng(20260902)
@@ -339,7 +338,7 @@ def test_simplex_node_reproduction_does_not_depend_on_the_triangulation(request,
 
 
 def test_cubic_beats_linear_on_the_toy_grid(library):
-    """The claim that justifies paying 4^k taps instead of 2^k."""
+    """The cubic has the smaller error here, which justifies 4^k taps instead of 2^k."""
     coarse = build_library(teff=TEFF[::2], logg=LOGG, mh=MH)
     errors = {}
     for method in ("linear", "cubic"):
@@ -365,7 +364,7 @@ def test_box_interpolator_gradient_matches_finite_differences(library):
     for axis, step in enumerate((1e-3, 1e-6, 1e-6)):
         bump = jnp.asarray(np.eye(3)[axis] * step)
         numeric = (float(scalar(point + bump)) - float(scalar(point - bump))) / (2 * step)
-        # atol against the largest component: a near-zero partial cannot be pinned to a
+        # atol against the largest component: a near-zero partial cannot be tested to a
         # relative tolerance by finite differences.
         np.testing.assert_allclose(analytic[axis], numeric, rtol=1e-5, atol=1e-6 * scale)
 
@@ -384,7 +383,7 @@ def test_box_hull_margin_signs(library):
 
 @pytest.fixture(scope="module")
 def punched_library():
-    """A grid with its corners cut away, as physics does to real OB libraries."""
+    """A grid with its corners removed, as they are in real OB libraries for physical reasons."""
     drop = {
         (t, g, m)
         for t in TEFF
@@ -416,12 +415,12 @@ def test_simplex_hull_margin_flags_the_punched_corner(punched_library):
     interpolator = library_interpolator(punched_library)
     # strictly inside a simplex
     assert float(interpolator.hull_margin(jnp.asarray([4712.0, 3.87, -0.23]))) > 0
-    # exactly on a shared facet: inside the hull, but with no margin — the contract is
-    # ">= 0 inside", and a node coordinate puts the point on a lattice hyperplane. Zero to
-    # rounding rather than exactly: the barycentric coordinates are Qhull's affine transform
-    # applied to the point, and at a vertex they carry ~1e-16 of either sign (measured
-    # -2.2e-16 at worst over 400 triangulations of the test grids), which is the slack
-    # ``crossval_library`` uses for the same decision.
+    # exactly on a shared facet: inside the hull, but with no margin. The contract is
+    # ">= 0 inside", and a node coordinate puts the point on a lattice hyperplane. The margin
+    # is zero to rounding rather than exactly. The barycentric coordinates are Qhull's affine
+    # transform applied to the point, and at a vertex they are in error by ~1e-16 of either
+    # sign (measured -2.2e-16 at worst over 400 triangulations of the test grids). The
+    # tolerance below is the one ``crossval_library`` uses for the same decision.
     margin = float(interpolator.hull_margin(jnp.asarray([4700.0, 4.0, -0.2])))
     assert abs(margin) <= lib_mod.HULL_MARGIN_TOL
     assert float(interpolator.hull_margin(jnp.asarray([5500.0, 3.0, -1.0]))) < 0
@@ -496,7 +495,7 @@ def medium_test_spectrum(medium, n=6000):
 
 @pytest.mark.parametrize("medium", ["air", "vacuum"])
 def test_line_core_medium_recovers_a_known_convention(medium):
-    """Same code, opposite spectra, opposite answers — the method validates itself."""
+    """The same code returns the correct medium for spectra built on either scale."""
     verdict = line_core_medium(*medium_test_spectrum(medium))
     assert verdict["medium"] == medium
     assert verdict["n_lines"] >= 5
@@ -507,7 +506,7 @@ def test_line_core_medium_refuses_when_it_cannot_tell():
     wave = np.linspace(4050.0, 6650.0, 4000)
     with pytest.raises(ValueError, match="not decisive"):
         line_core_medium(wave, np.ones_like(wave))
-    # too narrow a span to carry two reference lines
+    # too narrow a span to contain two reference lines
     narrow = np.linspace(5180.0, 5190.0, 200)
     with pytest.raises(ValueError, match="at least two reference lines"):
         line_core_medium(narrow, np.ones_like(narrow))
@@ -524,7 +523,7 @@ def test_line_core_medium_validates_input_shape():
 
 
 def test_interpolators_survive_a_jit_boundary_as_arguments(library, punched_library):
-    """They must pass as traced model arguments, not be baked in as constants (D27)."""
+    """They must pass as traced model arguments, not be embedded as constants (D27)."""
 
     @jax.jit
     def evaluate(interpolator, labels):
@@ -534,21 +533,21 @@ def test_interpolators_survive_a_jit_boundary_as_arguments(library, punched_libr
         interpolator = library_interpolator(lib)
         out = evaluate(interpolator, jnp.asarray([4700.0, 4.0, -0.2]))
         assert out.shape == (lib.n_pix,)
-        assert out.dtype == jnp.float64  # x64 must survive the round trip
+        assert out.dtype == jnp.float64  # the round trip must preserve x64
 
 
 # ---------------------------------------------------------------------------
 # the registry: naming, caching, and downloads that never touch the network
 # ---------------------------------------------------------------------------
 #
-# Everything checkable offline is checked offline, in the shape tests/test_archive.py uses:
-# a fake transport, not a recorded cassette. The BOSZ URL facts were confirmed against the
-# live archive on 2026-08-27 and are pinned here so a silent change upstream shows up as a
-# failing test rather than as a wrong spectrum.
+# Everything checkable offline is checked offline, as in tests/test_archive.py: with a fake
+# transport, not a recorded cassette. The BOSZ URL facts were confirmed against the live
+# archive on 2026-08-27 and are asserted here so that a silent change upstream appears as
+# a failing test rather than as a wrong spectrum.
 
 
 def _fake_bosz_shard(n_pix, seed=0):
-    """Two whitespace columns, flux and continuum, gzipped -- the real BOSZ layout."""
+    """Two whitespace columns, flux and continuum, gzipped, which is the real BOSZ layout."""
     rng = np.random.default_rng(seed)
     continuum = 1e6 * np.exp(-0.3 * np.linspace(0.0, 1.0, n_pix))
     flux = continuum * (1.0 - 0.4 * rng.random(n_pix))
@@ -581,14 +580,14 @@ def offline_registry(monkeypatch, tmp_path):
             destination.write_bytes(_fake_bosz_shard(wave.size, seed=len(calls)))
 
     monkeypatch.setattr(lib_mod, "_download_with_retries", fake_download)
-    # The medium check needs real line cores; a random spectrum has none, so it declines to
-    # answer rather than guessing -- which is the branch this fixture exercises.
+    # The medium check needs real line cores. A random spectrum has none, so the check
+    # is not decisive, which is the branch this fixture exercises.
     return entry, calls
 
 
 @pytest.fixture
 def gapped_registry(monkeypatch, tmp_path):
-    """A BOSZ-shaped library with one interior node unpublished (the archive answers 404)."""
+    """A BOSZ-shaped library with one interior node unpublished (the archive returns 404)."""
     monkeypatch.setenv("ALBIREO_DATA_DIR", str(tmp_path))
     wave = np.linspace(4000.0, 7000.0, 400)
     entry = dataclasses.replace(
@@ -633,9 +632,10 @@ def gapped_registry(monkeypatch, tmp_path):
 
 
 def test_a_bracketed_gap_is_filled_and_an_unbracketed_one_dropped(gapped_registry):
-    """The interior gap keeps the box a box; the corner, with no neighbours across it, goes."""
+    """The interior gap is filled, keeping the box complete. The unbracketed corner is dropped."""
     library = ab.fetch_library("gapped-grid", progress=False)
-    # Twelve nodes requested, two unpublished: the interior one filled, the corner dropped.
+    # Twelve nodes are requested and two are unpublished. The interior one is filled and
+    # the corner is dropped.
     assert library.n_nodes == 11
     assert library.meta["n_missing"] == 2
     assert library.meta["n_filled"] == 1 and library.meta["n_dropped"] == 1
@@ -664,8 +664,8 @@ def test_a_bracketed_gap_is_filled_and_an_unbracketed_one_dropped(gapped_registr
         library.log_continuum[filled_row],
         0.5 * (library.log_continuum[lo] + library.log_continuum[hi]),
     )
-    # The dropped corner leaves the box irregular here; on the real grid, whose only gap is
-    # interior, the fill is what restores the cubic.
+    # The dropped corner leaves the box irregular here. On the real grid, whose only gap is
+    # interior, the fill restores the cubic.
     assert library.axes() is None
     cached = ab.fetch_library("gapped-grid", progress=False)
     assert cached.meta["filled_nodes"] == library.meta["filled_nodes"]
@@ -703,10 +703,10 @@ def test_the_registry_lists_what_it_can_build():
 
 @pytest.mark.parametrize("name", ["bosz2024-hot-rvs", "bosz2024-hot-r20000"])
 def test_the_hot_box_is_registered_as_the_archive_publishes_it(name):
-    """Both hot entries: same 364 nodes, same shards, two bands.
+    """Both hot entries have the same 364 nodes and the same shards, in two bands.
 
-    The numbers are the archive's, measured on its index on 2026-09-10, so this is where a
-    silently re-pinned box would be caught.
+    The numbers are the archive's, measured on its index on 2026-09-10, so this test detects
+    a silent change to the registered box.
     """
     entry = lib_mod._LIBRARIES[name]
     assert isinstance(entry, lib_mod._Library)
@@ -721,14 +721,14 @@ def test_the_hot_box_is_registered_as_the_archive_publishes_it(name):
     assert (info["axes"]["teff"][0], info["axes"]["teff"][-1]) == (7000.0, 10000.0)
     assert info["axes"]["logg"] == [3.5, 4.0, 4.5, 5.0]
     assert info["axes"]["mh"] == [-1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5]
-    # Every node is published, so nothing is filled and nothing is dropped: the box stays a
-    # box and the cubic applies with no caveat about an interpolated node.
+    # Every node is published, so nothing is filled and nothing is dropped. The box is
+    # complete and the cubic applies with no caveat about an interpolated node.
     assert info["known_gaps"] == []
     assert info["download_mb"] == 532.0
     assert info["wave_range"] == ((8350.0, 8850.0) if name.endswith("rvs") else (4000.0, 7000.0))
     assert any("MARCS/ATLAS9 boundary" in c for c in info["caveats"])
     assert any("Paschen" in c for c in info["caveats"])
-    # Only the RVS entry meets a vacuum-scale instrument.
+    # Only the RVS entry is used with a vacuum-scale instrument.
     assert any("vacuum" in c for c in info["caveats"]) is name.endswith("rvs")
 
 
@@ -748,11 +748,11 @@ def test_an_unknown_name_lists_the_known_ones():
 
 
 def test_bosz_urls_match_the_archive():
-    """Pinned against files fetched from MAST on 2026-08-27.
+    """The URL was confirmed against files fetched from MAST on 2026-08-27.
 
-    Two of these are not what a careful reading of the documentation would give: Teff is
-    not zero-padded, and the atmosphere code changes across the grid. Both were wrong in
-    the first draft of the builder and cost a 404 each.
+    Two of its parts are not what a careful reading of the documentation would give: Teff
+    is not zero-padded, and the atmosphere code changes across the grid. An error in either
+    gives a 404.
     """
     url = lib_mod._bosz_url(6000.0, 4.0, 0.0, alpha=0.0, carbon=0.0, vmicro=2, resolution=20000)
     assert url == (
@@ -769,7 +769,7 @@ def test_bosz_urls_match_the_archive():
         (4000.0, 3.5, "mp"),  # plane-parallel at and above it
         (7000.0, 4.5, "mp"),
         (7750.0, 4.0, "mp"),  # inside the 7500-8000 overlap, where both families exist
-        (8000.0, 4.0, "mp"),  # MARCS wins the 7500-8000 overlap, so one family throughout
+        (8000.0, 4.0, "mp"),  # MARCS is used in the 7500-8000 overlap, so one family throughout
         (8250.0, 4.0, "ap"),  # the first ATLAS9 node of the hot box
         (9000.0, 4.0, "ap"),  # ATLAS9 above it
     ],
@@ -779,11 +779,11 @@ def test_the_atmosphere_code_follows_the_archive(teff, logg, code):
 
 
 def test_the_hot_box_crosses_the_atmosphere_seam_where_its_caveat_says():
-    """One crossing, between 8000 and 8250 K, and the caveat quotes the same two numbers.
+    """There is one crossing, between 8000 and 8250 K, and the caveat quotes both numbers.
 
     The hot box is the first registered library to span both model-atmosphere families, so
-    where the change of code falls is part of what the entry promises rather than an
-    implementation detail. It is stated in prose in the caveats and computed here.
+    the location of the change of code is part of what the entry documents. It is stated in
+    prose in the caveats and computed here.
     """
     axis = lib_mod._BOSZ_HOT_AXES["teff"]
     families = [lib_mod._bosz_atmosphere(teff, 4.0) for teff in axis]
@@ -800,9 +800,9 @@ def test_every_registered_bosz_box_has_uniformly_spaced_axes():
     ``_axis_weights`` uses the spline in its uniform-parameter form: the tangent at a node
     is estimated from the two neighbours as if they were equally spaced. Across a change of
     step that estimate is wrong, and the interpolant loses linear reproduction there. BOSZ's
-    own temperature axis changes step twice, 100 K below 4000 K and 500 K above 12,000 K, so
-    a registered box is in part a choice of a range over which it does not, and this asserts
-    that choice rather than trusting it.
+    temperature axis changes step twice, 100 K below 4000 K and 500 K above 12,000 K. A
+    registered box is therefore in part a choice of a range over which the step is constant,
+    and this test asserts that choice.
     """
     boxes = [entry for entry in lib_mod._LIBRARIES.values() if entry.source == "bosz2024"]
     assert len(boxes) >= 4
@@ -823,14 +823,14 @@ HOT_SHARDS = Path(__file__).resolve().parent / "data" / "bosz2024_hot_shards.txt
 
 
 def test_every_node_the_hot_box_requests_is_published():
-    """The 364 names the box would fetch, against the archive index harvested 2026-09-10.
+    """The 364 names the box would fetch are in the archive index harvested 2026-09-10.
 
-    The fixture is the harvested listing rather than a regeneration of the axes: it holds
+    The fixture is the harvested listing rather than a regeneration of the axes. It holds
     every published metallicity over the box's temperature and gravity range, fourteen
     against the box's seven, including the hole at (7750 K, log g +4.0, [M/H] -1.25) that
-    the box's own [M/H] axis avoids. A change to the axes, to the atmosphere dispatch or to
-    the file-name convention therefore appears here as a name the archive does not carry,
-    rather than as a 404 partway through a 532 MB build.
+    the box's [M/H] axis avoids. A change to the axes, to the atmosphere dispatch or to
+    the file-name convention therefore appears here as a name that is absent from the
+    archive, rather than as a 404 partway through a 532 MB build.
     """
     lines = HOT_SHARDS.read_text(encoding="utf-8").splitlines()
     published = {line for line in lines if line and not line.startswith("#")}
@@ -846,7 +846,7 @@ def test_every_node_the_hot_box_requests_is_published():
     assert len(requested) == 364
     assert requested <= published, sorted(requested - published)[:5]
 
-    # The listing is a harvest and not a product of the axes: this pair is the proof.
+    # This pair shows that the listing is a harvest and not a product of the axes.
     stem = "bosz2024_mp_t7750_g+4.0_m{}_a+0.00_c+0.00_v2_r20000_resam.txt.gz"
     assert stem.format("-1.25") not in published
     assert stem.format("-1.00") in published
@@ -860,7 +860,7 @@ def test_a_build_downloads_once_and_is_cached(offline_registry):
 
     second = ab.fetch_library("test-grid", progress=False)
     assert len(calls) == 9, "a cache hit must not touch the network"
-    # Bit-identical, not merely close: the build path reads back what it wrote, so a warm
+    # The results are bit-identical. The build path reads back what it wrote, so a warm
     # cache and a cold one cannot return different precision.
     assert np.array_equal(first.normalized, second.normalized)
     assert np.array_equal(first.log_continuum, second.log_continuum)
@@ -919,7 +919,7 @@ def test_clearing_the_cache_keeps_the_raw_shards(offline_registry):
 
     removed = ab.clear_library_cache("test-grid")
     assert removed and not lib_mod._library_cache_path(lib_mod._LIBRARIES["test-grid"]).is_file()
-    # Re-slicing another band out of the raw shards is free; re-downloading them is not.
+    # Another band can be sliced from the raw shards without downloading them again.
     assert sorted(p.name for p in lib_mod._raw_dir().glob("*")) == raw_before
 
     assert ab.clear_library_cache("_raw")
@@ -927,8 +927,8 @@ def test_clearing_the_cache_keeps_the_raw_shards(offline_registry):
 
 
 def test_a_declared_medium_is_checked_against_the_spectra(offline_registry, monkeypatch):
-    """BOSZ flipped convention between 2017 and 2024 under one name, so this is not
-    hypothetical: the build measures the medium and refuses to reconcile a disagreement."""
+    """BOSZ changed convention between 2017 and 2024 under one name. The build therefore
+    measures the medium and raises an error if it disagrees with the declared one."""
     entry = lib_mod._LIBRARIES["test-grid"]
     monkeypatch.setitem(
         lib_mod._LIBRARIES, "test-grid", dataclasses.replace(entry, medium="vacuum")
@@ -952,7 +952,7 @@ def test_a_two_column_file_is_required(tmp_path):
 
 
 def test_pollux_refuses_rather_than_guessing_a_format():
-    """No parser is shipped for a file format nobody here has seen."""
+    """No parser is shipped for a file format that has not been examined."""
     with pytest.raises(NotImplementedError, match="pollux"):
         ab.ingest_pollux(None)
 
@@ -960,8 +960,9 @@ def test_pollux_refuses_rather_than_guessing_a_format():
 def test_a_single_valued_axis_is_constant_rather_than_nan():
     """A library sliced to one metallicity keeps its column.
 
-    Before this was handled the degenerate cell gave lo == hi and a 0/0 that reached every
-    pixel as a NaN -- silent, and only visible once a fit failed to converge.
+    Unless this case is handled, the degenerate cell has lo == hi and the resulting 0/0
+    gives a NaN at every pixel. No error is raised, and the only symptom is a fit that
+    fails to converge.
     """
     wave = np.linspace(5000.0, 5010.0, 40)
     nodes = [(t, g, 0.0) for t in (6000.0, 6250.0) for g in (4.0, 4.5)]
@@ -1003,9 +1004,9 @@ def test_saving_and_loading_round_trips(tmp_path):
 
 @pytest.mark.network
 def test_the_archive_still_serves_what_the_registry_expects():
-    """One live request, pinning the two facts a silent upstream change would break.
+    """One live request checks the two facts that a silent upstream change would break.
 
-    Deliberately small: it fetches headers for a single shard rather than any spectrum.
+    The request is small: it fetches headers for a single shard and no spectrum.
     """
     import urllib.request
 

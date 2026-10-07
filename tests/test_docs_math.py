@@ -1,27 +1,27 @@
 """The documentation is read on two renderers; these tests keep it legible on both.
 
 Every page is Markdown that GitHub shows directly and that MkDocs also builds into the
-site. The two disagree about how to spell math, and only one spelling survives both.
+site. The two differ in their math syntax, and only one form renders correctly on both.
 
-GitHub runs its Markdown parser over a bare ``$...$`` before its math extension sees it,
-so the expression is quietly mangled rather than rejected: a backslash escape (``\\,``
-``\\!`` ``\\;`` ``\\%`` ``\\{``) is eaten as a Markdown escape and renders as the bare
-punctuation, a subscript underscore that follows a bracket can pair with a later one and
-turn the middle of the formula into italics, an opening ``$`` preceded by anything but a
-space or ``(`` does not start math at all, and a ``$$`` block containing a line that
-begins ``- `` or ``+ `` becomes a bullet list. None of this errors; it just renders
-wrongly, which is why it needs a test rather than a build step.
+GitHub runs its Markdown parser over a bare ``$...$`` before its math extension
+receives it, so the expression is silently corrupted rather than rejected. A backslash
+escape (``\\,`` ``\\!`` ``\\;`` ``\\%`` ``\\{``) is consumed as a Markdown escape and
+renders as the bare punctuation. A subscript underscore that follows a bracket can pair
+with a later one and turn the middle of the formula into italics. An opening ``$``
+preceded by anything but a space or ``(`` does not start math. A ``$$`` block containing
+a line that begins ``- `` or ``+ `` becomes a bullet list. None of this raises an error.
+The page renders wrongly, so it needs a test rather than a build step.
 
-The forms GitHub documents for this -- ``$`x`$`` inline and a ``` ```math ``` fence for
-display -- are opaque to its Markdown parser. ``scripts/mkdocs_math_hook.py`` maps both
+The forms GitHub documents for this (``$`x`$`` inline and a ``` ```math ``` fence for
+display) are opaque to its Markdown parser. ``scripts/mkdocs_math_hook.py`` maps both
 back onto arithmatex for the site.
 
-Getting the expression to the renderer intact is only half of it: GitHub then runs its
-own guard over the TeX and refuses a macro that is not on its allowlist, printing "The
-following macros are not allowed" in place of the formula. ``\\operatorname`` is on the
-wrong side of that line even though MathJax parses it, so the pages use ``\\mathrm``.
-GitHub publishes no list, so ``BLOCKED_MACROS`` below is empirical -- add to it whenever
-a page comes back with that message.
+Delivering the expression to the renderer intact is not sufficient. GitHub then runs its
+own filter over the TeX and rejects a macro that is not on its allowlist, printing "The
+following macros are not allowed" in place of the formula. ``\\operatorname`` is not on
+the allowlist even though MathJax parses it, so the pages use ``\\mathrm``. GitHub
+publishes no list, so ``BLOCKED_MACROS`` below is empirical. Add to it whenever a page
+shows that message.
 """
 
 from __future__ import annotations
@@ -37,8 +37,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 FENCE_OPEN = re.compile(r"^[ \t]*(`{3,}|~{3,})")
 BACKTICKS = re.compile(r"`+")
 
-# Macros GitHub's math renderer refuses. `operatorname` is the one this project actually
-# hit -- it renders everywhere else, so nothing but a page view catches it; write
+# Macros GitHub's math renderer rejects. `operatorname` is the one that occurred in this
+# project. It renders everywhere else, so only a page view detects it. Write
 # \mathrm{diag} instead, adding \, on either side where the operator abuts an ordinary
 # symbol. The rest are the define-a-macro family, which no page here needs and which a
 # renderer will not accept from untrusted Markdown.
@@ -68,19 +68,19 @@ ANY_FENCE = re.compile(r"^(```+|~~~+).*?^\1", re.DOTALL | re.MULTILINE)
 def _expressions(text: str) -> list[tuple[int, str]]:
     """Every math expression on the page, as (line number, TeX)."""
     found = [(text[: m.start()].count("\n") + 1, m.group(1)) for m in MATH_FENCE.finditer(text)]
-    # blank every fence, keeping the line count, so inline scanning sees prose only
+    # blank every fence, keeping the line count, so inline scanning covers prose only
     prose = ANY_FENCE.sub(lambda m: "\n" * m.group(0).count("\n"), text)
     found += [(prose[: m.start()].count("\n") + 1, m.group(2)) for m in INLINE_MATH.finditer(prose)]
     return found
 
 
 def _markdown_pages() -> list[Path]:
-    """The pages this convention governs: the site's sources, and the front page.
+    """The pages this convention applies to: the site's sources, and the front page.
 
-    ``paper/paper.md`` is deliberately not among them. Open Journals compiles it with
-    pandoc, which reads ``$...$`` and not the backtick form, so it has to stay in the
-    LaTeX spelling; its handful of expressions happen to satisfy GitHub's rules anyway
-    (each opens after a space, none carries a backslash escape).
+    ``paper/paper.md`` is excluded. Open Journals compiles it with pandoc, which reads
+    ``$...$`` and not the backtick form, so it must keep the LaTeX syntax. Its few
+    expressions nevertheless satisfy GitHub's rules (each opens after a space, none
+    contains a backslash escape).
     """
     pages = sorted((REPO_ROOT / "docs").rglob("*.md"))
     readme = REPO_ROOT / "README.md"
@@ -97,7 +97,7 @@ def _bare_dollars(text: str) -> list[tuple[int, str]]:
     """Line numbers of every ``$`` that is neither ``$`x`$`` math nor inside code.
 
     Scans left to right in the same order the writers' converter did, so a ``$`` is
-    reported only when no legitimate construct can claim it.
+    reported only when it belongs to no legitimate construct.
     """
     lines = text.split("\n")
     offsets = []
@@ -143,7 +143,7 @@ def _bare_dollars(text: str) -> list[tuple[int, str]]:
         at_line_start = False
 
         if char == "$":
-            # $`x`$ -- the run of backticks after the dollar must close the same way.
+            # $`x`$: the run of backticks after the dollar must close the same way.
             ticks = BACKTICKS.match(text, i + 1)
             if ticks:
                 close = text.find(ticks.group(0) + "$", ticks.end())
@@ -181,8 +181,8 @@ def test_no_bare_dollar_math(page: Path):
 @pytest.mark.parametrize("page", _markdown_pages(), ids=_page_ids())
 def test_display_math_uses_a_fence(page: Path):
     text = page.read_text(encoding="utf-8").replace("\r\n", "\n")
-    # A $$ delimiter would already have been reported as two bare dollars above; this
-    # names the display case specifically so the failure says what to write instead.
+    # A $$ delimiter would already have been reported as two bare dollars above. This
+    # test names the display case so that the failure states what to write instead.
     lines = [n for n, line in enumerate(text.split("\n"), 1) if "$$" in line]
     assert not lines, (
         f"{page.relative_to(REPO_ROOT).as_posix()} uses $$ for display math at line "
@@ -236,7 +236,7 @@ def test_hook_restores_the_dollar_form_arithmatex_reads():
     assert hook.on_page_markdown(r"a $`\alpha \, \beta`$ b") == r"a $\alpha \, \beta$ b"
     # An expression may be wrapped across two source lines.
     assert hook.on_page_markdown("x $`a +\nb`$ y") == "x $a +\nb$ y"
-    # The padding the writer adds around a body that starts with a backtick comes back off.
+    # The padding the writer adds around a body that starts with a backtick is removed.
     assert hook.on_page_markdown("$`` `a ``$") == "$`a$"
 
 
@@ -249,7 +249,7 @@ def test_hook_turns_a_math_fence_into_a_display_block():
 
 def test_hook_separates_back_to_back_math_fences():
     # Python-Markdown reads two $$ blocks with no blank line between them as one
-    # paragraph and hands arithmatex a single malformed expression.
+    # paragraph and passes arithmatex a single malformed expression.
     hook = _load_hook()
     out = hook.on_page_markdown("```math\nA = 1\n```\n```math\nB = 2\n```\n")
     assert re.search(r"\$\$\nA = 1\n\$\$\n\s*\n\s*\$\$\nB = 2\n\$\$", out), out

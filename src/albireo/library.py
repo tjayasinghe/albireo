@@ -7,22 +7,22 @@ A library is a published grid of synthetic spectra (BOSZ, Bohlin et al. 2017 and
 et al. 2024; POLLUX, Palacios et al. 2010; PHOENIX, Husser et al. 2013) reduced to the four
 quantities a label fit needs: the node labels, the normalized flux at each node, the
 continuum at each node, and the wavelength scale those are tabulated on. The medium of that
-wavelength scale is a required field of :class:`SpectralLibrary`. Everything else the
-upstream distributions carry (SEDs, stratifications, ionizing fluxes) is dropped at ingest.
+wavelength scale is a required field of :class:`SpectralLibrary`. Everything else in the
+upstream distributions (SEDs, stratifications, ionizing fluxes) is dropped at ingest.
 
 The module does not synthesize spectra: there is no line list, no model atmosphere and no
-radiative transfer. albireo reads grids computed elsewhere and cites them; bespoke synthesis
+radiative transfer. albireo reads grids computed elsewhere and cites them. Bespoke synthesis
 is reached through :mod:`albireo.handoff` and GSSP, iSpec, Korg.jl or PySME. Nor does the
-module guess the wavelength medium. Air and vacuum differ by ~83 km/s across the optical,
-the same order as the orbital semi-amplitudes albireo measures, and the distributions are
-not a reliable source: BOSZ 2017 was vacuum throughout while BOSZ 2024 is air above 200 nm,
-under the same name. :func:`line_core_medium` measures the convention from the spectra; the
-ingest paths use it to verify a declaration, not to supply one.
+module infer the wavelength medium. Air and vacuum differ by ~83 km/s across the optical,
+the same order as the orbital semi-amplitudes albireo measures. The distributions are not a
+reliable source: BOSZ 2017 was vacuum throughout while BOSZ 2024 is air above 200 nm, under
+the same name. :func:`line_core_medium` measures the convention from the spectra. The ingest
+paths use it to verify a declaration, not to supply one.
 
-Interpolation is in flux, not in model atmospheres, which is more accurate: on the
+Interpolation is in flux, not in model atmospheres, which is more accurate. On the
 250 K / 0.5 dex spacing BOSZ uses, Mészáros & Allende Prieto (2013) measured 0.19% scatter
 interpolating atmospheres against 0.051% interpolating fluxes linearly and 0.031% with a
-cubic. :func:`library_interpolator` therefore defaults to a cubic in flux space; an emulator
+cubic. :func:`library_interpolator` therefore defaults to a cubic in flux space. An emulator
 is not an evident improvement on it.
 
 Continua are stored and interpolated in the log. They are positive and span decades across
@@ -77,7 +77,7 @@ __all__ = [
 ]
 
 SUPPORTED_MEDIA = ("air", "vacuum")
-"""The two wavelength scales a library may declare. There is no third option and no default."""
+"""The two wavelength scales a library may declare. There is no default."""
 
 
 # ---------------------------------------------------------------------------
@@ -89,8 +89,8 @@ SUPPORTED_MEDIA = ("air", "vacuum")
 class SpectralLibrary:
     """A grid of synthetic spectra, standardized for label fitting.
 
-    Build-time container: plain NumPy, no tracing. The traced object is the interpolator
-    that :func:`library_interpolator` builds from it.
+    It is a build-time container: plain NumPy, no tracing. The traced object is the
+    interpolator that :func:`library_interpolator` builds from it.
 
     Attributes
     ----------
@@ -106,7 +106,7 @@ class SpectralLibrary:
     log_continuum
         Natural log of the continuum flux, same shape, in the upstream grid's unit. Only
         ratios between components enter the model, so the unit cancels, but two libraries
-        mixed in one fit must share it; ``meta["continuum_unit"]`` records it and the fit
+        mixed in one fit must share it. ``meta["continuum_unit"]`` records it and the fit
         checks.
     wave
         Wavelengths in Angstrom, shape ``(n_pix,)``, strictly increasing.
@@ -114,7 +114,7 @@ class SpectralLibrary:
         ``"air"`` or ``"vacuum"``. Required.
     meta
         Provenance: grid name, upstream version, retrieval date, checksum, microturbulence,
-        continuum unit, licence, citation. Carried into every template file written from a
+        continuum unit, licence, citation. Copied into every template file written from a
         fit, so the template remains reproducible.
     """
 
@@ -192,26 +192,26 @@ class SpectralLibrary:
     def resolving_power(self) -> float | None:
         """The resolving power the library's spectra are already broadened to, or ``None``.
 
-        A published grid is not an intrinsic spectrum: BOSZ is distributed at fixed
+        A published grid is not an intrinsic spectrum. BOSZ is distributed at fixed
         resolving powers, and every registry entry here is its ``R = 20,000`` file, so a
-        line in it already carries a Gaussian of ``sigma = c / (R 2 sqrt(2 ln 2))``,
-        6.37 km/s. Applying the full instrument profile to such a template broadens it
-        twice. The label fit therefore applies only the quadrature difference
-        ``sqrt(sigma_inst^2 - sigma_lib^2)`` wherever it convolves a template
-        (``docs/math.md`` §9.2a), and refuses a library at or below the instrument's
-        resolving power, which no convolution can undo.
+        line in it is already broadened by a Gaussian of
+        ``sigma = c / (R 2 sqrt(2 ln 2))``, 6.37 km/s. Applying the full instrument profile
+        to such a template broadens it twice. The label fit therefore applies only the
+        quadrature difference ``sqrt(sigma_inst^2 - sigma_lib^2)`` wherever it convolves a
+        template (``docs/math.md`` §9.2a), and rejects a library at or below the
+        instrument's resolving power, which no convolution can undo.
 
-        Read from ``meta["resolving_power"]`` when present (the key to set on a hand-built
-        library), otherwise from ``meta["resolution"]`` (the key the BOSZ ingest records).
-        ``None`` means an intrinsic-resolution grid, broadened by nothing but its own line
-        physics. Per source:
+        It is read from ``meta["resolving_power"]`` when present (the key to set on a
+        manually built library), otherwise from ``meta["resolution"]`` (the key the BOSZ
+        ingest records). ``None`` means an intrinsic-resolution grid, broadened only by its
+        line physics. Per source:
 
         - :func:`ingest_bosz` and :func:`fetch_library` for all four ``bosz2024-*``
           registry entries: 20,000, from ``meta["resolution"]``, which the cache, the
           wavelength sub-slice and every transform (``sliced``, ``in_medium``,
-          ``resampled_to``) carry unchanged.
+          ``resampled_to``) leave unchanged.
         - ``pollux-ob-smc24``: there is no ingest (:func:`ingest_pollux` raises), so a
-          library built by hand from that archive returns ``None`` unless its ``meta``
+          library built manually from that archive returns ``None`` unless its ``meta``
           declares ``"resolving_power"``. Declare it: ``None`` asserts an intrinsic grid.
         - :func:`albireo.simulate.synthetic_library` and any other container built
           without either key: ``None``. The toy libraries are intrinsic by construction.
@@ -242,8 +242,8 @@ class SpectralLibrary:
         """Sorted unique values per label axis if the nodes form a complete box, else None.
 
         A complete box means the node set is exactly the Cartesian product of its axes. A
-        BOSZ subset is such a set; a grid whose corners are cut away by physics, such as
-        POLLUX's OB models, is not. :func:`library_interpolator` dispatches on this.
+        BOSZ subset is such a set. A grid whose corners are missing for physical reasons,
+        such as POLLUX's OB models, is not. :func:`library_interpolator` dispatches on this.
         """
         axes = [np.unique(self.nodes[:, i]) for i in range(self.nodes.shape[1])]
         if int(np.prod([a.size for a in axes])) != self.n_nodes:
@@ -285,7 +285,7 @@ class SpectralLibrary:
         )
 
     def resampled_to(self, grid: LogGrid, *, medium: str) -> SpectralLibrary:
-        """Project onto a model grid, converting the wavelength scale on the way.
+        """Project onto a model grid, converting the wavelength scale.
 
         Uses flux-conserving pixel integration (:func:`albireo.operators.rebin_operator`)
         from the high-resolution library down to the model grid: a point sample would alias
@@ -293,10 +293,10 @@ class SpectralLibrary:
         variance ``dv^2 / 12`` (1.78 km^2/s^2 at ``dv = 4.63`` km/s) not shared with the
         data, since the epoch spectra are never box-averaged on the model grid. It is one of
         the five discrete steps whose ``(7/12) dv^2`` the epoch comparison removes from its
-        operator (:meth:`albireo.Fit.epoch_statistics`); left in, it alone would take about
-        8 km^2/s^2 from a fitted ``(v sin i)^2`` (``docs/math.md`` §9.2a).
+        operator (:meth:`albireo.Fit.epoch_statistics`). Left in, it alone would reduce a
+        fitted ``(v sin i)^2`` by about 8 km^2/s^2 (``docs/math.md`` §9.2a).
 
-        This moves the model onto the data's grid; the data are never resampled.
+        This moves the model onto the data's grid. The data are never resampled.
         """
         library = self.in_medium(medium)
         target = np.asarray(grid.wave, dtype=np.float64)
@@ -379,9 +379,9 @@ def _axis_weights(axis: jax.Array, value, cubic: bool):
     n = axis.shape[0]
     if n == 1:
         # A degenerate axis, for example a library sliced to one metallicity. The
-        # interpolant is constant along it, which is the only defensible reading: there is
-        # no second node. Without this branch the clip below produces an empty cell,
-        # lo == hi, and a 0/0 that propagates as a NaN through every pixel.
+        # interpolant is constant along it, because there is no second node. Without this
+        # branch the clip below produces an empty cell, lo == hi, and a 0/0 that propagates
+        # as a NaN through every pixel.
         return jnp.zeros(1, dtype=int), jnp.ones(1, dtype=jnp.float64)
     i = jnp.clip(jnp.searchsorted(axis, value, side="right") - 1, 0, n - 2)
     lo, hi = axis[i], axis[i + 1]
@@ -395,9 +395,9 @@ def _axis_weights(axis: jax.Array, value, cubic: bool):
     w_p1 = -1.5 * t3 + 2.0 * t2 + 0.5 * t
     w_p2 = 0.5 * t3 - 0.5 * t2
 
-    # Edge cells need a phantom node. Clamping it to the end node destroys linear
-    # reproduction there, and on a grid with only a handful of values per axis the cubic
-    # then loses to plain multilinear over about a third of the range. Extrapolating the
+    # Edge cells need a phantom node. Clamping it to the end node removes linear
+    # reproduction there, and on a grid with only a few values per axis the cubic is then
+    # less accurate than multilinear over about a third of the range. Extrapolating the
     # phantom linearly, f(-1) := 2 f(0) - f(1), keeps the interpolant exact on linear data
     # everywhere.
     at_low = i == 0
@@ -422,10 +422,10 @@ def _axis_weights(axis: jax.Array, value, cubic: bool):
 class BoxInterpolator:
     """Separable interpolation on a complete axis-product grid.
 
-    Multilinear or Catmull-Rom cubic (the default), applied to the flux itself. The cubic
+    It is multilinear or Catmull-Rom cubic (the default), applied to the flux. The cubic
     costs 4^k taps rather than 2^k. It is C^1 in the labels, which both L-BFGS and NUTS
-    require; it has local support, so it cannot ring across a Balmer jump; and on BOSZ's
-    spacing it halves the interpolation error (Mészáros & Allende Prieto 2013).
+    require. It has local support, so it cannot ring across a Balmer jump. On BOSZ's spacing
+    it halves the interpolation error (Mészáros & Allende Prieto 2013).
 
     Call with a label vector; returns ``(normalized, log_continuum)``, each ``(n_pix,)``.
 
@@ -445,7 +445,7 @@ class BoxInterpolator:
         out = []
         for values in (self.normalized, self.log_continuum):
             acc = values
-            # Contract one axis at a time: gather the stencil, then weight it away.
+            # Contract one axis at a time: gather the stencil, then sum it with the weights.
             for idx, w in stencils:
                 acc = jnp.tensordot(w, acc[idx], axes=(0, 0))
             out.append(acc)
@@ -469,8 +469,8 @@ class BoxInterpolator:
 
 
 # A hull vertex evaluates to a barycentric margin of either sign at the 1e-16 level (measured
-# -2.2e-16 over 400 triangulations of the test grids), so "inside the hull" is decided with
-# this slack. A node genuinely outside a grid's hull has a margin of order 1e-2.
+# -2.2e-16 over 400 triangulations of the test grids), so membership of the hull is decided
+# with this tolerance. A node outside a grid's hull has a margin of order 1e-2.
 HULL_MARGIN_TOL = 1e-12
 
 
@@ -479,26 +479,26 @@ HULL_MARGIN_TOL = 1e-12
 class SimplexInterpolator:
     """Barycentric interpolation over a Delaunay triangulation of scattered nodes.
 
-    For grids whose coverage is bounded by physics rather than by a box: POLLUX's OB models
-    have no cool, low-gravity corner, because no such star exists, so the axis product is not
-    the node set and :class:`BoxInterpolator` does not apply.
+    It is for grids whose coverage is bounded by physics rather than by a box. POLLUX's OB
+    models have no cool, low-gravity corner, because no such star exists, so the axis product
+    is not the node set and :class:`BoxInterpolator` does not apply.
 
     The triangulation is built once in NumPy. Under trace, barycentric coordinates are
     evaluated against every simplex by one batched affine map, and the containing simplex is
-    the one whose minimum coordinate is largest: a few thousand floating-point operations
-    for a realistic grid, jit- and vmap-safe with no callbacks. Outside the hull the weights
-    are clipped and renormalized, which extrapolates flat rather than diverging;
-    :meth:`hull_margin` is negative there, so the fit can detect it.
+    the one whose minimum coordinate is largest. This is a few thousand floating-point
+    operations for a realistic grid, and is jit- and vmap-safe with no callbacks. Outside the
+    hull the weights are clipped and renormalized, which extrapolates flat rather than
+    diverging. :meth:`hull_margin` is negative there, so the fit can detect it.
 
     A node is reproduced to rounding, not bit-for-bit: the barycentric coordinates are an
     affine transform applied to the point, so at a vertex they are ``1 - eps`` and ``eps``
     rather than ``1`` and ``0``. The error is ``eps`` times the spread of the stored rows
-    across that simplex's vertices: at the ulp level for a library whose neighbouring
+    across that simplex's vertices. It is at the ulp level for a library whose neighbouring
     spectra are alike (about one ``eps`` on the test grids, over 400 triangulations), and
-    growing with node-to-node roughness rather than with dimension. Which nodes come back
-    exact depends on the triangulation Qhull chose, which differs between scipy builds. The
-    box interpolator, whose node weights are exactly ``1`` and ``0`` by construction, is
-    bit-exact; code that needs that property should compare against the library row, not
+    grows with node-to-node roughness rather than with dimension. Which nodes are reproduced
+    exactly depends on the triangulation Qhull returns, which differs between scipy builds.
+    The box interpolator, whose node weights are exactly ``1`` and ``0`` by construction, is
+    bit-exact. Code that needs that property should compare against the library row, not
     an evaluation at the node. The same rounding puts :meth:`hull_margin` at a vertex
     within ``HULL_MARGIN_TOL`` of zero on either side.
 
@@ -625,21 +625,21 @@ def library_interpolator(
 
 
 # ---------------------------------------------------------------------------
-# Measuring what the interpolation costs
+# Measuring the interpolation error
 # ---------------------------------------------------------------------------
 
 
 def crossval_library(library: SpectralLibrary, *, method: str = "auto", seed: int = 0) -> dict:
     """Measure interpolation error by holding nodes out and predicting them.
 
-    The result decides whether a library needs a learned emulator. For comparison, on a
+    The result indicates whether a library needs a learned emulator. For comparison, on a
     250 K / 0.5 dex FGK grid Mészáros & Allende Prieto (2013) report 0.051% for linear and
     0.031% for cubic flux interpolation, against roughly 0.1% for a Payne-style network. A
     library near those numbers does not require an emulator; a coarse, strongly non-linear
     grid may.
 
     For a complete box the held-out set is every other node along each axis, so the
-    surviving grid has twice the spacing: a pessimistic proxy, since the real fit
+    remaining grid has twice the spacing. This is a pessimistic proxy, since the fit
     interpolates on the full grid. For irregular coverage a random fifth of the nodes is held
     out and the triangulation rebuilt without them.
 
@@ -680,9 +680,9 @@ def crossval_library(library: SpectralLibrary, *, method: str = "auto", seed: in
     predict = jax.jit(jax.vmap(interpolator))
 
     test = np.flatnonzero(~keep)
-    # Held-out nodes of a lattice sit on facets of the reduced hull, at margin zero to
-    # rounding; without the tolerance the triangulation, and so the scipy build, would decide
-    # which of them are counted, and n_tested and rms would move with it.
+    # Held-out nodes of a lattice are on facets of the reduced hull, at margin zero to
+    # rounding. Without the tolerance the triangulation, and so the scipy build, would
+    # determine which of them are counted, and n_tested and rms would change with it.
     margin = np.asarray(jax.jit(jax.vmap(interpolator.hull_margin))(library.nodes[test]))
     inside = margin >= -HULL_MARGIN_TOL
     test = test[inside]
@@ -706,8 +706,8 @@ def crossval_library(library: SpectralLibrary, *, method: str = "auto", seed: in
 # ---------------------------------------------------------------------------
 
 _MEDIUM_LINES: tuple[tuple[str, float], ...] = (
-    # Strong, isolated, and present in essentially every optical stellar spectrum.
-    # Vacuum wavelengths in Angstrom; the air counterparts are derived with albireo's own
+    # Strong, isolated, and present in nearly every optical stellar spectrum.
+    # Vacuum wavelengths in Angstrom; the air counterparts are derived with albireo's
     # converter, so a library that agrees with one disagrees with the other by ~1.5 A.
     ("H-delta", 4102.8991),
     ("H-gamma", 4341.6837),
@@ -721,12 +721,12 @@ _MEDIUM_LINES: tuple[tuple[str, float], ...] = (
 def line_core_medium(
     wave, flux, *, window_angstrom: float = 3.0, decisive: float = 4.0
 ) -> dict[str, Any]:
-    """Decide whether a spectrum is on the air or the vacuum scale, by measuring it.
+    """Determine whether a spectrum is on the air or the vacuum scale, by measuring it.
 
     Locates the core of each strong line in range, refines it with a parabola through the
     three samples around the minimum, and compares the result against both conventions. The
-    two differ by ~1.5 Angstrom in the optical while a correctly identified core lands within
-    a few hundredths, so the verdict is not marginal. BOSZ requires the measurement: the
+    two differ by ~1.5 Angstrom in the optical while a correctly identified core is within
+    a few hundredths, so the result is not marginal. BOSZ requires the measurement: the
     2017 release was vacuum throughout and the 2024 release is air above 200 nm, under one
     name (Bohlin et al. 2017; Mészáros et al. 2024).
 
@@ -737,8 +737,8 @@ def line_core_medium(
     window_angstrom
         Half-width of the search window around each reference position.
     decisive
-        Required ratio between the losing and winning mean residuals. Below it the verdict
-        is refused rather than guessed.
+        Required ratio of the larger mean residual to the smaller. Below it an error is
+        raised.
 
     Returns
     -------
@@ -749,7 +749,7 @@ def line_core_medium(
     Raises
     ------
     ValueError
-        If fewer than two reference lines are covered, or the verdict is not decisive; the
+        If fewer than two reference lines are covered, or the result is not decisive; the
         medium must then be established another way.
 
     References
@@ -814,9 +814,9 @@ def line_core_medium(
 class _Library:
     """One named library: its coverage, its source, and its citation.
 
-    ``version`` is a cache-busting token, not the upstream's version. It is bumped whenever
-    the build changes (a different band, a different node box, a fixed axis moved), because
-    the cached ``.npz`` is named after it; otherwise a stale cache would look fresh.
+    ``version`` is a cache key, not the upstream's version. It is incremented whenever the
+    build changes (a different band, a different node box, a fixed axis moved), because the
+    cached ``.npz`` is named after it. Otherwise a stale cache would be reused.
     """
 
     name: str
@@ -840,8 +840,8 @@ class _Library:
 
 # The FGK box is the one Mészáros & Allende Prieto (2013) benchmarked interpolation on,
 # 250 K in Teff and 0.5 dex in log g, so their measured 0.051% linear and 0.031% cubic apply
-# to this grid directly rather than by analogy. Verified against the archive listing on
-# 2026-08-27: Teff runs 4000..7000 in exact 250 K steps there.
+# to this grid directly. Verified against the archive listing on 2026-08-27: Teff runs
+# 4000..7000 in exact 250 K steps there.
 _BOSZ_FGK_AXES: dict[str, Any] = {
     "teff": [float(t) for t in range(4000, 7001, 250)],
     "logg": [3.0, 3.5, 4.0, 4.5, 5.0],
@@ -849,10 +849,10 @@ _BOSZ_FGK_AXES: dict[str, Any] = {
 }
 _BOSZ_FIXED: dict[str, Any] = {"alpha": 0.0, "carbon": 0.0, "vmicro": 2, "resolution": 20000}
 
-# The hot box is one uniform 250 K axis from the ceiling of the FGK box to 10,000 K, so the
-# Catmull-Rom weights, which assume equal node spacing, stay valid across the whole range.
+# The hot box is one uniform 250 K axis from the top of the FGK box to 10,000 K, so the
+# Catmull-Rom weights, which assume equal node spacing, are valid across the whole range.
 # Verified against the archive listing on 2026-09-10: every one of these 364 nodes is
-# published at a+0.00, c+0.00, v2, r20000, with no hole to fill and none to drop.
+# published at a+0.00, c+0.00, v2, r20000, with no gap to fill and no node to drop.
 # log g starts at 3.5 so that the MARCS half is plane-parallel throughout, the same geometry
 # ATLAS9 uses, which removes the spherical-to-plane-parallel step of the FGK box from this one.
 _BOSZ_HOT_AXES: dict[str, Any] = {
@@ -873,9 +873,9 @@ _BOSZ_CAVEATS = (
 
 # Confirmed against the archive listing on 2026-08-27: this one model is absent while every
 # carbon-varied version of it is present, so it is a gap in the published calculation rather
-# than a naming error here. Since D62 the node is filled by linear interpolation along [M/H]
-# between its published neighbours at -1.0 and -0.5, so that the grid is a complete box and
-# the cubic interpolant applies; the library's metadata names it.
+# than a naming error here. The node is filled by linear interpolation along [M/H] between
+# its published neighbours at -1.0 and -0.5 (D62), so that the grid is a complete box and
+# the cubic interpolant applies. The library's metadata names it.
 _BOSZ_GAPS = (
     "Teff 5750 K, log g 3.0, [M/H] -0.75 is not published (a+0.00, c+0.00, v2); filled by "
     "linear interpolation along [M/H] between its neighbours at -1.0 and -0.5.",
@@ -886,8 +886,8 @@ _BOSZ_RECOMPUTE_NOTE = (
     "strength. Anything cached before that date is the earlier calculation."
 )
 
-# Both RVS entries state this, and they must state the same thing: the band is the one place
-# where the library's air scale meets a vacuum-scale instrument.
+# Both RVS entries state this, and they must state the same thing: this is the only band in
+# which the library's air scale is compared with a vacuum-scale instrument.
 _BOSZ_RVS_MEDIUM_CAVEAT = (
     "Gaia publishes RVS spectra on the vacuum scale and this library is air. Convert with "
     "SpectralLibrary.in_medium('vacuum') before comparing the two."
@@ -917,7 +917,7 @@ _BOSZ_HOT_CAVEATS = (
     "far less affected than the continuum, but log_continuum in this band is "
     "version-sensitive at the top of the box, and it is log_continuum that sets the "
     "light ratio.",
-    # Measured on the archive index on 2026-09-10: the 364 shards of this box carry
+    # Measured on the archive index on 2026-09-10: the 364 shards of this box have
     # Last-Modified 2025-04-03 to 2025-05-25, while their directories were rewritten
     # 2025-09-24 to 2025-10-03.
     "The archive's shards for this box carry Last-Modified dates of April and May 2025, "
@@ -945,7 +945,7 @@ _LIBRARIES: dict[str, _Library] = {
         upstream_note=_BOSZ_RECOMPUTE_NOTE,
         caveats=_BOSZ_CAVEATS,
         known_gaps=_BOSZ_GAPS,
-        # Measured on the built files on 2026-09-10, not estimated.
+        # Measured on the built files on 2026-09-10.
         download_mb=621.0,
         cache_mb=51.0,
     ),
@@ -965,7 +965,7 @@ _LIBRARIES: dict[str, _Library] = {
         upstream_note=_BOSZ_RECOMPUTE_NOTE,
         caveats=(*_BOSZ_CAVEATS, _BOSZ_RVS_MEDIUM_CAVEAT),
         known_gaps=_BOSZ_GAPS,
-        # Measured on the built files on 2026-09-10, not estimated.
+        # Measured on the built files on 2026-09-10.
         download_mb=621.0,
         cache_mb=5.1,
     ),
@@ -1010,7 +1010,7 @@ _LIBRARIES: dict[str, _Library] = {
         caveats=(*_BOSZ_HOT_CAVEATS, _BOSZ_RVS_MEDIUM_CAVEAT),
         known_gaps=(),
         # The two hot entries share their raw shards, so building the second after the
-        # first costs no download.
+        # first requires no download.
         download_mb=532.0,
         cache_mb=4.0,
     ),
@@ -1054,10 +1054,10 @@ def library_names() -> list[str]:
 
 
 def library_info(name: str) -> dict[str, Any]:
-    """Everything the registry knows about one library, without downloading it.
+    """The registry entry for one library, without downloading it.
 
-    Carries the licence, the citation, the node box, the pinned axes, the download and
-    cache sizes, and the caveats that belong beside any number the library produces.
+    It includes the licence, the citation, the node box, the pinned axes, the download and
+    cache sizes, and the caveats that should accompany any number the library produces.
     """
     lib = _lookup_library(name)
     return {
@@ -1101,7 +1101,7 @@ def _n_nodes(lib: _Library) -> int | None:
 
 
 def _library_cache_path(lib: _Library) -> Path:
-    # The version token is part of the filename: a re-pinned registry then cannot read a
+    # The version token is part of the filename, so a redefined registry entry cannot read a
     # cache built under the old definition.
     return cache_dir() / "libraries" / f"{lib.name}-v{lib.version}.npz"
 
@@ -1140,9 +1140,9 @@ def clear_library_cache(name: str | None = None) -> list[Path]:
 def _content_digest(library: SpectralLibrary) -> str:
     """A hash of the library's content, not of the file containing it.
 
-    Taken over the arrays in their stored precision, so it survives a save/load round trip
-    and two machines that built the same library agree on it whatever their npz compression
-    produced. The file itself cannot be hashed: the digest is recorded inside it.
+    It is taken over the arrays in their stored precision, so a save/load round trip
+    preserves it, and two machines that built the same library agree on it whatever their npz
+    compression produced. The file cannot be hashed because the digest is recorded inside it.
     """
     digest = hashlib.sha256()
     digest.update("|".join(library.label_names).encode())
@@ -1208,7 +1208,7 @@ def load_library(path) -> SpectralLibrary:
 # Every fact encoded below was checked against the live archive on 2026-08-27 rather than
 # read from a paper, because two of them are not what the documentation would predict:
 #
-#   * Teff is NOT zero-padded. The token is "t6000" and "t10000", not "t06000".
+#   * Teff is not zero-padded. The token is "t6000" and "t10000", not "t06000".
 #   * The atmosphere code varies across the grid: "ms" (MARCS spherical) below log g 3.5,
 #     "mp" (MARCS plane-parallel) at and above it, "ap" (ATLAS9) above 8000 K, with both
 #     families published in the 7500-8000 K overlap.
@@ -1220,8 +1220,8 @@ def load_library(path) -> SpectralLibrary:
 def _bosz_atmosphere(teff: float, logg: float) -> str:
     """Which model family BOSZ published at this node.
 
-    MARCS below 8000 K and ATLAS9 above it, with MARCS split by geometry at log g 3.5.
-    Both exist inside the 7500-8000 K overlap; MARCS is chosen there, so a library below
+    It is MARCS below 8000 K and ATLAS9 above it, with MARCS split by geometry at log g 3.5.
+    Both exist inside the 7500-8000 K overlap. MARCS is chosen there, so a library below
     8000 K is one family throughout and never interpolates across a change of code.
     """
     if teff <= 8000.0:
@@ -1270,8 +1270,8 @@ def _node_key(node) -> tuple[float, ...]:
 def _bracketing_neighbours(nodes, index: int, index_of, label_names):
     """Two published neighbours of ``nodes[index]`` along one axis, and the linear weight.
 
-    The axes are tried metallicity first, then gravity, then temperature: over one grid
-    step a spectrum varies least, and most nearly linearly, along [M/H]. Returns
+    The axes are tried metallicity first, then gravity, then temperature, because over one
+    grid step a spectrum varies least, and most nearly linearly, along [M/H]. Returns
     ``(j_lo, j_hi, weight, axis)`` with the filled spectrum
     ``(1 - weight) * spectrum[j_lo] + weight * spectrum[j_hi]``, or ``None`` when no axis
     has a published node on both sides (a corner of the box, or two gaps in a row).
@@ -1329,8 +1329,8 @@ def ingest_bosz(
     :func:`fetch_library` reads. The URLs are deterministic, so the build is reproducible.
 
     The medium is measured from the assembled spectra with :func:`line_core_medium` and
-    checked against the registry's declaration. A disagreement raises, because it means the
-    upstream convention has changed.
+    checked against the registry's declaration. A disagreement raises an error, because it
+    means the upstream convention has changed.
 
     References
     ----------
@@ -1383,15 +1383,15 @@ def ingest_bosz(
         )
         targets.append((url, raw / Path(url).name))
 
-    # A published grid is not always the box its axes imply: BOSZ is missing exactly one
-    # model in this box, (5750 K, log g 3.0, [M/H] -0.75), while every carbon-varied version
-    # of it is present, so it is a gap in the calculation rather than a naming error. One
-    # gap costs the whole grid its box structure and with it the cubic interpolant: the
-    # fallback is piecewise linear over a triangulation, whose kinks stop a label fit 20 to
-    # 150 K from a perfect spectrum of the same grid (D62). A missing node that two
-    # published neighbours bracket along one axis is therefore filled by linear
-    # interpolation between them, named, and recorded in the metadata; one that cannot be
-    # bracketed is dropped and recorded, as before.
+    # A published grid is not always the box its axes imply. BOSZ is missing one model in
+    # this box, (5750 K, log g 3.0, [M/H] -0.75), while every carbon-varied version of it is
+    # present, so it is a gap in the calculation rather than a naming error. With one gap
+    # the grid is not a complete box and the cubic interpolant does not apply. The fallback
+    # is piecewise linear over a triangulation, whose kinks stop a label fit 20 to 150 K
+    # from a perfect spectrum of the same grid (D62). A missing node that two published
+    # neighbours bracket along one axis is therefore filled by linear interpolation between
+    # them, named, and recorded in the metadata. One that cannot be bracketed is dropped and
+    # recorded.
     missing: list[int] = []
     done = 0
     with ThreadPoolExecutor(max_workers=max(1, int(jobs))) as pool:
@@ -1518,8 +1518,8 @@ def ingest_bosz(
 def _verify_declared_medium(library: SpectralLibrary, lib: _Library) -> None:
     """Check the registry's medium against the spectra, where the band allows it.
 
-    A band too narrow to hold two reference lines, such as the RVS window, is not an error:
-    the check cannot run, and the declaration rests on a measurement in a wider band.
+    A band too narrow to contain two reference lines, such as the RVS window, is not an
+    error. The check cannot run, and the declaration relies on a measurement in a wider band.
     """
     middle = library.normalized[library.normalized.shape[0] // 2]
     try:
@@ -1536,12 +1536,13 @@ def _verify_declared_medium(library: SpectralLibrary, lib: _Library) -> None:
 
 
 def ingest_pollux(archive_path, name: str = "pollux-ob-smc24") -> SpectralLibrary:
-    """Build the POLLUX OB library from a hand-downloaded archive.
+    """Build the POLLUX OB library from a manually downloaded archive.
 
     Not implemented. POLLUX has no stable download URL (its collections are served through
     a form that posts to ``/download/``), so the archive cannot be fetched here, and a
-    parser written against an unseen file format would be a guess. The registry entry, the
-    citation and the caveats are in place; the reader follows once the archive is available.
+    parser written without seeing the file format could not be verified. The registry entry,
+    the citation and the caveats are in place. The reader will be added once the archive is
+    available.
 
     References
     ----------
@@ -1572,31 +1573,31 @@ def fetch_library(
     """Load a named library, downloading and building it on first use.
 
     The build is cached under :func:`albireo.examples.cache_dir` and reused thereafter, so
-    the cost is paid once per machine. ``$ALBIREO_DATA_DIR`` redirects the cache, which also
-    selects a shared or pre-populated directory on a cluster.
+    the download and build run once per machine. ``$ALBIREO_DATA_DIR`` redirects the cache,
+    which also selects a shared or pre-populated directory on a cluster.
 
     Parameters
     ----------
     name
         One of :func:`library_names`.
     wave_range
-        Optional sub-slice, in Angstrom, within the library's own band, applied after
-        loading. Widening is refused: the band is what was downloaded, and silently
-        returning less than was asked for would be worse than an error.
+        Optional sub-slice, in Angstrom, within the library's band, applied after loading.
+        Widening raises an error: the band is what was downloaded, and silently returning
+        less than was requested would be worse than an error.
     progress
-        Print download and build progress. On by default, since downloads run to hundreds
-        of megabytes.
+        Print download and build progress. On by default, since downloads amount to
+        hundreds of megabytes.
     jobs
         Parallel downloads during a build.
 
     Notes
     -----
     The cached build is checksummed on every load against the digest recorded when it was
-    written, so later corruption is caught. The upstream shards are verified structurally,
-    and the assembled library has its wavelength medium measured rather than trusted. No
-    registry-level pin under a DOI exists yet; until then two machines can compare
-    ``library.meta["content_sha256"]``, a hash of the arrays themselves and therefore
-    reproducible across machines, to confirm they built the same library.
+    written, so later corruption is detected. The upstream shards are verified structurally,
+    and the assembled library has its wavelength medium measured rather than assumed. No
+    registry-level pin under a DOI exists yet. Until one does, two machines can compare
+    ``library.meta["content_sha256"]``, a hash of the arrays and therefore reproducible
+    across machines, to confirm they built the same library.
     """
     lib = _lookup_library(name)
     path = _library_cache_path(lib)
@@ -1626,9 +1627,9 @@ def fetch_library(
     save_library(library, path)
     if progress:
         print(f"albireo: cached {name!r} ({path.stat().st_size / 1e6:.1f} MB) at {path}")
-    # Read back what was just written rather than returning the in-memory build. Fluxes are
-    # stored as float32, so the two differ in the last few digits, and a function whose
-    # precision depends on whether the cache was warm is a defect.
+    # Read back the written file rather than returning the in-memory build. Fluxes are
+    # stored as float32, so the two differ in the last few digits, and the result must not
+    # depend on whether the cache already existed.
     return _subset(load_library(path), wave_range, lib)
 
 

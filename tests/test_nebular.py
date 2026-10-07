@@ -2,18 +2,17 @@
 
 Four groups of assertions:
 
-1. *Structure* — the component is appended last, its shift law is the mirror of the
-   telluric one (static in the **barycentric** frame), and the θ-path swaps reproduce a
+1. Structure: the component is appended last, its shift law is the mirror of the
+   telluric one (static in the barycentric frame), and the θ-path swaps reproduce a
    fresh :func:`albireo.forward.build_problem` exactly.
-2. *Exactness* — the forward model reproduces the simulator's injection to float
+2. Exactness: the forward model reproduces the simulator's injection to float
    precision, and the D28 band assembly still equals the matrix-free operator with a
    nebular column present.
-3. *The per-pixel prior* — ``tau_profile`` / ``eta_profile`` against a dense
+3. The per-pixel prior: ``tau_profile`` / ``eta_profile`` against a dense
    construction, including the determinant recursion the marginal likelihood uses.
-4. *The point of the exercise* — an unmodelled nebular line leaks into the stellar
-   components as a spurious core-fill, and the component removes it. That test is the
-   reason this file exists; everything above it is the scaffolding that makes it
-   trustworthy.
+4. Purpose: an unmodelled nebular line is absorbed into the stellar components as a
+   spurious core-fill, and the component removes it. This is the main test of the
+   file. The groups above it verify the model it relies on.
 """
 
 from __future__ import annotations
@@ -50,8 +49,8 @@ from albireo.simulate import (
     synthetic_telluric_spectrum,
 )
 
-# H-beta, because it is where the problem actually bites: a nebular emission line sitting
-# in the core of the broad Balmer absorption every massive star has.
+# H-beta is used because the problem arises there: a nebular emission line in the core
+# of the broad Balmer absorption that every massive star has.
 HBETA = 4861.33
 GRID = ab.LogGrid.from_wavelength_range(4838.0, 4886.0, dv_kms=5.5)
 BJD = np.array([0.4, 1.3, 2.1, 3.0, 3.8, 4.6, 5.5, 6.2, 7.1, 8.0, 8.8, 9.6])
@@ -78,8 +77,8 @@ def _gaussian_line(center_angstrom: float, depth: float, sigma_kms: float) -> np
 def _stellar_components() -> list[np.ndarray]:
     """Two stars, each with a broad H-beta absorption plus some metal lines.
 
-    Broad and deep on purpose: the whole question is whether a narrow emission line in
-    the core of this profile ends up in the star or in the nebula.
+    The absorption is broad and deep because the tests check whether a narrow emission
+    line in the core of this profile is assigned to the star or to the nebula.
     """
     primary = _gaussian_line(HBETA, -0.55, 95.0) + synthetic_deviation_spectrum(
         GRID, n_lines=6, depth_range=(0.03, 0.12), sigma_v_range=(12.0, 25.0), seed=11
@@ -128,8 +127,8 @@ NEB_WINDOW = nebular_windows(lines=[HBETA], halfwidth_kms=500.0)
 def _prior(n_comp: int, *, confine: bool = False) -> SmoothnessPrior:
     """Stellar entries, plus a softer window-confined one when the nebular component is on.
 
-    The *stellar* entries are identical either way, so every with/without comparison
-    below differs in the model and in nothing else.
+    The stellar entries are identical in both cases, so every with/without comparison
+    below differs only in the model.
     """
     tau = np.full(n_comp, 200.0)
     eta = np.full(n_comp, 2.0)
@@ -149,7 +148,7 @@ def _prior(n_comp: int, *, confine: bool = False) -> SmoothnessPrior:
 
 @pytest.mark.parametrize("frame", ["barycentric", "topocentric"])
 def test_component_is_appended_last_with_the_barycentric_velocity_law(frame):
-    """Order is stellar, telluric, nebular — and the nebular law mirrors the telluric one."""
+    """Order is stellar, telluric, nebular, and the nebular law mirrors the telluric one."""
     ds, _ = _simulate(frame=frame, telluric=synthetic_telluric_spectrum(GRID, seed=9))
     problem = build_problem(
         GRID,
@@ -177,7 +176,7 @@ def test_component_is_appended_last_with_the_barycentric_velocity_law(frame):
 
 
 def test_nebular_velocity_shifts_the_component_on_the_model_grid():
-    """``nebular_v_kms`` moves where the component's lines land, in either frame."""
+    """``nebular_v_kms`` shifts the component's lines on the model grid, in either frame."""
     ds, _ = _simulate()
     common = dict(
         velocities=_orbit().component_velocities(BJD),
@@ -193,7 +192,7 @@ def test_nebular_velocity_shifts_the_component_on_the_model_grid():
 
 @pytest.mark.parametrize("frame", ["barycentric", "topocentric"])
 def test_theta_swaps_reproduce_a_fresh_build(frame):
-    """``with_velocities`` / ``with_light_fractions`` leave the nebular column alone."""
+    """``with_velocities`` / ``with_light_fractions`` leave the nebular column unchanged."""
     ds, _ = _simulate(frame=frame)
     amps = _amplitudes()
     vel = _orbit().component_velocities(BJD)
@@ -358,7 +357,7 @@ def test_profiled_prior_logdet_matches_dense():
 
 
 def test_uniform_profile_is_the_unprofiled_prior():
-    """A profile of ones must be bit-for-bit the v1 prior, not merely close."""
+    """A profile of ones must be bit-for-bit the v1 prior."""
     n = 30
     tau, eta = np.array([2.0, 5.0]), np.array([0.3, 1.7])
     plain = SmoothnessPrior(tau, eta)
@@ -419,7 +418,7 @@ def test_window_helpers():
 
 
 def test_window_profile_confines_the_recovered_component():
-    """With a windowed ridge the nebular spectrum is pinned to the continuum outside it."""
+    """With a windowed ridge the nebular spectrum is held at the continuum outside the window."""
     ds, truth = _simulate()
     problem = build_problem(
         GRID,
@@ -438,7 +437,7 @@ def test_window_profile_confines_the_recovered_component():
     outside_confined = np.max(np.abs(np.asarray(confined.d_hat)[2][~window]))
     assert outside_confined < 1e-3, f"nebular leaks outside its window: {outside_confined:.2e}"
     assert outside_confined < 0.05 * outside_free
-    # Inside the window the line survives the confinement essentially untouched.
+    # Inside the window the confinement leaves the line nearly unchanged.
     peak = np.max(np.asarray(confined.d_hat)[2][window])
     assert peak > 0.3, f"the confined component lost its line (peak {peak:.3f})"
 
@@ -475,8 +474,8 @@ def _conjunction_time() -> float:
 
 
 def _theta(*, nebular: bool) -> dict:
-    """θ at the injected orbit. ``secosw = sesinw = 1e-3``, never 0 — the parameterization
-    is singular at exactly the origin (design.md D39)."""
+    """θ at the injected orbit. ``secosw = sesinw = 1e-3``, never 0, because the
+    parameterization is singular at the origin (design.md D39)."""
     theta = {
         "period": jnp.asarray(P_TRUE),
         "t_conj": jnp.asarray(_conjunction_time()),
@@ -518,11 +517,11 @@ def test_site_requires_the_component():
 
 
 def test_inferred_hyperparameters_keep_the_window_profile():
-    """ML-II replaces the *scalars*; the profile is structure and must survive.
+    """ML-II replaces the scalars; the profile is structure and must be kept.
 
-    Regression test: dropping the profile here would silently un-confine a windowed
-    component the moment ``log_tau``/``log_eta`` were sampled — the confinement would
-    still be configured, still be documented, and simply not happen.
+    Regression test. If the profile were dropped here, sampling ``log_tau``/``log_eta``
+    would remove the confinement of a windowed component without an error, while the
+    confinement remained configured and documented.
     """
     ds, _ = _simulate()
     model = _model(ds, nebular=True, confine=True)
@@ -536,15 +535,15 @@ def test_inferred_hyperparameters_keep_the_window_profile():
     np.testing.assert_allclose(
         np.asarray(prior.eta_profile), np.asarray(model.fixed_prior.eta_profile)
     )
-    # And it reaches the answer: the confined component stays at the continuum outside
-    # its window, which an un-profiled prior would not do.
+    # The profile is also applied: the confined component stays at the continuum outside
+    # its window, which would not happen with an un-profiled prior.
     window = window_profile(GRID.wave, NEB_WINDOW) == 1.0
     d_hat = np.asarray(model.marginal(theta).d_hat)
     assert np.max(np.abs(d_hat[2][~window])) < 1e-3
 
 
 # ---------------------------------------------------------------------------
-# 5. Why the component exists: the core-fill it removes
+# 5. The core-fill that the component removes
 # ---------------------------------------------------------------------------
 
 
@@ -552,9 +551,9 @@ def test_inferred_hyperparameters_keep_the_window_profile():
 def core_fill():
     """Disentangle the same data with and without the nebular component, orbit fixed.
 
-    Holding the orbit at truth isolates the claim being tested — this is a statement
-    about the *spectra*, not about whether the orbit survives (which
-    :func:`test_joint_map_recovers_orbit_and_amplitudes` covers separately).
+    The orbit is held at the injected values so that the comparison concerns only the
+    spectra. Whether the orbit is recovered is tested separately in
+    :func:`test_joint_map_recovers_orbit_and_amplitudes`.
     """
     ds, truth = _simulate()
     vel = truth.velocities
@@ -572,9 +571,9 @@ def core_fill():
 def _combination_error(d_hat, truth) -> np.ndarray:
     """Light-weighted stellar combination minus truth, with the low-frequency offset removed.
 
-    The combination is what constant light fractions leave observable (math.md §5.1),
-    and its overall level is set by the ridge rather than by the data, so comparing the
-    *shape* is the only honest comparison.
+    The combination is what constant light fractions leave observable (math.md §5.1).
+    Its overall level is set by the ridge rather than by the data, so only its shape is
+    compared.
     """
     truth_comb = ELL @ np.stack([np.asarray(c) for c in truth.components])
     err = (ELL @ np.asarray(d_hat)[:2]) - truth_comb
@@ -588,7 +587,7 @@ def _line_core() -> np.ndarray:
 
 
 def test_unmodelled_nebular_emission_fills_the_stellar_line_core(core_fill):
-    """The whole point: without the component the emission is absorbed by the stars."""
+    """Without the component the emission is absorbed into the stellar spectra."""
     truth, res_without, res_with = core_fill
     core = _line_core()
     assert core.sum() > 3, "line-core mask is degenerate"
@@ -598,8 +597,8 @@ def test_unmodelled_nebular_emission_fills_the_stellar_line_core(core_fill):
 
     fill_without = float(np.mean(err_without[core]))
     fill_with = float(np.mean(err_with[core]))
-    # Unmodelled: a *positive* (emission-like) bias in the core of an absorption line —
-    # exactly the artificial narrowing the literature reports.
+    # Unmodelled: a positive (emission-like) bias in the core of an absorption line,
+    # which is the artificial narrowing the literature reports.
     assert fill_without > 0.05, f"expected a visible core-fill, got {fill_without:+.4f}"
     assert abs(fill_with) < 0.2 * fill_without, (
         f"the component did not remove the core-fill: {fill_with:+.4f} vs {fill_without:+.4f}"
@@ -611,11 +610,11 @@ def test_unmodelled_nebular_emission_fills_the_stellar_line_core(core_fill):
 
 
 def test_the_core_fill_costs_equivalent_width(core_fill):
-    """The quantity that actually propagates: the H-beta equivalent width.
+    """The quantity that propagates is the H-beta equivalent width.
 
-    The disentangled spectra are fed to an atmosphere code, so a filled core is not an
-    aesthetic problem — it is a systematically understated line strength, and gravity
-    from a Balmer profile is about as sensitive to that as a measurement gets.
+    The disentangled spectra are passed to an atmosphere code, so a filled core is a
+    systematically underestimated line strength, and a gravity derived from a Balmer
+    profile is highly sensitive to it.
     """
     truth, res_without, res_with = core_fill
     truth_comb = ELL @ np.stack([np.asarray(c) for c in truth.components])
@@ -652,8 +651,8 @@ def test_recovered_nebular_spectrum_matches_the_injection(core_fill):
 def _map_fit(model, *, nebular: bool, max_steps: int):
     """ML-II MAP over the orbit, the hyperparameters and (if present) the amplitudes.
 
-    Identical priors and starting point either way, apart from the sites the extra
-    component owns — so the two fits differ in the model and in nothing else.
+    The priors and the starting point are identical in both cases, apart from the sites
+    of the extra component, so the two fits differ only in the model.
     """
     n_comp = 3 if nebular else 2
     tau0 = np.array([200.0, 200.0, 8.0])[:n_comp]
@@ -662,9 +661,9 @@ def _map_fit(model, *, nebular: bool, max_steps: int):
         "t_conj": dist.Normal(_conjunction_time() + 0.01, 0.05),
         "secosw": dist.Uniform(-1.0, 1.0),
         "sesinw": dist.Uniform(-1.0, 1.0),
-        # Wide enough that a failing fit lands at an optimum rather than on a rail:
-        # a nebular-blind fit drives K_2 down hard, and a bound it hits would be
-        # reporting the prior instead of the failure.
+        # Wide enough that a failing fit converges to an optimum rather than to a bound.
+        # A nebular-blind fit lowers K_2 strongly, and a value at a bound would be set
+        # by the prior instead of by the failure.
         "k": dist.Uniform(np.array([10.0, 5.0]), np.array([90.0, 70.0])),
         "log_tau": dist.Normal(np.log(tau0), 3.0),
         "log_eta": dist.Normal(np.full(n_comp, np.log(2.0)), 3.0),
@@ -694,12 +693,12 @@ def joint_fits():
 
 
 def test_k2_scan_carries_the_component_through_both_models():
-    """The faint-companion scan is a matched filter for exactly this contaminant.
+    """The faint-companion scan is a matched filter for this contaminant.
 
-    A static emission line is what a companion at ``K_2 = 0`` looks like, so a scan with
-    nowhere to put it will happily report one. The plumbing under test is the prior
-    slicing: the null model drops the *companion* entry and keeps the nebular one, and
-    it is one index off from the pre-D40 version.
+    A static emission line resembles a companion at ``K_2 = 0``, so a scan whose model
+    has no nebular component reports a companion. The code under test is the prior
+    slicing: the null model drops the companion entry and keeps the nebular one, and
+    the slicing is one index off from the pre-D40 version.
     """
     k1, k2_true = 14.0, 44.0
     ell = np.array([0.9, 0.1])
@@ -765,16 +764,16 @@ def test_joint_map_recovers_orbit_and_amplitudes(joint_fits):
     for i, bound in enumerate((0.01, 0.015)):
         rel = abs(k_map[i] - K_TRUE[i]) / K_TRUE[i]
         assert rel < bound, f"K_{i + 1} off by {100 * rel:.2f}% (target < {100 * bound:.1f}%)"
-    # Measured 0.15% and 0.29%. The secondary gets the looser bound because it carries
-    # 30% of the light in a 48 A window; both are set about 5x off the measurement.
+    # Measured 0.15% and 0.29%. The secondary has the looser bound because it has
+    # 30% of the light in a 48 A window. Both bounds are about 5x the measured value.
     assert abs(float(fit.params["period"]) - P_TRUE) < 2e-3
     assert float(fit.params["ecc"]) < 0.02
-    # ML-II finds on its own that the nebular component should be less smooth than the
-    # stellar ones — the prior discovering a shape it was told nothing about.
+    # ML-II infers from the data that the nebular component should be less smooth than
+    # the stellar ones.
     assert float(fit.params["log_tau"][0]) > float(fit.params["log_tau"][2])
 
     # The amplitudes are identified only up to a common factor, so compare the
-    # centered logs — which is exactly what the model applies.
+    # centered logs, which are what the model applies.
     got = np.log(np.asarray(nebular_amplitudes(fit.params)))
     want = np.log(truth.nebular_amplitudes)
     want = want - want.mean()
@@ -786,18 +785,18 @@ def test_joint_map_recovers_orbit_and_amplitudes(joint_fits):
 
 @pytest.mark.slow
 def test_a_nebular_blind_fit_gets_the_orbit_badly_wrong(joint_fits):
-    """The sharpest statement in this file: the contamination is an *orbit* error too.
+    """The contamination also causes an error in the orbit.
 
-    A nebular line does not move, so a model with nowhere else to put it represents it
-    with whichever stellar component can be made to move least — which drags the
-    secondary's semi-amplitude down and pulls the period and the eccentricity after it.
-    This is not a subtle bias; it is the fit going somewhere else entirely, and it does
-    not even settle (the blind fit is still at |grad| ~ 3e4 where the modelled one is at
-    2). Only the primary survives, because 70% of the light pins it.
+    A nebular line does not move, so a model without a nebular component represents it
+    with the stellar component that can be made to move least. This lowers the
+    secondary's semi-amplitude and changes the period and the eccentricity with it.
+    The fit moves to a different solution and does not converge (the blind fit is still
+    at |grad| ~ 3e4 where the modelled one is at 2). Only the primary is recovered,
+    because it has 70% of the light.
 
-    The assertions are chosen to sit far from their thresholds rather than to be
-    comprehensive: K_2 and the period miss by factors, not percentages, and the
-    eccentricity of a circular orbit runs all the way to the solver's clip.
+    The assertions are chosen to be far from their thresholds rather than to be
+    comprehensive: K_2 and the period are wrong by factors, not percentages, and the
+    eccentricity of a circular orbit reaches the solver's clip.
     """
     _, fit, blind = joint_fits
     err = np.abs(np.asarray(fit.params["k"]) - K_TRUE) / np.asarray(K_TRUE)

@@ -1,14 +1,14 @@
 """The ESO Science Archive client (D44).
 
-Two layers. Everything that can be checked without the internet is checked without it —
-query construction, the truncation guard, filename safety, resume and atomicity — using a
-fake TAP response and a local HTTP handler. The handful of assertions that genuinely need
-the archive are marked ``network`` and are the first tests in the suite to use that marker.
+The tests are in two layers. Everything that can be checked offline is checked offline
+(query construction, the truncation guard, filename safety, resume and atomicity), using
+a fake TAP response and a local HTTP handler. The few assertions that need the archive
+are marked ``network``.
 
-The two behaviours worth the most here are both about *silence*: a TAP query that hits
-MAXREC returns a short list with no marker saying so, and a download cut cleanly in the
-middle returns a valid HTTP response. Both would produce a confident wrong answer
-downstream, so both raise.
+The two most important behaviours concern silent failures: a TAP query that hits MAXREC
+returns a short list with no overflow marker, and a download cut cleanly in the middle
+returns a valid HTTP response. Both would give a wrong result downstream with no error,
+so both raise.
 """
 
 import io
@@ -71,7 +71,7 @@ def test_spectra_query_composes_every_constraint():
 
 
 def test_a_wildcard_programme_becomes_LIKE():
-    """ESO Large Programmes split into sub-runs, so a prefix match is what is wanted."""
+    """ESO Large Programmes are split into sub-runs, so a prefix match is needed."""
     adql = archive.spectra_query(programme="112.25R7%")
     assert "proposal_id LIKE '112.25R7%'" in adql
     assert archive.spectra_query(programme="112.25R7.001").count("LIKE") == 0
@@ -92,7 +92,7 @@ def test_query_requires_both_coordinates_or_neither():
 
 
 def test_adql_string_literals_reject_embedded_quotes():
-    """Not a security boundary so much as a way to fail loudly on a mangled target name."""
+    """This is not a security boundary; it makes a mangled target name raise an error."""
     with pytest.raises(ValueError, match="may not contain a single quote"):
         archive.spectra_query(instrument="FER'OS")
 
@@ -101,13 +101,13 @@ def test_adql_string_literals_reject_embedded_quotes():
 
 
 def test_query_raises_when_the_result_hits_maxrec(monkeypatch):
-    """The failure this guard exists for: ESO's JSON carries no overflow marker."""
+    """ESO's JSON has no overflow marker, so a result that reaches MAXREC must raise."""
     rows = [(f"ADP.{i}", "TGT", 3000) for i in range(5)]
     monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: _FakeResponse(_tap_json(rows)))
     with pytest.raises(RuntimeError, match="MAXREC cap"):
         archive.query("SELECT 1", maxrec=5)
 
-    # One row short of the cap is a complete result and must come back normally.
+    # One row short of the cap is a complete result and must be returned normally.
     got = archive.query("SELECT 1", maxrec=6)
     assert [r.dp_id for r in got] == [f"ADP.{i}" for i in range(5)]
 
@@ -139,7 +139,7 @@ def test_query_returns_typed_records(monkeypatch):
 
 
 def test_local_filename_is_safe_on_windows():
-    """A colon makes NTFS read the name as an alternate data stream and the open fails."""
+    """NTFS interprets a colon in the name as an alternate data stream, and the open fails."""
     name = archive.local_filename("ADP.2016-09-20T09:32:35.364")
     assert ":" not in name
     assert name == "ADP.2016-09-20T09-32-35.364.fits"
@@ -198,11 +198,11 @@ def test_download_skips_what_is_already_there(tmp_path, monkeypatch):
 
 def test_a_truncated_transfer_is_not_accepted(tmp_path, monkeypatch):
     """A transfer cut cleanly in the middle is still a valid HTTP response."""
-    # The truncation guard raises ConnectionError, which is deliberately in `_TRANSIENT`
-    # — a real truncated transfer usually *is* worth retrying. So this test walks the full
-    # backoff ladder (2 + 4 + 8 + 16 s) before the failure it is asserting on surfaces.
-    # Stubbing the sleep keeps the retry *logic* under test and returns 30 s of wall clock
-    # to every run of the suite, local and CI alike.
+    # The truncation guard raises ConnectionError, which is in `_TRANSIENT` because a real
+    # truncated transfer is usually worth retrying. The test therefore goes through the
+    # full backoff sequence (2 + 4 + 8 + 16 s) before the asserted failure is reported.
+    # Stubbing the sleep keeps the retry logic under test and saves 30 s of wall-clock
+    # time in every run of the suite, locally and in CI.
     monkeypatch.setattr(archive.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(
         urllib.request,
@@ -265,11 +265,11 @@ def test_download_of_nothing_is_not_an_error(tmp_path):
 
 @pytest.mark.network
 def test_the_hr6819_programme_is_still_where_the_query_says_it_is():
-    """The one assertion that proves the query shape against the real service.
+    """The query form is checked against the real service.
 
-    HR 6819's FEROS programme is public and has been since 2005, so this is about as
-    stable as an archive query gets. It is marked ``network`` and deselected by
-    ``--no-network``; it is also the reason that marker exists.
+    HR 6819's FEROS programme has been public since 2005, so this is about as stable as
+    an archive query can be. The test is marked ``network`` and deselected by
+    ``--no-network``.
     """
     adql = archive.spectra_query(
         ra_deg=274.28139,
@@ -282,7 +282,7 @@ def test_the_hr6819_programme_is_still_where_the_query_says_it_is():
     assert len(records) >= 50, f"expected ~51 FEROS spectra, got {len(records)}"
     assert all(r.instrument == "FEROS" for r in records)
     assert all(r.dp_id.startswith("ADP.") for r in records)
-    # Sorted by observation time, as the query asks.
+    # Sorted by observation time, as the query specifies.
     times = [r.row["t_min"] for r in records]
     assert times == sorted(times)
 

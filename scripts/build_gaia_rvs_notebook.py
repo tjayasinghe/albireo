@@ -1,17 +1,17 @@
 """Regenerate the executed Gaia RVS notebook, ``docs/tutorials/gaia-rvs-benchmark.ipynb``.
 
 As with ``build_showcase_notebook.py``, the docs render this notebook with
-``execute: false``: the committed outputs are what the site shows, so the docs build stays
-offline and free of a JAX dependency. Re-executing it needs the RVS box of the BOSZ grid,
-which is downloaded once (621 MB) and cached as 5 MB:
+``execute: false``, so the site shows the committed outputs and the docs build requires
+neither network access nor JAX. Re-executing it needs the RVS box of the BOSZ grid, which
+is downloaded once (621 MB) and cached as 5 MB:
 
     python -c "import albireo; albireo.fetch_library('bosz2024-fgk-rvs')"
     python scripts/build_gaia_rvs_notebook.py [--postprocess-only]
 
-Wall time is about an hour, most of it the small benchmark at the end, which runs
-the command-line script in its own process and writes into a fixed directory under the
-system temp so that a rebuild resumes it. The notebook is seeded, so a rebuild reproduces
-the results apart from the printed timings.
+A run takes about an hour, most of it in the small benchmark at the end. That benchmark
+runs the command-line script in its own process and writes into a fixed directory under
+the system temporary directory, so that a rebuild resumes it. The notebook is seeded, so a
+rebuild reproduces the results apart from the printed timings.
 """
 
 from __future__ import annotations
@@ -39,19 +39,19 @@ CELLS: list[tuple[str, str]] = [
 # Benchmark albireo on Gaia RVS spectra, step by step
 
 Gaia DR4 publishes an epoch RVS spectrum for every transit of every star brighter than
-about G_RVS = 12, in the barycentric frame, including the double-lined transits the Gaia
-pipeline itself rejects. Until those spectra are released, albireo's performance on them
-can be measured only on simulations. The workflow, one step at a time:
+about G_RVS = 12, in the barycentric frame, including the double-lined transits that the
+Gaia pipeline rejects. Until those spectra are released, albireo's performance on them can
+be measured only on simulations. The workflow has five steps:
 
-1. render the two stars from a synthetic spectral library;
-2. put them in an orbit and simulate the epoch spectra Gaia would deliver;
-3. analyse that one binary and compare with what was injected;
-4. draw a population of binaries as a magnitude-limited survey sees them;
+1. render the spectra of two stars from a synthetic spectral library;
+2. put the stars in an orbit and simulate the epoch spectra Gaia would deliver;
+3. analyse that one binary and compare with the injected values;
+4. draw a population of binaries as a magnitude-limited survey observes them;
 5. run the benchmark over the population and read its report.
 
-Steps 1 to 3 treat one system; steps 4 and 5 repeat them over many, under several levels
+Steps 1 to 3 treat one system. Steps 4 and 5 repeat them over many, under several levels
 of prior knowledge, and tabulate the errors. Background is in the
-[science overview](../science.md); the prose version of this page is the
+[science overview](../science.md). The prose version of this page is the
 [Gaia RVS tutorial](gaia-rvs.md).
 
 Install with the plotting extra and fetch the RVS box of the BOSZ 2024 grid once (621 MB
@@ -62,8 +62,8 @@ pip install -e ".[io,plots]"
 python -c "import albireo; albireo.fetch_library('bosz2024-fgk-rvs')"
 ```
 
-Everything is seeded. The timings are those of one run on a 32-thread desktop, and every
-first call includes JAX compilation.""",
+Everything is seeded. The timings are from one run on a 32-thread desktop, and every first
+call includes JAX compilation.""",
     ),
     (
         PY,
@@ -142,15 +142,15 @@ fig.set_layout_engine("constrained")""",
 ## Step 2: the orbit, and the epochs Gaia would deliver
 
 The masses, the period, the eccentricity and the inclination fix the two semi-amplitudes.
-`simulate_rvs_dataset` then does what the instrument and the archive do, in order: it
+`simulate_rvs_dataset` then does what the instrument and the archive do, in order. It
 shifts each component to its velocity at every epoch and sums them with the light
-fractions; broadens the sum from the library's resolving power to the RVS's 11,500;
-rebins onto the detector pixels; adds photon noise at the S/N per detector pixel; and
+fractions. It broadens the sum from the library's resolving power to the RVS's 11,500 and
+rebins onto the detector pixels. It adds photon noise at the S/N per detector pixel and
 interpolates each epoch onto the grid the archive publishes, here the DR4 epoch grid.
 
-The last step matters: the archive's grid has more samples than the detector has pixels,
-so neighbouring samples share noise, which the archive's per-pixel `flux_error` does not
-report. The simulation records exactly what the delivery did to the noise and to the line
+The archive's grid has more samples than the detector has pixels, so after the last step
+neighbouring samples share noise, which the archive's per-pixel `flux_error` does not
+report. The simulation records the effect of the delivery on the noise and on the line
 widths, and the analysis below declares both.""",
     ),
     (
@@ -188,10 +188,10 @@ print(
     (
         MD,
         """\
-Two of the ten epochs, at the largest and the smallest velocity separation. At the
-largest separation the Ca II triplet lines of the two stars are resolved; at conjunction
-they sit on top of each other, and a single-star pipeline would measure one velocity and
-the wrong line depths.""",
+The next cell plots two of the ten epochs, at the largest and the smallest velocity
+separation. At the largest separation the Ca II triplet lines of the two stars are
+resolved. At conjunction they coincide, and a single-star pipeline would measure one
+velocity and the wrong line depths.""",
     ),
     (
         PY,
@@ -220,7 +220,7 @@ fig.set_layout_engine("constrained")""",
 The `Disentangler` takes a declaration: the components with their light fractions, the
 orbit priors, the line-spread width and, for these spectra, the noise correlation the
 delivery introduced. It recovers the two component spectra and the orbit jointly. The
-period is declared known, as a Gaia period would be; the semi-amplitudes and the
+period is declared known, as a Gaia period would be. The semi-amplitudes and the
 eccentricity are free.""",
     ),
     (
@@ -264,16 +264,16 @@ fig.set_layout_engine("constrained")""",
         """\
 ### Epoch velocities, and the orbit from them
 
-The disentangling infers the orbit from the spectra directly and never measures a
-velocity per epoch. The benchmark needs those too, as what an archive user would produce
-and an orbit code consumes: `measure_velocities` correlates every epoch against the
-recovered components (TODCOR, Zucker & Mazeh 1994), and `fit_rv_orbit` fits a Keplerian
-to the table. The two routes fail differently, so the report tabulates both.
+The disentangling infers the orbit from the spectra directly and does not measure a
+velocity per epoch. The benchmark also needs epoch velocities, which an archive user would
+produce and an orbit code takes as input. `measure_velocities` correlates every epoch
+against the recovered components (TODCOR, Zucker & Mazeh 1994), and `fit_rv_orbit` fits a
+Keplerian to the table. The two routes fail differently, so the report tabulates both.
 
-The velocities come out relative to the recovered components, which carry the systemic
-velocity the disentangling never fitted: in the figure the injected values (ticks) sit
-18 km/s below every measured point, on both components. The orbit fit therefore takes one
-zero point per component, and the systemic velocity is measured in the next step.""",
+The velocities are relative to the recovered components, which are at the systemic
+velocity the disentangling does not fit. In the figure the injected values (ticks) are
+18 km/s below every measured point, on both components. The orbit fit therefore includes
+one zero point per component, and the systemic velocity is measured in the next step.""",
     ),
     (
         PY,
@@ -291,13 +291,13 @@ axes[0].set_title("TODCOR velocities against the recovered components; ticks: in
 ### Labels
 
 The last stage compares library templates with the epoch spectra through the
-disentangling's own statistics and fits the temperature, gravity, metallicity and rotation
-of each star, together with the light fraction. The recovered components sit at the
-system's velocity, which the disentangling never measured, so each template's frame
-offset is fitted too, after a scan over trial offsets. The fitted offset is the systemic
-velocity and makes the pipeline's velocities absolute. The oracle tier of the benchmark
-gives this fit narrow priors around the truth; the other tiers give it the library box,
-as here.""",
+disentangling's statistics and fits the temperature, gravity, metallicity and rotation of
+each star, together with the light fraction. The recovered components are at the systemic
+velocity, which the disentangling does not measure, so each template's frame offset is
+also fitted, after a scan over trial offsets. The fitted offset is the systemic velocity
+and makes the pipeline's velocities absolute. The oracle tier of the benchmark gives this
+fit narrow priors around the injected values. The other tiers give it the library box, as
+here.""",
     ),
     (
         PY,
@@ -327,18 +327,18 @@ for name, injected, v in zip(("primary", "secondary"), (PRIMARY, SECONDARY), VSI
     (
         MD,
         """\
-That is one system, with fixed stars, an orbit and a S/N chosen by hand, and epochs
-spaced evenly over one period, a cadence no real star is observed at. The benchmark
-replaces every one of those choices with a draw.
+The system above has stars, an orbit and a S/N that were set manually, and epochs spaced
+evenly over one period, a cadence at which no real star is observed. The benchmark
+replaces each of those choices with a draw.
 
 ## Step 4: a population
 
 `draw_population` draws binaries from the field's distributions as a magnitude-limited
-survey sees them: the orbits and mass ratios of Moe & Di Stefano (2017), a dwarf sequence
-for the stars, the eclipse geometry for the inclinations, and the scanning law for the
-number of transits. The separation floor stands for Gaia's own double-lined selection: a
-pair whose lines never part by more than a resolution element and a half is not in the
-double-lined sample either.""",
+survey observes them. It uses the orbits and mass ratios of Moe & Di Stefano (2017), a
+dwarf sequence for the stars, the eclipse geometry for the inclinations, and the scanning
+law for the number of transits. The separation floor represents Gaia's double-lined
+selection. A pair whose lines are never separated by more than one and a half resolution
+elements is not in the double-lined sample either.""",
     ),
     (
         PY,
@@ -369,29 +369,30 @@ Every system is simulated once, with the S/N that follows from its G_RVS and the
 the scanning law gives it, and the same spectra are run through the pipeline under each
 knowledge tier:
 
-| tier | what the analysis is told |
+| tier | what the analysis is given |
 |---|---|
-| `oracle` | the period, the conjunction, the elements and narrow label priors: the ceiling |
+| `oracle` | the period, the conjunction, the elements and narrow label priors: the upper bound |
 | `eclipsing` | an eclipse ephemeris and a light-curve light ratio, the elements free |
-| `orbit` | a Gaia period and nothing else; the light ratio is measured |
+| `orbit` | a Gaia period only; the light ratio is measured |
 | `blind` | nothing: a period search from library templates |
 
 The benchmark is one command, `scripts/gaia_rvs_benchmark.py`, which draws or reads a
 population, simulates it, runs the pipeline under each tier in worker processes, and
-writes the report; `albireo.run_benchmark` is the same thing called from Python. The full
+writes the report. `albireo.run_benchmark` runs the same benchmark from Python. The full
 run, forty systems under all four tiers with the script's default optimiser budgets, takes
 hours. The run below gives the script three systems from the draw above, chosen to span it
-and to finish: a 1.1-day circular twin, a 4-day pair of mild eccentricity, and a 1.7-day
-pair whose secondary has a quarter of the light, with 41, 59 and 33 transits. It runs two
-tiers: `oracle`, the ceiling, and `orbit`, what a Gaia period alone gives. The
+and to finish. They are a 1.1-day circular twin, a 4-day pair of mild eccentricity, and a
+1.7-day pair whose secondary has a quarter of the light, with 41, 59 and 33 transits. The
+run uses two tiers: `oracle`, the upper bound, and `orbit`, with only a Gaia period. The
 semi-amplitude prior is capped at 150 km/s, above the largest in the population, which
 halves the width of the band the disentangling solves. The blind tier's period search is
-left to the full run, whose thirty-odd systems are what its recovery rate is measured on;
-on three it would say nothing. The numbers below illustrate the workflow and are not a
-result; the results of the full runs are recorded in the [benchmarks](../benchmarks.md).
+left to the full run, where its recovery rate is measured on thirty-odd systems. Three
+systems would not constrain that rate. The numbers below illustrate the workflow and are
+not a result. The results of the full runs are recorded in the
+[benchmarks](../benchmarks.md).
 
 The script runs in its own process, as it would from a shell, so the notebook's JAX state
-does not weigh on it.""",
+does not affect it.""",
     ),
     (
         PY,
@@ -439,10 +440,11 @@ for row in rows:
 ### Read the report
 
 `report.md` is written into the output directory beside `rows.csv` (one line per star run
-with the truth and every metric), `velocities.csv` (every epoch velocity with its injected
-value) and `summary.json`. Its first table is the recovery by tier: the median and the
-16th to 84th percentile of each error over the systems that completed. A pull is a
-difference over the quoted error, so a calibrated error gives a pull rms near one.""",
+with the injected values and every metric), `velocities.csv` (every epoch velocity with
+its injected value) and `summary.json`. Its first table is the recovery by tier: the
+median and the 16th to 84th percentile of each error over the systems that completed. A
+pull is a difference divided by the quoted error, so a calibrated error gives a pull rms
+near one.""",
     ),
     (
         PY,
@@ -462,29 +464,29 @@ Image(filename=out / "figures" / "k_recovery.png", width=720)""",
     (
         MD,
         """\
-The full benchmark is the same command with a drawn population and the default budgets;
-an interrupted run resumes from its output directory:
+The full benchmark is the same command with a drawn population and the default budgets,
+and an interrupted run resumes from its output directory:
 
 ```
 python scripts/gaia_rvs_benchmark.py --n 40 --jobs 8 --out bench/rvs
 python scripts/gaia_rvs_benchmark.py --report-only --out bench/rvs     # regenerate the report
 ```
 
-`--cadence gost` replaces the drawn transit count with the forecast of the Gaia Observation
-Forecast Tool for each system's own position, `--product dr3` delivers the DR3 mean-spectrum
-grid instead, and `--debcat` or `--gaia-sb2` build the population from real eclipsing or
-double-lined binaries rather than from the parametric draw.
+`--cadence gost` replaces the drawn transit count with the forecast of the Gaia
+Observation Forecast Tool for each system's position. `--product dr3` delivers the DR3
+mean-spectrum grid instead. `--debcat` or `--gaia-sb2` builds the population from real
+eclipsing or double-lined binaries rather than from the parametric draw.
 
-## What the report cannot tell you
+## Limitations of the simulation
 
-The simulation omits three effects. The templates and the truth come from the same grid,
-so template mismatch is absent: a real star's lines are not BOSZ's, and the label errors
-here are a floor. The line-spread function is a Gaussian at the nominal resolving power,
-which the DPAC model is not, and the smoothing the analysis declares is the mean over the
-band and the epochs. The epochs follow the scanning law's statistics rather than its
-phase, so a real star's period aliases are its own. The report does measure how the
-recovery scales with brightness, transit count, separation and light ratio, and where the
-quoted errors are calibrated.
+The simulation omits three effects. The templates and the injected spectra come from the
+same grid, so template mismatch is absent. A real star's lines are not BOSZ's, and the
+label errors here are a lower limit. The line-spread function is a Gaussian at the nominal
+resolving power, unlike the DPAC model, and the smoothing the analysis declares is the
+mean over the band and the epochs. The epochs follow the scanning law's statistics rather
+than its phase, so a real star's period aliases are not reproduced. The report measures
+how the recovery scales with brightness, transit count, separation and light ratio, and
+where the quoted errors are calibrated.
 
 References: Bohlin, R. C., et al. 2017, AJ, 153, 234; Cropper, M., et al. 2018, A&A, 616,
 A5; Mészáros, Sz., et al. 2024, PASP, 136, 4504; Moe, M. & Di Stefano, R. 2017, ApJS, 230,

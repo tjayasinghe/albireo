@@ -1,10 +1,10 @@
 """BLOeM by name: from a survey identifier to a model-ready Dataset.
 
 BLOeM (Binarity at LOw Metallicity) is a VLT/FLAMES-GIRAFFE survey of 929 OBAF stars in the
-Small Magellanic Cloud, with about 25 epochs each, an intrinsic binary fraction above 70%,
-and 59 published double-lined systems whose disentangling the survey team lists as future
-work. It is the largest public dataset albireo was built for, and none of it requires an ESO
-account.
+Small Magellanic Cloud, with about 25 epochs each and an intrinsic binary fraction above
+70%. It has 59 published double-lined systems, whose disentangling the survey team lists as
+future work. BLOeM is the largest public dataset albireo was built for, and none of it
+requires an ESO account.
 
     python examples/06_bloem.py            # defaults to BLOeM 1-037, an SB2
     python examples/06_bloem.py 1-002      # any identifier; 'BLOeM_1-2' also works
@@ -18,38 +18,38 @@ between are not obvious:
 * The archive does not use the survey's names. BLOeM spectra are filed under
   ``obs_collection='GIRAFFE'`` (there is no BLOeM Phase 3 collection) and ``target_name``
   is the Gaia DR3 source id, not ``1-037``. :func:`albireo.resolve_bloem` fetches the
-  published cross-match from VizieR, which speaks the same TAP dialect as ESO, so the join
+  published cross-match from VizieR, which uses the same TAP dialect as ESO, so the join
   adds no dependency.
-* The file layout differs from the FEROS one of example 03. These are GIRAFFE products: the
-  flux is in ``FLUX_REDUCED``, the errors in ``ERR_REDUCED``, the quality flags in
-  ``QUAL_REDUCED``, and the wavelengths are in nanometres on an air scale in the
-  heliocentric frame. Example 03's FEROS files use ``FLUX``/``ERR``, angstrom, barycentric.
-  :func:`albireo.read_dataset` reads both without being told which is which, because it
+* The file layout differs from the FEROS one of example 03. In these GIRAFFE products the
+  flux is in ``FLUX_REDUCED``, the errors in ``ERR_REDUCED`` and the quality flags in
+  ``QUAL_REDUCED``. The wavelengths are in nanometres on an air scale in the heliocentric
+  frame. Example 03's FEROS files use ``FLUX``/``ERR``, angstrom and the barycentric frame.
+  :func:`albireo.read_dataset` reads both without the layout being specified, because it
   dispatches on the IVOA utypes rather than on column names (``internal/design.md`` D45).
 
 Two things this script does not do
 ----------------------------------
 It does not fit an orbit. These systems have no published orbital solutions, so there is no
-literature value to score against and no informative prior to start from. The script builds
-the problem and evaluates the marginal likelihood once, which is where a loading example
-ends.
+literature value to compare with and no informative prior to start from. The script builds
+the problem and evaluates the marginal likelihood once, which is the scope of a loading
+example.
 
-It does not model the nebula. BLOeM's targets sit in H II regions, so a real analysis of the
+It does not model the nebula. BLOeM's targets are in H II regions, so an analysis of the
 Balmer lines needs the nebular component of example 04. The window below avoids the Balmer
 cores for that reason.
 
 The window
 ----------
-4120-4300 A, inside LR02's 3960-4571 A: Si III 4128/4130, He I 4144, He I 4169,
-He II 4200. It lies strictly between H-delta (4101.7) and H-gamma (4340.5), with neither
-line nor its wings inside, and well away from the order edges.
+The window, 4120-4300 A inside LR02's 3960-4571 A, contains Si III 4128/4130, He I 4144,
+He I 4169 and He II 4200. It lies strictly between H-delta (4101.7) and H-gamma (4340.5),
+with neither line nor its wings inside, and well away from the order edges.
 
 That bound is the reason for the window, and the margin is smaller than it appears. A wider
-blue edge would reach H-delta, which in an H II region carries nebular emission that this
-script does not model; ``albireo.nebular_windows`` places a +/-300 km/s window around it, so
+blue edge would reach H-delta, which in an H II region contains nebular emission that this
+script does not model. ``albireo.nebular_windows`` places a +/-300 km/s window around it, so
 anything below ~4096 A is contaminated. Widen this region only together with the nebular
-component of example 04: an unmodelled static emission line is a component with K = 0, and
-D40 measured K_2 59% low under one.
+component of example 04. An unmodelled static emission line is a component with K = 0, and
+D40 measured K_2 59% low with one present.
 
 Environment
 -----------
@@ -79,7 +79,7 @@ REGION = (4120.0, 4300.0)
 LSF_SIGMA = 47.6 / (2.0 * np.sqrt(2.0 * np.log(2.0)))
 DV_KMS = 8.0
 V_REL_MAX = 400.0
-# The SMC recedes at about +150 km/s, and these are SB2s on top of that.
+# The SMC recedes at about +150 km/s, and the SB2 orbital motion adds to that.
 LIGHT_FRACTIONS = (0.6, 0.4)
 
 
@@ -98,8 +98,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"           RA {star.ra_deg:.6f}  Dec {star.dec_deg:+.6f}")
 
     # --- 2. Fetch the epochs ------------------------------------------------------
-    # public_only because sub-run .004 releases through 2027-01-15; the proprietary rows
-    # would otherwise be returned and then fail to download.
+    # public_only is set because sub-run .004 releases through 2027-01-15. The proprietary
+    # rows would otherwise be returned and then fail to download.
     t0 = time.time()
     records = ab.bloem_spectra(star, public_only=True)
     if not records:
@@ -123,8 +123,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     # --- 3. FITS -> Dataset -------------------------------------------------------
-    # Nothing here names GIRAFFE's column layout, its nanometres or its air scale: the
-    # reader takes all three from the file. Compare example 03, which passes the same
+    # No argument here specifies GIRAFFE's column layout, its nanometres or its air scale.
+    # The reader takes all three from the file. Compare example 03, which passes the same
     # arguments to FEROS files that share none of those three conventions.
     t0 = time.time()
     dataset = ab.read_dataset(
@@ -134,11 +134,11 @@ def main(argv: list[str] | None = None) -> int:
         region_pad_angstrom=40.0,
         smooth_angstrom=60.0,
     )
-    # No share_wavelength_grid() here, in contrast with example 03. FEROS shifts before
-    # resampling, so its 51 epochs sit on grids that agree to 0.007 km/s and can be
+    # Unlike example 03, share_wavelength_grid() is not called here. FEROS shifts before
+    # resampling, so its 51 epochs are on grids that agree to 0.007 km/s and can be
     # relabelled onto one. GIRAFFE's differ by 5.3 km/s, most of a model pixel, so those
-    # are distinct wavelength solutions rather than sub-pixel bookkeeping, and
-    # share_wavelength_grid refuses them. albireo gives each its own rebin operator.
+    # are distinct wavelength solutions, and share_wavelength_grid rejects them. albireo
+    # builds a separate rebin operator for each.
     print(f"[{time.time() - t0:5.1f}s] ingest")
     print(dataset.summary())
 
@@ -171,8 +171,8 @@ def main(argv: list[str] | None = None) -> int:
         f"half-bandwidth {model.half_bandwidth}"
     )
 
-    # One evaluation, confirming that the path is wired end to end. The velocities are a
-    # placeholder: this star has no published orbit.
+    # One evaluation confirms that the sequence runs end to end. The velocities are a
+    # placeholder, because this star has no published orbit.
     theta = {
         "velocity": np.zeros((2, len(dataset))),
         "log_tau": np.log(np.array([1.0e4, 1.0e4])),

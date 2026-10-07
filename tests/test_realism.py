@@ -1,11 +1,12 @@
-"""Closed-loop tests for the M4 realism features.
+"""Closed-loop tests for the realism features.
 
-One closed loop per feature (the M4 acceptance gate, internal/design.md §8):
+Each feature has one closed loop (the M4 acceptance criterion, internal/design.md §8):
 hierarchical SB3 orbits, per-epoch light-fraction inference (the eclipse mode of
-math.md §5.2, with the breaker *inferred* rather than fixed), and multi-instrument
-LSF-width inference. Exactness/unit tests for the new θ-paths ride along.
+math.md §5.2, with the light fractions inferred rather than fixed), and
+multi-instrument LSF-width inference. Exactness and unit tests of the features' θ-paths
+are included.
 
-The telluric closed loop lives in test_telluric.py; the K2 scan in test_scan.py.
+The telluric closed loop is in test_telluric.py and the K2 scan in test_scan.py.
 """
 
 import jax
@@ -23,7 +24,7 @@ from albireo.simulate import InstrumentSpec, OrbitParams, simulate_dataset
 from albireo.simulate import synthetic_deviation_spectrum as synth_spectrum
 
 # ---------------------------------------------------------------------------
-# Shared gate-scale configuration (inner orbit identical to test_inference.py)
+# Shared acceptance-test configuration (inner orbit identical to test_inference.py)
 # ---------------------------------------------------------------------------
 
 GRID = ab.LogGrid.from_wavelength_range(5000.0, 5045.0, dv_kms=5.5)
@@ -269,7 +270,7 @@ def test_guards_reject_wide_lsf_and_outer_disk(small_data):
     }
     ld, _ = log_density(model3.model(priors_out), (), {}, init_out)
     assert not np.isfinite(float(ld))
-    # a component-count mismatch is a clear error, not a shape crash deep inside
+    # a component-count mismatch raises a clear ValueError, not a later shape error
     with pytest.raises(ValueError, match="light fractions"):
         model.log_likelihood({**_theta_sb3(), "log_tau": jnp.zeros(2), "log_eta": jnp.zeros(2)})
 
@@ -365,7 +366,7 @@ def test_sb3_spectra_recovered(sb3_fit):
 
 
 # ---------------------------------------------------------------------------
-# Closed loop 2: per-epoch light fractions (the inferred eclipse breaker)
+# Closed loop 2: inferred per-epoch light fractions (the eclipse mode)
 # ---------------------------------------------------------------------------
 
 ECLIPSE_EPOCHS = [2, 5, 9]
@@ -431,9 +432,9 @@ def test_per_epoch_light_recovered(light_fit):
 
 @pytest.mark.slow
 def test_eclipse_epochs_break_additive_indeterminacy(light_fit):
-    # With per-epoch light fractions *inferred*, the k = 0 invisible direction of
+    # With per-epoch light fractions inferred, the k = 0 null-space direction of
     # the constant-light case (math.md §5.2) becomes observable: each component is
-    # recovered individually, not just the light-weighted sum.
+    # recovered individually, not only the light-weighted sum.
     model, comps, _, fit = light_fit
     theta = {
         s: jnp.asarray(fit.params[s])
@@ -489,10 +490,10 @@ def lsf_fit():
         v_rel_max_kms=float(K_IN.sum()) * (1 + ECC_IN) * 1.35,
     )
     # The absolute LSF width is degenerate with the intrinsic line widths in a
-    # template-free model (verified: both-free ML-II inflates both widths by tens
-    # of percent while K's stay sub-0.2%). The supported workflow anchors one
-    # *reference* instrument with a tight prior; cross-instrument spectrum sharing
-    # then identifies the others. Mirrors the light-ratio policy (D13).
+    # template-free model. With both widths free, ML-II inflates both by tens of
+    # percent while the K errors stay below 0.2%. The supported workflow anchors one
+    # reference instrument with a tight prior, and cross-instrument spectrum sharing
+    # then identifies the others. This mirrors the light-ratio policy (D13).
     order = list(model.instruments)
     lo = {"A": 5.999, "B": 6.0}
     hi = {"A": 6.001, "B": 14.0}

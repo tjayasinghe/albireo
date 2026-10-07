@@ -1,17 +1,17 @@
 """Tests for the wavelength-dependent (tabulated) LSF (internal/design.md D8 v2, D37).
 
-D8 fixed a Gaussian constant-resolving-power LSF and reserved a seam: "tabulated LSF
-is v2 (banded matrix, no structural change)". D37 opens that seam — each model pixel
-may apply its own kernel row, realized from per-anchor kernels through static
-interpolation tables. What is pinned here: the row-varying convolution must *be* the
-banded matrix it claims (dense reconstruction), form an exact adjoint pair, and
-reduce to the stationary operator when every row is equal; an anchored problem's
-marginal must agree between the band assembly, comb probing, and a dense LAPACK
-reference — under diagonal and AR(1) noise, for Gaussian *and* arbitrary asymmetric
-banks (asymmetry is what flushes out a hidden kernel-flip assumption), and under
-gradients in the per-anchor widths; and a constant-width anchored build must
-reproduce the stationary marginal, because it is the same matrix realized through
-the other code path.
+D8 specifies a Gaussian constant-resolving-power LSF and reserves an extension point:
+"tabulated LSF is v2 (banded matrix, no structural change)". D37 implements it: each
+model pixel may apply its own kernel row, realized from per-anchor kernels through
+static interpolation tables. The tests assert three properties. The row-varying
+convolution must equal its documented banded matrix (dense reconstruction), form an
+exact adjoint pair, and reduce to the stationary operator when every row is equal. An
+anchored problem's marginal must agree between the band assembly, comb probing, and a
+dense LAPACK reference. This is tested under diagonal and AR(1) noise, for Gaussian
+and for arbitrary asymmetric banks (which reveal an implicit kernel-flip assumption),
+and under gradients in the per-anchor widths. A constant-width anchored build must
+reproduce the stationary marginal, because it is the same matrix realized through the
+other code path.
 """
 
 from __future__ import annotations
@@ -163,7 +163,7 @@ def test_anchored_constant_width_matches_stationary_marginal():
         **kw,
     )
     for g in anchored.groups:
-        assert g.kernel.shape[0] == SMALL_GRID.n  # really on the varying path
+        assert g.kernel.shape[0] == SMALL_GRID.n  # on the varying path
     ref = marginal_loglikelihood(stationary, PRIOR, assembly="band")
     out = marginal_loglikelihood(anchored, PRIOR, assembly="band")
     np.testing.assert_allclose(float(out.log_likelihood), float(ref.log_likelihood), rtol=1e-12)
@@ -171,7 +171,7 @@ def test_anchored_constant_width_matches_stationary_marginal():
 
 
 def test_band_matches_probe_and_dense_with_varying_lsf():
-    """The gold identity on a genuinely wavelength-dependent problem (diagonal noise)."""
+    """Band, probe and dense marginals agree for a wavelength-dependent LSF (diagonal noise)."""
     problem = anchored_problem()
     band = marginal_loglikelihood(problem, PRIOR, assembly="band")
     probe = marginal_loglikelihood(problem, PRIOR, assembly="probe")
@@ -185,7 +185,7 @@ def test_band_matches_probe_and_dense_with_varying_lsf():
 
 
 def test_band_matches_probe_with_varying_lsf_and_ar1():
-    """Varying LSF x correlated noise: the two bandwidth-widening features compose."""
+    """The two bandwidth-widening features, varying LSF and correlated noise, compose."""
     problem = with_ar1(with_jitter(anchored_problem(), np.array([1.2, 0.9, 1.4])), 0.45)
     band = marginal_loglikelihood(problem, PRIOR, assembly="band", validate=True)
     probe = marginal_loglikelihood(problem, PRIOR, assembly="probe")
@@ -197,12 +197,12 @@ def test_band_matches_probe_with_varying_lsf_and_ar1():
 
 @pytest.mark.parametrize("correlated", [False, True])
 def test_arbitrary_asymmetric_bank_band_matches_probe(correlated):
-    """Random asymmetric profiles, varying and stationary: no hidden flip survives this.
+    """Random asymmetric profiles, varying and stationary, detect any kernel flip.
 
     The Gaussian rows every fixture builds are symmetric, so a transposed tap or a
-    reversed kernel would cancel silently there. Random banks — a full per-pixel one
-    on the anchored groups and a (1, w) one on a stationary build — are the
-    adversarial case.
+    reversed kernel would go undetected there. Random banks (a full per-pixel one on
+    the anchored groups and a (1, w) one on a stationary build) are the adversarial
+    case.
     """
     rng = np.random.default_rng(11)
     problem = anchored_problem()
@@ -389,20 +389,21 @@ def gate_model():
 
 
 def test_data_term_prefers_the_injected_width_profile_at_fixed_spectra():
-    """The injected wavelength dependence is in the data and the forward model sees it.
+    """The injected wavelength dependence is in the data and the forward model reproduces it.
 
-    At the *true spectra* — absorption switched off — the weighted residuals under
-    the true width ramp must beat a flat width at the ramp's mean: the varying
-    kernel matters and the forward model realizes it correctly end-to-end.
+    At fixed true spectra, which cannot absorb a width change, the weighted residuals
+    under the true width ramp must be smaller than under a flat width at the ramp's
+    mean. The varying kernel thus has an effect and the forward model realizes it
+    correctly end-to-end.
 
-    Deliberately NOT asserted: that the *marginal* (free spectra) prefers the truth.
-    Measured here, it does not — the flat width beats the true ramp by ~3 nats, and
-    the ML profile beats the truth by ~8 while sitting ~3 km/s off one anchor. A
-    stationary width change commutes with the shifts, so the free spectra absorb it
-    and the marginal's width preference is dominated by the smoothness prior's taste
-    for smoother spectra, not by the instrument. Fitted anchor widths are therefore
-    diagnostics, not measurements — the recovery test below asserts exactly the
-    identified content (the orbit, and the ramp's direction) and no more.
+    It is not asserted that the marginal (free spectra) is highest at the true ramp.
+    Measured here, it is ~3 nats higher at the flat width and ~8 higher at the ML
+    profile, which is ~3 km/s from the true ramp at one anchor. A stationary width
+    change commutes with the shifts, so the free spectra absorb it, and the marginal's
+    width dependence is dominated by the smoothness prior, which favours smoother
+    spectra, not by the instrument. Fitted anchor widths are therefore diagnostics, not
+    measurements. The recovery test below asserts only the identified quantities (the
+    orbit and the ramp's direction).
     """
     from albireo.forward import data_residual_zscores
 
@@ -429,14 +430,14 @@ def test_data_term_prefers_the_injected_width_profile_at_fixed_spectra():
 
 @pytest.mark.slow
 def test_closed_loop_joint_fit_recovers_orbit_and_ramp_direction():
-    """The D37 gate: per-anchor widths free, and the orbit must not be corrupted.
+    """The D37 acceptance test: with per-anchor widths free, the orbit must not be biased.
 
-    Asserted: the orbit (the quantity the LSF could plausibly bias), the widths
-    staying interior to their bounds, and the injected ramp's *direction* across the
-    data span. Absolute width levels are deliberately not asserted — they sit along
-    the absorption-degenerate direction (measured here: ~2 nats between the fitted
-    3-width profile and one shared width), so a tight tolerance would test the
-    optimizer's wandering, not the physics.
+    Three things are asserted: the orbit (the quantity the LSF could plausibly bias),
+    widths interior to their bounds, and the injected ramp's direction across the data
+    span. Absolute width levels are not asserted, because they lie along the
+    absorption-degenerate direction (measured here: ~2 nats between the fitted 3-width
+    profile and one shared width). A tight tolerance would test only the optimizer's
+    stopping point.
     """
     import numpyro.distributions as dist
 

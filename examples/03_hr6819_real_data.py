@@ -1,52 +1,54 @@
 """Disentangle archival spectra: HR 6819, from ESO Phase-3 FITS to an orbit.
 
-The end-to-end path on observed data, as opposed to the simulator of example 01. The target
+This is the end-to-end analysis on observed data. Example 01 uses the simulator. The target
 is HR 6819 (HD 167128, QV Tel), a Be star with a stripped, bloated pre-subdwarf companion on
 a 40.3-day orbit. It was proposed as a black-hole host before interferometry resolved the
 pair (Rivinius et al. 2020; Bodensteiner et al. 2020; Frost et al. 2022; Klement et al.
-2025). The data are the 51 public FEROS spectra of ESO programme 073.D-0274(A), the same
-ones used by the published analyses of this system.
+2025). The data are the 51 public FEROS spectra of ESO programme 073.D-0274(A), the ones
+used by the published analyses of this system.
 
     python scripts/download_hr6819.py      # 51 files, ~153 MB, no ESO login needed
     python examples/03_hr6819_real_data.py
 
 Preparation the simulator does not require
 ------------------------------------------
-Archival spectra arrive in a state the model does not accept. Four decisions are taken
-before the fit, in :mod:`albireo.io` and :mod:`albireo.preprocess`:
+Archival spectra are not delivered in the form the model requires. Four decisions are
+taken before the fit, in :mod:`albireo.io` and :mod:`albireo.preprocess`:
 
-* Continuum. ESO delivers these with ``CONTNORM = False``: raw merged-echelle ADU, whose
+* Continuum. ESO delivers these with ``CONTNORM = False``, as raw merged-echelle ADU whose
   response falls by a factor of 20 across 3850-4750 A. albireo's model is
   ``1 + sum_i l_i d_i`` around a unit continuum, and its response term is fixed at build
   time rather than inferred, so the normalization done here is the one the fit uses.
 * Noise. The ``ERR`` column of these files is entirely ``NaN``, as the header states.
-  Inverse variances are estimated from the spectra themselves.
-* Frame and time. ``SPECSYS = 'BARYCENT'`` with the applied correction in
-  ``ESO DRS BARYCORR``, and a mid-exposure time that must be placed on the barycentre.
+  Inverse variances are estimated from the spectra.
+* Frame and time. The headers give ``SPECSYS = 'BARYCENT'`` with the applied correction
+  in ``ESO DRS BARYCORR``, and a mid-exposure time that must be referred to the
+  barycentre.
 * Per-exposure wavelength grids. The pipeline shifts before resampling, so the 51 spectra
-  sit on 28 distinct grids. :func:`albireo.preprocess.share_wavelength_grid` relabels them
+  are on 28 distinct grids. :func:`albireo.preprocess.share_wavelength_grid` relabels them
   onto one. The relabelling amounts to a hundredth of a pixel and reduces 28 operator
   groups to 1.
 
 The window
 ----------
-4380-4600 A: He I 4388, He I 4471, Mg II 4481, Si III 4552/4568/4575. These photospheric
-lines are present both in the sharp-lined stripped star and in the broad-lined Be star. The
-window contains no Balmer core and no disc emission (the Be star's disc emission is
-variable, and albireo assumes each component has one spectrum), and no telluric band lies
-within 1200 A.
+The window, 4380-4600 A, contains He I 4388, He I 4471, Mg II 4481 and
+Si III 4552/4568/4575. These photospheric lines are present both in the sharp-lined
+stripped star and in the broad-lined Be star. The window contains no Balmer core and no
+disc emission (the Be star's disc emission is variable, and albireo assumes each component
+has one spectrum), and no telluric band lies within 1200 A.
 
 Comparison values
 -----------------
-Klement et al. (2025), Table 3, combined eccentric solution: P = 40.3261 +/- 0.0013 d,
-e = 0.0289 +/- 0.0058, K_pre-sd = 61.15 +/- 0.88 km/s, K_Be = 3.90 +/- 0.27 km/s.
-Those are the numbers this script scores itself against.
+The script compares its result with the combined eccentric solution of Klement et al.
+(2025), Table 3: P = 40.3261 +/- 0.0013 d, e = 0.0289 +/- 0.0058,
+K_pre-sd = 61.15 +/- 0.88 km/s, K_Be = 3.90 +/- 0.27 km/s.
 
 The light ratio is not among them. With constant light fractions the likelihood depends only
-on the products ``l_i * d_i`` (``docs/math.md`` §5.2), so for a non-eclipsing system it is
-an input rather than a result: every recovered line depth scales as ``1 / l_i``. The value
-used below is the optical estimate of Bodensteiner et al. (2020). The GRAVITY value
-f = 0.439 +/- 0.013 is a K-band flux ratio and does not transfer to 4400 A unchanged.
+on the products ``l_i * d_i`` (``docs/math.md`` §5.2), so for a non-eclipsing system the
+light ratio is an input rather than a result. Every recovered line depth scales as
+``1 / l_i``. The value used below is the optical estimate of Bodensteiner et al. (2020).
+The GRAVITY value f = 0.439 +/- 0.013 is a K-band flux ratio and does not apply unchanged
+at 4400 A.
 
 Environment
 -----------
@@ -85,8 +87,8 @@ V_REL_MAX = 90.0  # bounds (K_1 + K_2)(1 + e) with headroom; sets the solver ban
 
 # Component 0 = the stripped pre-subdwarf (sharp-lined, K ~ 61 km/s).
 # Component 1 = the Be star (rotationally broadened, K ~ 4 km/s).
-# The ordering matters: `k`, `light_fractions` and the recovered spectra are all indexed by
-# it, and nothing downstream detects a swap.
+# The ordering matters: `k`, `light_fractions` and the recovered spectra are indexed by it,
+# and nothing downstream detects a swap.
 LIGHT_FRACTIONS = (0.45, 0.55)  # optical, Bodensteiner et al. 2020; an input (see above)
 
 # Klement et al. 2025, A&A, Table 3 (combined eccentric solution, astrometry + both RVs).
@@ -121,15 +123,16 @@ def main() -> int:
         region_pad_angstrom=60.0,  # fit the continuum on a wider slice, then trim
         smooth_angstrom=120.0,
     )
-    # One rebin operator instead of 28. Exact to ~0.007 km/s; raises if it is not.
+    # One rebin operator replaces 28. The relabelling is exact to ~0.007 km/s, or the
+    # function raises.
     dataset = ab.Dataset(share_wavelength_grid(list(dataset)), frame=dataset.frame)
     print(f"[{time.time() - t0:5.1f}s] ingest")
     print(dataset.summary())
 
     # --- 2. Model grid ------------------------------------------------------------
-    # Wider than the data by the largest shift plus the LSF kernel radius: inside that
-    # margin the shift and convolution operators zero-fill, and the pixels there would be
-    # modelled with missing flux at full weight.
+    # The grid is wider than the data by the largest shift plus the LSF kernel radius.
+    # Inside that margin the shift and convolution operators zero-fill, and the pixels
+    # there would be modelled with missing flux at full weight.
     grid = ab.LogGrid.covering(
         dataset, dv_kms=DV_KMS, v_margin_kms=V_REL_MAX, lsf_sigma_kms=LSF_SIGMA
     )
@@ -148,8 +151,8 @@ def main() -> int:
 
     # --- 3. Locate the orbit by scanning, before optimizing anything --------------
     # The marginal likelihood is sharply multimodal in conjunction phase, and L-BFGS
-    # started in the wrong mode converges to the wrong answer. A one-dimensional scan over
-    # one period takes about a minute and locates the right one.
+    # started in the wrong mode converges to the wrong solution. A one-dimensional scan
+    # over one period takes about a minute and locates the correct mode.
     log_tau0 = np.log(np.array([1.0e3, 1.0e8]))  # sharp component / rotationally broad one
     log_eta0 = np.log(np.array([1.0e2, 1.0e2]))
 
@@ -215,11 +218,11 @@ def main() -> int:
             f"   ({(value - ref) / err:+.1f} sigma)"
         )
 
-    # --- 5. Is the estimated noise calibrated? ------------------------------------
-    # The inverse variances were estimated from the spectra, so this check is required:
-    # whitened residuals must have unit scatter, or every quoted uncertainty is wrong by
-    # the same factor. It is measured here with no jitter site in theta, because a fitted
-    # jitter drives the number to 1 by construction.
+    # --- 5. Calibration of the estimated noise ------------------------------------
+    # The inverse variances were estimated from the spectra, so this check is required.
+    # Whitened residuals must have unit scatter, or every quoted uncertainty is wrong by
+    # the same factor. The scatter is measured here with no jitter site in theta, because
+    # a fitted jitter makes it 1 by construction.
     theta_map = {
         k: jnp.asarray(v)
         for k, v in fit.params.items()
@@ -229,32 +232,32 @@ def main() -> int:
     z = data_residual_zscores(model.problem_at(theta_map), result.d_hat)
     print(f"\n  whitened residuals: mean {z.mean():+.3f}, sd {z.std():.3f} (target 1.000)")
 
-    # The D15/D31 answer to sd != 1 is a `log_jitter` site: add
+    # The D15/D31 treatment of sd != 1 is a `log_jitter` site: add
     #     "log_jitter": dist.Normal(jnp.zeros(len(ds)), 2.0).to_event(1)
     # to `priors` and refit. See docs/benchmarks.md before interpreting the result on this
-    # dataset. The per-epoch factors come out spanning 1.1 to 3.1 and the residuals whiten,
-    # but the period also moves by ~175x the no-jitter formal error, because downweighting
-    # the noisiest exposures changes which of them carry the period leverage. A rescaled
-    # diagonal noise model is still diagonal, and these residuals are correlated.
+    # dataset. The per-epoch factors span 1.1 to 3.1 and the residuals are whitened, but
+    # the period also moves by ~175x the no-jitter formal error, because downweighting the
+    # noisiest exposures changes which exposures constrain the period. A rescaled diagonal
+    # noise model is still diagonal, and these residuals are correlated.
     #
-    # The complementary D33 handle is a per-epoch continuum: add
+    # The complementary D33 option is a per-epoch continuum: add
     #     "response": dist.Normal(jnp.zeros((len(dataset), 3)), 0.02)
-    # to `priors` (init at zeros) and refit. Measured on this dataset
-    # (scripts/hr6819_response_run.py): it absorbs ~4,000 nats of epoch-structured signal
-    # with coefficients of a few per mil, and moves nothing else (period by ~0.4 formal
-    # sigma, K by <0.001 km/s, residual sd from 1.674 to 1.668). The continuum is not what
-    # biases this orbit.
+    # to `priors` (init at zeros) and refit. On this dataset
+    # (scripts/hr6819_response_run.py) it absorbs ~4,000 nats of epoch-structured signal
+    # with coefficients of a few per mil. The period moves by ~0.4 formal sigma, K by
+    # <0.001 km/s and the residual sd from 1.674 to 1.668, so the bias in this orbit is
+    # not due to the continuum.
     #
-    # D34 addresses the correlation itself: build the model with
+    # D34 addresses the correlation: build the model with
     #     MarginalOrbitModel(..., ar1=True)
-    # and add "ar1_phi": dist.Uniform(-0.9, 0.9) alongside the jitters. That is an AR(1)
+    # and add "ar1_phi": dist.Uniform(-0.9, 0.9) alongside the jitters. This is an AR(1)
     # chain per epoch, on the probe assembly path at ~15x the per-step cost (the fast band
-    # assembly assumes diagonal noise). Measured on this dataset
-    # (scripts/hr6819_ar1_run.py): phi comes out at 0.7-0.8, the residuals whiten in scale
-    # and in lag-1 autocorrelation, the jitters collapse to a near-uniform 1.3-1.9, the D31
-    # period relocation does not recur, and the two analysis windows land 3x closer to each
-    # other in period. The ~0.044 d offset from the published period survives every noise
-    # model tried; see docs/benchmarks.md.
+    # assembly assumes diagonal noise). On this dataset (scripts/hr6819_ar1_run.py) phi is
+    # 0.7-0.8, the residuals are whitened in scale and in lag-1 autocorrelation, and the
+    # jitters narrow to a near-uniform 1.3-1.9. The D31 period relocation does not recur,
+    # and the two analysis windows agree 3x more closely in period. The ~0.044 d offset
+    # from the published period remains under every noise model tried
+    # (see docs/benchmarks.md).
 
     if os.environ.get("ALBIREO_HR6819_NUTS") != "1":
         print("\nSet ALBIREO_HR6819_NUTS=1 to continue into Laplace + NUTS.")

@@ -2,36 +2,36 @@
 
 A disentangled spectrum is the input to an atmosphere code, and the parameter that code
 returns is what is tabulated. The uncertainty on the disentangled spectrum is usually
-dropped at that boundary. Mahy et al. (2020), TMBM III, §3.1, state that "the uncertainties
+dropped at that step. Mahy et al. (2020), TMBM III, §3.1, state that "the uncertainties
 that could arise from the normalisation procedure are not taken into account in the global
 uncertainties on the presented properties".
 
 albireo has a posterior over the component spectra rather than a single best fit, so the
 uncertainty can be propagated by refitting draws. The procedure follows Kiran et al.
-(2016), who refitted a noise-perturbed disentangled profile 500 times; the difference lies
-in what is drawn. Kiran's loop adds independent noise per pixel at the amplitude of the
+(2016), who refitted a noise-perturbed disentangled profile 500 times. The difference is
+in what is drawn. Their procedure adds independent noise per pixel at the amplitude of the
 error bar. :func:`albireo.draw_spectra` returns draws from the joint posterior,
 ``d_hat + L^-T z`` on the vector stacked over all components, so each draw is correlated
 across wavelength and across the components.
 
-Disentangling error has a low-frequency null space, and low-frequency error is what moves a
-continuum and therefore a temperature. For a quantity that integrates the spectrum, such as
-an equivalent width and through it log g, the two recipes give different answers. This
-script measures the difference. Equivalent width stands in for the atmosphere code: D40
-established that EW is the quantity that reaches the atmosphere code and quantified an
-11.5% EW error as a systematic in log g, so a propagated EW uncertainty is a small-scale
-version of a propagated log g uncertainty that runs in seconds.
+Disentangling error has a low-frequency null space, and low-frequency error shifts the
+continuum and therefore the temperature. For a quantity that integrates the spectrum, such
+as an equivalent width and through it log g, the two procedures give different results.
+This script measures the difference. Equivalent width is a proxy for the atmosphere code.
+D40 established that EW is the input to the atmosphere code and quantified an 11.5% EW
+error as a systematic in log g. A propagated EW uncertainty is therefore a small-scale
+version of a propagated log g uncertainty, computed in seconds.
 
 The script does not run GSSP or iSpec. It writes the files they read, verifies the two
 properties of those files that fail silently (the iSpec wavelength unit and the GSSP grid
 spacing), and prints the fitting loop to run next. See ``docs/tutorials/downstream.md`` for
-that half.
+that part.
 
 Environment
 -----------
 ALBIREO_EXAMPLE_FAST=1
-    CI-sized run: fewer draws and fewer L-BFGS steps. The conclusions are unchanged; the
-    Monte-Carlo spread carries a wider error on itself.
+    CI-sized run: fewer draws and fewer L-BFGS steps. The conclusions are unchanged. The
+    error on the Monte-Carlo spread is larger.
 
 Usage
 -----
@@ -129,7 +129,7 @@ def main() -> None:
         print(f"  iSpec {ispec[0].name}: 3 tab-separated columns, first row = {i_first[0]} nm")
         print(f"        (the same pixel; {float(i_first[0]) * 10:.3f} A -- a factor of ten apart)")
         # iSpec performs no unit conversion on the text path, so a value in angstrom would
-        # sit a factor of ten outside every model grid. The unit is asserted here.
+        # be a factor of ten outside every model grid. The unit is asserted here.
         assert abs(float(i_first[0]) * 10.0 - g_wave[0]) < 1e-3, "iSpec column must be nm"
 
     # ---------------------------------------------------------------- the draws
@@ -138,7 +138,7 @@ def main() -> None:
     draws = np.asarray(ab.draw_spectra(marginal, jax.random.key(0), N_DRAWS))
     print(f"  drew {draws.shape} in {time.perf_counter() - start:.2f} s")
 
-    # The line to integrate: deepest feature of component 1, away from the grid edges.
+    # The line to integrate is the deepest feature of component 1, away from the grid edges.
     interior = slice(grid.n // 10, -grid.n // 10)
     center = float(wave[interior][np.argmin(d_hat[0][interior])])
     print(f"  measuring the equivalent width of the line at {center:.2f} A")
@@ -154,7 +154,7 @@ def main() -> None:
     )
     ew_hat = [equivalent_width(wave, 1.0 + d_hat[c], center, EW_HALF_WIDTH_A) for c in range(2)]
 
-    # The comparison recipe (Kiran et al. 2016): the same number of spectra, perturbed by
+    # The comparison procedure (Kiran et al. 2016) perturbs the same number of spectra with
     # independent Gaussian noise per pixel at the amplitude of the pointwise band.
     rng = np.random.default_rng(11)
     white = d_hat[None, :, :] + rng.normal(0.0, 1.0, (N_DRAWS, *d_hat.shape)) * std[None, :, :]
@@ -198,17 +198,17 @@ def main() -> None:
     print("  then fit every file with the same grid and settings, and take the spread of")
     print("  the resulting Teff / log g. See docs/tutorials/downstream.md.")
 
-    # For an integrated quantity the two recipes disagree, because disentangling error is
-    # not white. The claim is asserted as well as printed.
+    # For an integrated quantity the two procedures disagree, because disentangling error
+    # is not white. The claim is asserted as well as printed.
     assert max(ratios) > 1.5, (
         f"joint-vs-white EW spread ratios {ratios} -- expected the joint draws to give a "
         "materially larger integrated uncertainty than independent per-pixel noise at the "
         "band's amplitude"
     )
     assert np.all(ew_joint.std(axis=1, ddof=1) > 0.0)
-    # The second result: the components exchange line depth. Independent per-pixel noise has
-    # no cross-component structure, so the two correlations printed above measure what the
-    # white-noise recipe omits.
+    # The second result is that the components exchange line depth. Independent per-pixel
+    # noise has no cross-component structure, so the two correlations printed above measure
+    # what the white-noise procedure omits.
     assert corr < -0.5, f"expected a strong anti-correlation between components, got {corr:+.3f}"
     assert abs(corr_white) < 0.5, (
         f"independent per-pixel noise should carry no cross-component structure, "

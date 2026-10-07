@@ -1,28 +1,27 @@
-"""Writers for the atmosphere codes that consume disentangled spectra.
+"""Writers for the atmosphere codes that read disentangled spectra.
 
 **Experimental.** The writers follow the file formats the atmosphere codes accept,
 and change when those do.
 
-Codes such as GSSP, iSpec, Korg.jl and PySME turn a component spectrum into effective
-temperature, surface gravity and abundances. This module writes the input files those codes
-read, without further hand-editing. The two formats are not interchangeable and their
-differences produce no error message, so both are recorded here against their primary
-sources.
+Codes such as GSSP, iSpec, Korg.jl and PySME derive effective temperature, surface gravity
+and abundances from a component spectrum. This module writes the input files those codes
+read, without further editing. The two formats are not interchangeable and their differences
+produce no error message, so both are recorded here against their primary sources.
 
-GSSP (Tkachenko 2015, Appendix B, which serves as the manual: there is no separate document
-and no source repository) takes a two-column ASCII file of wavelength (Angstrom, linear
-scale) and normalized flux. Its configuration files have no error column, no S/N entry and
+GSSP takes a two-column ASCII file of wavelength (Angstrom, linear scale) and normalized
+flux (Tkachenko 2015, Appendix B, which serves as the manual: there is no separate document
+and no source repository). Its configuration files have no error column, no S/N entry and
 no weighting entry. The wavelength scale must be equidistant, because GSSP computes the step
 of its synthetic spectra from the observation: a log-wavelength grid written as-is sets that
 step from the first pixel pair.
 
 iSpec (Blanco-Cuaresma et al. 2014) takes tab-separated text with one header line and exactly
 three columns, ``waveobs``, ``flux`` and ``err``: wavelength in nanometres and the error as
-an absolute 1-sigma in flux units. The reader drops line 1 positionally and fixes the column
-order, so the column names are cosmetic and the order is not.
+an absolute 1-sigma in flux units. The reader drops line 1 and assigns the columns by
+position, so the column names are ignored and the order matters.
 
-Since GSSP accepts no per-pixel uncertainty, the disentangling posterior can reach an
-atmospheric parameter only through repeated fits of posterior draws (:func:`export_draws`).
+Since GSSP accepts no per-pixel uncertainty, the disentangling posterior can be propagated to
+an atmospheric parameter only through repeated fits of posterior draws (:func:`export_draws`).
 
 Neither writer converts between air and vacuum. iSpec provides ``air_to_vacuum`` and
 ``vacuum_to_air`` as explicit user steps and does no conversion on read; albireo does the
@@ -48,9 +47,9 @@ __all__ = [
 ]
 
 # iSpec discards any pixel whose error is <= 0 rather than down-weighting it, and deactivates
-# the use of errors entirely if every error is non-positive. A disentangled component's
-# posterior standard deviation approaches zero where the prior dominates or the component
-# carries no light, so an unfloored export would remove exactly the pixels the band describes.
+# the use of errors if every error is non-positive. A disentangled component's posterior
+# standard deviation approaches zero where the prior dominates or the component contributes
+# no light, so an export without the floor would remove those pixels.
 _ISPEC_ERR_FLOOR = 1e-8
 
 
@@ -80,7 +79,7 @@ def _linear_grid(wave, step_angstrom):
     lo, hi = float(wave[0]), float(wave[-1])
     if step_angstrom is None:
         # The median spacing of the source grid: a finer step oversamples a spectrum that
-        # carries no information at the added scales, a coarser one discards resolution.
+        # contains no information at the added scales, and a coarser one discards resolution.
         step_angstrom = float(np.median(np.diff(wave)))
     if not step_angstrom > 0:
         raise ValueError(f"step_angstrom must be positive, got {step_angstrom}")
@@ -113,8 +112,8 @@ def write_gssp(path, grid, d_hat, *, component=None, step_angstrom=None, dilute=
         written grid is always equidistant: GSSP infers the step of its synthetic spectra
         from the observation, so a log-wavelength grid is resampled.
     dilute
-        Records the caller's intent and changes no numbers. ``True`` states that the spectrum
-        written is still light-diluted, which is what GSSP's ``dilution_flag adjust`` mode
+        Records the caller's intent and changes no numbers. ``True`` indicates that the
+        written spectrum is still light-diluted, as GSSP's ``dilution_flag adjust`` mode
         expects for a disentangled component. albireo never removes the dilution, since the
         light fraction is an assumption of the fit rather than a measurement
         (``docs/math.md`` §5.2). The flag exists because the corresponding GSSP configuration
@@ -127,13 +126,13 @@ def write_gssp(path, grid, d_hat, *, component=None, step_angstrom=None, dilute=
     Notes
     -----
     Resampling is linear interpolation onto the equidistant grid. It correlates neighbouring
-    pixels, which is why albireo does not resample observations; here it is applied to a
-    model quantity for a code that requires the spacing. The same interpolation is applied
-    to every draw in :func:`export_draws`, so draws remain comparable to each other.
+    pixels, so albireo does not resample observations. Here it is applied to a model
+    quantity for a code that requires the spacing. The same interpolation is applied to
+    every draw in :func:`export_draws`, so draws remain comparable to each other.
 
     GSSP has no error column (Tkachenko 2015, Appendix B.2): its configuration files contain
     no error path, no S/N and no weighting, and its quoted uncertainties come from chi-square
-    on the fit residuals. The posterior band reaches it only through :func:`export_draws`.
+    on the fit residuals. The posterior band is propagated only through :func:`export_draws`.
 
     References
     ----------
@@ -187,14 +186,14 @@ def write_ispec(path, grid, d_hat, std=None, *, component=None, err_floor=_ISPEC
     Notes
     -----
     Wavelengths are written in nanometres. iSpec's plain-text path performs no unit
-    conversion and its internal scale, including the atomic line lists, is nm; an Angstrom
-    value would land a factor of ten outside every model grid. The unit is regression-tested.
+    conversion and its internal scale, including the atomic line lists, is nm. An Angstrom
+    value would lie a factor of ten outside every model grid. The unit is regression-tested.
 
     The grid is written as-is: iSpec imposes no equidistance requirement, and resampling
     would correlate the noise to no purpose.
 
     iSpec uses the error column in its reported parameter uncertainties, but weights by
-    ``sqrt(1/err)`` rather than ``1/err**2``, a hand-calibration in its own source. The
+    ``sqrt(1/err)`` rather than ``1/err**2``, a manual calibration in its own source. The
     returned ``errors['teff']`` is therefore not a Gaussian propagation of this band and does
     not scale linearly with it; it is the within-fit error of one spectrum. It should not be
     added in quadrature to the spread from :func:`export_draws` (see its Notes for the
@@ -221,9 +220,9 @@ def write_ispec(path, grid, d_hat, std=None, *, component=None, err_floor=_ISPEC
         rows = "\n".join(
             f"{w:.10f}\t{f:.10f}\t{e:.10f}" for w, f, e in zip(wave_nm, flux, err, strict=True)
         )
-        # One header line, and no trailing newline: iSpec drops line 1 positionally, and a
-        # final empty line splits to a 1-tuple, which breaks the primary parser and drops
-        # the file into a legacy fallback that reads it wrongly rather than refusing it.
+        # One header line and no trailing newline. iSpec drops line 1 by position. A final
+        # empty line splits to a 1-tuple, on which the primary parser fails, and the legacy
+        # fallback parser then reads the file incorrectly without raising an error.
         Path(target).write_text(f"waveobs\tflux\terr\n{rows}", encoding="utf-8")
         written.append(Path(target))
     return written[0] if len(written) == 1 else written
@@ -232,11 +231,11 @@ def write_ispec(path, grid, d_hat, std=None, *, component=None, err_floor=_ISPEC
 def export_draws(directory, grid, draws, *, format="gssp", prefix="draw", **kwargs):
     """Write ``N`` posterior draws as ``N`` fittable spectra, one set per draw.
 
-    This is how a disentangling uncertainty reaches an effective temperature. All ``N``
-    exported spectra are fitted with the same atmosphere code, grid and settings; the spread
+    The draws propagate a disentangling uncertainty to an effective temperature. All ``N``
+    exported spectra are fitted with the same atmosphere code, grid and settings. The spread
     of the resulting parameters is the contribution of the disentangling posterior. That term
-    is usually omitted: Mahy et al. (2020, §3.1) state that the uncertainties from the
-    normalization procedure are not included in the properties they present, and Pavlovski,
+    is usually omitted. Mahy et al. (2020, §3.1) state that the uncertainties from the
+    normalization procedure are not included in the properties they present. Pavlovski,
     Southworth & Tamajo (2018) note that propagating uncertainties through disentangling is
     difficult and must be tackled numerically.
 
@@ -245,7 +244,7 @@ def export_draws(directory, grid, draws, *, format="gssp", prefix="draw", **kwar
     directory
         Output directory, created if absent.
     grid
-        The :class:`~albireo.grids.LogGrid` the draws live on.
+        The :class:`~albireo.grids.LogGrid` of the draws.
     draws
         Shape ``(n_draws, n_comp, n_pix)``, from
         :func:`albireo.likelihood.draw_spectra`.
@@ -280,11 +279,11 @@ def export_draws(directory, grid, draws, *, format="gssp", prefix="draw", **kwar
     The spread does not contain the following, which a report using it should state:
 
     * The atmosphere code's own model error: grid coarseness, LTE assumptions, line-list
-      quality. That lies outside albireo's posterior and is unaffected by the draws.
+      quality. That is outside albireo's posterior and is unaffected by the draws.
     * Anything albireo conditions on rather than marginalizes. The light fractions are
       assumed, not inferred, and the marginal likelihood is flat in them under constant light
-      (see ``scripts/m5_light_ratio_demo.py``); Pavlovski & Hensberge (2010) identify this
-      systematic as dominant. The draw spread carries no information about it.
+      (see ``scripts/m5_light_ratio_demo.py``). Pavlovski & Hensberge (2010) identify this
+      systematic as dominant. The draw spread contains no information about it.
     * iSpec's own ``errors['teff']``, a within-draw fit error computed from the ``err``
       column. Adding it in quadrature to a spread from the same posterior counts part of
       that posterior twice.
@@ -292,7 +291,7 @@ def export_draws(directory, grid, draws, *, format="gssp", prefix="draw", **kwar
     ``N = 100`` is a reasonable production value: the relative standard error of a sample
     standard deviation is ``1/sqrt(2(N-1))``, i.e. 7% at 100 and 12.7% at 32. Below about 32
     the spread is too noisy to quote. The atmosphere grid step should be smaller than the
-    spread being measured; if every draw lands in one grid cell the spread is zero for a
+    spread being measured; if every draw falls in one grid cell the spread is zero for a
     reason unrelated to the data.
 
     References

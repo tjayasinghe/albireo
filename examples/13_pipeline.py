@@ -9,26 +9,27 @@ command line.
     python examples/13_pipeline.py            # in-process, two simulated stars
     python examples/13_pipeline.py --jobs 2   # the same batch in two worker processes
 
-Both stars are simulated with known answers, so the reports carry an "against the
-injected truth" block. The first is the packaged example, measured against its own
-disentangled components: its velocities are differential, because a disentangled
-component's rest frame is not identified and no synthetic grid is consulted, so the orbit
-fitted to the table gives each component its own systemic velocity. The second star's
+Both stars are simulated with known injected values, so the reports include an "against
+the injected truth" block. The first is the packaged example, measured against its own
+disentangled components. Its velocities are differential, because a disentangled
+component's rest frame is not identified and no synthetic grid is used. The orbit fitted
+to the table therefore has one systemic velocity per component. The second star's
 components are drawn from a toy synthetic library at known labels. The label stage fits
-them back and measures each component's frame offset, so its velocities are absolute and
-the orbit recovers the +12 km/s systemic velocity that the disentangling alone cannot
-determine.
+the labels and measures each component's frame offset, so this star's velocities are
+absolute and the orbit recovers the +12 km/s systemic velocity, which the disentangling
+alone cannot determine.
 
-Three results to check in the output.
+Three results should be checked in the output.
 
 1. The flags. Every caveat a run records is printed at the end of each star's report and
    stored in ``result.json``. On the packaged star the flag states that the velocities are
-   differential and why; on the toy star there should be none.
-2. The zero point. The toy star's ``gamma`` against the injected +12 km/s, a quantity a
-   disentangling cannot produce on its own.
+   differential and why. On the toy star there should be none.
+2. The zero point. The toy star's ``gamma`` is compared with the injected +12 km/s. A
+   disentangling alone cannot determine this quantity.
 3. The batch table. ``results.csv`` has one row per star (period, eccentricity,
    semi-amplitudes and systemic velocities with errors, labels, flags), and
-   ``failures.txt`` lists any star that did not complete, without stopping the others.
+   ``failures.txt`` lists any star that did not complete. A failure does not stop the
+   others.
 
 Environment
 -----------
@@ -91,7 +92,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"\n  flags: {toy.flags or 'none'}")
     print(f"\nproducts: {run.directory / 'results.csv'} and one directory per star")
 
-    # ---- the gate ---------------------------------------------------------------
+    # ---- assertions -------------------------------------------------------------
     assert not run.failures, run.failures
     assert packaged.report["velocities"]["absolute_all"] is False
     assert packaged.report["orbit"]["gamma_mode"] == "one per component"

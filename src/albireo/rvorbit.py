@@ -6,15 +6,15 @@ path of ``docs/math.md`` §7 fits the same Keplerian from the spectra directly.
 The joint path does not use this module. :mod:`albireo.todcor` produces one velocity per
 component per epoch, and this module fits a Keplerian to such a table with the same
 Kepler solver and angle conventions as the joint model (:mod:`albireo.kepler`,
-:func:`albireo.orbit_velocities`), so that the two routes can be compared element by
+:func:`albireo.orbit_velocities`). The two routes can then be compared element by
 element (``docs/math.md`` §10.6).
 
 The fit is weighted nonlinear least squares over the sampled elements: period, time of
 conjunction, ``(sqrt(e) cos w, sqrt(e) sin w)``, one semi-amplitude per component and a
 systemic velocity, with the Jacobian computed by JAX. The systemic velocity is a single
 parameter when every component's velocities are absolute and one parameter per component
-otherwise: a table built from disentangled templates carries one unidentified zero point
-per component (``docs/math.md`` §7.6), and a shared gamma would then absorb two different
+otherwise. A table built from disentangled templates has one unidentified zero point per
+component (``docs/math.md`` §7.6), and a shared gamma would then absorb two different
 constants and bias both semi-amplitudes. :class:`RVOrbit` records which was used in
 ``gamma_mode``.
 
@@ -67,9 +67,9 @@ _GRID_MIN_FREQUENCIES = 20_000
 def _valid_velocities(table) -> np.ndarray:
     """``(n_comp, n_epochs)``: whether each velocity can enter a period search or a fit.
 
-    A velocity counts where its own component was measured, which is a finite velocity and
-    a finite error off that component's search edge, at an epoch that is not blended. The
-    other components do not enter: a primary measured at an epoch whose secondary sat at
+    A velocity is valid where its own component was measured: a finite velocity and a
+    finite error off that component's search edge, at an epoch that is not blended. The
+    other components do not matter: a primary measured at an epoch whose secondary was at
     the search edge, or was removed by the caller, is still a measurement of the primary.
     Where every component is valid this is ``table.good`` repeated per component, with the
     errors' finiteness added.
@@ -99,40 +99,40 @@ def _frequency_grid(t, period_range, n_frequencies) -> np.ndarray:
     """The frequencies ``find_period`` evaluates, in ascending order.
 
     With ``n_frequencies`` given the grid is that many points spaced evenly from
-    ``1 / longest`` to ``1 / shortest``, as asked. By default it is anchored at the low end
-    instead: the step is ``1 / (N T)`` with ``T`` the span of the epochs, the points are
+    ``1 / longest`` to ``1 / shortest``. By default it is anchored at the low end. The
+    step is ``1 / (N T)`` with ``T`` the span of the epochs, the points are
     ``1 / longest + k / (N T)`` below the highest frequency, and the highest frequency is
     appended as the last point. ``N`` is ``_GRID_OVERSAMPLING`` samples per ``1/T``, raised
     where needed to the smallest integer that gives at least ``_GRID_MIN_FREQUENCIES``
-    points, computed with the frequency span rounded down to two significant figures, so
-    that the count still reaches the minimum and ``N`` does not follow small movements of
-    the high end.
+    points. It is computed with the frequency span rounded down to two significant
+    figures, so that the count still reaches the minimum and ``N`` is unaffected by small
+    movements of the high end.
 
     The anchoring makes a run reproducible (D65). The default shortest period is twice the
-    smallest gap between two epochs, so a grid spaced evenly between the two ends moves
-    every upper frequency when one epoch time moves: a shift of 1e-6 d in the closest pair
-    of a Gaia-like table (gaps of 0.074 d, some 1500 d of baseline) moves the top of the
+    smallest gap between two epochs, so on a grid spaced evenly between the two ends every
+    upper frequency moves when one epoch time moves. A shift of 1e-6 d in the closest pair
+    of a Gaia-like table (gaps of 0.074 d, about 1500 d of baseline) moves the top of the
     grid by more than one step, and near-degenerate short-period peaks change order. Epoch
-    times written to six decimals shift by exactly that much; on an evenly spaced grid the
-    recorded peaks of five benchmark tables reproduced only after moving the shortest
+    times written to six decimals shift by that much. On an evenly spaced grid the
+    recorded peaks of five benchmark tables were reproduced only after moving the shortest
     period by 0.5 to 4e-6 d.
 
-    The guarantee: when an epoch other than the first and the last moves, ``T`` and the
-    low end do not, so every point below both the old and the new highest frequency stays
-    where it was, bit for bit, the last point moves with the high end, and points are
-    added or removed only between the two, unless ``N`` changes. ``N`` is 10 on any table
-    whose ``10 T`` times the span reaches the minimum (every multi-year survey table), and
-    does not depend on the high end at all there. Below that it changes only when the
-    shift carries the span across a two-significant-figure boundary or carries
-    ``20000 / (T span)`` across an integer; a 1e-6 d shift moves a span of about 6.8 per
-    day by about 1e-4, so that boundary case is rare but possible, and the whole grid is
-    then respaced. Moving the first or the last epoch changes ``T`` and respaces every
-    point by a relative ``dT / T``.
+    When an epoch other than the first and the last moves, ``T`` and the low end do not.
+    Unless ``N`` changes, every point below both the old and the new highest frequency is
+    then unchanged, bit for bit, the last point moves with the high end, and points are
+    added or removed only between the two. ``N`` is 10 on any table whose ``10 T`` times
+    the span reaches the minimum (every multi-year survey table), and there it does not
+    depend on the high end. Below that it changes only when the shift moves the span
+    across a two-significant-figure boundary or moves ``20000 / (T span)`` across an
+    integer. A 1e-6 d shift moves a span of about 6.8 per day by about 1e-4, so that
+    boundary case is rare but possible, and the whole grid is then respaced. Moving the
+    first or the last epoch changes ``T`` and respaces every point by a relative
+    ``dT / T``.
 
     Against the evenly spaced grid, over the 33 blind tables of the benchmark's third run,
-    the anchored grid keeps the number of systems whose true period ranks first at 20
-    while reshuffling near-degenerate candidates: one Gaia system from rank 39 to 11, one
-    from 23 to 24, one from 3 to 4, and field systems from 40 to 41 and from 2 to 6.
+    the anchored grid keeps at 20 the number of systems whose true period ranks first. It
+    reorders near-degenerate candidates: one Gaia system from rank 39 to 11, one from 23
+    to 24, one from 3 to 4, and field systems from 40 to 41 and from 2 to 6.
     """
     if period_range is None:
         gaps = np.diff(np.sort(t))
@@ -236,8 +236,8 @@ def _harmonic_power(t, y, w, freqs, n_harmonics: int) -> np.ndarray:
         weighted = design * weight[None, :, None]
         normal = np.einsum("fnp,fnq->fpq", weighted, design)
         rhs = np.einsum("fnp,n->fp", weighted, y)
-        # The design is singular where the harmonics degenerate (the long-period corner of
-        # the grid, and any frequency the epochs alias exactly); ridge it rather than fail.
+        # The design is singular where the harmonics degenerate (the long-period end of the
+        # grid, and any frequency the epochs alias exactly). A ridge prevents a failed solve.
         normal[:, diagonal, diagonal] *= 1.0 + 1e-10
         normal[:, diagonal, diagonal] += 1e-12 * total
         try:
@@ -253,14 +253,15 @@ def _harmonic_power(t, y, w, freqs, n_harmonics: int) -> np.ndarray:
 def _distinct_peaks(freqs, power, n_peaks: int, tol: float = 0.02) -> list[float]:
     """The ``n_peaks`` highest grid periods that differ from each other by more than ``tol``.
 
-    Only the local maxima of the power array are walked. An accepted peak is the highest
-    point of its own exclusion window and so a local maximum, wherever the grid resolves
-    that window: the step in period is ``dP/P = P / (N_os T)``, below ``tol`` up to about
-    ``P = 0.2 T`` at ten samples per ``1/T``, and the list is then the one an exhaustive
-    loop over every grid point returns, at a few thousand comparisons instead of a few
-    hundred thousand. At longer periods the two lists differ, and in the direction that
-    helps: two adjacent grid points on the flank of one broad peak are already more than
-    ``tol`` apart in period, and the exhaustive loop reports both as separate candidates.
+    Only the local maxima of the power array are examined. An accepted peak is the highest
+    point of its own exclusion window and therefore a local maximum, wherever the grid
+    resolves that window. The step in period is ``dP/P = P / (N_os T)``, below ``tol`` up
+    to about ``P = 0.2 T`` at ten samples per ``1/T``. The list is then the one an
+    exhaustive loop over every grid point returns, at a few thousand comparisons instead
+    of a few hundred thousand. At longer periods the two lists differ, and this one is
+    preferable: two adjacent grid points on the flank of one broad peak are already more
+    than ``tol`` apart in period, and the exhaustive loop reports both as separate
+    candidates.
     """
     power = np.asarray(power)
     interior = np.flatnonzero((power[1:-1] > power[:-2]) & (power[1:-1] >= power[2:])) + 1
@@ -291,61 +292,61 @@ def find_period(
     two components' velocities, which is free of both systemic velocities and both
     template zero points and has amplitude ``K_1 + K_2``. A single component is searched
     as it is. The statistic is the floating-mean, weighted generalized periodogram of
-    Zechmeister and Kürster (2009): a constant is fitted alongside the sinusoid at every
+    Zechmeister and Kürster (2009). A constant is fitted alongside the sinusoid at every
     frequency, and the returned power is the fraction of the weighted variance the pair
-    removes. The weights ``1 / sigma^2`` enter the fit, not the data.
+    removes. The weights ``1 / sigma^2`` enter the fit, and the data are not rescaled.
 
     The floating mean makes the search usable on clumped sampling. A classical
-    periodogram fits ``a cos(wt) + b sin(wt)`` with the offset held at zero, which is
+    periodogram fits ``a cos(wt) + b sin(wt)`` with the offset held at zero. This is
     harmless when the epochs are spread evenly enough that the sampling window has no mean
-    at the frequencies of interest. A survey cadence is not: on the D62
-    benchmark's Gaia-like tables, 10 to 25 epochs falling into about eleven visibility
-    windows separated by hundreds of days, the constant the classical model cannot fit is
-    absorbed into the sinusoid, and the spurious power buries the true period. Over those
-    tables the true period is the highest peak of the classical periodogram in 5 of 13
-    systems and of this one in 9 of 13.
+    at the frequencies of interest. A survey cadence is not. The D62 benchmark's Gaia-like
+    tables have 10 to 25 epochs in about eleven visibility windows separated by hundreds
+    of days. On them the constant the classical model cannot fit is absorbed into the
+    sinusoid, and the spurious power can exceed that of the true period. Over those tables
+    the true period is the highest peak of the classical periodogram in 5 of 13 systems
+    and of this one in 9 of 13.
 
     The frequency grid is uniform in frequency, so the step in period is
     ``dP/P = P / (N_os T)`` with ``T`` the span of the epochs and ``N_os = 10`` samples per
     ``1/T``. That is 0.1% at a hundredth of the baseline and 4.7% at 0.47 of it, so a peak
-    reported near a third of the baseline is good to a few per cent only; the Keplerian
-    fit started from it, not the grid, pins the period down. A finer grid was measured
-    and changes no outcome for the single-sinusoid search. The default grid starts at the
+    reported near a third of the baseline is located to a few per cent only. The Keplerian
+    fit started from it, not the grid, determines the period. A finer grid was tested and
+    changed no outcome for the single-sinusoid search. The default grid starts at the
     longest period and keeps its step whatever the shortest period is, so that moving one
-    epoch time by a rounding error does not move the grid under the peaks
+    epoch time by a rounding error does not move the grid relative to the peaks
     (:func:`_frequency_grid`).
 
     Each velocity enters where its own component was measured: a finite velocity and error,
     off that component's search edge, at an epoch that is not blended. The relative velocity
-    of two components is defined where both are; one component searched alone
-    (``components=[name]``) keeps every epoch at which it was measured, whatever happened to
-    the others there.
+    of two components is defined where both are. One component searched alone
+    (``components=[name]``) keeps every epoch at which it was measured, regardless of the
+    other components.
 
     With ``n_harmonics = 2`` the model is ``c + a1 cos(wt) + b1 sin(wt) + a2 cos(2wt) +
     b2 sin(2wt)``, fitted by weighted least squares at every frequency, and the power is
     ``1 - chi2 / chi2_null`` on the same scale. An eccentric orbit's velocity curve is not
-    a sinusoid, and the second harmonic ranks its period higher: over the same benchmark it
+    a sinusoid, and the second harmonic ranks its period higher. Over the same benchmark it
     moved two systems at e = 0.41 and 0.47 from rank 10 to ranks 2 and 1, and one at
     e = 0.67 from beyond the six hundredth peak to rank 1. It is worse on circular orbits,
-    where the extra freedom is spent on noise, so it belongs beside the one-harmonic search
-    as a second source of candidates rather than in place of it.
+    where the additional parameters fit noise, so it is a second source of candidates
+    beside the one-harmonic search and does not replace it.
 
     With ``swap_invariant`` the series is the magnitude of the difference instead. Two
     alike components at similar light fractions can be exchanged between epochs by the
     correlation that measured them (:func:`reassign_by_orbit`), which flips the sign of
-    the difference at random epochs and destroys its periodogram; the magnitude is the
-    same under the exchange. Its dominant peak sits at half the period for a circular
+    the difference at random epochs and destroys its periodogram. The magnitude is
+    unchanged by the exchange. Its dominant peak is at half the period for a circular
     orbit, so the caller should try each peak and its double, and then re-assign the
     epochs by the orbit fitted at each candidate.
 
-    A periodogram peak is a starting point, not a period. The Keplerian fitted at a
-    candidate uses the shape of the curve and every velocity at once, and on the same
-    benchmark it separated the truth from the best alias by hundreds in chi-square wherever
-    the truth was reachable at all; the search should propose many candidates and the fit
-    decide among them. There is a floor: a table of ten or eleven epochs whose true
-    Keplerian already leaves a reduced chi-square above about five cannot be searched by
-    any statistic on that table. An alias then fits better than the truth, and the correct
-    output is a failure rather than a period.
+    A periodogram peak is only a starting point. The Keplerian fitted at a candidate uses
+    the shape of the curve and every velocity at once. On the same benchmark it separated
+    the true period from the best alias by hundreds in chi-square wherever the true period
+    was reachable. The search should propose many candidates and the fit decide among
+    them. A table of ten or eleven epochs whose true Keplerian already leaves a reduced
+    chi-square above about five cannot be searched by any statistic on that table. An
+    alias then fits better than the true period, and the correct output is a failure
+    rather than a period.
 
     Parameters
     ----------
@@ -356,10 +357,10 @@ def find_period(
         twice the baseline.
     n_frequencies
         Size of the frequency grid, spaced evenly between the two ends. Default: a step of
-        ``1 / (N T)`` from the lowest frequency with ``T`` the span of the epochs and
-        ``N`` ten samples per ``1/T``, raised to the smallest integer that gives at least
-        20000 frequencies (with the span rounded down to two significant figures), and the
-        highest frequency as the last point. A multi-year survey cadence (Gaia's, for
+        ``1 / (N T)`` from the lowest frequency, and the highest frequency as the last
+        point. ``T`` is the span of the epochs and ``N`` ten samples per ``1/T``, raised
+        to the smallest integer that gives at least 20000 frequencies (with the span
+        rounded down to two significant figures). A multi-year survey cadence (Gaia's, for
         instance) is then not searched on a grid coarser than its own peak width, and the
         grid points do not move with the shortest period.
     components
@@ -372,7 +373,7 @@ def find_period(
     n_harmonics
         Harmonics in the model. One is the generalized periodogram in closed form; two is
         the eccentric-orbit search described above. ``1 + 2 n_harmonics`` parameters need
-        that many usable epochs and then some.
+        more than that many usable epochs.
 
     Returns
     -------
@@ -450,7 +451,7 @@ class RVOrbit:
         Semi-amplitudes [km/s], one per component.
     gamma
         Systemic velocity [km/s]: one value repeated when it was shared, one per component
-        when each carried its own zero point.
+        when each had its own zero point.
     gamma_mode
         ``"shared"`` or ``"one per component"``.
     errors
@@ -469,9 +470,9 @@ class RVOrbit:
     used
         Per epoch: whether any component's velocity at that epoch entered the fit.
     held
-        Components whose semi-amplitude was held at its start rather than fitted, because
-        they had no more usable velocities than parameters of their own (one, or two with a
-        systemic velocity of their own). Their semi-amplitude is not a measurement, and
+        Components whose semi-amplitude was held at its starting value rather than fitted,
+        because they had no more usable velocities than parameters of their own (one, or two
+        with a systemic velocity of their own). Their semi-amplitude is not a measurement, and
         :attr:`mass_ratio`, :meth:`minimum_masses` and :meth:`projected_semiaxes` do not
         report numbers for them.
     """
@@ -509,7 +510,7 @@ class RVOrbit:
     def mass_ratio(self) -> float | None:
         """``q = M_2 / M_1 = K_1 / K_2`` for a double-lined table; ``None`` otherwise.
 
-        ``None`` too when either semi-amplitude was held rather than fitted (:attr:`held`).
+        Also ``None`` when either semi-amplitude was held rather than fitted (:attr:`held`).
         """
         if not self._measured_pair():
             return None
@@ -632,14 +633,14 @@ class _Objective:
 def _objective(circular: bool, n_comp: int, n_gamma: int) -> _Objective:
     """The compiled objective for one static configuration of :func:`fit_rv_orbit`.
 
-    Taking the data as arguments and caching the functions on the configuration (circular
-    or not, the number of components, one systemic velocity or one per component) leaves
-    JAX one compilation per configuration and array shape, shared by every candidate
-    period of one table. Closures over each call's data compiled per call, and
+    The functions take the data as arguments and are cached on the configuration (circular
+    or not, the number of components, one systemic velocity or one per component). JAX
+    then compiles once per configuration and array shape for all candidate periods of one
+    table. Closures over each call's data compile per call, and with them
     benchmark-harness processes fitting thousands of starting periods grew to 2.7 to 3.8
-    GB each (D65); with this and :func:`_predictor`, three tables through six search
-    configurations peak at 446 MB against 5061 MB with this alone, and the full 33-table
-    rerun at 697 MB.
+    GB each (D65). With this function and :func:`_predictor`, three tables through six
+    search configurations peak at 446 MB against 5061 MB with this alone, and the full
+    33-table rerun at 697 MB.
     """
 
     def model(params, t_eval):
@@ -712,9 +713,9 @@ def _predictor(n_comp: int):
 def _semi_amplitude_start(y) -> float:
     """Half the range of one component's usable velocities ``y``; zero with none.
 
-    The start :func:`fit_rv_orbit` gives a semi-amplitude: ``K`` for a Keplerian of any
-    eccentricity whose phases are covered, since the curve runs from ``gamma - K (1 - e cos
-    w)`` to ``gamma + K (1 + e cos w)``.
+    Used by :func:`fit_rv_orbit` as the starting semi-amplitude: ``K`` for a Keplerian of
+    any eccentricity whose phases are covered, since the curve ranges from
+    ``gamma - K (1 - e cos w)`` to ``gamma + K (1 + e cos w)``.
     """
     y = np.asarray(y, dtype=np.float64)
     return 0.5 * float(np.ptp(y)) if y.size else 0.0
@@ -737,7 +738,7 @@ def fit_rv_orbit(
 
     The parameters are the period, the time of conjunction, ``(sqrt(e) cos w,
     sqrt(e) sin w)``, one semi-amplitude per component and the systemic velocity or
-    velocities (``docs/math.md`` §10.6). The Jacobian is computed by JAX; the optimizer is
+    velocities (``docs/math.md`` §10.6). The Jacobian is computed by JAX. The optimizer is
     ``scipy.optimize.least_squares`` with the bounds ``0.5 P_0 <= P <= 2 P_0``,
     ``|sqrt(e) cos w| <= 0.95``, ``|sqrt(e) sin w| <= 0.95`` and ``K_i >= 0``, where
     ``P_0`` is the starting period.
@@ -748,35 +749,37 @@ def fit_rv_orbit(
         A :class:`~albireo.todcor.VelocityTable`. Each velocity enters where its own
         component was measured: a finite velocity and a positive finite error, off that
         component's search edge, at an epoch that is not blended. A primary measured at an
-        epoch whose secondary sat at the search edge, or was set to ``nan`` by the caller,
-        still counts.
+        epoch whose secondary was at the search edge, or was set to ``nan`` by the caller,
+        still enters.
 
         A component with no more usable velocities than parameters of its own (one, its
         semi-amplitude, or two where each component has its own systemic velocity) cannot
-        constrain them, and an unconstrained parameter is not held by the optimizer: on a
-        benchmark table whose secondary was gated at every epoch the semi-amplitude ran to
-        1.5e7 km/s. Such a component is held (:attr:`RVOrbit.held`): its semi-amplitude
-        stays at 1e-3 km/s, or at the caller's ``k``, its own systemic velocity at its
-        start, neither is fitted or counted in ``n_parameters``, both have ``nan`` errors,
-        and its velocities carry no weight.
+        constrain them, and the optimizer does not hold an unconstrained parameter in place.
+        On a benchmark table whose secondary was excluded at every epoch by the detection
+        threshold, the semi-amplitude reached 1.5e7 km/s. Such a component is held
+        (:attr:`RVOrbit.held`). Its semi-amplitude stays at 1e-3 km/s, or at the caller's
+        ``k``, and its own systemic velocity at its starting value. Neither is fitted or
+        counted in ``n_parameters``, both have ``nan`` errors, and its velocities have no
+        weight.
     period
-        Starting period [d]. Required: a least-squares fit finds the nearest local optimum,
+        Starting period [d]. Required. A least-squares fit finds the nearest local optimum,
         so the period must be known to within a few percent, from the literature, from
         :func:`find_period`, or from an eclipse ephemeris.
     t_conj, ecc, omega, k
         Optional starting values; defaults are derived from the table (``t_conj`` from a
         scan over phase, ``ecc`` = 0.1, ``omega`` = 0, and ``k`` as described below).
 
-        The default semi-amplitude start of a component is half the range of its own usable
-        velocities, which is ``K`` at any eccentricity once the phases are covered. It
-        takes a companion's undetected draws at face value: 321 km/s on a benchmark system
-        whose 7% secondary the templates never detected, above the declared ceiling of
-        250 km/s. Removing those velocities is the caller's decision, and the pipeline's
-        detection gate makes it (``Analysis.detection_min``). A ``sqrt(2)`` times weighted
-        standard deviation is not used: sampled evenly in time it is 0.34 to 0.51 of ``K``
-        at ``e = 0.9`` (0.65 to 0.77 at 0.7), and it changed the chi-square ranking of six
-        benchmark tables whose components are all usable. The only bound the fit declares
-        on ``K`` is zero, and the start is held at or above 1e-3 km/s.
+        The default starting semi-amplitude of a component is half the range of its own
+        usable velocities, which is ``K`` at any eccentricity once the phases are covered.
+        It does not exclude the velocities of an undetected companion: 321 km/s on a
+        benchmark system whose 7% secondary the templates never detected, above the
+        declared upper limit of 250 km/s. Removing those velocities is the caller's
+        decision. The pipeline applies its detection threshold
+        (``Analysis.detection_min``). ``sqrt(2)`` times the weighted standard deviation is
+        not used. Sampled evenly in time it is 0.34 to 0.51 of ``K`` at ``e = 0.9`` (0.65 to
+        0.77 at 0.7), and it changed the chi-square ranking of six benchmark tables whose
+        components are all usable. The only bound the fit declares on ``K`` is zero, and
+        the starting value is at least 1e-3 km/s.
     gamma
         ``"shared"`` fits one systemic velocity; ``"per-component"`` fits one per
         component. Default: shared when every component's velocities are absolute, per
@@ -815,7 +818,7 @@ def fit_rv_orbit(
 
     # Per component and epoch: the velocities that enter. A component with no more usable
     # velocities than parameters of its own is held (see the docstring) and its velocities
-    # carry no weight. An epoch enters where any velocity does, and a velocity that does not
+    # have no weight. An epoch enters where any velocity does, and a velocity that does not
     # is held at zero with zero weight.
     valid = valid & (np.where(np.isfinite(s), s, 0.0) > 0.0)
     n_gamma = 1 if gamma == "shared" else n_comp
@@ -989,11 +992,11 @@ def reassign_by_orbit(table, predicted, *, threshold: float = 3.0):
 
     Two similar spectra at similar light fractions give a correlation surface that is
     nearly symmetric under the exchange of the two shifts, and a per-epoch measurement
-    then lands in one of the two equivalent minima at random. No single epoch decides
-    which star is which; the orbit does, and a disentangling supplies one. The
-    decision is made on the relative velocity ``v_1 - v_2``, which is free of a shared
-    zero point, after removing the constant offset between the table and the prediction
-    (each component of a differential table carries its own zero point).
+    then returns one of the two equivalent minima at random. No single epoch determines
+    which star is which. The orbit does, and a disentangling provides one. The decision
+    is made on the relative velocity ``v_1 - v_2``, which is free of a shared zero point,
+    after removing the constant offset between the table and the prediction (each
+    component of a differential table has its own zero point).
 
     Parameters
     ----------
@@ -1043,9 +1046,9 @@ def _exchanged(table, swap):
     """The two-component ``table`` with its components exchanged at the epochs ``swap``.
 
     Velocities, errors, covariances, light fractions, detection statistics and edge flags
-    move together, and ``settings["reassigned_by_orbit"]`` records the count. Shared by
-    :func:`reassign_by_orbit` and by callers that decide an exchange on one copy of a table
-    and apply it to another.
+    are exchanged together, and ``settings["reassigned_by_orbit"]`` records the count. Used
+    by :func:`reassign_by_orbit` and by callers that decide an exchange on one copy of a
+    table and apply it to another.
     """
     from dataclasses import replace
 

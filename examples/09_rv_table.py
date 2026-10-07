@@ -1,39 +1,37 @@
 """Radial velocities without an orbit: the free per-epoch table (``docs/math.md`` §7.6).
 
-Every other fit in this directory imposes a Keplerian. This one does not: each epoch's
-velocity is its own free parameter, the component spectra are still marginalized out
+Every other fit in this directory imposes a Keplerian. This one does not. Each epoch's
+velocity is a free parameter, the component spectra are still marginalized out
 analytically, and no orbital element is assumed. The mode exists for three reasons.
 
 * A per-epoch RV table with uncertainties is the standard product of a spectroscopic binary
-  analysis, and it is the point of comparison for a user arriving from a cross-correlation
-  or shift-and-add pipeline.
-* It is the model check for the Keplerian mode. Fit free velocities, then ask whether a
-  Keplerian threads them (:func:`albireo.keplerian_residuals`). A slightly wrong period, an
+  analysis, and it is the point of comparison for users of a cross-correlation or
+  shift-and-add pipeline.
+* It is the model check for the Keplerian mode. Fit free velocities, then test whether a
+  Keplerian fits them (:func:`albireo.keplerian_residuals`). A slightly wrong period, an
   unmodelled third body, or line-profile variability that the orbit would have absorbed
-  into ``e`` all appear as structured residuals where noise alone would not.
-* Two of its properties are counter-intuitive, and the script demonstrates them rather than
-  stating them.
+  into ``e`` all appear as structured residuals, which noise alone does not produce.
+* Two of its properties are counter-intuitive, and the script demonstrates them.
 
-Property one: there is one arbitrary zero point per component, not one in total. With no
-orbit tying the stars together, each component's spectrum is a free vector, so translating
-it absorbs a constant added to that component's shifts and leaves the likelihood unchanged.
-It is the systemic velocity (D14) once per star rather than once in total. The script
-demonstrates the invariance directly, and shows that removing it in velocity space is only
-first-order correct while pixel space is exact, because ``xi = artanh(v/c)`` turns
-relativistic velocity addition into ordinary addition.
+First, there is one arbitrary zero point per component, not one in total. With no orbit
+linking the stars, each component's spectrum is a free vector, so translating it absorbs a
+constant added to that component's shifts and leaves the likelihood unchanged. It is the
+systemic velocity (D14), once per star. The script demonstrates the invariance and shows
+that removing it in velocity space is correct only to first order, while in pixel space it
+is exact, because ``xi = artanh(v/c)`` maps relativistic velocity addition to ordinary
+addition.
 
-Property two: the raw Laplace error bars are the prior. Each zero point is an exactly flat
+Second, the raw Laplace error bars are set by the prior. Each zero point is an exactly flat
 direction, so its posterior width is the prior width, and every epoch's marginal variance
-inherits it. The script prints both: the raw diagonal, which comes out at
-``prior_sigma / sqrt(n_epochs)`` on every entry and would take the same value on an
-uninformative dataset, and the projected value from
-:func:`albireo.relative_velocity_errors`, which is smaller by a factor of several hundred
-and responds to the data.
+includes it. The script prints both. The raw diagonal is ``prior_sigma / sqrt(n_epochs)``
+on every entry and would take the same value on an uninformative dataset. The projected
+value from :func:`albireo.relative_velocity_errors` is smaller by a factor of several
+hundred and depends on the data.
 
-The mode also has a failure that the script exercises. From a cold start the problem is
-multimodal: with every epoch initialized at the same velocity the two components are
-indistinguishable, so the free table requires a warm start. The failure is loud rather than
-silent, in that the cold fit ends at a potential tens of thousands of nats worse.
+The mode also has a failure case, which the script demonstrates. From a cold start the
+problem is multimodal. With every epoch initialized at the same velocity the two components
+are indistinguishable, so the free table requires a warm start. The failure is detectable,
+because the cold fit ends at a potential tens of thousands of nats worse.
 
 Environment
 -----------
@@ -125,7 +123,7 @@ def simulate():
 
 
 def priors(n_epochs: int) -> dict:
-    """No orbital sites: ``velocity`` replaces them, and may not coexist with them."""
+    """Priors with no orbital sites: ``velocity`` replaces them and may not coexist with them."""
     return {
         "velocity": dist.Normal(0.0, V_PRIOR_SIGMA).expand([2, n_epochs]).to_event(2),
         "log_tau": dist.Normal(5.7, 1.5).expand([2]).to_event(1),
@@ -164,8 +162,8 @@ def plot(bjd, rel_true, rel_fit, sigma, resid, path: str) -> None:
 
     # Overplotting a Keplerian on a free table requires adopting the table's zero point,
     # which is the mean over the observed epochs taken in pixel space. Using the curve's
-    # own phase average instead offsets it by several km/s, and the residual panel would
-    # then disagree with the left panel about the same fit.
+    # phase average instead offsets it by several km/s, and the residual panel would then
+    # be inconsistent with the left panel.
     dense = np.linspace(0.0, 1.0, 400)
     kep_pix = np.asarray(GRID.velocity_to_pixels(ab.orbit_velocities(theta, jnp.asarray(bjd))))
     zero_point = kep_pix.mean(axis=1)
@@ -189,7 +187,7 @@ def plot(bjd, rel_true, rel_fit, sigma, resid, path: str) -> None:
     axes[0].legend(fontsize=8)
 
     # Wilson diagram: the slope is -K_1/K_2 = the mass ratio, and it is invariant to both
-    # zero points because a slope is not a location.
+    # zero points because a constant offset does not change a slope.
     axes[1].errorbar(
         rel_fit[1], rel_fit[0], xerr=sigma[1], yerr=sigma[0], fmt="o", ms=4, capsize=2, color="C2"
     )
@@ -232,7 +230,7 @@ def main() -> None:
     exact = np.array(v_true, dtype=float)
     exact[0] = relativistic_add(exact[0], 50.0)
     naive = np.array(v_true, dtype=float)
-    naive[0] = naive[0] + 50.0  # ordinary addition, which is NOT the group operation
+    naive[0] = naive[0] + 50.0  # ordinary addition, which is not the group operation
     d_exact = abs(float(model.log_likelihood({"velocity": jnp.asarray(exact)})) - ref)
     d_naive = abs(float(model.log_likelihood({"velocity": jnp.asarray(naive)})) - ref)
     print("1. The arbitrary zero point, one per component")
@@ -243,7 +241,7 @@ def main() -> None:
     print("   approximation to it, and the difference is why the centering is done in")
     print("   pixel space (docs/math.md 7.6).")
 
-    # 2. Fit the table, warm-started from a badly wrong Keplerian ----------------------
+    # 2. Fit the table, warm-started from a wrong Keplerian ----------------------------
     start = np.stack([v_true[0] * 1.3, v_true[1] * 0.7])  # 30% off in both semi-amplitudes
     warm = fit(model, start, bjd.size)
     rel_fit = np.asarray(ab.relative_velocities(warm.params["velocity"], GRID))
@@ -309,7 +307,7 @@ def main() -> None:
     print("   That gap is what the mode is for: a Keplerian is a strong constraint, and a")
     print("   table fitted without one says whether the data support it.")
 
-    # 5. The failure mode, demonstrated rather than described ---------------------------
+    # 5. The failure mode ---------------------------------------------------------------
     cold = fit(model, np.zeros((2, bjd.size)), bjd.size)
     print("\n5. The cold start, which does not work")
     print(f"   warm potential {warm.potential:.1f}   cold potential {cold.potential:.1f}")
@@ -326,15 +324,15 @@ def main() -> None:
     else:
         print("\nmatplotlib not installed - skipping the figure (it is not a dependency)")
 
-    # 7. The gate -------------------------------------------------------------------------
+    # 7. Assertions -----------------------------------------------------------------------
     assert d_exact < 1e-6, f"the relativistic zero-point shift moved the likelihood by {d_exact}"
     assert d_naive > 100 * max(d_exact, 1e-12), "the naive shift should be measurably worse"
     assert np.all(rms < 0.3), f"per-epoch RV rms {rms} km/s"
     assert abs(wilson / (-K1_TRUE / K2_TRUE) - 1) < 0.02, f"Wilson slope {wilson}"
     assert np.ptp(raw) / raw.mean() < 1e-3, "the raw bars should be the prior on every entry"
     assert raw.mean() > 50.0 * sigma.mean(), "the projection should shrink the bars enormously"
-    # The residual against the true orbit is the fit's own noise rather than zero, so the
-    # two are compared in units of the per-epoch error: a few sigma against tens of them.
+    # The residual against the injected orbit is the noise of the fit rather than zero, so
+    # the two are compared in units of the per-epoch error, a few sigma against tens.
     assert np.max(np.abs(resid) / sigma) < 10.0, "the true orbit should thread the table"
     assert np.max(np.abs(bad) / sigma) > 10.0 * np.max(np.abs(resid) / sigma), (
         "a 0.5% period error should be an order of magnitude more visible than the fit residual"

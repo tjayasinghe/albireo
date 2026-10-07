@@ -1,7 +1,7 @@
 # Quickstart
 
-This page fits the example dataset that ships with the package. It needs no data of your
-own and no network, and takes a few minutes on one CPU.
+This page fits the example dataset that ships with the package. It needs no other data
+and no network access, and takes a few minutes on one CPU.
 
 albireo is not yet on PyPI, so install it from a clone. The figures on this page need the
 `plots` extra; nothing else here needs an optional dependency.
@@ -30,8 +30,8 @@ Dataset: 12 epochs, frame='topocentric'
 ```
 
 The example is a simulated double-lined binary with a known injected orbit and known
-component spectra, so every result below can be compared with the truth. It requires
-neither astropy nor an archive account.
+component spectra, so every result below can be compared with the injected values. It
+requires neither astropy nor an archive account.
 
 ## Fit the orbit
 
@@ -66,29 +66,29 @@ Assumed, not measured:
       only l_i * d_i is observable, so every recovered depth scales as 1/l_i.
 ```
 
-The injected truth is *P* = 6.0 d, *K* = 42.0 and 63.0 km/s, *e* = 0.15, ω = 0.7. The fit
-takes about a minute, most of it JAX compilation on the first call. No per-epoch radial
-velocity is measured at any stage: the orbit is inferred from the spectra directly, with
-the component spectra integrated out in closed form.
+The injected values are *P* = 6.0 d, *K* = 42.0 and 63.0 km/s, *e* = 0.15, ω = 0.7. The
+fit takes about a minute, most of it JAX compilation on the first call. No per-epoch
+radial velocity is measured at any stage: the orbit is inferred from the spectra directly,
+with the component spectra integrated out in closed form.
 
-Four quantities in that fit were derived from the declaration; the low-level interface
-requires the user to set each. `dis.explain()` prints them:
+Four quantities in that fit were derived from the declaration. The low-level interface
+requires the user to set each of them. `dis.explain()` prints them:
 
 ```python
 print(dis.explain())
 ```
 
 - **The velocity budget**, which sets the solver's bandwidth. It must bound the largest
-  relative velocity the priors allow, not the value the fit converges to; it is derived
+  relative velocity the priors allow, not the value the fit converges to. It is derived
   from the support of the `k` priors, and narrowing those priors reduces the cost of a fit.
 - **The model grid**, widened by that budget plus the LSF kernel radius so that the
-  shifted model does not run off the grid.
+  shifted model stays within the grid.
 - **The conjunction phase**, located by a 42-point scan before optimization. The marginal
   likelihood is strongly multimodal in phase (about 10⁵ nats between the best and worst
-  phase here), and an optimizer started in the wrong trough converges to the wrong answer.
-- **The smoothness hyperparameters**, fitted by empirical Bayes and then frozen. The
-  report flags any hyperparameter that did not move from its starting value, a sign that
-  the hyperprior rather than the data sets that component's smoothness.
+  phase here), and an optimizer started in the wrong mode converges to the wrong solution.
+- **The smoothness hyperparameters**, fitted by empirical Bayes and then held fixed. The
+  report flags any hyperparameter that did not move from its starting value, which
+  indicates that the hyperprior, not the data, sets that component's smoothness.
 
 ## Sample the posterior
 
@@ -125,9 +125,9 @@ truth_on_model = np.stack(
 fig, axes = ab.plot_spectra(dis.grid, d_hat, std=std, truth=truth_on_model)
 ```
 
-Between the lines, and wherever the epochs provide little leverage, the recovered
-spectrum is set by the smoothness prior rather than by the data. The uncertainty band
-identifies those regions. In particular the constant (*k* = 0) mode of each component
+Between the lines, and wherever the epochs constrain it weakly, the recovered spectrum is
+set by the smoothness prior rather than by the data. The uncertainty band identifies
+those regions. In particular the constant (*k* = 0) mode of each component
 spectrum is exactly unconstrained by the data (see the
 [degeneracy section](math.md#5-degeneracies-and-identifiability)), so the data determine
 the light-weighted sum, `fit.composite()`, rather than each component's continuum level.
@@ -142,7 +142,7 @@ fig, axes = ab.plot_residual_zscores(
 
 The figure has three panels: the residual distribution against a unit normal, the
 per-epoch scatter, and the per-epoch lag-1 autocorrelation. Correlated pixels inflate every
-uncertainty derived from the fit and are not visible in a histogram; the third panel is
+uncertainty derived from the fit and are not visible in a histogram. The third panel is
 the diagnostic for them. `fit.z_rms` is the scalar summary printed in every fit summary.
 
 ## Save the results
@@ -167,8 +167,8 @@ model, priors, init = dis.expert()
 That triple is what [`MarginalOrbitModel`](api/inference.md) and `ab.run_map` take, so
 features the declarative interface does not expose (per-epoch jitter, AR(1) correlated
 noise, inferred light fractions, inferred LSF widths) are added at that level. The
-declarative interface is marked experimental while its vocabulary settles; the low-level
-interface is the supported one.
+declarative interface is marked experimental because its names may still change. The
+low-level interface is the supported one.
 
 ## Next steps
 
