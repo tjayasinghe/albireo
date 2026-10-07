@@ -116,6 +116,11 @@ hooks:
   # check-yaml pre-commit hook cannot load. The hook is kept outside docs/ so that mkdocs
   # does not publish it.
   - scripts/mkdocs_math_hook.py
+  # mkdocs-jupyter renders a notebook outside the MkDocs Markdown pipeline, so a relative
+  # link such as ../science.md is published as written and is not validated. The hook
+  # rewrites these links to the built page URLs and warns on a missing target. The
+  # notebook sources keep the relative .md form, which GitHub's notebook viewer resolves.
+  - scripts/mkdocs_notebook_links_hook.py
 
 extra_javascript:
   - javascripts/mathjax.js
