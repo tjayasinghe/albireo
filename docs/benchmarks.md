@@ -3406,6 +3406,34 @@ population, because the stage was finished after this population's blind tier ha
 one field system on which it ran is the 553-day pair, rerun afterwards, where it overruled
 the table and chose another alias.
 
+**Both populations by line separation.** The 33 systems of the two tables above are
+divided here at a largest velocity separation $`(K_1 + K_2)(1 + e)`$ of 100 km/s, 3.8
+times the FWHM of the line-spread function. Twenty-two are above it (eleven of each
+population) and eleven below (three Gaia orbits and eight field systems). The counts are
+taken from the `rows.csv` of the two runs (`gaia_d63/` and `field_d63/` in the research
+directory). A system is counted when both semi-amplitudes of the disentangling are within
+5 percent of the injected values.
+
+| quantity | oracle | orbit | blind |
+|---|---|---|---|
+| above 100 km/s: K1 and K2 within 5% | 21 of 22 | 19 of 22 | 15 of 22 |
+| above 100 km/s: median abs(dK1 / K1) and abs(dK2 / K2) [%] | 0.36 and 0.42 | 0.65 and 0.75 | 1.0 and 1.6 |
+| above 100 km/s: period search recovered within 2% | | | 16 of 22 |
+| below 100 km/s: K1 and K2 within 5% | 1 of 11 | 2 of 11 | 0 of 11 |
+| below 100 km/s: median abs(dK1 / K1) and abs(dK2 / K2) [%] | 11.7 and 3.9 | 18.1 and 33.2 | 46 and 73 |
+| below 100 km/s: period search recovered within 2% | | | 2 of 11 |
+
+Above 100 km/s the system outside 5 percent under the oracle tier is a 45-day pair at a
+S/N of 10 per pixel with a flux ratio of 0.17 (5.8 and 7.4 percent). Under the orbit tier
+it is joined by the 0.54-day contact pair and by the 0.58-day pair with the 7-percent
+secondary (7.5 and 2.8 percent). Five of the six periods the blind tier misses above
+100 km/s belong to twins with a mass ratio above 0.97. Below 100 km/s the system within 5
+percent under both tiers is a 7.68-day pair of slow rotators at a S/N of 97 whose
+semi-amplitudes sum to 53 km/s, and the second under the orbit tier is a 309-day pair with
+a flux ratio of 0.30 (2.5 and 4.6 percent). Five of the 33 systems have a component
+rotating at 85 to 122 km/s. Three are within 5 percent under the oracle tier and one
+under the orbit tier.
+
 **Conclusions and open items.** On Gaia's own epochs, ten to twenty-five per star over
 five years, the blind route now finds the period on half the double-lined orbits and
 recovers both semi-amplitudes within 5 percent on half, up from a fifth. With the period

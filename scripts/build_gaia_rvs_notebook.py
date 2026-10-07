@@ -50,9 +50,10 @@ be measured only on simulations. The workflow has five steps:
 5. run the benchmark over the population and read its report.
 
 Steps 1 to 3 treat one system. Steps 4 and 5 repeat them over many, under several levels
-of prior knowledge, and tabulate the errors. Background is in the
-[science overview](../science.md). The prose version of this page is the
-[Gaia RVS tutorial](gaia-rvs.md).
+of prior knowledge, and tabulate the errors. The key numbers of the recorded full runs, 33
+systems under four tiers, are in the section "Results of the full runs" after step 5.
+Background is in the [science overview](../science.md). The prose version of this page is
+the [Gaia RVS tutorial](gaia-rvs.md).
 
 Install with the plotting extra and fetch the RVS box of the BOSZ 2024 grid once (621 MB
 downloaded, 5 MB kept):
@@ -390,14 +391,14 @@ writes the report. `albireo.run_benchmark` runs the same benchmark from Python. 
 run, forty systems under all four tiers with the script's default optimiser budgets, takes
 hours. The run below gives the script three systems from the draw above, chosen to span it
 and to finish. They are a 1.1-day circular twin, a 4-day pair of mild eccentricity, and a
-1.7-day pair whose secondary has a quarter of the light, with 41, 59 and 33 transits. The
-run uses two tiers: `oracle`, the upper bound, and `orbit`, with only a Gaia period. The
-semi-amplitude prior is capped at 150 km/s, above the largest in the population, which
-halves the width of the band the disentangling solves. The blind tier's period search is
-left to the full run, where its recovery rate is measured on thirty-odd systems. Three
-systems would not constrain that rate. The numbers below illustrate the workflow and are
-not a result. The results of the full runs are recorded in the
-[benchmarks](../benchmarks.md).
+1.7-day pair whose secondary is a quarter as bright as its primary, with 41, 59 and 33
+transits. The run uses two tiers: `oracle`, the upper bound, and `orbit`, with only a Gaia
+period. The semi-amplitude prior is capped at 150 km/s, above the largest in the
+population, which halves the width of the band the disentangling solves. The blind tier's
+period search is left to the full run, where its recovery rate is measured on thirty-odd
+systems. Three systems would not constrain that rate. The numbers below illustrate the
+workflow and are not a result. The results of the full runs are recorded in the
+[benchmarks](../benchmarks.md) and summarised under "Results of the full runs" below.
 
 The script runs in its own process, as it would from a shell, so the notebook's JAX state
 does not affect it.""",
@@ -457,18 +458,73 @@ for row in rows:
 
 `report.md` is written into the output directory beside `rows.csv` (one line per star run
 with the injected values and every metric), `velocities.csv` (every epoch velocity with
-its injected value) and `summary.json`. Its first table is the recovery by tier: the
-median and the 16th to 84th percentile of each error over the systems that completed. A
-pull is a difference divided by the quoted error, so a calibrated error gives a pull rms
-near one.""",
+its injected value) and `summary.json` (the statistics of every tier). The next cell reads
+the key numbers from `summary.json`. Each entry is the median absolute error over the
+systems of the tier, A the primary and B the secondary. The epoch-velocity rows instead
+pool the usable epochs of all the systems: the error is the median absolute difference
+from the injected velocity, and a pull is that difference divided by the quoted error, so
+calibrated errors give a pull rms near one.""",
+    ),
+    (
+        PY,
+        """\
+import json
+
+from IPython.display import Markdown
+
+KEY_NUMBERS = {  # row label: the statistics of summary.json in the row
+    "K1, K2 error, disentangling": "{k_A_abs_rel_dis:.2%}, {k_B_abs_rel_dis:.2%}",
+    "K1, K2 error, orbit fitted to the velocity table": "{k_A_abs_rel:.2%}, {k_B_abs_rel:.2%}",
+    "eccentricity error": "{ecc_abs_err:.3f}",
+    "systemic velocity error [km/s]": "{gamma_abs_err_A:.2f}",
+    "epoch velocity error, A, B [km/s]": "{median_abs_A:.2f}, {median_abs_B:.2f}",
+    "epoch velocity pull rms, A, B": "{pull_rms_A:.2f}, {pull_rms_B:.2f}",
+    "Teff error, A, B [K]": "{teff_abs_err_A:.0f}, {teff_abs_err_B:.0f}",
+    "log g error, A [dex]": "{logg_abs_err_A:.2f}",
+    "v sin i error, A [km/s]": "{vsini_abs_err_A:.2f}",
+    "light fraction error, A, label fit": "{light_abs_err_A:.3f}",
+    "wall-clock time per star [s]": "{seconds_median:.0f}",
+}
+
+summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+# per tier: the median of every per-system statistic, and the pooled epoch statistics
+medians = {
+    tier: {k: v["median"] for k, v in stats.items() if isinstance(v, dict) and "median" in v}
+    | summary["epoch_velocities"][tier]
+    for tier, stats in summary["tiers"].items()
+}
+lines = ["| quantity | " + " | ".join(medians) + " |", "|---|" + "---|" * len(medians)]
+for label, row in KEY_NUMBERS.items():
+    lines.append(f"| {label} | " + " | ".join(row.format(**m) for m in medians.values()) + " |")
+Markdown("\\n".join(lines))""",
+    ),
+    (
+        MD,
+        """\
+In this run:
+
+- **Semi-amplitudes.** The two systems observed at a S/N of 27 and 47 per detector pixel
+  have K1 and K2 within 1 percent of the injected values under both tiers. The third, at
+  G_RVS = 11.3 (a S/N of 8) with a flux ratio of 0.24, is within 5.4 percent.
+- **Epoch velocities.** The median absolute error is 0.9 to 1.0 km/s, and the pull rms of
+  1.0 to 1.2 shows that the quoted errors are calibrated.
+- **Labels.** The temperatures of the two brighter systems are within 120 K, and those of
+  the third are 210 to 790 K off. With only the period declared, the label fit measures
+  the primary's light fraction to 0.007, where the correlation against library templates
+  that precedes the disentangling is 0.048 off.
+- **Twins.** The twin pair is recovered in the other order under the `orbit` tier. The
+  report flags the exchange and evaluates the pair in that order.
+
+All three systems are short-period pairs whose lines separate by more than 180 km/s, which
+is the favourable case. The first table of `report.md` gives every statistic with its 16th
+to 84th percentile range over the systems that completed:""",
     ),
     (
         PY,
         """\
 text = (out / "report.md").read_text(encoding="utf-8")
-start = text.index("## Recovery by tier")
-end = text.index("\\n![", start)
-print(text[start:end].strip())""",
+start = text.index("| quantity |", text.index("## Recovery by tier"))
+Markdown(text[start : text.index("\\n\\n", start)])""",
     ),
     (
         PY,
@@ -492,6 +548,62 @@ python scripts/gaia_rvs_benchmark.py --report-only --out bench/rvs     # regener
 Observation Forecast Tool for each system's position. `--product dr3` delivers the DR3
 mean-spectrum grid instead. `--debcat` or `--gaia-sb2` builds the population from real
 eclipsing or double-lined binaries rather than from the parametric draw.
+
+## Results of the full runs
+
+The recorded runs analyse 33 simulated systems under all four tiers. Nineteen are drawn
+from the field distributions as in step 4, with periods of 1.3 to 844 d, 11 to 100
+transits and a S/N of 9 to 98 per pixel and epoch. Fourteen are double-lined orbits of the
+Gaia DR3 catalogue, with periods of 0.5 to 30 d and a S/N of 14 to 97, simulated at their
+DR3 counts of 10 to 25 transits, which are fewer than DR4 will have. The numbers in this
+section are from the third run, the most recent. Its tables and those of the two runs
+before it are in the [benchmarks](../benchmarks.md).
+
+The largest velocity separation of the orbit, (K1 + K2)(1 + e), orders the recovery more
+than the magnitude or the number of transits does. The table gives the number of systems
+with both semi-amplitudes of the disentangling within 5 percent of the injected values, on
+either side of a separation of 100 km/s, which is about four times the FWHM of the
+line-spread function (26 km/s). The median errors of K1 and K2 are in brackets.
+
+| tier | declared to the analysis | separation above 100 km/s | below 100 km/s |
+|---|---|---|---|
+| `oracle` | the orbit and the light ratio | 21 of 22 (0.36, 0.42 %) | 1 of 11 |
+| `orbit` | the period | 19 of 22 (0.65, 0.75 %) | 2 of 11 |
+| `blind` | nothing | 15 of 22 (1.0, 1.6 %) | 0 of 11 |
+
+- **Semi-amplitudes.** With the period declared, as a Gaia orbit or a light curve gives
+  it, 19 of the 22 systems above 100 km/s are within 5 percent, on 10 to 100 transits. The
+  three exceptions are a 0.54-day contact pair of stars rotating at 100 km/s, a 0.58-day
+  pair with a primary rotating at 122 km/s and a secondary with 7 percent of the light,
+  and a 45-day pair at a S/N of 10 with a flux ratio of 0.17.
+- **Period.** The `blind` tier finds the period within 2 percent for 16 of the 22 systems
+  above 100 km/s and for 2 of the 11 below. Five of the six it misses above 100 km/s are
+  twins with a mass ratio above 0.97. A known period should be declared.
+- **Epoch velocities.** Under the `oracle` and `orbit` tiers the median absolute error of
+  an epoch velocity is 0.6 to 0.8 km/s on the Gaia orbits and 0.9 to 1.3 km/s on the
+  field systems. The median pull rms of a system is 1.0 to 1.4, and 83 to 92 percent of
+  the epochs are within three quoted errors.
+- **Faint secondaries.** The disentangling recovers a companion that the correlation at
+  single epochs does not. For a secondary with 5 percent of the light (P = 117 d, a S/N of
+  98, 80 transits) both semi-amplitudes of the disentangling are within 0.5 percent under
+  every tier, and the orbit fitted to the velocity table gives the secondary a
+  semi-amplitude of zero.
+- **Labels and light ratio.** Measured afterwards on 22 products of the third run, with
+  the comparison against the epochs that is now the default, the median errors are 60 K in
+  temperature, 0.04 dex (primaries) and 0.13 dex (secondaries) in surface gravity, and
+  0.006 dex in metallicity. Under the `orbit` tier the light fraction is measured to
+  0.011.
+- **Cases not recovered.** Below 100 km/s the lines never separate by four resolution
+  elements, and the semi-amplitudes are not recovered even with the orbit declared. The
+  exception is a 7.7-day pair of slow rotators at a S/N of 97, recovered to 1 percent at a
+  separation of 53 km/s. Of the five systems with a component rotating at 85 to 122 km/s,
+  one is within 5 percent under the `orbit` tier. Primaries above 7000 K are outside the
+  library box these runs use.
+- **Cost.** One star under one tier takes 7 to 15 minutes on a 32-thread desktop running
+  three stars at once.
+
+The third run predates the label comparison and the velocity-table changes that the run in
+this notebook includes. No full run has been repeated with them.
 
 ## Limitations of the simulation
 

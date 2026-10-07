@@ -34,7 +34,9 @@ This file records what changed. The reasons are recorded elsewhere:
 - **A step-by-step Gaia RVS notebook.** `docs/tutorials/gaia-rvs-benchmark.ipynb` renders two
   stars from the library, simulates the epochs Gaia would deliver, disentangles them, measures
   the epoch velocities and the labels, draws a population and runs a three-system benchmark,
-  with the outputs committed. `scripts/build_gaia_rvs_notebook.py` regenerates it.
+  with the outputs committed. Its report section tabulates the key numbers of that run from
+  `summary.json`, and a closing section summarises the recorded full runs by line separation
+  and by tier. `scripts/build_gaia_rvs_notebook.py` regenerates it.
 - **Pipeline setting for the label comparison, and epoch-fit results in the report (D65).**
   `Analysis.label_compare` (`compare` under `[labels]`, default `"epochs"`, validated against
   `"epochs"`, `"native"` and `"matched"`) is passed to `Fit.match_labels`, which already had
@@ -444,6 +446,10 @@ This file records what changed. The reasons are recorded elsewhere:
 
 ### Fixed
 
+- **Links from the notebook pages of the docs site.** A relative `.md` or `.ipynb` link in an
+  executed notebook was published as written and led to a missing page on the site, although
+  it resolved on GitHub. `scripts/mkdocs_notebook_links_hook.py` rewrites these links to the
+  built page URLs and warns on a missing target, which fails a strict build.
 - **`MAPResult.potential` docstring corrected (D65).** The docstring called it the negative
   log joint. It is numpyro's unconstrained-space potential, which also includes the
   log-Jacobian of every bounded site's transform, so `run_map` returns the mode in the
