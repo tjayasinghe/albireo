@@ -29,7 +29,7 @@ approximately this order:
 | Stock | [`albireo.library`](library.md) | published synthetic grids in a standard form, with the wavelength medium declared and differentiable interpolation over them |
 | Label | [`albireo.match`](match.md) | Teff / log g / [M/H] / *v* sin *i* against those grids, for template selection rather than abundance analysis |
 | Measure | [`albireo.todcor`](todcor.md) | one velocity per component per epoch by N-dimensional correlation against templates (disentangled components, a label match, or a library), with calibrated errors and a batch driver |
-| Solve | [`albireo.rvorbit`](rvorbit.md) | a Keplerian fitted to that table with the same solver and conventions as the joint model, and a period search |
+| Solve | [`albireo.rvorbit`](rvorbit.md) | a Keplerian fitted to that table with the same solver and conventions as the joint model, a period search, and the decisions an orbit makes for the epochs of a table: the order of two alike components and the minimum of a blended epoch |
 | Run | [`albireo.pipeline`](pipeline.md) | every stage above for a list of stars from one declaration (`albireo run config.toml`), in worker processes, with structured products, figures and a record of failures |
 
 [`albireo.gaia`](gaia.md), [`albireo.population`](gaia.md) and

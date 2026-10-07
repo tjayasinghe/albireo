@@ -54,21 +54,75 @@ epochs for its model contributes nothing, and the others are used. In the bootst
 table of at most 25 usable epochs has a fifth source after the merge, the leave-one-out
 search (below).
 
-An eccentric Keplerian is fitted from each start, and the epochs are re-assigned by it
-where two alike components were exchanged and the light fractions allow it (below). Every
-orbit above the declared semi-amplitude ceiling or eccentricity maximum is set aside and
-named in a flag. The velocities of a companion the templates could not follow gave a wrong
-period the lowest chi-square, at 1537 km/s and e = 0.94. A semi-amplitude below the floor
-is not tested, because an unmeasurable companion gives one at any period. The lowest
-chi-square is chosen; fits that converged to the same period within 2% count once. Over the
-32 oracle velocity tables of the [D62 benchmark](../benchmarks.md) this route recovers the
-period of 28, against 23 for the six peaks of the classical periodogram it replaced. Every
-other fitted period within a chi-square difference of 25 of the lowest is named, with its
+An eccentric Keplerian is fitted from each start by
+[`assign_components`](rvorbit.md#the-decisions-an-orbit-makes-for-a-table), which decides
+with the orbit what one epoch leaves open (the candidate fits, below). Every orbit above
+the declared semi-amplitude ceiling or eccentricity maximum is set aside and named in a
+flag. The velocities of a companion the templates could not follow gave a wrong period the
+lowest chi-square, at 1537 km/s and e = 0.94. A semi-amplitude below the floor is not
+tested, because an unmeasurable companion gives one at any period. The lowest chi-square is
+chosen; fits that converged to the same period within 2% count once. Over the 32 oracle
+velocity tables of the [D62 benchmark](../benchmarks.md) this route recovers the period of
+28, against 23 for the six peaks of the classical periodogram it replaced. Every other
+fitted period within a chi-square difference of 25 of the lowest is named, with its
 difference, in one flag and recorded in `result.json` under `bootstrap.ambiguous`. The
 bootstrap gives the disentangling a period known to 3%, which is unrecoverable if wrong. A
 table of ten or eleven epochs that a Keplerian fits at a reduced chi-square above about
 five cannot be searched. On those 32 tables the flag was raised on three of the four
 systems the route did not recover, and on none of the 28 it did.
+
+**The candidate fits.** One epoch of the table leaves two things open: the order of the
+velocities of two alike components, and which of two minima is the solution where the
+lines overlap. The table flags such an epoch and records both minima
+([Blended epochs](todcor.md#blended-epochs)). Each candidate's fit decides both with its
+own orbit. The fit and the decisions are repeated until nothing changes, from the table as
+measured and from up to three assignments made from the period alone: the candidate period
+and the periods within $`1/T`$ of it in frequency, with $`T`$ the time span of the usable
+epochs. Every flagged epoch is decided at every candidate, so the orbits of all candidates
+are fitted to the same velocities and their chi-squares are comparable. The pair is
+interchanged only where the light fractions allow it (the decisions by the orbit, below).
+The second minima are decided at any light ratio. A velocity removed by the detection gate
+closes its epoch.
+
+Before D68 each candidate had one exchange by its first fit, and the flagged epochs had no
+weight. `scripts/period_decision_bench.py` measures the bootstrap's table again for the 33
+blind systems of the third run and ranks the candidates under each procedure. One system
+has no table (templates that measure no light, below). On the other 32 the injected period
+has these places in the chi-square ranking:
+
+| candidate fit | first | within the first 4 | absent | first, with both semi-amplitudes within 5 % | seconds per system |
+|---|---|---|---|---|---|
+| one exchange, flagged epochs left out (before D68) | 20 | 22 | 5 | 10 | 1 |
+| `assign_components`, flagged epochs left out | 25 | 25 | 4 | 17 | 7 |
+| `assign_components` at the candidate period only | 25 | 25 | 6 | 16 | 4 |
+| `assign_components` as the pipeline calls it | 26 | 26 | 5 | 17 | 7 |
+
+Six systems move to the first place: field systems from ranks 2, 6 and 34, and Gaia
+systems from ranks 4 and 48 and from absent. Five of them do so by the repeated
+assignment. The sixth, a field system of 22 epochs with 12 usable as measured and 4
+flagged, does so by the decision of its flagged epochs, from rank 6. A seventh system, a
+Gaia pair of nearly equal stars, keeps the first place while the semi-amplitudes of its
+orbit change from 2.6 times the injected ones to within 0.3 percent of them. That system
+is the one the window is for. It has 12 usable epochs over 716 d, and its nearest
+candidate is 7.650 d for an injected 7.675 d, $`0.30/T`$ away. The assignment decided at
+the candidate gives an orbit above the semi-amplitude ceiling, which is set aside, and
+with the window the same candidate reaches the injected orbit at a chi-square of 15. One
+system moves from rank 23 to absent: a Gaia pair with a flux ratio of 0.07 whose
+companion the templates do not measure. The numbers are those of the ranking. The runs
+of the benchmark were not repeated, so the number of periods that the pipeline recovers
+end to end from these rankings is not measured.
+
+**Templates that measure no light.** The library table is measured with the light
+fractions fitted and then held. Where no epoch gives a positive amplitude to every
+template, the correlation measures neither the light fractions nor the velocities of every
+component ([Measured light fractions](todcor.md#measured-light-fractions)). On the routes
+that asked for the table (`period = "search"` and `light = "measure"`) the star stops with
+an error that names the remedy, starting temperatures closer to the stars. The table of
+the semi-amplitude starts was not requested, so there the star continues from the evenly
+spaced starts, with a flag. One of the 33 blind systems is in this case with the default
+templates of 6000 and 5000 K: a pair of 6950 and 6530 K whose lines are never more than
+32 km/s apart. Its recorded run, which predates D66, held light fractions of 0.82 and 0.18
+for an injected 0.60 and 0.40 and did not recover the period.
 
 **The detection gate.** In the bootstrap's period search and candidate fits, and only
 there, a companion velocity has no weight when its detection statistic is below
@@ -277,7 +331,10 @@ against 25 percent with a freely fitted amplitude. Where a component's precision
 from its start by more than a factor of ten, the correlation fits the amplitudes freely.
 The table's light column is then that fitted scale and not a light fraction, and a flag
 names the component, its starting value and the fitted one. `velocities.light_source` in
-`result.json` records which applied (`"declared"` or `"global re-measure"`).
+`result.json` records which applied (`"declared"` or `"global re-measure"`). Where the
+amplitudes are fitted freely and no epoch gives positive ones, there is none to hold. The
+table then has the amplitudes of each epoch, a flag says that they are not light
+fractions, and the entry is `"free per epoch"`.
 
 The light fraction the label fit measures is not used here, although in the epoch
 comparison it is the better measurement of the light. On the orbit tier of the D65
@@ -286,12 +343,16 @@ correlation needs the amplitude that reproduces the epochs with these templates,
 disentangled component scaled to $`l_0`$ is reproduced by $`l_0`$, not by the true
 fraction. On a simulated pair with true light 0.70 and 0.30, templates were taken from a
 disentangling at each of four declarations. Holding the true fractions instead of the
-declared ones raised the fainter component's rms velocity error from 0.35 to 0.84 km/s at a
-declaration of 0.6 and 0.4, from 0.34 to 14.3 km/s at 0.45 and 0.55, and to 71 km/s at 0.9
-and 0.1, where the components exchanged. With the templates rescaled by $`l_0 / w`$ the
-velocities were identical to the declared case at every declaration.
+declared ones raised the fainter component's rms velocity error from 0.35 to 0.75 km/s at a
+declaration of 0.6 and 0.4, from 0.34 to 2.3 km/s at 0.45 and 0.55, and to 71 km/s at 0.9
+and 0.1, where the components exchanged. At 0.45 and 0.55 the two conjunction epochs also
+had their lowest chi-square at the end of the search window and were not measured. With
+the templates rescaled by $`l_0 / w`$ the velocities were identical to the declared case at
+every declaration. (Before the search was changed in D66 the values were 0.84 and
+14.3 km/s. The second included those two epochs, for which a minimum inside the window,
+30 km/s off, was reported.)
 
-**The exchange by the orbit.** Two alike spectra cannot be distinguished in a single epoch.
+**The decisions by the orbit.** Two alike spectra cannot be distinguished in a single epoch.
 Where the correlation's two peaks are equivalent solutions, the disentangling's orbit
 therefore determines which component each row belongs to, and a flag counts the epochs it
 exchanged. At light fractions a factor of several apart, with the amplitudes held, the
@@ -299,9 +360,14 @@ peaks are not equivalent. An exchanged row has the other component's amplitude, 
 swap is decided on a noise draw of the faint component's velocity. On a 95/5 pair the step
 swapped 19 of 80 epochs and raised the error of the primary's semi-amplitude from 5 to 56
 percent. The exchange is therefore skipped, with a flag, wherever the two declared
-fractions differ by more than a factor of three. Where it runs and an epoch was exchanged,
-the table as measured is kept beside the delivered one as `velocities_unexchanged.rv`, so
-that a genuine exchange can be separated from a swap made on noise. The bootstrap's
+fractions differ by more than a factor of three. The same step decides the epochs of the
+table that are flagged for a second minimum, at any light ratio. The minimum that the
+disentangling's orbit and the spectrum together fit better is taken
+([`assign_by_orbit`](rvorbit.md#the-second-minimum-of-a-blended-epoch)), the epoch loses
+its flag, and a flag of the report counts the epochs decided and those at which the other
+minimum was taken. Where an epoch was exchanged or decided, the table as measured is kept
+beside the delivered one as `velocities_unexchanged.rv`, so that a genuine exchange can be
+separated from a swap made on noise. The bootstrap's
 candidate fits follow the same rule, applied to the light fractions of the library table's
 own amplitudes. Without it (before D65), the chosen orbits of two field systems whose
 amplitudes differed by factors of 7.1 and 3.25 had re-assigned 3 and 11 of their epochs.
@@ -333,9 +399,9 @@ Each star's products are written to `<output>/<star>/`:
 | `summary.txt` | every stage's own report, the assumptions block, the flags |
 | `result.json` | the machine-readable report: dataset, declaration (with the noise model), the orbit from the spectra with its Keplerian at every epoch and the scans that preceded it, labels with both error bars, the velocity table (every epoch's velocity, error, light and detection statistic per component), the orbit from the table with errors, timings, flags, files; for a simulation, the truth block with the injected velocity of every epoch |
 | `velocities.rv`, `velocities.csv` | the epoch velocity table in two formats (commented ASCII with the zero-point status in its header, and CSV): one velocity per component per epoch, measured by TODCOR against the disentangled components, absolute when the label fit set the zero points. The epoch times have every digit of a float64, so that a period search on the written table reproduces the run's; every other number has six decimals. The `at_edge` column is merged over the components in both files. The CSV also has one `at_edge_<component>` column per component, which identifies the component whose velocity was lost at the search edge (a velocity is used wherever its own component was measured). A table whose median R-squared is negative (the templates fit the epochs worse than no template), or which has no usable epoch, is marked failed: `# FAILED: <reason>` on the line under the format line, `velocities.status` in `result.json`, a flag, and no orbit fitted to it |
-| `velocities_unexchanged.rv` | the table as measured, before the exchange by the orbit, written when an epoch was exchanged |
+| `velocities_unexchanged.rv` | the table as measured, before the decisions by the orbit, written when an epoch was exchanged or the minimum of a flagged epoch decided |
 | `template_velocities.rv`, `template_velocities.csv` | the table measured against library templates at the declared starting labels before the disentangling, on the routes that measure one (the search route's bootstrap, the light measurement, the semi-amplitude start). It is written as soon as it exists, so it is available when a later stage fails. On the search route its component assignment is the chosen orbit's rather than the correlation's, as the header states. The format is that of `velocities.rv` and `velocities.csv`, per-component edge flags in the CSV included |
-| `template_velocities_unexchanged.rv` | that table as the period search used it, before the bootstrap's chosen orbit re-assigned any component, written when the bootstrap re-assigned an epoch. The periodogram is reproduced from this table |
+| `template_velocities_unexchanged.rv` | that table as the period search used it, before the decisions of the bootstrap's chosen orbit, written when that orbit re-assigned an epoch or decided the minimum of a flagged one. The periodogram is reproduced from this table |
 | `spectrum_<component>.txt`, `spectra.fits` | the disentangled components with their uncertainty band |
 | `orbit.txt`, `labels.txt`, `template_<component>.txt` | the Keplerian from the table, the label report, and the label fit's model spectra |
 | `fit.npz`, `posterior.npz` | the MAP result for `load_fit`; the NUTS draws when sampling was requested |

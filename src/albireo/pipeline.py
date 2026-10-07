@@ -1483,11 +1483,18 @@ def _run_stages(ctx: _Context) -> tuple[dict[str, Any], str, dict[str, Any]]:
                 )
             else:
                 with ctx.stage("k-start"):
-                    table, _ = _library_table(ctx, dataset, lsf, library, "semi-amplitude")
-                    _write_template_table(ctx, table, "semi-amplitude start")
-                    table_orbit = _table_orbit(ctx, table, star, settings)
-                    starts = _k_starts(ctx, table_orbit, star, settings)
-                    elements = _element_starts(ctx, table_orbit, star, settings)
+                    try:
+                        table, _ = _library_table(ctx, dataset, lsf, library, "semi-amplitude")
+                    except ValueError as error:
+                        ctx.flag(
+                            f"semi-amplitude starts skipped ({error}); the range's evenly "
+                            "spaced starts are used"
+                        )
+                    else:
+                        _write_template_table(ctx, table, "semi-amplitude start")
+                        table_orbit = _table_orbit(ctx, table, star, settings)
+                        starts = _k_starts(ctx, table_orbit, star, settings)
+                        elements = _element_starts(ctx, table_orbit, star, settings)
         orbit_spec = _declared_orbit(star, settings, starts=starts, elements=elements)
 
     # 4. disentangle
@@ -1563,25 +1570,39 @@ def _run_stages(ctx: _Context) -> tuple[dict[str, Any], str, dict[str, Any]]:
         amplitudes = _template_light(ctx, fit, lights)
         light_source = "global re-measure" if isinstance(amplitudes, str) else "declared"
         table, templates = _measure_epoch_velocities(ctx, fit, templates, amplitudes)
-        if fit.mode == "keplerian" and table.n_components == 2 and _exchange_allowed(ctx, lights):
-            # The orbit assigns two alike components that are indistinguishable in one epoch.
-            from albireo.rvorbit import reassign_by_orbit
+        if isinstance(amplitudes, str) and table.light_mode == "free per epoch":
+            light_source = "free per epoch"  # no epoch gave positive amplitudes to hold
+        if fit.mode == "keplerian" and table.n_components == 2:
+            # The orbit decides what one epoch leaves open: the order of two alike
+            # components, where the light fractions allow the exchange, and the minimum at
+            # the epochs flagged for a second one.
+            from albireo.rvorbit import assign_by_orbit
 
             unexchanged = table
-            table, swapped = reassign_by_orbit(table, np.asarray(fit.velocities()))
-            if swapped.any():
+            table, decided = assign_by_orbit(
+                table, np.asarray(fit.velocities()), exchange=_exchange_allowed(ctx, lights)
+            )
+            if decided.exchanged.any():
                 ctx.flag(
-                    f"{int(swapped.sum())} of {table.n_epochs} epochs had their components "
-                    "re-assigned by the disentangling's orbit: the two spectra are alike "
-                    "enough that the correlation alone could not tell them apart there"
+                    f"{int(decided.exchanged.sum())} of {table.n_epochs} epochs had their "
+                    "components re-assigned by the disentangling's orbit: the two spectra are "
+                    "alike enough that the correlation alone could not tell them apart there"
                 )
+            if decided.resolved.any():
+                ctx.flag(
+                    f"{int(decided.resolved.sum())} of {table.n_epochs} epochs had a second "
+                    "minimum of the correlation as deep as the first, and the disentangling's "
+                    f"orbit decided between the two: it took the other minimum at "
+                    f"{int(decided.alternative.sum())}"
+                )
+            if decided.changes:
                 # The table as measured distinguishes a real exchange from a swap made on
                 # noise, so it is kept beside the delivered one.
                 ctx.directory.mkdir(parents=True, exist_ok=True)
                 ctx.files["velocities_unexchanged"] = os.fspath(
                     unexchanged.write(
                         ctx.directory / "velocities_unexchanged.rv",
-                        header=f"star: {ctx.star.name}\nas measured, before the exchange",
+                        header=f"star: {ctx.star.name}\nas measured, before the orbit's decisions",
                     )
                 )
     live["templates"] = templates
@@ -2111,8 +2132,14 @@ def _library_table(ctx: _Context, dataset: Dataset, lsf, library, purpose: str):
     The ``period = "search"`` bootstrap and the ``light = "measure"`` stage share this
     function. The templates are rendered on a grid covering the search, and the epochs
     are correlated against them with free-then-held light fractions.
+
+    Where no epoch gives a positive amplitude to every template, the correlation measures
+    neither the light fractions nor the companion, and an error says so. Two templates
+    cooler than both stars fit a pair that is never resolved as a difference of the two
+    at every epoch (one of the 33 benchmark systems with the templates of the blind tier,
+    ``docs/benchmarks.md``).
     """
-    from albireo.todcor import Template, todcor
+    from albireo.todcor import Template, _LightNotMeasured, todcor
 
     star, settings, log = ctx.star, ctx.settings, ctx.log
     medium = dataset[0].medium
@@ -2190,15 +2217,25 @@ def _library_table(ctx: _Context, dataset: Dataset, lsf, library, purpose: str):
         )
     lsf_sigma = {k: v.sigma_kms for k, v in lsf.items()}
     anchors = {k: v.anchors_angstrom for k, v in lsf.items() if v.anchors_angstrom is not None}
-    table = todcor(
-        dataset,
-        templates,
-        v_range=(-settings.v_range, settings.v_range),
-        light="global",
-        lsf_sigma_v=lsf_sigma,
-        lsf_anchors_angstrom=anchors or None,
-        noise_correlation=_noise_values(settings, dataset),
-    )
+    try:
+        table = todcor(
+            dataset,
+            templates,
+            v_range=(-settings.v_range, settings.v_range),
+            light="global",
+            lsf_sigma_v=lsf_sigma,
+            lsf_anchors_angstrom=anchors or None,
+            noise_correlation=_noise_values(settings, dataset),
+        )
+    except _LightNotMeasured as error:
+        raise ValueError(
+            f"star {star.name!r}: {purpose}: the correlation against library templates at "
+            "the starting labels gives no epoch with a positive amplitude for every "
+            "component, so it measures neither the light fractions nor every component's "
+            "velocity. The templates do not describe the components: declare starting "
+            "temperatures closer to the stars. A star with a declared period and declared "
+            "light fractions needs no template table"
+        ) from error
     log(
         f"{purpose} velocities: {int(table.good.sum())}/{table.n_epochs} usable epochs "
         f"(library templates, absolute)"
@@ -2627,6 +2664,14 @@ def _bootstrap(ctx: _Context, dataset: Dataset, lsf, library):
             "re-assigned by the orbit fitted to the table; alike components are exchanged "
             "at random by a per-epoch correlation"
         )
+    resolved = int(table.settings.get("resolved_by_orbit", 0))
+    if resolved:
+        ctx.flag(
+            f"bootstrap: {resolved} of {table.n_epochs} epochs had a second minimum of the "
+            "correlation as deep as the first, and the orbit fitted to the table decided "
+            f"between the two: it took the other minimum at "
+            f"{int(table.settings.get('second_minimum_by_orbit', 0))}"
+        )
     if search is None:
         # Every relative velocity was gated or unmeasured below four epochs. The first
         # component's own search and the candidates it proposed remain.
@@ -2746,6 +2791,16 @@ def _bootstrap(ctx: _Context, dataset: Dataset, lsf, library):
 # used before D64 the proposal was not monotone in the count, and 233 of 1296 starts present at
 # twenty were absent at fifty.
 _PERIODOGRAM_PEAKS = 50
+
+# The candidate fits of the bootstrap make their assignments over the periods within this
+# many 1/T of each candidate, T being the time span of the usable epochs
+# (`albireo.rvorbit.assign_components`, D68). A candidate is a periodogram peak, and for two
+# alike components, exchanged at random between the epochs, the peak is displaced from the
+# period by a fraction of 1/T, which is enough for the assignment decided at the candidate to
+# be wrong. Over the 32 blind tables of the third run that the correlation measures, the
+# injected period is first in the chi-square ranking on 26 with the window and on 25 without
+# it, and no table loses its place (`scripts/period_decision_bench.py`).
+_CANDIDATE_PERIOD_WINDOW = 1.0
 
 # The leave-one-epoch-out source of the bootstrap (D65). On a table of at most
 # `_LEAVE_ONE_OUT_MAX_EPOCHS` usable epochs as measured, the `_LEAVE_ONE_OUT_PEAKS` highest peaks
@@ -3005,22 +3060,33 @@ def _orbit_over_candidates(
     difference of 25 of the best is named in one flag, because a bootstrap gives the
     disentangling a period to within 3%, which is unrecoverable if it is the wrong one.
 
-    For a two-component table each candidate's orbit is also used to re-assign the epochs
-    where the correlation exchanged two alike components (:func:`reassign_by_orbit`), and
-    the orbit is refitted to the re-assigned table. The table that goes with the best
-    orbit is returned beside it. A third value holds the number of candidates fitted, the
-    ambiguous periods, and under ``"ranked"`` every distinct valid orbit with its own
-    table in chi-square order, the best first, of which
+    Each candidate's orbit is fitted by :func:`albireo.rvorbit.assign_components`, which
+    decides with the orbit what one epoch of a two-component table leaves open: the order
+    of the pair where the correlation exchanged two alike components, and the minimum at
+    the epochs the table flags for a second one. The fit and the decisions are repeated
+    until nothing changes, from the table as measured and from assignments made from the
+    period alone: the candidate period and the periods within
+    ``_CANDIDATE_PERIOD_WINDOW`` of it, in units of the reciprocal of the time span of the
+    usable epochs. Every flagged epoch is decided at every candidate, so the orbits of all
+    candidates are fitted to the same velocities and their chi-squares are comparable. The
+    table that goes with the best orbit is returned beside it. A third value holds the
+    number of candidates fitted, the ambiguous periods, and under ``"ranked"`` every
+    distinct valid orbit with its own table in chi-square order, the best first, of which
     :func:`_decide_period_by_disentangling` takes the top few.
+
+    Before D68 each candidate had one exchange by its first fit, and the flagged epochs
+    had no weight. ``scripts/period_decision_bench.py`` measures both procedures on the
+    blind tables of the benchmark (``docs/benchmarks.md``).
 
     The bootstrap passes two further settings. With ``detection_min`` the orbits are fitted
     to :func:`_detection_gate`'s copy of the table, so that a velocity below the detection
-    threshold has no weight in any fit. The exchange is decided on that copy and applied
-    to the table as measured, which is the table returned. With ``exchange`` false no
-    epoch is re-assigned, as :func:`_exchange_allowed` decides for light fractions too far
-    apart for the correlation's two peaks to be equivalent solutions.
+    threshold has no weight in any fit. The decisions are made on that copy and applied to
+    the table as measured, which is the table returned. With ``exchange`` false no pair
+    is interchanged, as :func:`_exchange_allowed` decides for light fractions too far
+    apart for the correlation's two peaks to be equivalent solutions. The second minima
+    are still decided.
     """
-    from albireo.rvorbit import _exchanged, fit_rv_orbit, reassign_by_orbit
+    import albireo.rvorbit as rvorbit
 
     fit_table = table
     if detection_min:
@@ -3032,20 +3098,19 @@ def _orbit_over_candidates(
         if not period > 0.0 or any(abs(period / p - 1.0) < 0.02 for p in seen):
             continue
         seen.append(period)
-        candidate_table = table
         try:
-            orbit = fit_rv_orbit(fit_table, period=period, circular=circular)
-            if table.n_components == 2 and exchange:
-                predicted = orbit.predict(table.bjd)
-                reassigned, swapped = reassign_by_orbit(fit_table, predicted)
-                if swapped.any():
-                    candidate_table = (
-                        reassigned if fit_table is table else _exchanged(table, swapped)
-                    )
-                    orbit = fit_rv_orbit(reassigned, period=orbit.period, circular=circular)
+            # The pipeline's own rule has decided whether the pair may be interchanged.
+            assigned, orbit, decided = rvorbit.assign_components(
+                fit_table,
+                period=period,
+                circular=circular,
+                exchange=exchange,
+                light_ratio_max=None,
+                period_window=_CANDIDATE_PERIOD_WINDOW,
+            )
         except (ValueError, RuntimeError, np.linalg.LinAlgError):
             continue
-        fitted.append((orbit, candidate_table))
+        fitted.append((orbit, assigned if fit_table is table else decided.apply(table)))
     if not fitted:
         raise ValueError("no candidate period gave an orbit fit")
     fitted.sort(key=lambda pair: pair[0].chi2)
@@ -3489,11 +3554,30 @@ def _measure_epoch_velocities(ctx: _Context, fit: Fit, templates: list, lights):
     rejected (:func:`_disowned_zero_points`), and the orbit fit has one systemic velocity
     per component. A failure with no zero point to drop is re-raised.
 
+    Where the amplitudes are fitted freely (``lights`` is ``"global"``) and no epoch gives
+    positive ones, there is no amplitude to hold. The table is then measured with the
+    amplitudes of each epoch (``light="free"``) and a flag says so. The products of the
+    disentangling are kept, and :func:`_assess_table` marks the table failed where it has
+    no usable epoch.
+
     Returns the table and the templates it was measured against, which the report and the
     figures must show.
     """
+    from albireo.todcor import _LightNotMeasured
+
+    def measure(pair):
+        try:
+            return fit.measure_velocities(templates=pair, light=lights)
+        except _LightNotMeasured:
+            ctx.flag(
+                "the freely fitted template amplitudes are not positive at any epoch, so none "
+                "is held: the table has the amplitudes of each epoch, which are not light "
+                "fractions, and the templates do not describe the components"
+            )
+            return fit.measure_velocities(templates=pair, light="free")
+
     try:
-        return fit.measure_velocities(templates=templates, light=lights), templates
+        return measure(templates), templates
     except ValueError as exc:
         if not any(t.v_zero_kms is not None for t in templates):
             raise
@@ -3510,7 +3594,7 @@ def _measure_epoch_velocities(ctx: _Context, fit: Fit, templates: list, lights):
         templates = [
             replace(t, v_zero_kms=None, meta={**t.meta, "zero_point": "dropped"}) for t in templates
         ]
-        return fit.measure_velocities(templates=templates, light=lights), templates
+        return measure(templates), templates
 
 
 def _orbit(ctx: _Context, fit: Fit, table):
@@ -4456,10 +4540,17 @@ def _write_template_table(ctx: _Context, table, purpose: str, *, unexchanged=Non
         "starting labels, before the disentangling"
     )
     swapped = int(table.settings.get("reassigned_by_orbit", 0))
+    resolved = int(table.settings.get("resolved_by_orbit", 0))
     if swapped:
         header += (
             "\ncomponent assignment: the winning orbit's, not the correlation's; "
             f"{swapped} of {table.n_epochs} epochs re-assigned"
+        )
+    if resolved:
+        header += (
+            f"\nsecond minima: decided by the winning orbit at {resolved} of {table.n_epochs} "
+            f"epochs, the other minimum taken at "
+            f"{int(table.settings.get('second_minimum_by_orbit', 0))}"
         )
     ctx.files["template_velocities"] = os.fspath(
         table.write(directory / "template_velocities.rv", header=header)
@@ -4467,8 +4558,8 @@ def _write_template_table(ctx: _Context, table, purpose: str, *, unexchanged=Non
     ctx.files["template_velocities_csv"] = os.fspath(
         _write_velocity_csv(directory / "template_velocities.csv", table)
     )
-    if swapped and unexchanged is not None:
-        # The period search ran on the table before the re-assignment, so that table
+    if (swapped or resolved) and unexchanged is not None:
+        # The period search ran on the table before the orbit's decisions, so that table
         # reproduces the periodogram and is kept beside the delivered one.
         ctx.files["template_velocities_unexchanged"] = os.fspath(
             unexchanged.write(

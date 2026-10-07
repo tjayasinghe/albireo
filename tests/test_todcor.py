@@ -1,6 +1,6 @@
 """Tests for the TODCOR mode: per-epoch velocities by N-dimensional correlation.
 
-Four kinds of claim are tested here.
+Six kinds of claim are tested here.
 
 1. **The estimator is Zucker & Mazeh's.** On a uniform grid with uniform weights the
    weighted-least-squares surface that albireo evaluates equals the two-dimensional
@@ -17,6 +17,17 @@ Four kinds of claim are tested here.
    component whose minimum the window does not bracket is returned as NaN rather than as
    the edge value. The reported shift is one at which the chi-square was evaluated, which
    is checked against a brute-force scan of every integer shift.
+5. **The search returns the lowest minimum.** Where the lines of two components overlap
+   the chi-square has a second minimum, at the pair exchanged about its light-weighted
+   mean velocity. The reported chi-square is checked against a lattice of fractional
+   shifts built from an independent NumPy transcription, and the pieces of the refinement
+   (the cell quadratic, its minimum over the cell, the choice of starting points) are
+   checked against direct evaluations.
+6. **An epoch with a second solution is flagged.** ``margin`` is the rise in chi-square to
+   the other minimum, checked against the same lattice. Below the threshold it raises
+   ``blended``, and the epochs returned exchanged are among those flagged. The same pair
+   of velocities in the other order is not a second solution. Where a second solution
+   flags an epoch, the table has its velocities and their covariance.
 
 All data are generated in the tests. Nothing is downloaded.
 """
@@ -232,6 +243,54 @@ def test_global_light_is_a_median_of_the_free_pass_and_is_then_held(sb2):
     first = table.settings["first_pass_light"]
     assert first.shape == table.light.shape
     assert np.all(np.abs(table.velocity - truth.velocities) < 5.0 * table.sigma)
+
+
+def test_global_light_is_measured_at_the_epochs_with_positive_amplitudes(fixed_table):
+    """A held fraction is a median of positive measured amplitudes, or an error (D68)."""
+    from dataclasses import replace
+
+    from albireo.todcor import _global_light, _LightNotMeasured
+
+    light = np.array(fixed_table.light)
+    light[:, :5] = np.array([[1.4], [-0.5]])  # a difference of the two templates
+    light[:, 5:] = np.array([[0.7], [0.3]])
+    np.testing.assert_allclose(_global_light(replace(fixed_table, light=light))["a"], [0.7, 0.3])
+    # Where no epoch with positive amplitudes is usable, those epochs are taken as they are.
+    flagged = replace(fixed_table, light=light, blended=np.ones(8, dtype=bool))
+    np.testing.assert_allclose(_global_light(flagged)["a"], [0.7, 0.3])
+    light[:, 5:] = np.array([[1.2], [-0.2]])
+    assert issubclass(_LightNotMeasured, ValueError)
+    with pytest.raises(_LightNotMeasured, match="no epoch gives a positive amplitude"):
+        _global_light(replace(fixed_table, light=light))
+
+
+def test_global_light_is_an_error_where_the_templates_fit_as_a_difference():
+    """Templates that describe neither star measure no light, and ``"global"`` says so.
+
+    Both stars have the spectrum ``l1`` and are never resolved. The templates are ``l1 +
+    l2`` and ``l1 + 3 l2``, and the data are ``1.5`` of the first less ``0.5`` of the
+    second, so the free pass gives a negative amplitude at every epoch. Before D68 the
+    median of those amplitudes was held, and no epoch of the table was usable.
+    """
+    from albireo.todcor import _LightNotMeasured
+
+    l1, l2 = components()
+    bjd = np.sort(np.random.default_rng(3).uniform(0.0, 21.0, size=4))
+    inst = {
+        "a": ab.InstrumentSpec(wave=np.arange(5008.0, 5052.0, 0.05), sigma_v_lsf=5.0, snr=150.0)
+    }
+    orbit = ab.OrbitParams(period=6.31, t_peri=2.0, ecc=0.0, omega=0.0, k=(3.0, 4.0), gamma=12.0)
+    dataset, _ = ab.simulate_dataset(
+        GRID, [l1, l1], bjd=bjd, instruments=inst, light_fractions=LIGHT, orbit=orbit, seed=5
+    )
+    templates = [
+        Template("A", GRID, l1 + l2, v_zero_kms=0.0),
+        Template("B", GRID, l1 + 3.0 * l2, v_zero_kms=0.0),
+    ]
+    free = todcor(dataset, templates, light="free", **COMMON)
+    np.testing.assert_allclose(free.light, _col([1.5, -0.5], free), atol=0.05)
+    with pytest.raises(_LightNotMeasured, match="templates closer to the components"):
+        todcor(dataset, templates, light="global", **COMMON)
 
 
 def test_free_scale_reports_the_normalization_and_the_same_velocities(sb2, fixed_table):
@@ -712,6 +771,403 @@ def test_an_advancing_fine_window_reports_a_shift_it_evaluated():
 
 
 # ---------------------------------------------------------------------------
+# 5. the lowest minimum at blended epochs
+#
+# Two copies of one spectrum at light fractions 0.6 and 0.4, with lines 5 to 9 pixels wide
+# (sigma) and 4 to 16 pixels apart, give a surface with two minima: the pair injected, and
+# the pair with the same weighted mean and the opposite difference. Both lie on a valley
+# along which the weighted mean is constant, much narrower than it is long, so that neither
+# the coarse stride nor the integer shifts show which is the lower. The noise is low enough
+# that the injected pair is the lower by hundreds in chi-square at every epoch.
+# ---------------------------------------------------------------------------
+
+BLEND_NOISE = 0.002
+
+
+def _fractional(t, shift):
+    """``t`` shifted by a fractional number of pixels, by the two-tap interpolation."""
+    n = int(np.floor(shift))
+    f = float(shift) - n
+    return (1.0 - f) * _shifted(t, n) + f * _shifted(t, n + 1)
+
+
+def _blend_dataset(shifts, seed, noise=BLEND_NOISE, light=LIGHT):
+    """Epochs on the model grid: one spectrum at two fractional shifts per epoch."""
+    c = ab.synthetic_deviation_spectrum(GRID, seed=21, sigma_v_range=(8.0, 14.0), margin=0.12)
+    keep = slice(EDGE_MARGIN, GRID.n - EDGE_MARGIN)
+    rng = np.random.default_rng(seed)
+    epochs = []
+    for j, (s1, s2) in enumerate(shifts):
+        flux = 1.0 + light[0] * _fractional(c, s1) + light[1] * _fractional(c, s2)
+        noisy = flux[keep] + rng.normal(0.0, noise, GRID.n - 2 * EDGE_MARGIN)
+        epochs.append(
+            EpochData(
+                wave=GRID.wave[keep],
+                flux=noisy,
+                ivar=np.full(noisy.size, noise**-2),
+                bjd=float(j),
+            )
+        )
+    templates = [Template("A", GRID, c, v_zero_kms=0.0), Template("B", GRID, c, v_zero_kms=0.0)]
+    return Dataset(epochs, frame="barycentric"), templates, c
+
+
+def _blend_shifts(seed=4, n=16):
+    """Pairs of shifts 3 to 16 pixels apart about a mean within two pixels of zero."""
+    rng = np.random.default_rng(seed)
+    separation = rng.uniform(3.0, 16.0, n) * rng.choice([-1.0, 1.0], n)
+    mean = rng.uniform(-2.0, 2.0, n)
+    return np.stack([mean + LIGHT[1] * separation, mean - LIGHT[0] * separation], axis=1)
+
+
+def _lattice(dataset, j, c, shifts1, shifts2, half=40):
+    """The chi-square at every pair of the fractional shifts given, by direct summation.
+
+    The inner products are formed at the integer shifts and combined with the weights of
+    the two-tap interpolation, which is exact for the shift operator of the model. The
+    lowest lattice value is an upper bound on the minimum of the surface.
+    """
+    keep = slice(EDGE_MARGIN, GRID.n - EDGE_MARGIN)
+    z = dataset[j].flux - 1.0
+    w = float(dataset[j].ivar[0])
+    integers = np.arange(-half, half + 1)
+    columns = np.stack([_shifted(c, int(n))[keep] for n in integers], axis=1)
+    b = columns.T @ z
+    gram = columns.T @ columns
+
+    def interpolation(shifts):
+        position = np.asarray(shifts, dtype=float) + half
+        n = np.clip(np.floor(position).astype(int), 0, integers.size - 2)
+        f = position - n
+        weights = np.zeros((position.size, integers.size))
+        weights[np.arange(position.size), n] = 1.0 - f
+        weights[np.arange(position.size), n + 1] += f
+        return weights
+
+    w1, w2 = interpolation(shifts1), interpolation(shifts2)
+    l1, l2 = LIGHT
+    return w * (
+        z @ z
+        - 2.0 * (l1 * (w1 @ b)[:, None] + l2 * (w2 @ b)[None, :])
+        + l1**2 * np.einsum("ik,kl,il->i", w1, gram, w1)[:, None]
+        + l2**2 * np.einsum("ik,kl,il->i", w2, gram, w2)[None, :]
+        + 2.0 * l1 * l2 * (w1 @ gram @ w2.T)
+    )
+
+
+def _lattice_minimum(dataset, j, c, half=40, step=0.1):
+    """The lowest chi-square on a lattice of ``step`` pixels over ``half`` on either side."""
+    shifts = np.arange(0.0, 2 * half + step / 2, step) - half
+    return float(_lattice(dataset, j, c, shifts, shifts, half=half).min())
+
+
+@pytest.mark.parametrize("coarse_step", [None, 3, 6])
+def test_the_lowest_minimum_is_found_where_the_lines_overlap(coarse_step):
+    """The solution is the injected pair, at a chi-square no lattice point is below.
+
+    Before D66 the search refined the lowest coarse sample alone, within the cells touching
+    the lowest integer shift. On these 16 epochs it returned the exchanged pair at 1, 4 and
+    5 of them for strides of 1 (the default here, with no line-spread width declared), 3
+    and 6 pixels, up to 3e5 above the lowest chi-square, with a quoted error of 0.006 pixel.
+    """
+    shifts = _blend_shifts()
+    dataset, templates, c = _blend_dataset(shifts, seed=11)
+    table = todcor(
+        dataset,
+        templates,
+        v_range=(-45.0, 45.0),
+        light=LIGHT,
+        lsf_sigma_v=None,
+        nuisance_order=None,
+        coarse_step=coarse_step,
+    )
+    assert table.refined.all() and not table.at_edge.any()
+    measured = np.asarray(GRID.velocity_to_pixels(table.velocity))
+    np.testing.assert_allclose(measured, shifts.T, rtol=0, atol=0.1)
+    assert np.all((table.reduced_chi2 > 0.9) & (table.reduced_chi2 < 1.1))
+    for j in range(dataset.n_epochs):
+        assert table.chi2[j] <= _lattice_minimum(dataset, j, c) * (1.0 + 1e-9)
+
+
+def test_the_cell_quadratic_is_the_chi_square_inside_a_cell():
+    """``c + g.f + f.H.f / 2`` against the chi-square evaluated at fractional shifts."""
+    from albireo.todcor import _cell_quadratic, _minimize_box_quadratic, _Terms
+
+    rng = np.random.default_rng(6)
+    n_pix, n_shift, n_tmpl = 60, 7, 3
+    for m in (0, 2):
+        columns = rng.normal(size=(n_tmpl, n_pix, n_shift))
+        weight = rng.uniform(0.5, 2.0, n_pix)
+        z = rng.normal(size=n_pix)
+        basis = rng.normal(size=(n_pix, m))
+        weighted = columns * weight[None, :, None]
+        terms = _Terms(
+            b=np.einsum("ins,n->is", weighted, z),
+            gram=np.einsum("ins,knt->ikst", columns, weighted),
+            pwa=np.einsum("nm,ins->ims", basis, weighted),
+            pwp=basis.T @ (weight[:, None] * basis),
+            pwz=basis.T @ (weight * z),
+            zwz=float(z @ (weight * z)),
+        )
+        for _ in range(10):
+            corner = rng.integers(0, n_shift - 1, n_tmpl)
+            amps = rng.uniform(0.1, 0.9, n_tmpl)
+            const, grad, hess = _cell_quadratic(terms, corner, amps)
+            assert np.all(np.linalg.eigvalsh(hess) > -1e-9 * np.abs(hess).max())
+            for f in rng.uniform(0.0, 1.0, (5, n_tmpl)):
+                exact = terms.chi2(corner + f, amps)[0]
+                assert const + grad @ f + 0.5 * f @ hess @ f == pytest.approx(exact, rel=1e-10)
+            x, value = _minimize_box_quadratic(grad, hess)
+            assert np.all((x >= 0.0) & (x <= 1.0))
+            axes = np.meshgrid(*[np.linspace(0.0, 1.0, 21)] * n_tmpl, indexing="ij")
+            lattice = np.stack(axes, axis=-1).reshape(-1, n_tmpl)
+            on_lattice = lattice @ grad + 0.5 * np.einsum("ni,ik,nk->n", lattice, hess, lattice)
+            assert value <= on_lattice.min() + 1e-9 * np.abs(on_lattice).max()
+            assert value == pytest.approx(grad @ x + 0.5 * x @ hess @ x)
+
+
+def test_the_box_minimum_of_a_singular_quadratic_is_on_the_boundary():
+    """With no curvature along one direction the minimum is on a face of the cell."""
+    from albireo.todcor import _minimize_box_quadratic
+
+    direction = np.array([1.0, 1.0]) / np.sqrt(2.0)
+    hess = 50.0 * np.outer(direction, direction)  # flat along (1, -1)
+    grad = -hess @ np.array([0.4, 0.4]) + np.array([0.3, -0.3])  # a slope along the flat direction
+    x, value = _minimize_box_quadratic(grad, hess)
+    axes = np.meshgrid(*[np.linspace(0.0, 1.0, 401)] * 2, indexing="ij")
+    lattice = np.stack(axes, axis=-1).reshape(-1, 2)
+    on_lattice = lattice @ grad + 0.5 * np.einsum("ni,ik,nk->n", lattice, hess, lattice)
+    assert value <= on_lattice.min() + 1e-12
+    assert np.any((x == 0.0) | (x == 1.0))
+
+
+def test_candidate_minima_are_those_that_can_be_the_lowest():
+    """A basin whose lowest sample is the higher is kept, and a shallow basin is not."""
+    from albireo.todcor import _candidate_minima
+
+    x, y = np.meshgrid(np.arange(40.0), np.arange(40.0), indexing="ij")
+
+    def basin(x0, y0, depth, curvature=0.6):
+        return -depth * np.exp(-0.5 * curvature * ((x - x0) ** 2 + (y - y0) ** 2))
+
+    def indices(surface, n_max, **kwargs):
+        return [start.tolist() for start in _candidate_minima(surface, n_max, **kwargs)[0]]
+
+    # The deeper basin is sampled half a pixel from its minimum along both axes and the
+    # shallower one at its minimum, so the lowest sample is in the shallower. A third basin
+    # of a fifth of the depth is sampled at its minimum.
+    surface = basin(10.5, 10.5, 104.0) + basin(25.0, 25.0, 100.0) + basin(32.0, 8.0, 20.0)
+    starts, floors = _candidate_minima(surface, 6)
+    assert starts[0].tolist() == [25, 25]
+    assert len(starts) > 1
+    assert {tuple(start.tolist()) for start in starts[1:]} <= {
+        (10, 10),
+        (10, 11),
+        (11, 10),
+        (11, 11),
+    }
+    # The floor of a candidate is below the minimum of its basin, here -104 between samples.
+    for start, floor in zip(starts[1:], floors[1:], strict=True):
+        assert floor < -104.0 < surface[tuple(start)]
+    assert floors[0] <= surface[25, 25]
+    assert indices(surface, 1) == [[25, 25]]
+    # A minimum on the boundary is left out of an interior search unless it is the lowest.
+    edge = basin(0.0, 20.0, 50.0) + basin(20.0, 20.0, 49.5)
+    assert indices(edge, 6) == [[0, 20], [20, 20]]
+    assert indices(edge, 6, interior=True) == [[0, 20], [20, 20]]
+    lower_inside = basin(0.0, 20.0, 49.5) + basin(20.0, 20.0, 50.0)
+    assert indices(lower_inside, 6) == [[20, 20], [0, 20]]
+    assert indices(lower_inside, 6, interior=True) == [[20, 20]]
+    # With a slack the basins that can lie within it of the lowest are appended. The third
+    # basin is 80 above and its floor 75 above, and the first entries are unchanged.
+    assert indices(surface, 6, slack=70.0) == indices(surface, 6)
+    near = indices(surface, 6, slack=90.0)
+    assert near[:-1] == indices(surface, 6) and near[-1] == [32, 8]
+    assert indices(surface, 1, slack=90.0) == [[25, 25], [32, 8]]
+    assert indices(lower_inside, 6, interior=True, slack=5.0) == [[20, 20]]
+
+
+# ---------------------------------------------------------------------------
+# 6. the margin to a second minimum, and the blend flag
+#
+# The epochs are those of section 5 with more noise, so that the two minima of an epoch
+# are comparable in depth. The pair exchanged about the light-weighted mean has the
+# difference of the two shifts of the opposite sign, so the second minimum is the lowest
+# point of the half-plane in which that sign is the other one.
+# ---------------------------------------------------------------------------
+
+BLEND_SEARCH = {
+    "v_range": (-45.0, 45.0),
+    "light": LIGHT,
+    "lsf_sigma_v": None,
+    "nuisance_order": None,
+}
+
+
+def _well(dataset, j, c, sign):
+    """The lowest chi-square at which ``s1 - s2`` has the given sign, by direct summation.
+
+    A lattice of 0.1 pixel locates the lowest point more than a pixel inside the half-plane,
+    and a lattice of 0.005 pixel around that point gives the value.
+    """
+    coarse = np.arange(-30.0, 30.05, 0.1)
+    chi2 = _lattice(dataset, j, c, coarse, coarse)
+    inside = sign * (coarse[:, None] - coarse[None, :]) > 1.0
+    i1, i2 = np.unravel_index(int(np.argmin(np.where(inside, chi2, np.inf))), chi2.shape)
+    assert sign * (coarse[i1] - coarse[i2]) > 1.25  # a minimum, not the edge of the half-plane
+    fine = np.arange(-0.1, 0.1025, 0.005)
+    return float(_lattice(dataset, j, c, coarse[i1] + fine, coarse[i2] + fine).min())
+
+
+def _correlation(table):
+    c = table.covariance
+    return c[:, 0, 1] / np.sqrt(c[:, 0, 0] * c[:, 1, 1])
+
+
+def test_the_margin_is_the_rise_to_the_exchanged_minimum():
+    """``margin`` equals the rise to the lowest point of the other half-plane.
+
+    Where it is infinite the search refined no second minimum, and the other half-plane is
+    then more than a thousand above the solution, against a threshold of 9.
+    """
+    shifts = _blend_shifts()
+    dataset, templates, c = _blend_dataset(shifts, seed=11, noise=0.01)
+    table = todcor(dataset, templates, **BLEND_SEARCH)
+    measured = np.asarray(GRID.velocity_to_pixels(table.velocity))
+    np.testing.assert_allclose(measured, shifts.T, rtol=0, atol=0.2)
+    assert not table.blended.any() and not table.second_minimum.any()
+    finite = np.isfinite(table.margin)
+    assert 6 <= finite.sum() < dataset.n_epochs
+    for j in range(dataset.n_epochs):
+        sign = np.sign(measured[0, j] - measured[1, j])
+        rise = _well(dataset, j, c, -sign) - _well(dataset, j, c, sign)
+        if finite[j]:
+            assert table.margin[j] == pytest.approx(rise, rel=1e-4, abs=0.05)
+        else:
+            assert rise > 1000.0
+
+
+def test_an_epoch_with_a_second_minimum_as_deep_is_flagged():
+    """The two epochs returned exchanged are flagged, and the curvature does not show them.
+
+    At this noise the two closest pairs, 4 and 5 pixels apart, are returned at the
+    exchanged pair, with the injected one 0.5 and 0.1 above in chi-square. The curvature
+    there is regular (correlations of -0.74 and -0.61), so before D67 the two epochs were
+    reported as usable, 25 and 39 quoted errors from the injected shifts.
+    """
+    shifts = _blend_shifts()
+    dataset, templates, _ = _blend_dataset(shifts, seed=21, noise=0.04)
+    table = todcor(dataset, templates, **BLEND_SEARCH)
+    measured = np.asarray(GRID.velocity_to_pixels(table.velocity))
+    wrong = np.any(np.abs(measured - shifts.T) > 1.0, axis=0)
+    assert np.flatnonzero(wrong).tolist() == [3, 7]
+    injected_sign = np.sign(shifts[:, 0] - shifts[:, 1])
+    np.testing.assert_array_equal(np.sign(measured[0] - measured[1])[wrong], -injected_sign[wrong])
+    np.testing.assert_array_equal(np.sign(measured[0] - measured[1])[~wrong], injected_sign[~wrong])
+    np.testing.assert_array_equal(table.second_minimum, table.margin < 9.0 * table.reduced_chi2)
+    np.testing.assert_array_equal(table.second_minimum, wrong)
+    assert np.all(table.margin[wrong] < 1.0)
+    assert np.all(np.abs(_correlation(table)) < 0.9)
+    np.testing.assert_array_equal(table.blended, wrong)
+    np.testing.assert_array_equal(table.good, ~wrong)
+    assert "2 blended (2 by a second minimum)" in table.summary()
+    np.testing.assert_array_equal(table.to_dict()["margin"], table.margin)
+
+    # The table has the other minimum where it flags the epoch, and nowhere else. At these
+    # two epochs it is the injected pair, with errors and a correlation like those of the
+    # minimum returned, since the two lie on one valley.
+    other = np.asarray(GRID.velocity_to_pixels(table.alternative))
+    assert np.all(np.isfinite(table.alternative[:, wrong]))
+    assert np.isnan(table.alternative[:, ~wrong]).all()
+    assert np.isnan(table.alternative_covariance[~wrong]).all()
+    other_sigma = table.alternative_sigma / GRID.dv_kms
+    assert np.all(np.abs(other - shifts.T)[:, wrong] < 3.0 * other_sigma[:, wrong])
+    np.testing.assert_allclose(table.alternative_sigma[:, wrong], table.sigma[:, wrong], rtol=0.1)
+    variance = np.diagonal(table.alternative_covariance, axis1=1, axis2=2).T
+    np.testing.assert_allclose(table.alternative_sigma[:, wrong], np.sqrt(variance[:, wrong]))
+    c = table.alternative_covariance[wrong]
+    assert np.all(c[:, 0, 1] / np.sqrt(c[:, 0, 0] * c[:, 1, 1]) < -0.5)
+    columns = table.to_dict()
+    np.testing.assert_array_equal(columns["alt_A"], table.alternative[0])
+    np.testing.assert_array_equal(columns["alt_sigma_B"], table.alternative_sigma[1])
+
+    # The threshold is in units of the noise level the quoted errors use. With the variances
+    # declared four times too large the rises are a quarter, and so is the reduced
+    # chi-square, so the profiled flag is unchanged. Taking the weights as given flags two
+    # more epochs, whose rises of 4.5 and 8.1 are 18 and 32 on the scale of the residuals.
+    loose = Dataset(
+        [EpochData(wave=e.wave, flux=e.flux, ivar=0.25 * e.ivar, bjd=e.bjd) for e in dataset],
+        frame="barycentric",
+    )
+    profiled = todcor(loose, templates, **BLEND_SEARCH)
+    np.testing.assert_allclose(profiled.margin, 0.25 * table.margin, rtol=1e-9)
+    np.testing.assert_array_equal(profiled.second_minimum, wrong)
+    np.testing.assert_allclose(profiled.alternative, table.alternative, atol=1e-6)
+    np.testing.assert_allclose(
+        profiled.alternative_covariance, table.alternative_covariance, rtol=1e-6
+    )
+    as_given = todcor(loose, templates, errors="ivar", **BLEND_SEARCH)
+    np.testing.assert_array_equal(as_given.second_minimum, as_given.margin < 9.0)
+    assert np.flatnonzero(as_given.second_minimum).tolist() == [3, 5, 7, 15]
+    np.testing.assert_array_equal(as_given.blended, as_given.second_minimum)
+    np.testing.assert_array_equal(
+        np.all(np.isfinite(as_given.alternative), axis=0), as_given.second_minimum
+    )
+
+
+def test_the_same_pair_in_the_other_order_is_not_a_second_minimum():
+    """Two identical spectra at equal light: the interchanged minimum is not counted.
+
+    The surface is symmetric under the exchange of the two shifts, so every epoch has a
+    second minimum exactly as deep, with the two velocities interchanged. It gives the same
+    pair of velocities, so the margin is infinite, no epoch is flagged, and the pair is
+    measured at every epoch, in either order.
+    """
+    shifts = _blend_shifts()
+    equal = (0.5, 0.5)
+    dataset, templates, _ = _blend_dataset(shifts, seed=21, noise=0.04, light=equal)
+    table = todcor(dataset, templates, **{**BLEND_SEARCH, "light": equal})
+    assert np.all(np.isinf(table.margin)) and np.isnan(table.alternative).all()
+    assert not table.second_minimum.any() and not table.blended.any() and table.good.all()
+    measured = np.asarray(GRID.velocity_to_pixels(table.velocity))
+    sigma = table.sigma / GRID.dv_kms
+    assert np.all(np.abs(np.sort(measured, axis=0) - np.sort(shifts.T, axis=0)) < 5.0 * sigma)
+    interchanged = np.sign(measured[0] - measured[1]) != np.sign(shifts[:, 0] - shifts[:, 1])
+    assert 0 < interchanged.sum() < dataset.n_epochs
+
+
+def test_the_margin_counts_the_minima_at_which_the_velocities_differ():
+    """``_margin`` on hand-made minima: the order of the components is free.
+
+    It returns the rise and the place of that minimum in the list it was given.
+    """
+    from albireo.todcor import _margin
+
+    velocity, sigma = np.array([10.0, -20.0]), np.array([1.0, 2.0])
+    returned = (100.0, velocity)
+    assert _margin(100.0, velocity, sigma, [returned]) == (np.inf, None)
+    # Within three quoted errors, as labelled and with the two velocities interchanged.
+    close = (101.0, np.array([12.9, -14.1]))
+    interchanged = (100.5, np.array([-17.5, 12.5]))
+    assert _margin(100.0, velocity, sigma, [returned, close, interchanged]) == (np.inf, None)
+    # One velocity more than three of its errors away in both orders: a different pair.
+    other = (104.0, np.array([13.5, -20.0]))
+    far = (102.5, np.array([-40.0, 60.0]))
+    assert _margin(100.0, velocity, sigma, [returned, close, other]) == (pytest.approx(4.0), 2)
+    minima = [returned, other, interchanged, far]
+    assert _margin(100.0, velocity, sigma, minima) == (pytest.approx(2.5), 3)
+    # The tolerance is each component's own error: 6.5 is beyond three errors of 2, 5.5 is not.
+    beyond, within = (103.0, np.array([10.0, -26.5])), (103.0, np.array([10.0, -25.5]))
+    assert _margin(100.0, velocity, sigma, [beyond]) == (pytest.approx(3.0), 0)
+    assert _margin(100.0, velocity, sigma, [within]) == (np.inf, None)
+    # Three components: any order of the same three velocities is the same solution.
+    three, errors = np.array([0.0, 50.0, -50.0]), np.ones(3)
+    cycled = (7.0, np.array([50.2, -50.1, 0.3]))
+    assert _margin(0.0, three, errors, [cycled]) == (np.inf, None)
+    assert _margin(0.0, three, errors, [cycled, (8.0, np.array([50.0, -50.0, 6.0]))]) == (8.0, 1)
+
+
+# ---------------------------------------------------------------------------
 # templates, validation, batch
 # ---------------------------------------------------------------------------
 
@@ -893,6 +1349,21 @@ def test_velocity_table_is_a_plain_dataclass_of_arrays(fixed_table):
         fixed_table.sigma,
         rtol=1e-10,
     )
+    # A table built without a margin has none: no second minimum is declared.
+    assert fixed_table.margin.shape == (8,) and not np.any(np.isnan(fixed_table.margin))
+    assert fixed_table.alternative.shape == (2, 8)
+    assert fixed_table.alternative_covariance.shape == (8, 2, 2)
+    fields = {
+        name: getattr(fixed_table, name)
+        for name in fixed_table.__dataclass_fields__
+        if name not in ("margin", "alternative", "alternative_covariance")
+    }
+    by_hand = VelocityTable(**fields)
+    assert np.all(np.isinf(by_hand.margin)) and not by_hand.second_minimum.any()
+    assert by_hand.alternative.shape == (2, 8) and np.isnan(by_hand.alternative).all()
+    assert np.isnan(by_hand.alternative_covariance).all()
+    assert np.isnan(by_hand.alternative_sigma).all()
+    np.testing.assert_array_equal(by_hand.good, fixed_table.good)
 
 
 # ---------------------------------------------------------------------------

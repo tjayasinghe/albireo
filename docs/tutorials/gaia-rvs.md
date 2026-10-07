@@ -20,7 +20,8 @@ python examples/14_gaia_rvs.py     # the notebook's own system, end to end
 ```
 
 The [step-by-step notebook](gaia-rvs-benchmark.ipynb) runs the same workflow cell by cell,
-with its outputs.
+with its outputs. A [second notebook](gaia-rvs-todcor.ipynb) measures the epoch velocities of
+the same simulated systems by TODCOR against library templates, without disentangling.
 
 ## One binary
 

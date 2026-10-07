@@ -23,6 +23,11 @@ per-epoch errors from :func:`albireo.todcor` are curvature errors of a template 
 exclude template mismatch, line-profile variability and any third body, so the scatter of a
 table about a Keplerian is generally larger than they imply.
 
+An orbit also decides what one epoch of a correlation leaves open: the order of the
+velocities of two alike components (:func:`reassign_by_orbit`), and the minimum at an epoch
+that the table flags for a second one (:func:`assign_by_orbit`). :func:`assign_components`
+makes both decisions while it fits the orbit at a known period (``docs/math.md`` §10.6).
+
 Minimum masses and projected semi-axes follow Hilditch (2001), eqs. 3.17 and 3.18, with the
 IAU 2015 nominal constants. :func:`find_period` is the floating-mean, weighted generalized
 Lomb-Scargle periodogram of Zechmeister and Kürster (2009) (Lomb 1976; Scargle 1982;
@@ -49,9 +54,17 @@ import jax.numpy as jnp
 import numpy as np
 
 from albireo.grids import C_KMS
-from albireo.kepler import radial_velocity, t_peri_from_t_conj
+from albireo.kepler import _NEWTON_ITERATIONS, radial_velocity, t_peri_from_t_conj
 
-__all__ = ["RVOrbit", "find_period", "fit_rv_orbit", "reassign_by_orbit"]
+__all__ = [
+    "Assignment",
+    "RVOrbit",
+    "assign_by_orbit",
+    "assign_components",
+    "find_period",
+    "fit_rv_orbit",
+    "reassign_by_orbit",
+]
 
 # Minimum masses and projected semi-axes in solar units from km/s and days
 # (Hilditch 2001, eqs. 3.17 and 3.18, with the IAU 2015 nominal constants).
@@ -62,6 +75,18 @@ _ASINI_COEFF = 86400.0 / (2.0 * math.pi) / 695_700.0  # a sin i [R_sun] = coeff 
 # this many frequencies (D65; see `_frequency_grid`).
 _GRID_OVERSAMPLING = 10
 _GRID_MIN_FREQUENCIES = 20_000
+
+# The largest ratio of the two light fractions at which `assign_components` exchanges the
+# components of an epoch, and the grid of orbits from which it takes its starting
+# assignments (`_relative_curves`): the phases, the eccentricities above zero, the arguments
+# of periastron, the number of best curves examined and the number of starts kept.
+_EXCHANGE_LIGHT_RATIO = 3.0
+_ASSIGNMENT_PHASES = 60
+_ASSIGNMENT_ECCENTRICITIES = (0.2, 0.4, 0.6, 0.8)
+_ASSIGNMENT_OMEGAS = 8
+_ASSIGNMENT_CURVES = 200
+_ASSIGNMENT_STARTS = 3
+_ASSIGNMENT_WINDOW_STEPS = 8
 
 
 def _valid_velocities(table) -> np.ndarray:
@@ -1042,13 +1067,618 @@ def reassign_by_orbit(table, predicted, *, threshold: float = 3.0):
     return _exchanged(table, swap), swap
 
 
+@dataclass(frozen=True, eq=False)
+class Assignment:
+    """What an orbit decided for the epochs of a two-component velocity table.
+
+    Attributes
+    ----------
+    exchanged
+        Per epoch: the two components were interchanged.
+    alternative
+        Per epoch: the other minimum of the correlation was taken
+        (``VelocityTable.alternative``).
+    resolved
+        Per epoch: the epoch was flagged for a second minimum and the orbit decided between
+        the two minima, so the epoch is no longer flagged ``blended``.
+    """
+
+    exchanged: np.ndarray
+    alternative: np.ndarray
+    resolved: np.ndarray
+
+    @classmethod
+    def none(cls, n_epochs: int) -> Assignment:
+        """The assignment that changes nothing."""
+        return cls(*(np.zeros(int(n_epochs), dtype=bool) for _ in range(3)))
+
+    @property
+    def changes(self) -> bool:
+        """Whether any epoch is exchanged, takes the other minimum or loses its flag."""
+        return bool(self.exchanged.any() or self.alternative.any() or self.resolved.any())
+
+    def same_as(self, other: Assignment) -> bool:
+        """Whether the two make the same decisions at every epoch."""
+        return (
+            np.array_equal(self.exchanged, other.exchanged)
+            and np.array_equal(self.alternative, other.alternative)
+            and np.array_equal(self.resolved, other.resolved)
+        )
+
+    def apply(self, table):
+        """The table with these decisions made, or ``table`` itself where there are none.
+
+        The other minimum is taken first: its velocities and covariance are interchanged
+        with those the correlation returned, which stay recorded as the alternative,
+        ``chi2`` rises by ``margin`` and ``margin`` changes sign. The resolved epochs lose
+        the ``blended`` flag. The components are then interchanged at the exchanged
+        epochs (:func:`reassign_by_orbit` lists what is exchanged). ``settings`` records
+        the three counts as ``reassigned_by_orbit``, ``second_minimum_by_orbit`` and
+        ``resolved_by_orbit``. The decisions can be made on one copy of a table and
+        applied to another with the same epochs.
+        """
+        from dataclasses import replace
+
+        if not self.changes:
+            return table
+        out = _with_alternative(table, self.alternative)
+        if self.resolved.any():
+            out = replace(out, blended=np.asarray(out.blended, dtype=bool) & ~self.resolved)
+        if self.exchanged.any():
+            out = _exchanged(out, self.exchanged)
+        counts = {
+            "reassigned_by_orbit": int(self.exchanged.sum()),
+            "second_minimum_by_orbit": int(self.alternative.sum()),
+            "resolved_by_orbit": int(self.resolved.sum()),
+        }
+        return replace(out, settings={**dict(out.settings), **counts})
+
+
+def assign_by_orbit(table, predicted, *, threshold: float = 3.0, exchange: bool = True):
+    """Decide by predicted velocities what the epochs of a table leave open.
+
+    Two decisions are made. The order of the pair is decided at the usable epochs by
+    :func:`reassign_by_orbit`, where ``exchange`` allows it. The minimum is decided at the
+    epochs the table flags for a second minimum (``VelocityTable.second_minimum``), where
+    it records the velocities of that minimum and their covariance
+    (``VelocityTable.alternative``). At such an epoch the minimum returned and the other
+    one are each compared with the prediction, in the order the first rule gives each,
+    by
+
+        chi2 = e . C^-1 . e,    e = v - v_predicted - offset,
+
+    with ``C`` the covariance of that minimum's velocities and ``offset`` the median
+    difference between the table and the prediction over the usable epochs, one value per
+    component. The other minimum also carries its rise in the chi-square of the
+    correlation, ``margin`` divided by the reduced chi-square, so that the sum is the
+    chi-square of the spectrum and of the orbit together, and it is taken where its sum is
+    the lower. Every such epoch is decided and loses the ``blended`` flag, with the
+    velocities of the minimum taken.
+
+    The covariance is used whole, because the two velocities of a blended epoch are
+    correlated (to -0.8 at the smallest separations of the simulated Gaia RVS epochs of
+    ``docs/benchmarks.md``), and the errors alone do not describe the direction along which
+    the two minima differ.
+
+    Parameters
+    ----------
+    table
+        A two-component :class:`~albireo.todcor.VelocityTable`.
+    predicted
+        Predicted velocities, ``(2, n_epochs)`` km/s. Their zero points need not match
+        the table's.
+    threshold
+        Passed to :func:`reassign_by_orbit`, and used in the same way for the order of
+        each minimum at a flagged epoch.
+    exchange
+        Whether the two components may be interchanged. Without it only the minimum is
+        decided.
+
+    Returns
+    -------
+    (VelocityTable, Assignment)
+        The table with the decisions made (:meth:`Assignment.apply`) and the decisions. A
+        table with other than two components, or with fewer than three usable epochs, is
+        returned unchanged.
+    """
+    pred = np.asarray(predicted, dtype=np.float64)
+    assignment = Assignment.none(table.n_epochs)
+    if table.n_components != 2 or pred.shape != (2, table.n_epochs):
+        return table, assignment
+    assignment = _decided(table, assignment, pred, threshold, exchange, _open_epochs(table))
+    return assignment.apply(table), assignment
+
+
+def assign_components(
+    table,
+    *,
+    period: float,
+    circular: bool = False,
+    gamma: str | None = None,
+    threshold: float = 3.0,
+    max_rounds: int = 6,
+    exchange: bool = True,
+    light_ratio_max: float | None = _EXCHANGE_LIGHT_RATIO,
+    period_window: float = 0.0,
+):
+    """Fit a Keplerian at a known period and decide by it what the epochs leave open.
+
+    One epoch of a correlation can leave two things open. Two alike spectra at alike
+    light fractions give a surface that is nearly symmetric under the exchange of the two
+    shifts, and each epoch returns the pair of velocities in one of the two orders
+    (:func:`reassign_by_orbit`). And where the lines of the two stars overlap, the surface
+    has a second minimum that noise can make the lower. The table flags such an epoch and
+    records the velocities of the other minimum (``VelocityTable.alternative``). With the
+    period known, the orbit and these decisions are found together:
+
+    1. A Keplerian is fitted to the usable epochs (:func:`fit_rv_orbit`). The epochs whose
+       order it contradicts are exchanged, every epoch flagged for a second minimum takes
+       the minimum the orbit fits better (:func:`assign_by_orbit`), and the fit is
+       repeated with those epochs, until nothing changes or ``max_rounds`` rounds have
+       been made.
+    2. Where the two components may be exchanged, the same is done from up to three
+       further assignments, made from the period alone. The magnitude of the velocity
+       difference does not depend on the assignment. It is fitted with the magnitude of a
+       Keplerian's relative velocity over a grid of phase, eccentricity and argument of
+       periastron, and the sign of each of the best curves assigns the epochs. With
+       ``period_window`` the grid also covers the periods of that window. Each of these
+       fits starts from the period of its curve, and the table as measured is fitted
+       from the best of those periods as well.
+    3. The assignment reached from the table as measured is returned, unless the best of
+       the others lowers the chi-square of the orbit by more than ``threshold**2`` times
+       its reduced chi-square.
+
+    One exchange from one fit is not enough where the first fit is poor, and a poor first
+    fit is the rule for two alike stars, whose epochs come out in either order at random.
+    On simulated tables of such a pair (semi-amplitudes of 61 and 64 km/s, errors of
+    0.5 km/s, twelve epochs, each in a random order) one exchange gave both
+    semi-amplitudes within 2 percent for 2, 1, 2 and 0 of 60 tables at eccentricities of
+    0, 0.3, 0.6 and 0.8. With one further start, from the circular curves alone, the
+    counts were 60, 45, 24 and 3, and with the grid they are 60, 60, 48 and 12
+    (``scripts/assignment_bench.py``). Twelve epochs rarely sample the periastron passage
+    of an orbit of eccentricity 0.8, and with forty epochs 42 of 60 are recovered.
+
+    Parameters
+    ----------
+    table
+        A two-component :class:`~albireo.todcor.VelocityTable`. A table with another
+        number of components is fitted as it is.
+    period
+        The period [d], as :func:`fit_rv_orbit` takes it. Every fit starts from it, except
+        those of ``period_window``.
+    circular, gamma
+        Passed to :func:`fit_rv_orbit`.
+    threshold
+        The significance an exchange needs. An epoch is exchanged where that reduces the
+        residual of its relative velocity by more than this many times its error
+        (:func:`reassign_by_orbit`), and an assignment made from the period alone replaces
+        the one reached from the table as measured where it lowers the chi-square by more
+        than the square of this number times the reduced chi-square.
+    max_rounds
+        The largest number of rounds of decisions followed by a new fit, from each
+        starting assignment.
+    exchange
+        Whether the two components may be interchanged. Without it only the minimum is
+        decided, at the epochs flagged for a second one.
+    light_ratio_max
+        No epoch is exchanged where the two light fractions, the medians of
+        ``table.light`` over the epochs, differ by more than this factor. The exchange
+        assumes that the two orders of a pair are equivalent solutions of the correlation,
+        and at light fractions a factor of several apart they are not: a 95/5 pair went
+        from 5 to 56 percent off in the primary, with 19 of its 80 epochs exchanged on
+        noise in the faint component's velocity. ``None`` exchanges at any ratio, and
+        fractions that are not finite and positive do not apply the rule. The rule does
+        not concern the second minimum, which is decided at any ratio.
+    period_window
+        The half-width of the range of frequency around ``1 / period`` in which the
+        assignments of step 2 are also made, in units of ``1 / T``, with ``T`` the time
+        span of the usable epochs. It is sampled at eight frequencies per ``1 / T``. Zero,
+        the default, is for a period that is known. A period that is off by ``x / T``
+        puts the phase off by ``x / 2`` of a cycle at either end of the span, the epochs
+        near a conjunction are then assigned wrongly, and the fit that follows does not
+        leave that assignment. The peak of a periodogram of two alike components is known
+        to a fraction of ``1 / T``. On a benchmark table of 12 usable epochs over 716 d
+        the candidate nearest the injected period of 7.675 d was 7.650 d, ``0.30 / T``
+        away. The assignment made at that period gave an orbit at a chi-square of 175
+        with semi-amplitudes eleven times the injected ones, and with a window of 1 the
+        same candidate gave the injected orbit at 14.9. The pipeline's candidate fits
+        pass 1.
+
+    Returns
+    -------
+    (VelocityTable, RVOrbit, Assignment)
+        The table with the decisions made (:meth:`Assignment.apply`), the orbit fitted to
+        it, and the decisions: the epochs exchanged, those at which the other minimum was
+        taken, and those that lost the ``blended`` flag. Where nothing is decided the
+        table is ``table`` itself.
+
+    Notes
+    -----
+    Which of two alike stars is the first component is not determined by a table. The
+    same velocities fit equally well with the two components exchanged at every epoch,
+    the two semi-amplitudes interchanged and ``omega`` advanced by pi. The starting
+    assignments keep the order of most of the weight of the table as measured.
+
+    The lowest chi-square is not taken as it stands, because the assignments are many
+    and a table of few epochs can be fitted by a wrong one. On a benchmark table of 10
+    usable epochs (an eccentricity of 0.58, a S/N of 17), the assignment as measured gave
+    semi-amplitudes 9 and 12 percent below the injected ones at a chi-square of 23.1 for
+    13 degrees of freedom. With two epochs exchanged, an orbit of eccentricity 0.88 and
+    semi-amplitudes eight times the injected ones fitted at 18.8.
+
+    Every epoch flagged for a second minimum is decided, and none is left out, so that
+    the orbits of different assignments and of different periods are fitted to the same
+    velocities and their chi-squares can be compared.
+
+    A :class:`ValueError` from the first fit is raised, as :func:`fit_rv_orbit` raises it
+    for a table that cannot support an orbit. An assignment whose table cannot be fitted
+    is left out.
+    """
+
+    def fit_from(start_period):
+        def fit(candidate):
+            return fit_rv_orbit(candidate, period=start_period, circular=circular, gamma=gamma)
+
+        return fit
+
+    fit = fit_from(period)
+    nothing = Assignment.none(table.n_epochs)
+    if table.n_components != 2:
+        return table, fit(table), nothing
+    exchange = bool(exchange) and _alike_light(table, light_ratio_max)
+    if not exchange and not _open_epochs(table).any():
+        return table, fit(table), nothing
+    search = (threshold, int(max_rounds), exchange)
+    measured = _settled_assignment(table, nothing.exchanged, fit, *search)
+    if not exchange:
+        return measured
+    other = None
+    starts = _assignments_by_period(table, float(period), threshold, float(period_window))
+    for start, start_period in starts:
+        try:
+            reached = _settled_assignment(table, start, fit_from(start_period), *search)
+        except ValueError:
+            continue
+        if other is None or reached[1].chi2 < other[1].chi2:
+            other = reached
+    if other is None:
+        return measured
+    reduced = other[1].chi2 / max(other[1].n_points - other[1].n_parameters, 1)
+    gain = measured[1].chi2 - other[1].chi2
+    return other if gain > float(threshold) ** 2 * reduced else measured
+
+
+def _alike_light(table, ratio_max: float | None) -> bool:
+    """Whether the median light fractions of a two-component table are within ``ratio_max``.
+
+    True as well where the rule does not apply: no ``ratio_max``, or fractions that are
+    not finite and positive.
+    """
+    if ratio_max is None:
+        return True
+    light = np.asarray(table.light, dtype=np.float64)
+    if light.ndim != 2 or not np.all(np.any(np.isfinite(light), axis=1)):
+        return True
+    fractions = np.nanmedian(light, axis=1)
+    if np.any(fractions <= 0.0):
+        return True
+    return bool(fractions.max() / fractions.min() <= float(ratio_max))
+
+
+def _ridge(covariance) -> np.ndarray:
+    """Per epoch: a correlation above 0.9 between two of the velocities (the blend flag's)."""
+    cov = np.asarray(covariance, dtype=np.float64)
+    variance = np.diagonal(cov, axis1=1, axis2=2)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        correlation = np.abs(cov) / np.sqrt(variance[:, :, None] * variance[:, None, :])
+    off_diagonal = ~np.eye(cov.shape[-1], dtype=bool)
+    return np.any(np.nan_to_num(correlation[:, off_diagonal], nan=0.0) > 0.9, axis=1)
+
+
+def _open_epochs(table) -> np.ndarray:
+    """Per epoch: flagged for a second minimum alone, with both minima usable.
+
+    The epoch is flagged ``blended`` with ``second_minimum`` true, every velocity and
+    error of the minimum returned and of the other one is finite, no component is at its
+    search edge, and neither minimum lies on a ridge. An orbit decides such an epoch
+    (:func:`assign_by_orbit`). A velocity removed by the caller closes its epoch.
+    """
+    v = np.asarray(table.velocity, dtype=np.float64)
+    s = np.asarray(table.sigma, dtype=np.float64)
+    other = np.asarray(table.alternative, dtype=np.float64)
+    other_s = np.asarray(table.alternative_sigma, dtype=np.float64)
+    with np.errstate(invalid="ignore"):
+        usable = np.all(np.isfinite(v) & np.isfinite(s) & (s > 0.0), axis=0)
+        usable &= np.all(np.isfinite(other) & np.isfinite(other_s) & (other_s > 0.0), axis=0)
+    at_edge = np.any(np.broadcast_to(np.asarray(table.at_edge, dtype=bool), v.shape), axis=0)
+    flagged = np.asarray(table.blended, dtype=bool) & np.asarray(table.second_minimum, dtype=bool)
+    ridge = _ridge(table.covariance) | _ridge(table.alternative_covariance)
+    return flagged & usable & ~at_edge & ~ridge
+
+
+def _with_alternative(table, taken):
+    """The two-component ``table`` with the other minimum taken at the epochs ``taken``.
+
+    The velocities and their covariance are interchanged with ``alternative`` and
+    ``alternative_covariance``, and the errors follow. ``chi2`` rises by ``margin`` and
+    ``margin`` changes sign, so the minimum the correlation returned stays recorded as the
+    alternative, lower by that amount. ``light`` and ``delta_chi2`` are kept.
+    """
+    from dataclasses import replace
+
+    taken = np.asarray(taken, dtype=bool)
+    if not taken.any():
+        return table
+    velocity, other = np.array(table.velocity), np.array(table.alternative)
+    velocity[:, taken], other[:, taken] = table.alternative[:, taken], table.velocity[:, taken]
+    covariance, other_covariance = (
+        np.array(table.covariance),
+        np.array(table.alternative_covariance),
+    )
+    covariance[taken] = table.alternative_covariance[taken]
+    other_covariance[taken] = table.covariance[taken]
+    chi2, margin = np.array(table.chi2, dtype=np.float64), np.array(table.margin, dtype=np.float64)
+    chi2[taken] = chi2[taken] + margin[taken]
+    margin[taken] = -margin[taken]
+    sigma, sigma_ivar = np.array(table.sigma), np.array(table.sigma_ivar)
+    sigma[:, taken] = table.alternative_sigma[:, taken]
+    # The errors with the weights as given are the quoted ones without the reduced
+    # chi-square of that minimum, which the quoted errors include unless errors="ivar".
+    scale = np.ones(int(taken.sum()))
+    if table.settings.get("errors") != "ivar":
+        n_parameters = table.settings.get("n_parameters", 0)
+        dof = np.maximum(np.asarray(table.n_pixels) - n_parameters, 1)
+        scale = chi2[taken] / dof[taken]
+    sigma_ivar[:, taken] = sigma[:, taken] / np.sqrt(scale)
+    return replace(
+        table,
+        velocity=velocity,
+        sigma=sigma,
+        sigma_ivar=sigma_ivar,
+        covariance=covariance,
+        chi2=chi2,
+        margin=margin,
+        alternative=other,
+        alternative_covariance=other_covariance,
+    )
+
+
+def _chosen_minima(table, ordered, predicted, threshold: float, exchange: bool, open_epochs):
+    """Which minimum each open epoch takes, and in which order of its components.
+
+    ``ordered`` is the table with the order of the pair already decided at its usable
+    epochs, from which the offsets between the table and the prediction are taken.
+    Returns the epochs at which the other minimum is taken, those at which the minimum
+    taken is interchanged, and those decided: every open epoch, or none where fewer than
+    three usable epochs give no offset (:func:`assign_by_orbit` has the statistic).
+    """
+    n = table.n_epochs
+    taken, flipped = np.zeros(n, dtype=bool), np.zeros(n, dtype=bool)
+    v = np.asarray(ordered.velocity, dtype=np.float64)
+    s = np.asarray(ordered.sigma, dtype=np.float64)
+    good = ordered.good & np.all(np.isfinite(v), axis=0) & np.all(np.isfinite(s), axis=0)
+    if not open_epochs.any() or int(good.sum()) < 3:
+        return taken, flipped, np.zeros(n, dtype=bool)
+    target = predicted + np.median((v - predicted)[:, good], axis=1)[:, None]
+    scale = np.ones(n)
+    if table.settings.get("errors") != "ivar":
+        scale = np.asarray(table.reduced_chi2, dtype=np.float64)
+    for j in np.flatnonzero(open_epochs):
+        minima = (
+            (table.velocity[:, j], table.covariance[j], 0.0),
+            (table.alternative[:, j], table.alternative_covariance[j], table.margin[j] / scale[j]),
+        )
+        best = None
+        for is_other, (u, cov, rise) in enumerate(minima):
+            u, cov = np.asarray(u, dtype=np.float64), np.asarray(cov, dtype=np.float64)
+            flip = False
+            if exchange:
+                # The rule of `reassign_by_orbit` on this minimum's own pair, with the
+                # variance of the difference taken from the covariance.
+                sigma_r = math.sqrt(max(cov[0, 0] + cov[1, 1] - 2.0 * cov[0, 1], 1e-30))
+                r, r_target = u[0] - u[1], target[0, j] - target[1, j]
+                flip = (abs(r - r_target) - abs(-r - r_target)) / sigma_r > threshold
+            if flip:
+                u, cov = u[::-1], cov[::-1, ::-1]
+            e = u - target[:, j]
+            try:
+                total = float(e @ np.linalg.solve(cov, e)) + float(rise)
+            except np.linalg.LinAlgError:
+                total = np.inf
+            if best is None or total < best[0]:
+                best = (total, bool(is_other), bool(flip))
+        taken[j], flipped[j] = best[1], best[2]
+    return taken, flipped, np.array(open_epochs, dtype=bool)
+
+
+def _decided(table, state: Assignment, predicted, threshold: float, exchange: bool, open_epochs):
+    """One round of decisions by ``predicted``, from the assignment ``state``.
+
+    The order of the pair is decided at the epochs usable as measured, starting from the
+    order ``state`` gives them, and then the minimum and its order at the open epochs,
+    afresh from the table as measured.
+    """
+    ordered = state.exchanged & ~open_epochs
+    base = _exchanged(table, ordered) if ordered.any() else table
+    if exchange:
+        ordered = ordered ^ reassign_by_orbit(base, predicted, threshold=threshold)[1]
+        base = _exchanged(table, ordered) if ordered.any() else table
+    taken, flipped, resolved = _chosen_minima(
+        table, base, predicted, threshold, exchange, open_epochs
+    )
+    return Assignment(ordered | flipped, taken, resolved)
+
+
+def _settled_assignment(table, start, fit, threshold: float, max_rounds: int, exchange: bool):
+    """The best assignment reached from ``start`` by rounds of decisions and fits.
+
+    ``start`` marks the epochs of ``table`` that are exchanged before the first fit, which
+    leaves out the epochs flagged for a second minimum. Each round decides the order of
+    the pairs and the minima by the current orbit (:func:`_decided`) and fits again, until
+    nothing changes. Returns the table, the orbit and the assignment of the round with
+    the lowest chi-square, which is the last one unless the decisions cycle. The first
+    fit is not compared with the others where a second minimum is open, since it has
+    fewer velocities.
+    """
+    open_epochs = _open_epochs(table)
+    nothing = Assignment.none(table.n_epochs)
+    state = Assignment(np.array(start, dtype=bool), nothing.alternative, nothing.resolved)
+    current = state.apply(table)
+    orbit = fit(current)
+    best = (current, orbit, state)
+    comparable = not open_epochs.any()
+    for _ in range(max_rounds):
+        decided = _decided(table, state, orbit.predict(table.bjd), threshold, exchange, open_epochs)
+        if decided.same_as(state):
+            break
+        state = decided
+        current = state.apply(table)
+        try:
+            orbit = fit(current)
+        except ValueError:
+            break
+        if not comparable or orbit.chi2 < best[1].chi2:
+            best = (current, orbit, state)
+            comparable = True
+    return best
+
+
+def _relative_curves(t, period: float) -> np.ndarray:
+    """Relative-velocity curves of unit amplitude on a grid of Keplerian orbits at ``period``.
+
+    One row per orbit: ``cos(nu + omega) + e cos(omega)`` at the times ``t``, the relative
+    velocity of two components divided by ``K_1 + K_2``. The circular curves come first,
+    at ``_ASSIGNMENT_PHASES`` phases over half a period, since the magnitude of a circular
+    curve repeats after half a period. Then, for every eccentricity of
+    ``_ASSIGNMENT_ECCENTRICITIES`` and ``_ASSIGNMENT_OMEGAS`` arguments of periastron over
+    the circle, the curves at ``_ASSIGNMENT_PHASES`` phases of periastron over a period.
+
+    Kepler's equation is solved here with NumPy, by the starter and the Newton count of
+    :func:`albireo.kepler.solve_kepler`, so that the scan compiles nothing. It is solved
+    once per phase and eccentricity, since the argument of periastron does not enter it.
+    A test checks the curves against :func:`albireo.kepler.radial_velocity`.
+    """
+    t = np.asarray(t, dtype=np.float64)
+    half = np.arange(_ASSIGNMENT_PHASES) / (2.0 * _ASSIGNMENT_PHASES)
+    full = np.arange(_ASSIGNMENT_PHASES) / float(_ASSIGNMENT_PHASES)
+    omegas = np.arange(_ASSIGNMENT_OMEGAS) * 2.0 * np.pi / _ASSIGNMENT_OMEGAS
+
+    def true_anomaly(phase, ecc):
+        mean_anomaly = 2.0 * np.pi * (t[None, :] / period - phase[:, None])
+        m = np.mod(mean_anomaly + np.pi, 2.0 * np.pi) - np.pi
+        ecc_anomaly = m + ecc * np.sin(m) + 0.5 * ecc**2 * np.sin(2.0 * m)
+        for _ in range(_NEWTON_ITERATIONS):
+            ecc_anomaly = ecc_anomaly - (ecc_anomaly - ecc * np.sin(ecc_anomaly) - m) / (
+                1.0 - ecc * np.cos(ecc_anomaly)
+            )
+        return 2.0 * np.arctan2(
+            np.sqrt(1.0 + ecc) * np.sin(0.5 * ecc_anomaly),
+            np.sqrt(1.0 - ecc) * np.cos(0.5 * ecc_anomaly),
+        )
+
+    curves = [np.cos(true_anomaly(half, 0.0))]
+    for e in _ASSIGNMENT_ECCENTRICITIES:
+        nu = true_anomaly(full, e)
+        curves.extend(np.cos(nu + w) + e * np.cos(w) for w in omegas)
+    return np.concatenate(curves)
+
+
+def _window_periods(t, period: float, window: float) -> list[float]:
+    """The periods of the assignment scan: ``period`` first, then those of the window.
+
+    The window is ``window / T`` in frequency on either side of ``1 / period``, with ``T``
+    the time span of the epochs ``t``, sampled at ``_ASSIGNMENT_WINDOW_STEPS`` frequencies
+    per ``1 / T``. A change of ``1 / T`` in frequency moves the phase by half a cycle at
+    either end of the span, so this spacing leaves a sixteenth of that between a period
+    and the nearest one sampled. The periods are ordered by their distance from ``period``.
+    """
+    span = float(np.ptp(t)) if np.size(t) else 0.0
+    if not window > 0.0 or not span > 0.0:
+        return [period]
+    steps = math.ceil(window * _ASSIGNMENT_WINDOW_STEPS)
+    periods = [period]
+    for k in range(1, steps + 1):
+        for sign in (1.0, -1.0):
+            frequency = 1.0 / period + sign * k / (_ASSIGNMENT_WINDOW_STEPS * span)
+            if frequency > 0.0:
+                periods.append(1.0 / frequency)
+    return periods
+
+
+def _assignments_by_period(
+    table, period: float, threshold: float, window: float = 0.0
+) -> list[tuple[np.ndarray, float]]:
+    """Starting assignments from the period alone: the epochs each would exchange.
+
+    The magnitude of the difference of the two velocities is the same in either order.
+    Over the usable epochs it is fitted with ``A |c(t)|`` for every curve ``c`` of
+    :func:`_relative_curves`, with ``A`` solved by weighted least squares. A curve, with
+    the sign that agrees with most of the weight of the table as measured, is a predicted
+    relative velocity, and :func:`reassign_by_orbit` gives the epochs that contradict it.
+    The curves are taken in order of increasing chi-square, and the first
+    ``_ASSIGNMENT_STARTS`` distinct sets of exchanged epochs are returned, each with the
+    period of its curve. They are starting points for the Keplerian fit, which is not
+    restricted to the grid.
+
+    With ``window`` zero the curves are those at ``period``, and the empty set, the table
+    as measured, is left out. With a window the curves of every period of
+    :func:`_window_periods` are ranked together, and the empty set is returned as well,
+    once, where its best curve is at another period than ``period``: the table as
+    measured is then also fitted from that period.
+    """
+    v = np.asarray(table.velocity, dtype=np.float64)
+    s = np.asarray(table.sigma, dtype=np.float64)
+    good = table.good & np.all(np.isfinite(v), axis=0) & np.all(np.isfinite(s), axis=0)
+    variance = np.where(good, s[0] ** 2 + s[1] ** 2, 1.0)
+    good = good & (variance > 0.0)
+    if int(good.sum()) < 3:
+        return []
+    difference = np.where(good, v[0] - v[1], 0.0)
+    weight = np.where(good, 1.0 / variance, 0.0)
+    t = np.asarray(table.bjd, dtype=np.float64)
+    ranked = []  # (chi-square, period, curve), the best curves of every period
+    for trial in _window_periods(t[good], period, window):
+        curves = _relative_curves(t, trial)
+        norm = (weight * curves**2).sum(axis=1)
+        usable = norm > 0.0
+        amplitude = (weight * np.abs(difference) * np.abs(curves)).sum(axis=1) / np.where(
+            usable, norm, 1.0
+        )
+        residual = np.abs(difference)[None, :] - amplitude[:, None] * np.abs(curves)
+        chi2 = np.where(usable, (weight * residual**2).sum(axis=1), np.inf)
+        for index in np.argsort(chi2, kind="stable")[:_ASSIGNMENT_CURVES]:
+            if np.isfinite(chi2[index]):
+                ranked.append((float(chi2[index]), trial, amplitude[index] * curves[index]))
+    ranked.sort(key=lambda entry: entry[0])  # stable: the nearer period first on a tie
+    starts: list[tuple[np.ndarray, float]] = []
+    seen = [np.zeros(table.n_epochs, dtype=bool)]
+    as_measured = False  # whether the empty set has been met
+    n_distinct = 0
+    for _, trial, curve in ranked[:_ASSIGNMENT_CURVES]:
+        if float(np.sum(weight * np.sign(difference * curve))) < 0.0:
+            curve = -curve
+        predicted = np.stack([0.5 * curve, -0.5 * curve])
+        exchanged = reassign_by_orbit(table, predicted, threshold=threshold)[1]
+        if not exchanged.any():
+            if not as_measured and trial != period:
+                starts.append((exchanged, trial))
+            as_measured = True
+        elif not any(np.array_equal(exchanged, other) for other in seen):
+            seen.append(exchanged)
+            starts.append((exchanged, trial))
+            n_distinct += 1
+            if n_distinct >= _ASSIGNMENT_STARTS:
+                break
+    return starts
+
+
 def _exchanged(table, swap):
     """The two-component ``table`` with its components exchanged at the epochs ``swap``.
 
     Velocities, errors, covariances, light fractions, detection statistics and edge flags
-    are exchanged together, and ``settings["reassigned_by_orbit"]`` records the count. Used
-    by :func:`reassign_by_orbit` and by callers that decide an exchange on one copy of a
-    table and apply it to another.
+    are exchanged together, with the velocities and the covariance of the other minimum
+    (``alternative``), and ``settings["reassigned_by_orbit"]`` records the count. Used by
+    :func:`reassign_by_orbit` and :meth:`Assignment.apply`.
     """
     from dataclasses import replace
 
@@ -1061,17 +1691,22 @@ def _exchanged(table, swap):
         out[1] = np.where(swap, array[0], array[1])
         return out
 
-    covariance = np.array(table.covariance)
-    covariance[swap] = covariance[swap][:, ::-1, :][:, :, ::-1]
+    def exchange_covariance(array):
+        out = np.array(array)
+        out[swap] = out[swap][:, ::-1, :][:, :, ::-1]
+        return out
+
     return replace(
         table,
         velocity=exchange(table.velocity),
         sigma=exchange(table.sigma),
         sigma_ivar=exchange(table.sigma_ivar),
-        covariance=covariance,
+        covariance=exchange_covariance(table.covariance),
         light=exchange(table.light),
         delta_chi2=exchange(table.delta_chi2),
         at_edge=exchange(table.at_edge),
+        alternative=exchange(table.alternative),
+        alternative_covariance=exchange_covariance(table.alternative_covariance),
         settings={**dict(table.settings), "reassigned_by_orbit": int(swap.sum())},
     )
 

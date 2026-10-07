@@ -583,8 +583,12 @@ def test_disentangled_templates_are_reproduced_by_the_declared_light_not_the_mea
     disentangled component is ``(w / l0) t``, however, so the amplitude that reproduces the
     epochs with it as a TODCOR template is ``l0``. Holding the true fraction ``w`` instead
     scales each template's contribution by ``w / l0``. With the true median light and a
-    declaration off by 0.25, the velocities degrade by an order of magnitude or more, and
-    templates rescaled by ``l0 / w`` reproduce the declared case to rounding.
+    declaration off by 0.25, the velocities of the eight epochs away from conjunction are
+    several times further from the fitted ones (0.77 and 2.3 km/s rms against 0.12 and
+    0.34). At the two conjunction epochs the lowest chi-square is at the end of the search
+    window, so the companion is not measured there. Before the search of D66 a minimum
+    inside the window, 30 km/s from the fitted velocity, was reported for them. Templates
+    rescaled by ``l0 / w`` reproduce the declared case to rounding.
     """
     from dataclasses import replace
 
@@ -595,10 +599,12 @@ def test_disentangled_templates_are_reproduced_by_the_declared_light_not_the_mea
     truth = np.asarray(fit.velocities())
     templates = fit.templates()
 
+    apart = np.any(np.abs(truth) > 1.0, axis=0)  # every epoch but the two conjunctions
+
     def rms(table):
         v = np.asarray(table.velocity)
-        assert np.all(table.good), "every epoch measured"
-        return np.sqrt(np.mean((v - truth) ** 2, axis=1))
+        assert np.all(table.good[apart]), "every epoch away from conjunction measured"
+        return np.sqrt(np.mean((v - truth)[:, apart] ** 2, axis=1))
 
     declared = fit.measure_velocities(templates=templates, light=list(lights))
     measured = fit.measure_velocities(templates=templates, light=list(true_light))
@@ -609,6 +615,7 @@ def test_disentangled_templates_are_reproduced_by_the_declared_light_not_the_mea
         ],
         light=list(true_light),
     )
+    assert int(apart.sum()) == 8 and declared.good.all() and rescaled.good.all()
     assert np.all(rms(declared) < 0.5), rms(declared)
     assert np.all(rms(measured) > 3.0 * rms(declared)), (rms(measured), rms(declared))
     np.testing.assert_allclose(rescaled.velocity, declared.velocity, atol=1e-6)

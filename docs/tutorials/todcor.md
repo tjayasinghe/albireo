@@ -93,7 +93,11 @@ samples the DEMO LSF at one pixel per sigma, so the snippet upsamples it by thre
 **The light fractions.** `light="global"` (the default) fits them freely in every epoch, takes
 the weighted median over the well-detected, unblended epochs of each instrument, and holds
 that value. This is standard practice, because a per-epoch ratio is noisy and a ratio fitted
-at a blended phase is not a measurement. Pass a sequence to hold declared values instead. If
+at a blended phase is not a measurement. An epoch at which a fitted amplitude is negative
+does not enter the median: templates that do not describe the components fit a blend as a
+difference of the two. Where no epoch has positive amplitudes `todcor` raises an error
+([Measured light fractions](../api/todcor.md#measured-light-fractions)). Pass a sequence
+to hold declared values instead. If
 the templates are the disentangled components, hold the fractions the disentangling assumed.
 The components were solved for at those fractions, and no other amplitude is consistent with
 their definition ([§9.1](../math.md#91-relation-of-a-disentangled-component-to-the-stellar-spectrum)).
@@ -114,10 +118,20 @@ such a template twice).
 - `sigma` is the curvature of the chi-square surface at its minimum, rescaled by the reduced
   chi-square so that the noise level is measured from the residuals rather than taken from
   `ivar`. This is Zucker's (2003) estimator. `sigma_ivar` uses the weights as given.
-- `blended` marks epochs where the two velocities were measured along a ridge (a covariance
-  correlation above 0.9). It is set for twin spectra at the same velocity but not for two
-  different spectra at the same velocity, because two different line lists remain separable,
-  which is the basis of the method.
+- `blended` marks epochs that do not determine the velocities. One cause is a ridge: the
+  two velocities have a covariance correlation above 0.9. This is the case for twin spectra
+  at the same velocity but not for two different spectra at the same velocity, because two
+  different line lists remain separable, which is the basis of the method. The other cause
+  is a second solution. Two stars with overlapping lines have a second minimum, at the pair
+  with the same light-weighted mean velocity and the opposite velocity difference, and
+  noise can make it the lower. `margin` is the rise in chi-square to the other minimum, and
+  the epoch is flagged where it is below 9 times the reduced chi-square. The table then
+  records the velocities of the other minimum as `alternative`, and an orbit decides
+  between the two (`albireo.rvorbit.assign_by_orbit`). A second minimum that is the same
+  pair of velocities in the other order is not counted, since for two alike stars it is
+  present at every epoch. `albireo.rvorbit.assign_components` fits the orbit at a known
+  period and makes both decisions with it. The rates on Gaia RVS spectra are measured in
+  the [TODCOR notebook](gaia-rvs-todcor.ipynb).
 - `delta_chi2` is the rise in chi-square when each component is removed and the rest
   refitted. A small value means the epoch does not detect that star, which a faint-companion
   search must check epoch by epoch.

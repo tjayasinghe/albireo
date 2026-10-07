@@ -924,7 +924,7 @@ def test_an_orbit_outside_the_declared_ranges_cannot_win(monkeypatch):
         1.20: dict(chi2=90.0, k=[80.0, 20.0], ecc=0.95),
     }
 
-    def fake_fit(table, *, period, circular):
+    def fake_fit(table, *, period, circular, **kwargs):
         spec = fits[min(fits, key=lambda p: abs(p - period))]
         return types.SimpleNamespace(
             period=period, chi2=spec["chi2"], k=np.array(spec["k"]), ecc=spec["ecc"]
@@ -935,7 +935,7 @@ def test_an_orbit_outside_the_declared_ranges_cannot_win(monkeypatch):
     ctx = types.SimpleNamespace(
         settings=Analysis(k_min=2.0, k_max=250.0, ecc_max=0.9), flag=flags.append
     )
-    table = types.SimpleNamespace(n_components=1, bjd=np.arange(3.0))
+    table = types.SimpleNamespace(n_components=1, n_epochs=3, bjd=np.arange(3.0))
     best, _, record = _orbit_over_candidates(ctx, table, [0.34, 0.58, 1.20], circular=False)
     assert best.period == 0.58 and record["n_candidates"] == 3
     assert any("lies outside the declared ranges" in f and "1537" in f for f in flags)
@@ -962,15 +962,10 @@ def test_the_orbit_loop_merges_fits_and_names_every_ambiguity(monkeypatch):
     # starting period -> the period it converges to, and its chi-square
     outcome = {6.0: (6.31, 100.0), 6.4: (6.30, 90.0), 12.6: (12.62, 110.0), 3.1: (3.15, 400.0)}
 
-    def stub_fit(table, *, period, circular=False, **kwargs):
-        return _Fit(*outcome[round(float(period), 4)])
+    def stub_assign(table, *, period, circular=False, **kwargs):
+        return table, _Fit(*outcome[round(float(period), 4)]), None
 
-    monkeypatch.setattr(rvorbit_module, "fit_rv_orbit", stub_fit)
-    monkeypatch.setattr(
-        rvorbit_module,
-        "reassign_by_orbit",
-        lambda table, predicted: (table, np.zeros(table.bjd.size, dtype=bool)),
-    )
+    monkeypatch.setattr(rvorbit_module, "assign_components", stub_assign)
 
     class _Table:
         n_components = 2
@@ -1032,6 +1027,76 @@ def _orbit_table(bjd, *, sigma=0.3, seed=0):
         frame="barycentric",
         settings={"n_parameters": 3},
     )
+
+
+def test_the_candidate_fits_decide_the_epochs_with_a_second_minimum():
+    """A flagged epoch enters every candidate fit with the minimum the orbit fits (D68).
+
+    Three blended epochs of the table hold two minima, the injected pair and the pair
+    exchanged about the light-weighted mean, and at two of them the table has the wrong
+    one. Before D68 these epochs had no weight in the candidate fits. The fit now takes
+    the right minimum at each, the delivered table is flagged at none of them, and a
+    velocity removed by the detection gate closes its epoch.
+    """
+    from albireo.pipeline import _orbit_over_candidates
+
+    rng = np.random.default_rng(6)
+    table = _orbit_table(np.sort(rng.uniform(0.0, 60.0, size=24)), seed=6)
+    truth = ORBIT.component_velocities(table.bjd)
+    light = np.array([0.62, 0.38])
+    difference, mean = truth[0] - truth[1], light @ truth
+    exchanged = np.stack([mean - light[1] * difference, mean + light[0] * difference])
+    blends = np.flatnonzero((np.abs(difference) > 15.0) & (np.abs(difference) < 45.0))[:3]
+    assert blends.size == 3
+    wrong = blends[[0, 2]]
+    velocity = np.array(table.velocity)
+    other = np.full(velocity.shape, np.nan)
+    other[:, blends] = exchanged[:, blends]
+    velocity[:, wrong], other[:, wrong] = exchanged[:, wrong], table.velocity[:, wrong]
+    flagged_at = np.zeros(24, dtype=bool)
+    flagged_at[blends] = True
+    margin = np.full(24, np.inf)
+    margin[blends] = [2.0, 5.0, 0.5]
+    other_covariance = np.full((24, 2, 2), np.nan)
+    other_covariance[blends] = table.covariance[blends]
+    flagged = replace(
+        table,
+        velocity=velocity,
+        blended=flagged_at,
+        margin=margin,
+        alternative=other,
+        alternative_covariance=other_covariance,
+    )
+    np.testing.assert_array_equal(flagged.second_minimum, flagged_at)
+
+    ctx = SimpleNamespace(settings=Analysis(k_min=2.0, k_max=250.0, ecc_max=0.9), flag=[].append)
+    orbit, delivered, _ = _orbit_over_candidates(ctx, flagged, [6.35], circular=False)
+    assert orbit.n_points == 48 and delivered.good.all()
+    np.testing.assert_array_equal(delivered.velocity, table.velocity)
+    assert delivered.settings["resolved_by_orbit"] == 3
+    assert delivered.settings["second_minimum_by_orbit"] == 2
+    assert delivered.settings["reassigned_by_orbit"] == 0
+    np.testing.assert_allclose(orbit.k, ORBIT.k, atol=0.5)
+    # The second minima are decided where the pair may not be interchanged as well.
+    held, as_held, _ = _orbit_over_candidates(ctx, flagged, [6.35], circular=False, exchange=False)
+    np.testing.assert_array_equal(as_held.velocity, table.velocity)
+    assert held.chi2 == pytest.approx(orbit.chi2, rel=1e-6)
+
+    # Gated at one of the three epochs, the companion's velocity closes that epoch: the
+    # decisions are made on the gated copy, and the delivered table stays flagged there.
+    statistic = np.array(flagged.delta_chi2)
+    statistic[1, blends[1]] = 10.0
+    gated_orbit, gated_table, _ = _orbit_over_candidates(
+        ctx,
+        replace(flagged, delta_chi2=statistic),
+        [6.35],
+        circular=False,
+        detection_min=100.0,
+    )
+    assert gated_orbit.n_points == 46
+    np.testing.assert_array_equal(gated_table.blended, np.arange(24) == blends[1])
+    np.testing.assert_array_equal(gated_table.velocity, table.velocity)
+    assert gated_table.settings["resolved_by_orbit"] == 2
 
 
 def test_the_detection_gate_takes_the_weight_off_undetected_velocities_only(monkeypatch):
@@ -1105,37 +1170,40 @@ def test_the_detection_gate_takes_the_weight_off_undetected_velocities_only(monk
     ungated, _, _ = _orbit_over_candidates(ctx, weak, [6.35], circular=False)
     assert ungated.chi2 > 100.0 * best.chi2
 
-    # The exchange is decided on the gated copy. The refit is on the exchanged gated copy,
-    # so a gated velocity still has no weight, and the table returned is the table as
-    # measured with the same epochs exchanged.
+    # The exchange is decided on the gated copy. Every fit is to a gated copy, so a gated
+    # velocity still has no weight, and the table returned is the table as measured with
+    # the same epochs exchanged. One detected epoch is given with its two stars interchanged.
     import albireo.rvorbit as rvorbit_module
     from albireo.rvorbit import _exchanged
 
     swap = np.zeros(24, dtype=bool)
     swap[np.flatnonzero(~lost)[0]] = True
-    decided_on = []
-    monkeypatch.setattr(
-        rvorbit_module,
-        "reassign_by_orbit",
-        lambda t, p: (decided_on.append(t) or _exchanged(t, swap), swap),
-    )
-    fitted_to = []
+    interchanged = replace(_exchanged(weak, swap), settings=weak.settings)
+    fitted_to, decided_on = [], []
 
     def spy_fit(t, **kwargs):
         fitted_to.append(t)
         return fit_rv_orbit(t, **kwargs)
 
+    exchange_as_it_is = rvorbit_module.reassign_by_orbit
+
+    def spy_exchange(t, predicted, **kwargs):
+        decided_on.append(t)
+        return exchange_as_it_is(t, predicted, **kwargs)
+
     monkeypatch.setattr(rvorbit_module, "fit_rv_orbit", spy_fit)
-    _, exchanged, _ = _orbit_over_candidates(ctx, weak, [6.35], circular=False, detection_min=100.0)
-    assert len(decided_on) == 1 and np.isnan(decided_on[0].velocity[1, lost]).all()
-    assert len(fitted_to) == 2
-    np.testing.assert_array_equal(fitted_to[0].velocity, gated.velocity)
-    np.testing.assert_array_equal(fitted_to[1].velocity, _exchanged(gated, swap).velocity)
-    assert np.isnan(fitted_to[1].velocity[1, lost]).all()
-    np.testing.assert_array_equal(exchanged.velocity, _exchanged(weak, swap).velocity)
-    np.testing.assert_array_equal(exchanged.velocity[:, swap], weak.velocity[::-1, swap])
-    np.testing.assert_array_equal(exchanged.velocity[:, ~swap], weak.velocity[:, ~swap])
+    monkeypatch.setattr(rvorbit_module, "reassign_by_orbit", spy_exchange)
+    put_back, exchanged, _ = _orbit_over_candidates(
+        ctx, interchanged, [6.35], circular=False, detection_min=100.0
+    )
+    assert decided_on and all(np.isnan(t.velocity[1, lost]).all() for t in decided_on)
+    assert len(fitted_to) >= 2 and all(np.isnan(t.velocity[1, lost]).all() for t in fitted_to)
+    np.testing.assert_array_equal(fitted_to[0].velocity, _exchanged(gated, swap).velocity)
+    np.testing.assert_array_equal(exchanged.velocity, weak.velocity)
+    np.testing.assert_array_equal(exchanged.velocity[:, swap], interchanged.velocity[::-1, swap])
+    np.testing.assert_array_equal(exchanged.velocity[:, ~swap], interchanged.velocity[:, ~swap])
     assert exchanged.settings["reassigned_by_orbit"] == 1
+    assert put_back.chi2 == pytest.approx(best.chi2, rel=1e-6)
     monkeypatch.setattr(rvorbit_module, "fit_rv_orbit", fit_rv_orbit)
 
     # Without the exchange nothing is re-assigned.
@@ -1693,6 +1761,64 @@ def test_a_semi_amplitude_start_no_medium_allows_is_skipped_and_not_a_failure(
     assert "k-start" not in result.seconds, "the stage was skipped, not run"
 
 
+def test_a_template_table_that_measures_no_light_stops_only_the_routes_that_asked_for_it(
+    toy, library, tmp_path, monkeypatch
+):
+    """A correlation without positive amplitudes is an error on a route that needs its table.
+
+    Two templates cooler than both stars fit a pair that is never resolved as a difference
+    of the two at every epoch, and ``todcor(light="global")`` raises (D68). On the
+    ``period = "search"`` route the star stops, and its error names the stage and what to
+    declare. The table of the semi-amplitude starts was not requested, so there the star
+    continues from the evenly spaced starts of the range, with a flag. The second star is
+    stopped where it declares the disentangling, which is as far as this test needs it.
+    """
+    import sys
+
+    import albireo.pipeline as pipeline_module
+
+    class Reached(Exception):
+        pass
+
+    def reached(*args, **kwargs):
+        raise Reached("the disentangling was declared")
+
+    module = sys.modules["albireo.todcor"]
+    real, calls = module.todcor, []
+
+    def unmeasured(*args, **kwargs):
+        calls.append(kwargs.get("light"))
+        if len(calls) == 1:
+            raise module._LightNotMeasured("instrument 'TOY': no epoch gives a positive amplitude")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(module, "todcor", unmeasured)
+    dataset, truth, grid = toy
+    options = {"labels": False, "overrides": {"max_steps": 2, "k_max": 90.0}}
+    searching = _star(dataset, truth, grid, name="searching", period="search", **options)
+    ranged = _star(dataset, truth, grid, name="ranged", **options)
+    config = PipelineConfig(
+        stars=[searching, ranged],
+        output=tmp_path,
+        library=library,
+        analysis=Analysis(fast=True, plots=False),
+    )
+    with pytest.raises(RuntimeError, match="declare starting temperatures closer") as failure:
+        run_star(searching, config, progress=False)
+    assert calls == ["global"]
+    assert "'searching': bootstrap: the correlation against library" in str(failure.value)
+
+    calls.clear()
+    assert all(c.k is None for c in ranged.components), "the branch needs a ranged semi-amplitude"
+    monkeypatch.setattr(pipeline_module, "_declare", reached)
+    result = pipeline_module._run_star_guarded(
+        ranged, config, tmp_path / "ranged", progress=False, keep_live=False
+    )
+    assert result.error.startswith("Reached"), result.error
+    skipped = [f for f in result.flags if "semi-amplitude starts skipped" in f]
+    assert len(skipped) == 1 and "no epoch with a positive amplitude" in skipped[0], result.flags
+
+
 # ---------------------------------------------------------------------------
 # 4. the guards: a stage that failed must not be read as a measurement
 # ---------------------------------------------------------------------------
@@ -2141,7 +2267,7 @@ def test_the_table_as_measured_is_kept_where_the_orbit_exchanged_an_epoch(
     rows = np.loadtxt(path, comments="#", usecols=(0, 2, 4))
     np.testing.assert_allclose(rows[:, 1], measured.velocity[0], atol=1e-6)
     np.testing.assert_allclose(rows[:, 2], measured.velocity[1], atol=1e-6)
-    assert "as measured, before the exchange" in path.read_text(encoding="utf-8")
+    assert "as measured, before the orbit's decisions" in path.read_text(encoding="utf-8")
     assert report["velocities"]["names"] == ["A", "B"]
 
     # A 95/5 pair: the exchange does not run, so no second table is written.
@@ -2541,3 +2667,38 @@ def test_the_velocity_stage_records_where_the_amplitudes_came_from(toy, tmp_path
     ctx, report, fit = run((400.0, 141452.0), "moved")
     assert report["velocities"]["light_source"] == "global re-measure"
     assert fit.measured[1] == "global"
+
+
+def test_the_velocity_stage_keeps_the_star_where_no_amplitude_is_positive(toy, tmp_path):
+    """Free amplitudes with no positive epoch give the per-epoch table and a flag (D68).
+
+    ``todcor(light="global")`` raises where no epoch has positive amplitudes. After the
+    disentangling that is not a reason to lose the star: the table is measured with the
+    amplitudes of each epoch, the flag says that they are not light fractions, and the
+    declared fractions are not put in their place.
+    """
+    import sys
+
+    from albireo.pipeline import _measure_epoch_velocities
+
+    unmeasured = sys.modules["albireo.todcor"]._LightNotMeasured
+    dataset, truth, grid = toy
+    templates = _StubFit(("A", "B")).templates()
+    free = replace(_velocity_table(), light_mode="free per epoch")
+
+    class _Fit:
+        def __init__(self):
+            self.calls = []
+
+        def measure_velocities(self, *, templates, light):
+            self.calls.append(light)
+            if light == "global":
+                raise unmeasured("instrument 'TOY': no epoch gives a positive amplitude")
+            return free
+
+    ctx = _context(_star(dataset, truth, grid, name="shrunk"), tmp_path / "shrunk")
+    fit = _Fit()
+    table, used = _measure_epoch_velocities(ctx, fit, templates, "global")
+    assert fit.calls == ["global", "free"] and table is free and used is templates
+    assert len(ctx.flags) == 1 and "not positive at any epoch" in ctx.flags[0]
+    assert ctx.zero_points is None, "no zero point was dropped for it"

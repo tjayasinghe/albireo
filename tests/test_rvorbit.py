@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 import numpy as np
 import pytest
 
 import albireo as ab
-from albireo.rvorbit import find_period, fit_rv_orbit, reassign_by_orbit
+from albireo.rvorbit import (
+    Assignment,
+    assign_by_orbit,
+    assign_components,
+    find_period,
+    fit_rv_orbit,
+    reassign_by_orbit,
+)
 from albireo.todcor import VelocityTable
 
 P, T_PERI, ECC, OMEGA, K1, K2, GAMMA = 6.31, 2.0, 0.15, 0.7, 30.0, 55.0, 12.0
@@ -251,6 +259,340 @@ def test_swapped_epochs_are_reassigned_by_the_orbit():
     bad = fit_rv_orbit(broken, period=P)
     np.testing.assert_allclose(good.k, [K1, K2], atol=0.3)
     assert bad.chi2 > 10.0 * good.chi2
+
+
+TWIN_K = (61.0, 64.0)
+
+
+def _twin_table(seed, *, n_epochs=12, ecc=0.3):
+    """Two alike stars at random times, the two velocities of each epoch in a random order.
+
+    The tables are those of ``scripts/assignment_bench.py``: the argument and the time of
+    periastron are drawn per table, the errors are 0.5 km/s, and the light fractions are
+    equal. Returns the table, the injected velocities and the epochs that were exchanged.
+    """
+    rng = np.random.default_rng(seed)
+    bjd = np.sort(rng.uniform(0.0, 40.0, size=n_epochs))
+    orbit = ab.OrbitParams(
+        period=P,
+        t_peri=rng.uniform(0.0, P),
+        ecc=ecc,
+        omega=rng.uniform(0.0, 2.0 * np.pi),
+        k=TWIN_K,
+        gamma=GAMMA,
+    )
+    truth = orbit.component_velocities(bjd)
+    velocity = truth + rng.normal(0.0, 0.5, truth.shape)
+    exchanged = rng.uniform(size=n_epochs) < 0.5
+    velocity[:, exchanged] = velocity[::-1, exchanged]
+    table = replace(_table_from(bjd, velocity, 0.5), light=np.full(truth.shape, 0.5))
+    return table, truth, exchanged
+
+
+def _twins_recovered(orbit) -> bool:
+    """Both semi-amplitudes within 2 percent of the injected ones, in either order."""
+    k = np.asarray(orbit.k)
+    return min(np.max(np.abs(order / np.array(TWIN_K) - 1.0)) for order in (k, k[::-1])) < 0.02
+
+
+def _same_assignment(mask, injected, truth) -> bool:
+    """``mask`` undoes the injected exchange, in one of the two orders of the stars.
+
+    Only the epochs with the two velocities more than ten errors apart are compared: an
+    epoch at conjunction fits in either order and is left as it is.
+    """
+    clear = np.abs(truth[0] - truth[1]) > 5.0
+    return bool(
+        np.array_equal(mask[clear], injected[clear])
+        or np.array_equal(mask[clear], ~injected[clear])
+    )
+
+
+@pytest.mark.parametrize("ecc", [0.0, 0.3])
+def test_alike_stars_in_a_random_order_are_assigned_at_a_known_period(ecc):
+    """Twelve epochs of two alike stars, each in a random order, give the orbit.
+
+    One exchange by the first fit recovers 1 of these 20 tables for the circular orbit and
+    none at an eccentricity of 0.3, because the first fit is poor. ``assign_components``
+    recovers all 40 (``scripts/assignment_bench.py`` has the rates at other eccentricities
+    and numbers of epochs).
+    """
+    n_tables = 20
+    once = assigned = 0
+    for seed in range(n_tables):
+        table, truth, injected = _twin_table(seed, ecc=ecc)
+        first = fit_rv_orbit(table, period=P)
+        exchanged, moved = reassign_by_orbit(table, first.predict(table.bjd))
+        once += _twins_recovered(fit_rv_orbit(exchanged, period=P) if moved.any() else first)
+        result, orbit, decided = assign_components(table, period=P)
+        assigned += _twins_recovered(orbit)
+        assert _same_assignment(decided.exchanged, injected, truth)
+        assert not decided.alternative.any() and not decided.resolved.any()
+        # In one of the two orders of the stars every velocity is the injected one.
+        errors = [np.abs(result.velocity[order] - truth).max() for order in ([0, 1], [1, 0])]
+        assert min(errors) < 3.0 * 0.5
+        assert orbit.chi2 < 2.0 * (orbit.n_points - orbit.n_parameters)
+    assert assigned == n_tables
+    assert once <= 2
+
+
+def test_the_assignment_returns_the_table_the_orbit_and_the_exchanged_epochs():
+    table, _, _ = _twin_table(3)
+    assigned, orbit, decided = assign_components(table, period=P)
+    mask = decided.exchanged
+    assert mask.dtype == bool and mask.shape == (table.n_epochs,) and mask.any()
+    assert decided.changes and decided.apply(table).velocity.tolist() == assigned.velocity.tolist()
+    np.testing.assert_array_equal(assigned.velocity[:, mask], table.velocity[::-1][:, mask])
+    np.testing.assert_array_equal(assigned.velocity[:, ~mask], table.velocity[:, ~mask])
+    assert assigned.settings["reassigned_by_orbit"] == int(mask.sum())
+    refit = fit_rv_orbit(assigned, period=P)
+    assert orbit.chi2 == pytest.approx(refit.chi2, rel=1e-6)
+    np.testing.assert_allclose(orbit.k, refit.k, rtol=1e-5)
+    assert orbit.chi2 < 0.01 * fit_rv_orbit(table, period=P).chi2
+    # The options of the fit are passed on.
+    _, circular, _ = assign_components(table, period=P, circular=True, gamma="per-component")
+    assert circular.ecc == 0.0 and circular.gamma_mode == "one per component"
+    # A table that is in order is returned as it is, with the orbit of the plain fit.
+    ordered, _, _ = make_table()
+    same, plain, none = assign_components(ordered, period=P)
+    assert same is ordered and not none.changes and none.apply(ordered) is ordered
+    assert plain.chi2 == pytest.approx(fit_rv_orbit(ordered, period=P).chi2, rel=1e-9)
+    # A table that cannot support an orbit raises as the fit does.
+    few = replace(table, blended=np.arange(table.n_epochs) > 1)
+    with pytest.raises(ValueError, match="not enough to fit"):
+        assign_components(few, period=P)
+
+
+def test_the_assignment_is_not_made_between_unalike_light_fractions():
+    """At light fractions more than a factor of three apart no epoch is exchanged."""
+    table, _, _ = _twin_table(3)
+    n = table.n_epochs
+    unalike = replace(table, light=np.repeat(np.array([[0.9], [0.1]]), n, axis=1))
+    same, orbit, decided = assign_components(unalike, period=P)
+    assert same is unalike and not decided.changes
+    assert orbit.chi2 == pytest.approx(fit_rv_orbit(unalike, period=P).chi2, rel=1e-9)
+    _, exchanged, moved = assign_components(unalike, period=P, light_ratio_max=None)
+    assert moved.exchanged.any() and _twins_recovered(exchanged)
+    assert assign_components(unalike, period=P, light_ratio_max=10.0)[2].exchanged.any()
+    # The exchange can be refused outright, whatever the light fractions.
+    kept, _, refused = assign_components(table, period=P, exchange=False)
+    assert kept is table and not refused.changes
+    # Fractions that are not finite and positive do not apply the rule.
+    unknown = replace(table, light=np.full(table.velocity.shape, np.nan))
+    assert assign_components(unknown, period=P)[2].exchanged.any()
+    # A table with another number of components is fitted as it is.
+    one = replace(
+        table,
+        names=("A",),
+        velocity=table.velocity[:1],
+        sigma=table.sigma[:1],
+        sigma_ivar=table.sigma_ivar[:1],
+        covariance=table.covariance[:, :1, :1],
+        light=table.light[:1],
+        delta_chi2=table.delta_chi2[:1],
+        at_edge=table.at_edge[:1],
+        absolute=(True,),
+    )
+    single, alone, untouched = assign_components(one, period=P)
+    assert single is one and alone.names == ("A",) and not untouched.changes
+
+
+def test_the_starting_assignments_come_from_a_grid_of_keplerian_curves():
+    """The curves against the Kepler solver of the package, and the starts they give."""
+    from albireo.kepler import radial_velocity
+    from albireo.rvorbit import (
+        _ASSIGNMENT_ECCENTRICITIES,
+        _ASSIGNMENT_OMEGAS,
+        _ASSIGNMENT_PHASES,
+        _assignments_by_period,
+        _relative_curves,
+    )
+
+    t = np.sort(np.random.default_rng(5).uniform(2457000.0, 2457900.0, 40))
+    curves = _relative_curves(t, P)
+    n_phase, n_omega = _ASSIGNMENT_PHASES, _ASSIGNMENT_OMEGAS
+    assert curves.shape == (n_phase * (1 + len(_ASSIGNMENT_ECCENTRICITIES) * n_omega), t.size)
+    for k in (0, 17, n_phase - 1):  # circular curves, at phases over half a period
+        expected = radial_velocity(
+            t, period=P, t_peri=k / (2 * n_phase) * P, ecc=0.0, omega=0.0, k=1.0
+        )
+        np.testing.assert_allclose(curves[k], expected, atol=1e-6)
+    for i, j, k in ((0, 0, 0), (1, 3, 7), (3, 7, n_phase - 1), (3, 2, 31)):
+        expected = radial_velocity(
+            t,
+            period=P,
+            t_peri=k / n_phase * P,
+            ecc=_ASSIGNMENT_ECCENTRICITIES[i],
+            omega=j * 2.0 * np.pi / n_omega,
+            k=1.0,
+        )
+        row = n_phase * (1 + i * n_omega + j) + k
+        np.testing.assert_allclose(curves[row], expected, atol=1e-6)
+
+    table, truth, injected = _twin_table(3, ecc=0.0)
+    starts = _assignments_by_period(table, P, 3.0)
+    assert 1 <= len(starts) <= 3
+    assert all(start.any() and period == P for start, period in starts)
+    assert len({start.tobytes() for start, _ in starts}) == len(starts)
+    # The orbit is circular, so the best curve of the grid is the orbit.
+    assert _same_assignment(starts[0][0], injected, truth)
+    few = replace(table, blended=np.arange(table.n_epochs) > 1)
+    assert _assignments_by_period(few, P, 3.0) == []
+
+
+@pytest.mark.parametrize("ecc", [0.0, 0.3])
+def test_the_assignments_are_also_made_over_a_window_of_period(ecc):
+    """A period off by half the frequency resolution is repaired by the window (D68).
+
+    The period given is ``0.5 / T`` from the injected one in frequency, ``T`` being the
+    time span, so the phase is off by a quarter of a cycle at either end of the span. The
+    assignment made at that period is wrong, and the fit that follows does not leave it:
+    none of these six circular tables is recovered and one of the six eccentric ones.
+    With a window of ``1 / T`` all twelve are (``scripts/assignment_bench.py`` has the
+    rates over more tables and offsets).
+    """
+    from albireo.rvorbit import _ASSIGNMENT_WINDOW_STEPS, _window_periods
+
+    t = _twin_table(0, ecc=ecc)[0].bjd
+    periods = _window_periods(t, P, 1.0)
+    assert periods[0] == P and len(periods) == 2 * _ASSIGNMENT_WINDOW_STEPS + 1
+    steps = (1.0 / np.array(periods) - 1.0 / P) * np.ptp(t) * _ASSIGNMENT_WINDOW_STEPS
+    np.testing.assert_allclose(np.sort(steps), np.arange(-8, 9), atol=1e-9)
+    assert np.all(np.diff(np.abs(steps)) >= -1e-9), "ordered by the distance from the period"
+    assert _window_periods(t, P, 0.0) == [P] and _window_periods(t[:1], P, 1.0) == [P]
+
+    at_the_period, in_the_window = 0, 0
+    for seed in range(6):
+        table, _, _ = _twin_table(seed, ecc=ecc)
+        off = 1.0 / (1.0 / P + 0.5 / np.ptp(table.bjd))
+        at_the_period += _twins_recovered(assign_components(table, period=off)[1])
+        _, orbit, _ = assign_components(table, period=off, period_window=1.0)
+        in_the_window += _twins_recovered(orbit)
+        assert abs(orbit.period / P - 1.0) < 2e-3
+    assert at_the_period <= 1 and in_the_window == 6
+
+
+BLEND_LIGHT = np.array([0.6, 0.4])
+BLEND_SIGMA, BLEND_CORRELATION = 0.5, -0.6
+
+
+def _blended_table(seed, *, n_epochs=30, interchanged=0.0):
+    """An unequal pair whose blended epochs are flagged for a second minimum.
+
+    At the epochs with the two velocities 8 to 40 km/s apart the table holds two minima:
+    the injected pair, and the pair with the same light-weighted mean and the opposite
+    difference, each with its own noise at a correlation of -0.6. Which of the two is the
+    one returned is drawn per epoch. With ``interchanged`` that fraction of all the epochs
+    also has its two components interchanged. Returns the table, the injected velocities,
+    the flagged epochs, those at which the pair returned is the wrong one, and those
+    interchanged.
+    """
+    from albireo.rvorbit import _exchanged
+
+    rng = np.random.default_rng(seed)
+    bjd = np.sort(rng.uniform(0.0, 40.0, size=n_epochs))
+    orbit = ab.OrbitParams(period=P, t_peri=T_PERI, ecc=ECC, omega=OMEGA, k=(K1, K2), gamma=GAMMA)
+    truth = orbit.component_velocities(bjd)
+    cov = BLEND_SIGMA**2 * np.array([[1.0, BLEND_CORRELATION], [BLEND_CORRELATION, 1.0]])
+    noise = rng.multivariate_normal(np.zeros(2), cov, size=(2, n_epochs))
+    difference = truth[0] - truth[1]
+    mean = BLEND_LIGHT @ truth
+    exchanged = np.stack([mean - BLEND_LIGHT[1] * difference, mean + BLEND_LIGHT[0] * difference])
+    right, other = truth + noise[0].T, exchanged + noise[1].T
+    flagged = (np.abs(difference) > 8.0) & (np.abs(difference) < 40.0)
+    wrong = flagged & (rng.uniform(size=n_epochs) < 0.5)
+    covariance = np.repeat(cov[None], n_epochs, axis=0)
+    table = replace(
+        _table_from(bjd, np.where(wrong, other, right), BLEND_SIGMA),
+        covariance=covariance,
+        blended=flagged.copy(),
+        margin=np.where(flagged, rng.uniform(0.0, 8.0, n_epochs), np.inf),
+        alternative=np.where(flagged, np.where(wrong, right, other), np.nan),
+        alternative_covariance=np.where(flagged[:, None, None], covariance, np.nan),
+    )
+    swapped = rng.uniform(size=n_epochs) < interchanged
+    if swapped.any():
+        table = replace(_exchanged(table, swapped), settings=table.settings)
+    return table, truth, flagged, wrong, swapped
+
+
+@pytest.mark.parametrize("seed", [0, 1, 3])
+def test_the_orbit_decides_between_the_two_minima_of_a_flagged_epoch(seed):
+    """Every flagged epoch takes the minimum the orbit fits, and is flagged no longer."""
+    table, truth, flagged, wrong, _ = _blended_table(seed)
+    assert flagged.sum() >= 6 and wrong.any() and not wrong[flagged].all()
+    np.testing.assert_array_equal(table.second_minimum, flagged)
+    np.testing.assert_array_equal(table.good, ~flagged)
+    plain = fit_rv_orbit(table, period=P)
+    assert plain.n_points == 2 * int((~flagged).sum())
+
+    assigned, orbit, decided = assign_components(table, period=P, exchange=False)
+    np.testing.assert_array_equal(decided.resolved, flagged)
+    np.testing.assert_array_equal(decided.alternative, wrong)
+    assert not decided.exchanged.any()
+    assert assigned.good.all() and orbit.n_points == 2 * table.n_epochs
+    assert np.abs(assigned.velocity - truth).max() < 4.0 * BLEND_SIGMA
+    np.testing.assert_allclose(orbit.k, [K1, K2], atol=0.3)
+    assert orbit.chi2 < 1.5 * (orbit.n_points - orbit.n_parameters)
+    # The minimum the correlation returned stays in the table, as the alternative.
+    np.testing.assert_array_equal(assigned.alternative[:, wrong], table.velocity[:, wrong])
+    np.testing.assert_array_equal(assigned.velocity[:, wrong], table.alternative[:, wrong])
+    np.testing.assert_allclose(assigned.margin[wrong], -table.margin[wrong])
+    np.testing.assert_allclose(assigned.chi2[wrong], table.chi2[wrong] + table.margin[wrong])
+    kept = flagged & ~wrong
+    np.testing.assert_array_equal(assigned.velocity[:, kept], table.velocity[:, kept])
+    np.testing.assert_array_equal(assigned.margin[kept], table.margin[kept])
+    assert assigned.settings["resolved_by_orbit"] == int(flagged.sum())
+    assert assigned.settings["second_minimum_by_orbit"] == int(wrong.sum())
+    assert assigned.settings["reassigned_by_orbit"] == 0
+    np.testing.assert_array_equal(decided.apply(table).velocity, assigned.velocity)
+
+    # One round with given velocities decides the same, whatever their zero points.
+    predicted = truth - np.array([[5.0], [-3.0]])
+    once, by_prediction = assign_by_orbit(table, predicted, exchange=False)
+    assert by_prediction.same_as(decided)
+    np.testing.assert_array_equal(once.velocity, assigned.velocity)
+
+    # A velocity removed by the caller closes its epoch: it stays flagged.
+    closed = np.flatnonzero(flagged)[0]
+    velocity, sigma = np.array(table.velocity), np.array(table.sigma)
+    velocity[1, closed] = sigma[1, closed] = np.nan
+    gated, _, partial = assign_components(
+        replace(table, velocity=velocity, sigma=sigma), period=P, exchange=False
+    )
+    assert not partial.resolved[closed] and gated.blended[closed]
+    assert partial.resolved.sum() == flagged.sum() - 1
+
+
+@pytest.mark.parametrize("seed", [0, 3])
+def test_the_order_and_the_minimum_are_decided_together(seed):
+    """With three epochs in ten interchanged as well, both decisions are recovered."""
+    table, truth, flagged, wrong, swapped = _blended_table(seed, interchanged=0.3)
+    assert swapped.sum() >= 5 and (swapped & flagged).any()
+    assigned, orbit, decided = assign_components(table, period=P)
+    np.testing.assert_array_equal(decided.exchanged, swapped)
+    np.testing.assert_array_equal(decided.alternative, wrong)
+    np.testing.assert_array_equal(decided.resolved, flagged)
+    assert assigned.good.all()
+    assert np.abs(assigned.velocity - truth).max() < 4.0 * BLEND_SIGMA
+    np.testing.assert_allclose(orbit.k, [K1, K2], atol=0.3)
+    # At an epoch both interchanged and returned at the wrong minimum, the alternative in
+    # the table is the wrong minimum in the order of the stars.
+    both = swapped & wrong
+    if both.any():
+        np.testing.assert_array_equal(assigned.alternative[:, both], table.velocity[::-1][:, both])
+    # Without the exchange the interchanged epochs stay as they are, and the fit is poor.
+    _, held, without = assign_components(table, period=P, exchange=False)
+    assert not without.exchanged.any() and held.chi2 > 50.0 * orbit.chi2
+
+
+def test_an_assignment_that_decides_nothing_returns_the_table():
+    table, _, _ = make_table()
+    nothing = Assignment.none(table.n_epochs)
+    assert not nothing.changes and nothing.apply(table) is table
+    assert nothing.same_as(Assignment.none(table.n_epochs))
+    same, decided = assign_by_orbit(table, np.zeros((3, table.n_epochs)))
+    assert same is table and not decided.changes
 
 
 def test_the_swap_invariant_search_survives_exchanged_epochs():

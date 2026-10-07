@@ -31,6 +31,106 @@ This file records what changed. The reasons are recorded elsewhere:
 
 ### Added
 
+- **A step-by-step TODCOR notebook on Gaia RVS spectra.** `docs/tutorials/gaia-rvs-todcor.ipynb`
+  measures the epoch velocities of simulated Gaia RVS binaries by `todcor` against library
+  templates, with nothing disentangled and the outputs committed. It measures one binary and
+  fits its orbit, tabulates the errors against the line separation and the S/N, measures the
+  effect of templates offset from the stars, and repeats the measurement on the 33 systems and
+  epochs of the recorded disentangling runs under five declarations of what is known about the
+  templates. With templates at the injected labels the median error of an epoch velocity is
+  0.55 km/s for the primaries and 0.96 km/s for the secondaries, over the 93 percent of the
+  epochs that are usable. The orbit fitted to a table then gives both semi-amplitudes within
+  5 percent for 21 of the 22 systems with a largest separation above 100 km/s and for 9 of
+  the 11 below, at 10 ms per epoch. With the label errors of a classification the counts are
+  17 of 22 and 2 of 11 (18 and 3 with `scale="free"`), and with the pipeline's generic
+  templates 16 and 1.
+  `scripts/build_gaia_rvs_todcor_notebook.py` regenerates the notebook in about five minutes,
+  and its `--prose-only` option replaces the Markdown cells without executing anything.
+  `scripts/todcor_blend_bench.py` compares the search of `todcor` with the lowest chi-square of
+  a lattice of shifts, and tabulates what the blend flag marks.
+- **A blend flag for an epoch with a second solution, and its margin (D67).**
+  `VelocityTable.margin` is the rise in chi-square from the minimum `todcor` returns to the
+  lowest other minimum it refined at which the velocities differ. `blended` is raised where
+  the margin is below 9 times the reduced chi-square (9 under `errors="ivar"`), beside the
+  ridge it already marked. `VelocityTable.second_minimum` marks the epochs flagged for this
+  reason, the written table has a `margin` column, and `summary()` counts them. Where the
+  lines of two components overlap, noise can make the pair exchanged about the
+  light-weighted mean the lowest minimum, and the curvature there is regular: on simulated
+  Gaia RVS epochs of a pair at light fractions of 0.625 and 0.375 this happens at 46, 17, 1
+  and 0 of 480 epochs for a S/N of 15, 40, 100 and 300, with the injected pair the other
+  minimum at most 8.4 above. Two minima give different velocities where, in every order of
+  the components, some velocity differs by more than three quoted errors. The order is free
+  because two alike stars have a second minimum with the two velocities interchanged at
+  every separation: a flag that counted it marked every usable epoch of three benchmark
+  systems. The margin flags 33 of the 64 wrong epochs and 96 correct ones, and the other 31
+  are the same pair in the other order to within three quoted errors
+  (`scripts/todcor_blend_bench.py --margin`). Thresholds of 16 and 25 flag no further wrong
+  epoch. On the 33 systems of the benchmark with templates at the injected labels the flag
+  marks 3 percent of the epochs, the velocities beyond five quoted errors fall from 0.1 and
+  0.5 percent to 0.0 and 0.1, and 9 of the 11 systems below 100 km/s have both
+  semi-amplitudes within 5 percent against 8. A flagged epoch is left out unless an orbit
+  decides it (D68, below). An elongated single minimum, which occurs where the lines are
+  closer than their width, is flagged only by the correlation of the two velocities.
+- **`albireo.rvorbit.assign_components`: the velocities of two alike stars assigned to the stars
+  at a known period (D67).** Each epoch of two alike stars gives the pair of velocities in one of
+  the two orders. The function fits a Keplerian, exchanges the epochs the fit contradicts
+  (`reassign_by_orbit`) and repeats until no epoch moves, from the table as measured and from up
+  to three assignments made from the period alone. For those, the magnitude of the velocity
+  difference is fitted with the magnitude of a Keplerian's relative velocity over a grid of
+  phase, eccentricity and argument of periastron. It returns the table, the orbit and the
+  decisions (an `Assignment`, D68). An assignment made from the period alone replaces the one
+  reached from the table as measured only where it lowers the chi-square by more than nine times
+  its reduced chi-square, and no epoch is exchanged at light fractions more than a factor of
+  three apart. On simulated tables of twelve epochs in a random order
+  (`scripts/assignment_bench.py`), one exchange by the first fit, as the pipeline's candidate
+  fits made it before D68, gives both semi-amplitudes within 2 percent for 2, 1, 2 and 0 of 60
+  tables at eccentricities of 0, 0.3, 0.6 and 0.8, and the function for 60, 60, 48 and 12. On the
+  33 benchmark systems with the injected templates the counts within 5 percent above 100 km/s are
+  18 and 21 of 22. The procedure is that of the TODCOR notebook, whose scan of circular curves
+  gave 60, 45, 24 and 3 on the same tables. The pipeline's candidate fits use it since D68.
+- **The other minimum of a blended epoch, and the decision between the two by an orbit
+  (D68).** Where the margin flags an epoch, `todcor` records the minimum it refers to.
+  `VelocityTable.alternative` has its velocities and `alternative_covariance` their
+  covariance, on the scale of that minimum's own chi-square, with `alternative_sigma` the
+  errors and `alt_<name>`, `alt_sigma_<name>` the columns of the written table. On the
+  sweep of D67 the recorded minimum is the injected pair at each of the 33 flagged wrong
+  epochs and a wrong pair at 95 of the 96 flagged correct ones.
+  `albireo.rvorbit.assign_by_orbit` compares the two minima of every such epoch with
+  predicted velocities, each through its own covariance, with the rise in the chi-square of
+  the spectrum added to the other one, and takes the lower (`docs/math.md` §10.6). It also
+  makes the exchange of `reassign_by_orbit`, and returns the table with an `Assignment`:
+  the masks `exchanged`, `alternative` and `resolved`, and `apply`, which makes the same
+  decisions on another table with the same epochs. A decided epoch loses the `blended`
+  flag. `assign_components` makes these decisions in every round of its fit. On a pair at
+  light fractions of 0.625 and 0.375 observed at 240 epochs
+  (`docs/tutorials/gaia-rvs-todcor.ipynb`) the orbit decides the 8 and 6 flagged epochs at
+  a S/N of 15 and 40, and none of the 6 and 2 epochs that were wrong as measured remains
+  wrong. On the 33 benchmark systems with templates at the injected labels it decides 34
+  epochs, one of them wrongly, and the usable epochs rise from 93.4 to 96.6 percent. With
+  templates in error the decided epochs share the mismatch, which the quoted errors do not
+  include: 20 of 63 are more than five quoted errors and 3 km/s off under the classified
+  labels and 55 of 126 under the generic templates, where 5 and 25 percent of the other
+  usable epochs are. The numbers of systems with both semi-amplitudes within 5 percent at
+  a known period are those of the tables with the flagged epochs left out, to within one
+  system either way. The quoted errors of a decided epoch are those of the curvature at
+  one of two minima and are smaller than its errors (a pull rms of 0.7 to 1.9 on 14
+  epochs).
+- **`assign_components(period_window=...)`: a period known to a fraction of 1/T (D68).** An
+  assignment is the sign of the predicted relative velocity at each epoch. A period off by
+  `x / T` in frequency, with `T` the time span, puts the phase off by `x / 2` of a cycle at
+  either end of the span, and the fit does not leave the assignment made there. With a
+  window the starting assignments are also made at the periods within that many `1 / T`
+  of the one given, eight per `1 / T`, and each is fitted from the period of its curve. On
+  simulated tables of twelve epochs of two alike stars (`scripts/assignment_bench.py`), a
+  period given 0.25, 0.5 and 1 times `1 / T` off recovers 29, 6 and 1 of 60 circular
+  tables without the window and all 60 with a window of 1. The default is zero, for a
+  known period, and the results at the period itself are unchanged. The grid of curves is
+  evaluated with Kepler's equation solved once per phase and eccentricity, 3 to 10 times
+  faster than before with identical values.
+- **`scripts/period_decision_bench.py`.** The script measures the pipeline's bootstrap table
+  again for the 33 blind systems of the recorded Gaia RVS runs and gives the rank of the
+  injected period in the chi-square ranking of the candidate orbits, under the candidate
+  fit before D68 and under the present one, with and without its two parts.
 - **A step-by-step Gaia RVS notebook.** `docs/tutorials/gaia-rvs-benchmark.ipynb` renders two
   stars from the library, simulates the epochs Gaia would deliver, disentangles them, measures
   the epoch velocities and the labels, draws a population and runs a three-system benchmark,
@@ -49,8 +149,10 @@ This file records what changed. The reasons are recorded elsewhere:
   used as the correlation's amplitude. The disentangled components are `(w / l0) t`, so `l0` is
   the amplitude that reproduces the epochs with them. On a simulated pair with true light
   fractions of 0.70 and 0.30, declared as 0.45 and 0.55, holding the true fractions instead
-  raised the fainter component's rms velocity error from 0.34 to 14.3 km/s. Templates rescaled
-  by `l0 / w` gave the declared case's velocities exactly
+  raised the fainter component's rms velocity error from 0.34 to 14.3 km/s (2.3 km/s over the
+  eight epochs still measured after the search change of D66, which reports the two conjunction
+  epochs as not measured). Templates rescaled by `l0 / w` gave the declared case's velocities
+  exactly
   (`test_disentangled_templates_are_reproduced_by_the_declared_light_not_the_measured_one`).
 - **`albireo.gaia.rvs_delivered_sigma_kms` (D65).** The function returns the Gaussian width of
   a line resampled by `deliver`: `sigma_eff^2 = sigma_R^2 + Delta_det^2 / 6 + (Delta_det^2 -
@@ -257,6 +359,43 @@ This file records what changed. The reasons are recorded elsewhere:
 
 ### Changed
 
+- **The pipeline decides the open epochs of a table with the orbit (D68).** The candidate
+  fits of the period search (`period = "search"`) call `assign_components` with a
+  `period_window` of 1 in place of one exchange by the first fit: the exchange is repeated
+  from the table as measured and from assignments made from the period alone, and every
+  epoch flagged for a second minimum takes the minimum the candidate's orbit fits better,
+  where it had no weight before. On the 32 blind tables of the third run that the
+  correlation measures, the injected period is first in the chi-square ranking on 26,
+  against 20, and first with both semi-amplitudes within 5 percent on 17, against 10
+  (`scripts/period_decision_bench.py`). The repeated assignment gains five systems and
+  would lose one without the window, and the decision of the flagged epochs gains one.
+  One system at rank 23 becomes absent. The candidate fits take 7 s per system against
+  1 s. The runs of the benchmark were not repeated, so the number of periods recovered
+  end to end is not measured. After the disentangling, `assign_by_orbit` replaces
+  `reassign_by_orbit`: the disentangling's orbit also decides the flagged epochs of the
+  final table, at any light ratio, a flag counts them, and `velocities_unexchanged.rv` is
+  written when any epoch was exchanged or decided.
+- **`light="global"` holds positive light fractions or raises an error (D68).** The median of the
+  free pass is over the epochs at which every amplitude is positive. Where no epoch qualified as
+  usable and detected, the median was over every epoch with finite amplitudes and could be
+  negative: two templates that describe neither star fit a blend as a difference of the two. A
+  negative held fraction left every epoch of one benchmark system on a ridge, and for two others
+  gave tables in which every epoch counted as usable while the companion's velocities were tens
+  of km/s off. `todcor` now raises an error where no epoch has positive amplitudes, and
+  `light="free"` returns the amplitudes as solved. In the pipeline the star stops with that error
+  on the routes that asked for the template table (`period = "search"`, `light = "measure"`),
+  continues with a flag where the table was only a source of starting values, and after the
+  disentangling measures the table with the amplitudes of each epoch, with a flag and
+  `velocities.light_source` set to `"free per epoch"`. One of the 33 blind systems of the
+  benchmark is in this case with the default templates. With the search before D66 its light
+  fractions were those of one epoch at which a higher minimum was returned, and its recorded run
+  did not recover the period.
+- **`VelocityTable.blended` is raised by a second solution as well as by a ridge (D67).**
+  `good`, `find_period` and `fit_rv_orbit` therefore leave out more epochs than before where
+  lines overlap: 3 to 12 percent of the epochs of the benchmark's 33 systems, by template
+  tier. The first pass of `light="global"` supplies the light fractions only and does not
+  search for second minima. The pipeline's tables and the recorded benchmark runs were
+  measured before the change. A `VelocityTable` built by hand has an infinite `margin`.
 - **The epoch comparison removes the model grid's smoothing from its operator (D65).**
   `Fit.epoch_statistics(grid_compensation=True)`, the default, and so `Fit.match_labels`, build
   the stellar operator with `sigma_op^2 = sigma_inst^2 - sigma_lib^2 - (7/12) dv^2`. Five discrete
@@ -446,6 +585,37 @@ This file records what changed. The reasons are recorded elsewhere:
 
 ### Fixed
 
+- **`VelocityTable.settings["scale"]` records the `scale` option.** The loop over the epochs
+  reused the name for the rescaling of the errors, so the entry held the reduced chi-square
+  of the last epoch, or 1.0 under `errors="ivar"`. Nothing in the package read it.
+- **`todcor` returns the lowest minimum of the chi-square where the lines overlap (D66).** The
+  surface of two components with overlapping lines is a valley of constant light-weighted mean
+  velocity with two minima: the solution, and the pair with the velocity difference of the
+  opposite sign. The search refined the lowest sample of its coarse pass alone, within the
+  cells touching the lowest integer shift, and neither the coarse samples nor the integer
+  shifts show which minimum is the lower. On simulated Gaia RVS epochs with the lines up to
+  60 km/s apart it returned a minimum above the lowest at 43, 70, 73 and 90 of 360 epochs for a
+  S/N of 15, 40, 100 and 300, by up to 1421 in chi-square, and 45 to 49 of the 480 epochs of
+  the sweep had a velocity more than five quoted errors off at every S/N. The search now
+  refines every minimum of the coarse surface and of each full-resolution window that can
+  contain the lowest one, moves the refinement from cell to cell until no neighbouring cell is
+  lower, and is repeated from the exchanged pair of every pair of components. It returns the
+  lowest chi-square of a lattice of an eighth of a pixel at all 1440 epochs
+  (`scripts/todcor_blend_bench.py`). The epochs more than five quoted errors off are now 46,
+  17, 1 and 0 of 480: those at which the noise has made the exchanged pair the better fit
+  (`docs/math.md` §10.3), which the margin of D67 flags where the two minima give different
+  velocities. The result no longer depends on `coarse_step`, and the minimum over a cell is
+  computed in closed form from the integer-shift inner products. A start that can reach
+  neither a lower minimum nor one within the threshold of the flag is skipped, so the cost
+  is unchanged where the lines are resolved (0.059 and 0.088 s per epoch of 39,680 pixels on
+  the wall-clock fixture of `scripts/todcor_bench.py`, before and after). On that sweep,
+  three quarters of whose epochs have the lines within 60 km/s, it is 8.4 ms per epoch
+  against 6.2 ms, of which about 1 ms is the search for second minima.
+  A component whose lowest chi-square inside `v_range` is at the end of the range is reported
+  as not measured, as the documentation of `at_edge` states, in cases where a minimum inside
+  the range had been reported: with disentangled templates held at light fractions other than
+  the declared ones, two conjunction epochs of a test fixture change from 30 km/s off to not
+  measured, and `docs/api/pipeline.md` quotes the new values.
 - **Links from the notebook pages of the docs site.** A relative `.md` or `.ipynb` link in an
   executed notebook was published as written and led to a missing page on the site, although
   it resolved on GitHub. `scripts/mkdocs_notebook_links_hook.py` rewrites these links to the

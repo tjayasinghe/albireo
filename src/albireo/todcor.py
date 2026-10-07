@@ -16,7 +16,10 @@ instrument's line-spread function, ``R_j`` the projection onto the epoch's nativ
 (data are never resampled), and ``w`` the inverse variances with the masks applied. For
 every set of shifts the amplitudes are either held or solved in closed form. The
 chi-square is minimized over the integer shifts of the template grid and then refined
-below a pixel.
+below a pixel. Where the lines of two components overlap the surface has a second minimum,
+at the pair exchanged about its light-weighted mean velocity, and the search is made from
+both and returns the lower (``docs/math.md`` §10.3). An epoch at which another minimum fits
+as well and gives a different pair of velocities is flagged ``blended``.
 
 On a uniform grid with uniform weights and free amplitudes the chi-square surface is
 identical to the two-dimensional correlation of Zucker & Mazeh (1994),
@@ -56,6 +59,7 @@ Zucker, S. 2003, MNRAS, 342, 1291
 
 from __future__ import annotations
 
+import itertools
 import math
 import time
 import warnings
@@ -94,6 +98,22 @@ __all__ = [
 _ROW_BUCKET = 1024
 _SHIFT_CHUNK = 32
 _EPS = 1e-12
+# The largest number of local minima refined per epoch: of the coarse surface at full
+# resolution, and of each fine window below a pixel (see `_candidate_minima`). A fine
+# window is moved at most `_WINDOW_MOVES` times while its minimum is on its edge.
+_COARSE_STARTS = 6
+_FINE_STARTS = 4
+_WINDOW_MOVES = 6
+# The blend flag (`VelocityTable.blended`) is raised by another minimum of the surface within
+# `_BLEND_CHI2` of the one returned, in units of the reduced chi-square under
+# ``errors="profiled"``, whose velocities differ from those returned by more than
+# `_BLEND_SIGMAS` quoted errors in every order of the components (`_margin`).
+_BLEND_CHI2 = 9.0
+_BLEND_SIGMAS = 3.0
+
+
+class _LightNotMeasured(ValueError):
+    """The free pass of ``light="global"`` gave no epoch with positive amplitudes."""
 
 
 # ---------------------------------------------------------------------------
@@ -632,44 +652,92 @@ def _stencil(center: np.ndarray, lower: np.ndarray, upper: np.ndarray, h: float)
     return np.stack([x.reshape(-1) for x in mesh], axis=1)
 
 
-def _minimize_box_quadratic(g: np.ndarray, hess: np.ndarray, x0: np.ndarray, lower, upper):
-    """Minimize ``g.x + x.H.x/2`` over a box by exact coordinate descent from ``x0``."""
-    x = np.clip(np.asarray(x0, dtype=np.float64), lower, upper)
-    n_dim = x.size
-    for _ in range(60):
-        moved = 0.0
-        for i in range(n_dim):
-            slope = g[i] + hess[i] @ x
-            curv = hess[i, i]
-            if curv > _EPS:
-                new = x[i] - slope / curv
-            else:  # flat or concave along this axis: move downhill to the edge
-                new = lower[i] if slope > 0 else upper[i]
-            new = float(np.clip(new, lower[i], upper[i]))
-            moved = max(moved, abs(new - x[i]))
-            x[i] = new
-        if moved < 1e-10:
-            break
-    return x
+def _minimize_box_quadratic(g: np.ndarray, hess: np.ndarray) -> tuple[np.ndarray, float]:
+    """Minimize the convex ``g.x + x.H.x/2`` over the unit box exactly; ``(x, value)``.
+
+    The stationary point is the minimum where it lies inside the box. Otherwise the
+    minimum is on the boundary, and it is the lowest of the minima over the ``2 N``
+    facets, each a problem of the same form in one dimension fewer. A singular ``H`` has
+    a direction along which the quadratic is linear or flat, so its minimum is also on the
+    boundary. A coordinate descent is not used. It converges at the rate of the squared
+    correlation of ``H`` per sweep, which is above 0.99 at a blended epoch.
+    """
+    n = g.size
+    if n == 1:
+        g0, h0 = float(g[0]), float(hess[0, 0])
+        x = min(max(-g0 / h0, 0.0), 1.0) if h0 > _EPS else (0.0 if g0 > 0.0 else 1.0)
+        return np.array([x]), g0 * x + 0.5 * h0 * x * x
+    scale = float(np.prod(np.clip(np.diag(hess), 0.0, None)))
+    if scale > 0.0 and np.linalg.det(hess) > 1e-12 * scale:
+        x = np.linalg.solve(hess, -g)
+        if np.all((x >= 0.0) & (x <= 1.0)):
+            return x, float(g @ x + 0.5 * x @ hess @ x)
+    best_x, best_value = None, np.inf
+    keep = np.arange(n)
+    for axis in range(n):
+        rest = keep[keep != axis]
+        for bound in (0.0, 1.0):
+            # On the facet x[axis] = bound the gradient gains H[rest, axis] * bound.
+            sub_x, sub_value = _minimize_box_quadratic(
+                g[rest] + hess[rest, axis] * bound, hess[np.ix_(rest, rest)]
+            )
+            value = sub_value + g[axis] * bound + 0.5 * hess[axis, axis] * bound * bound
+            if value < best_value:
+                best_x = np.empty(n)
+                best_x[rest] = sub_x
+                best_x[axis] = bound
+                best_value = float(value)
+    return best_x, best_value
+
+
+def _cell_quadratic(terms: _Terms, corner: np.ndarray, amps: np.ndarray):
+    """The chi-square inside one unit cell of the fine window as ``c + g.f + f.H.f / 2``.
+
+    With the amplitudes held, every inner product is bilinear in the fractional shifts
+    ``f`` of the cell whose lowest corner is ``corner`` (:meth:`_Terms.at`), so the
+    chi-square with the nuisance profiled is exactly a quadratic in them
+    (``docs/math.md`` §10.3). Its coefficients are differences of the integer-shift terms
+    at the corners of the cell. ``H`` is positive semi-definite, since the chi-square is
+    the squared norm of a residual that is affine in ``f``.
+    """
+    n_tmpl = terms.n_tmpl
+    lo = np.asarray(corner, dtype=int)
+    rows = np.arange(n_tmpl)
+    b_lo = terms.b[rows, lo]
+    b_step = terms.b[rows, lo + 1] - b_lo
+    gram_lo = np.empty((n_tmpl, n_tmpl))
+    gram_step = np.empty((n_tmpl, n_tmpl))  # template i moved one pixel, k at the corner
+    gram_both = np.empty((n_tmpl, n_tmpl))
+    for i in range(n_tmpl):
+        for k in range(n_tmpl):
+            block = terms.gram[i, k, lo[i] : lo[i] + 2, lo[k] : lo[k] + 2]
+            gram_lo[i, k] = block[0, 0]
+            gram_step[i, k] = block[1, 0] - block[0, 0]
+            gram_both[i, k] = block[1, 1] - block[1, 0] - block[0, 1] + block[0, 0]
+    const = terms.zwz - 2.0 * amps @ b_lo + amps @ gram_lo @ amps
+    grad = 2.0 * amps * (gram_step @ amps - b_step)
+    hess = 2.0 * np.outer(amps, amps) * gram_both
+    if terms.m:
+        pwa_lo = terms.pwa[rows, :, lo]  # (n_tmpl, m)
+        pwa_step = terms.pwa[rows, :, lo + 1] - pwa_lo
+        resid = terms.pwz - amps @ pwa_lo
+        solved = np.linalg.solve(terms.pwp, np.column_stack([resid, pwa_step.T]))
+        const = const - resid @ solved[:, 0]
+        grad = grad + 2.0 * amps * (pwa_step @ solved[:, 0])
+        hess = hess - 2.0 * np.outer(amps, amps) * (pwa_step @ solved[:, 1:])
+    return float(const), grad, 0.5 * (hess + hess.T)
 
 
 def _refine_cell(terms: _Terms, corner: np.ndarray, amps):
     """Exact minimum of the chi-square over one unit cell of the fine window.
 
-    With the amplitudes fixed the chi-square is exactly a quadratic in the fractional
-    shifts inside a cell (every term is bilinear in them). It is therefore reconstructed
-    from ``3^N`` exact evaluations and minimized in closed form, with the box constraint
-    handled by coordinate descent (``docs/math.md`` §10.3). Returns ``(chi2, position)``.
+    The chi-square with the amplitudes held is a quadratic in the fractional shifts inside
+    the cell (:func:`_cell_quadratic`), and its minimum over the cell is found in closed
+    form (:func:`_minimize_box_quadratic`). Returns ``(chi2, position)``.
     """
-    n_dim = terms.n_tmpl
-    grid = np.meshgrid(*[np.array([0.0, 0.5, 1.0])] * n_dim, indexing="ij")
-    frac = np.stack([x.reshape(-1) for x in grid], axis=1)
-    values = np.array([terms.chi2(corner + f, amps)[0] for f in frac])
-    _, g, hess = _quadratic_fit(frac, values)
-    best = frac[int(np.argmin(values))]
-    x = _minimize_box_quadratic(g, hess, best, np.zeros(n_dim), np.ones(n_dim))
-    pos = corner + x
-    return terms.chi2(pos, amps)[0], pos
+    const, grad, hess = _cell_quadratic(terms, corner, np.asarray(amps, dtype=np.float64))
+    x, value = _minimize_box_quadratic(grad, hess)
+    return const + value, corner + x
 
 
 def _profiled(terms: _Terms, pos, amps, mode: str):
@@ -682,36 +750,140 @@ def _profiled(terms: _Terms, pos, amps, mode: str):
 
 
 def _refine(terms: _Terms, start: np.ndarray, amps, mode: str):
-    """Sub-pixel minimum from the integer minimum ``start`` of the fine window.
+    """Sub-pixel minimum reached from the integer point ``start`` of the fine window.
 
-    Every unit cell touching ``start`` is minimized exactly with the amplitudes held. When
-    they are profiled (``mode`` ``"free"`` or ``"scale"``) the amplitude solve and the cell
-    minimization alternate until the position converges. Falls back to ``start``, flagged
-    as unrefined, if the minimum is not interior to the window.
+    Every unit cell touching the position is minimized exactly with the amplitudes held,
+    and the position moves to the lowest of them: all ``2^N`` cells at an integer point,
+    the two on either side of a cell face, and the one cell that contains an interior
+    point. The step is repeated until no cell touching the position is lower, so that the
+    descent crosses cell faces and follows the surface for more than a pixel. At a blended
+    epoch the surface is a valley along which the light-weighted mean velocity is constant,
+    and its lowest integer sample is the one nearest its floor, which can be several pixels
+    from its minimum. When the amplitudes are profiled (``mode`` ``"free"`` or
+    ``"scale"``) the amplitude solve alternates with the step until the position
+    converges.
+
+    The descent stops at the boundary of the window, where the caller moves the window
+    (:func:`_refine_at`). Falls back to ``start``, flagged as unrefined, if ``start`` is
+    itself on that boundary.
     """
-    n_dim = terms.n_tmpl
     hi = terms.n_shift - 1
     pos = start.astype(np.float64)
     if np.any(start <= 0) or np.any(start >= hi):
         chi2, a, _ = _profiled(terms, pos, amps, mode)
         return chi2, pos, a, False
-    _, current, _ = _profiled(terms, pos, amps, mode)
-    for _ in range(12 if mode != "fixed" else 1):
-        candidates = []
-        for signs in np.ndindex(*(2,) * n_dim):
-            corner = np.floor(pos).astype(int) - np.array(signs)
-            corner = np.clip(corner, 0, hi - 1)
-            candidates.append(_refine_cell(terms, corner, current))
-        chi2, new_pos = min(candidates, key=lambda c: c[0])
+    value, current, _ = _profiled(terms, pos, amps, mode)
+    cells: dict[tuple[int, ...], tuple[float, np.ndarray]] = {}
+    for _ in range(max(12, 4 * terms.n_shift)):
+        base = np.floor(pos).astype(int)
+        on_face = pos == base
+        axes = [
+            sorted({int(np.clip(c - 1, 0, hi - 1)), int(np.clip(c, 0, hi - 1))}) if face else [c]
+            for c, face in zip(base.tolist(), on_face.tolist(), strict=True)
+        ]
+        best = None
+        for corner in itertools.product(*axes):
+            if corner not in cells:
+                cells[corner] = _refine_cell(terms, np.array(corner), current)
+            if best is None or cells[corner][0] < best[0]:
+                best = cells[corner]
         if mode == "fixed":
-            return chi2, new_pos, current, True
-        _, new_amps, _ = _profiled(terms, new_pos, amps, mode)
-        settled = np.max(np.abs(new_pos - pos)) < 1e-6
-        pos, current = new_pos, new_amps
+            if not best[0] < value or np.array_equal(best[1], pos):
+                break  # no cell touching the position is lower: a minimum of the surface
+            value, pos = best
+            continue
+        _, new_amps, _ = _profiled(terms, best[1], amps, mode)
+        settled = np.max(np.abs(best[1] - pos)) < 1e-6
+        pos, current = best[1], new_amps
+        cells.clear()  # the cell quadratics hold the amplitudes
         if settled:
             break
     chi2, current, _ = _profiled(terms, pos, amps, mode)
     return chi2, pos, current, True
+
+
+def _candidate_minima(
+    surface: np.ndarray, n_max: int, *, interior: bool = False, slack: float = 0.0
+):
+    """The local minima of a sampled chi-square surface that can contain its lowest minimum.
+
+    The surface of two components has two minima of comparable depth wherever their lines
+    overlap: the solution, and the one with the components exchanged about their
+    light-weighted mean velocity, which reproduces the first two moments of the blended
+    profile. A sampled surface does not show which is the lower. A basin sampled at a
+    distance ``d`` from its minimum is ``d.H.d / 2`` above it, with ``H`` the curvature,
+    and at a S/N of 100 that exceeds the difference in depth of the two basins on the
+    integer shifts as well as on the coarse stride. Refining the lowest sample alone
+    therefore returns either minimum.
+
+    Every local minimum that can be the lowest is returned, the lowest sample first. A
+    point is a local minimum where it is finite and no neighbour within one step along
+    every axis is lower. Its basin can be lower than its sample by at most the largest
+    value of ``d.H.d / 2`` over half a step along every axis, which for a quadratic basin is
+    bounded by a quarter of the sum over the axes of the second differences
+    ``f(+1) + f(-1) - 2 f(0)``. A minimum is kept where its sample minus that bound does
+    not exceed the lowest sample, and at most ``n_max`` are kept. A neighbour outside the
+    surface is replaced by the one opposite. With ``interior`` a minimum on the boundary
+    of the surface is left out unless it is the lowest sample.
+
+    With ``slack`` the local minima whose sample minus the bound exceeds the lowest
+    sample by at most ``slack`` are appended, up to ``n_max`` more. They cannot contain the
+    lowest minimum. They are the ones that can lie within ``slack`` of it, which the blend
+    flag needs (:func:`_margin`). The first ``n_max`` entries do not depend on ``slack``.
+
+    Returns the indices and, for each, its floor: the sample minus the bound, below which
+    the minimum of a quadratic basin cannot lie. A caller that has already refined a
+    minimum below the floor of a candidate need not refine that candidate.
+
+    On 360 simulated Gaia RVS epochs of a pair with light fractions 0.625 and 0.375 and
+    separations of 0 to 60 km/s, refining the lowest coarse sample alone, within the cells
+    touching the lowest integer shift, returned a minimum above the lowest at 43, 70, 73
+    and 90 epochs for a S/N of 15, 40, 100 and 300, by up to 8.5, 34, 166 and 1421 in
+    chi-square (``scripts/todcor_blend_bench.py``, ``docs/benchmarks.md``).
+    """
+    clean = np.where(np.isfinite(surface), surface, np.inf)
+    shape, n_dim = clean.shape, clean.ndim
+    padded = np.pad(clean, 1, constant_values=np.inf)
+
+    def neighbour(offset):
+        return padded[tuple(slice(1 + o, 1 + o + n) for o, n in zip(offset, shape, strict=True))]
+
+    is_minimum = np.isfinite(clean)
+    for offset in np.ndindex(*(3,) * n_dim):
+        offset = tuple(o - 1 for o in offset)
+        if any(offset):
+            is_minimum &= clean <= neighbour(offset)
+    if not is_minimum.any():  # no finite sample: the caller's handling of the surface applies
+        return [np.array(np.unravel_index(int(np.nanargmin(surface)), shape))], [-np.inf]
+    bound = np.zeros(shape)
+    with np.errstate(invalid="ignore"):
+        for axis in range(n_dim):
+            above = neighbour(tuple(int(a == axis) for a in range(n_dim)))
+            below = neighbour(tuple(-int(a == axis) for a in range(n_dim)))
+            mirrored_above = np.where(np.isfinite(above), above, below)
+            mirrored_below = np.where(np.isfinite(below), below, above)
+            bound += 0.25 * (mirrored_above + mirrored_below - 2.0 * clean)
+        lowest = float(clean[is_minimum].min())
+        floor = clean - bound
+        can_be_lowest = is_minimum & ~(floor > lowest)
+        near = is_minimum & ~can_be_lowest & ~(floor > lowest + slack)
+    last = np.array(shape) - 1
+
+    def ordered(keep, *, with_lowest):
+        index = np.argwhere(keep)
+        starts = [index[i] for i in np.argsort(clean[keep], kind="stable")]
+        if interior:
+            starts = [
+                start
+                for k, start in enumerate(starts)
+                if (with_lowest and k == 0) or (np.all(start > 0) and np.all(start < last))
+            ]
+        return starts[: max(int(n_max), 1)]
+
+    starts = ordered(can_be_lowest, with_lowest=True)
+    if slack > 0.0:
+        starts += ordered(near, with_lowest=False)
+    return starts, [float(floor[tuple(start)]) for start in starts]
 
 
 def _hessian(terms: _Terms, pos: np.ndarray, amps, mode: str, h: float = 0.2):
@@ -1061,8 +1233,30 @@ class VelocityTable:
         the rest refitted. This is the per-epoch detection statistic. It is small for a
         companion not detected at that epoch.
     blended
-        Per epoch: the velocities lie on a ridge (a covariance correlation above 0.9, or a
-        curvature that is not positive definite).
+        Per epoch: the epoch does not determine the velocities. The flag is raised where
+        they lie on a ridge (a covariance correlation above 0.9, or a curvature that is not
+        positive definite), and where another minimum of the surface fits as well and gives
+        different velocities: ``margin`` below 9 times the reduced chi-square, or below 9
+        under ``errors="ivar"`` (:func:`todcor`, Notes).
+    margin
+        Per epoch: the rise in chi-square from the minimum returned to the lowest other
+        minimum the search refined at which the velocities differ. Two minima give the same
+        velocities where, in some order of the components, every velocity of one is within
+        three quoted errors of the other's. The same pair of velocities assigned to the
+        stars in the other order is therefore not counted. One epoch does not determine
+        that assignment for two alike stars, and an orbit does
+        (:func:`albireo.rvorbit.assign_components`). ``inf`` where the search found no such
+        minimum, and in a table built without one. ``nan`` where nothing was measured or
+        the curvature gave no error.
+    alternative, alternative_covariance
+        ``(n_comp, n_epochs)`` km/s and ``(n_epochs, n_comp, n_comp)`` km/s²: the
+        velocities at the minimum ``margin`` refers to and their covariance, where that
+        minimum flags the epoch (``second_minimum``), and ``nan`` elsewhere. The epoch
+        alone does not decide between the two pairs, and an orbit can
+        (:func:`albireo.rvorbit.assign_components`). The covariance is on the scale of
+        ``covariance``, with the reduced chi-square of that minimum, and
+        ``alternative_sigma`` is the square root of its diagonal. ``light`` and
+        ``delta_chi2`` are those of the minimum returned.
     at_edge
         ``(n_comp, n_epochs)``: the chi-square of that component was still decreasing at
         the edge of the range searched, either on the coarse grid over ``v_range`` or on
@@ -1095,7 +1289,19 @@ class VelocityTable:
     refined: np.ndarray
     absolute: tuple[bool, ...]
     frame: str
+    margin: np.ndarray | None = None
+    alternative: np.ndarray | None = None
+    alternative_covariance: np.ndarray | None = None
     settings: dict = field(default_factory=dict, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.margin is None:
+            object.__setattr__(self, "margin", np.full(np.shape(self.bjd), np.inf))
+        if self.alternative is None:
+            object.__setattr__(self, "alternative", np.full(np.shape(self.velocity), np.nan))
+        if self.alternative_covariance is None:
+            empty = np.full(np.shape(self.covariance), np.nan)
+            object.__setattr__(self, "alternative_covariance", empty)
 
     @property
     def n_epochs(self) -> int:
@@ -1122,6 +1328,24 @@ class VelocityTable:
         """
         dof = np.maximum(self.n_pixels - self.settings.get("n_parameters", 0), 1)
         return self.chi2 / dof
+
+    @property
+    def alternative_sigma(self) -> np.ndarray:
+        """``(n_comp, n_epochs)`` km/s: the quoted errors of ``alternative``."""
+        variance = np.diagonal(self.alternative_covariance, axis1=1, axis2=2).T
+        with np.errstate(invalid="ignore"):
+            return np.sqrt(np.where(variance >= 0.0, variance, np.nan))
+
+    @property
+    def second_minimum(self) -> np.ndarray:
+        """Per epoch: ``margin`` is below the threshold that raises ``blended``.
+
+        The threshold is 9 times the reduced chi-square, or 9 under ``errors="ivar"``.
+        These epochs are blended whatever the curvature at the minimum returned.
+        """
+        scale = 1.0 if self.settings.get("errors") == "ivar" else self.reduced_chi2
+        with np.errstate(invalid="ignore"):
+            return np.asarray(self.margin < _BLEND_CHI2 * scale, dtype=bool)
 
     @property
     def good(self) -> np.ndarray:
@@ -1173,6 +1397,11 @@ class VelocityTable:
         out["chi2_red"] = self.reduced_chi2
         out["r2"] = self.r_squared
         out["n_pix"] = self.n_pixels
+        out["margin"] = self.margin
+        other_sigma = self.alternative_sigma
+        for i, name in enumerate(self.names):
+            out[f"alt_{name}"] = self.alternative[i]
+            out[f"alt_sigma_{name}"] = other_sigma[i]
         out["blended"] = self.blended
         out["at_edge"] = np.any(self.at_edge, axis=0)
         out["refined"] = self.refined
@@ -1247,9 +1476,11 @@ class VelocityTable:
         n_edge = int(np.any(self.at_edge, axis=0).sum())
         n_unrefined = int((~self.refined).sum())
         if n_blend or n_edge or n_unrefined:
+            n_second = int((self.blended & self.second_minimum).sum())
+            second = f" ({n_second} by a second minimum)" if n_second else ""
             lines.append(
-                f"  flags: {n_blend} blended, {n_edge} at the search edge, not measured, "
-                f"{n_unrefined} not refined below a pixel"
+                f"  flags: {n_blend} blended{second}, {n_edge} at the search edge, not "
+                f"measured, {n_unrefined} not refined below a pixel"
             )
         weak = [
             f"{name} in {int((self.delta_chi2[i] < 25.0).sum())} epoch(s)"
@@ -1328,21 +1559,31 @@ def _check_margins(grid: LogGrid, dataset: Dataset, shift_lo: float, shift_hi: f
 
 
 def _global_light(first: VelocityTable) -> dict[str, np.ndarray]:
-    """Per-instrument light fractions from a free-amplitude pass: a weighted median."""
+    """Per-instrument light fractions from a free-amplitude pass: a median over epochs.
+
+    The epochs are those of the instrument with every amplitude positive, usable, and
+    every component detected at a rise above 9. Where none qualifies, every epoch with
+    positive amplitudes is taken. Where no epoch has positive amplitudes the pass has not
+    measured the light, and an error is raised. Two templates cooler than both stars fit a
+    blend best as a difference, with one amplitude negative, at every epoch of a pair that
+    is never resolved. Before D68 the median was then taken over those epochs, and the
+    held fractions, one of them negative, left every epoch of the table on a ridge.
+    """
     out = {}
     instruments = sorted(set(first.instrument))
     for inst in instruments:
-        sel = np.array([i == inst for i in first.instrument]) & first.good
-        sel &= np.all(first.light > 0.0, axis=0) & np.all(np.isfinite(first.light), axis=0)
-        sel &= np.all(first.delta_chi2 > 9.0, axis=0)
+        here = np.array([i == inst for i in first.instrument])
+        with np.errstate(invalid="ignore"):
+            positive = here & np.all(np.isfinite(first.light) & (first.light > 0.0), axis=0)
+            sel = positive & first.good & np.all(first.delta_chi2 > 9.0, axis=0)
         if not sel.any():
-            sel = np.array([i == inst for i in first.instrument]) & np.all(
-                np.isfinite(first.light), axis=0
-            )
+            sel = positive
         if not sel.any():
-            raise ValueError(
-                f"instrument {inst!r}: no epoch yielded usable free light fractions; pass "
-                "light=<fractions> explicitly"
+            raise _LightNotMeasured(
+                f"instrument {inst!r}: no epoch gives a positive amplitude to every template, "
+                "so the free pass does not measure the light fractions (light='free' shows "
+                "the amplitudes). The templates do not describe every component at any "
+                "epoch: pass light=<fractions>, or templates closer to the components"
             )
         fractions = first.light[:, sel] / first.light[:, sel].sum(axis=0, keepdims=True)
         med = np.median(fractions, axis=1)
@@ -1400,7 +1641,11 @@ def todcor(
         ``"global"`` (default) fits them freely in every epoch, takes the weighted median
         over the well-detected, unblended epochs of each instrument, and re-measures with
         them held fixed. A per-epoch light ratio is noisy, and a ratio fitted at a blended
-        phase is not a measurement. ``"free"`` reports the per-epoch fit itself. A
+        phase is not a measurement. ``"free"`` reports the per-epoch fit itself. An
+        amplitude of that fit can be negative: templates that do not describe the
+        components fit a blend as a difference. ``"global"`` takes the median over the
+        epochs at which every amplitude is positive and raises an error where there is
+        none. A
         sequence or a ``{name: fraction}`` mapping, summing to one, holds them fixed. When
         the templates are the components of a disentangling that assumed fractions, those
         should be held fixed, because no other choice is consistent with the definition of
@@ -1422,7 +1667,10 @@ def todcor(
     coarse_step
         Stride of the global search, in template pixels. Default: the narrowest effective
         LSF sigma in pixels (at least one), which cannot step over a correlation peak.
-        The minimum found is then refined at full resolution and below a pixel.
+        Every minimum of the coarse surface that can contain the lowest one, or lie
+        within the blend threshold of it, is then searched at full resolution and refined
+        below a pixel, and where the lines of two components overlap the search is repeated
+        from the exchanged pair (Notes). The result does not depend on the stride.
     errors
         ``"profiled"`` (default) rescales the curvature error by the reduced chi-square,
         so that the noise level is estimated from the residuals: the maximum-likelihood
@@ -1464,6 +1712,48 @@ def todcor(
     :meth:`albireo.Fit.templates` upsamples to that. A library template's grid should be
     built the same way.
 
+    Where the lines of two components overlap, the surface is a valley along which their
+    light-weighted mean velocity is constant, with two minima: the solution, and the pair
+    with the same mean and the velocity difference of the opposite sign, which reproduces
+    the first two moments of the blended profile (``docs/math.md`` §10.3). The search is
+    made from both and the lower is returned, to the minimum of a lattice of 0.125 pixel
+    on all 1440 simulated Gaia RVS epochs it was compared on (``docs/benchmarks.md``). The
+    two minima differ in depth only through the asymmetry of the blended profile, so noise
+    can make the exchanged pair the lower. Both velocities are then wrong by about their
+    separation, and the curvature at that minimum is regular, so the quoted errors do not
+    show it.
+
+    The search keeps every minimum it refines, and ``VelocityTable.margin`` is the rise in
+    chi-square from the one returned to the lowest other one at which the velocities
+    differ. An epoch is flagged ``blended`` where the margin is below 9 times the reduced
+    chi-square (9 under ``errors="ivar"``). The velocities of two minima differ where, in
+    every order of the components, some velocity differs by more than three quoted
+    errors. The same pair in the other order is not counted: the surface of two alike
+    stars has that minimum at every separation, the pair is measured, and an orbit assigns
+    it to the stars (:func:`albireo.rvorbit.assign_components`).
+
+    On those epochs (R = 11,500, light fractions 0.625 and 0.375, 480 at each S/N) either
+    velocity was more than five quoted errors and 3 km/s from the injected one at 46, 17,
+    1 and 0 epochs for a S/N of 15, 40, 100 and 300 per pixel, all with the lines 10 to
+    40 km/s apart, up to 1.5 times the FWHM of the line-spread function. At 63 of these 64
+    the minimum returned was the exchanged pair, and at all 64 the injected pair was
+    another minimum the search refined, at a rise of at most 8.4. The margin flags 33 of
+    the 64 and 96 epochs that were measured correctly. At the other 31 the two minima are
+    the same pair of velocities in the two orders to within three quoted errors, the case
+    the margin does not count. With the two velocities interchanged, 30 of them are within
+    five quoted errors or 3 km/s of the injected ones (``docs/benchmarks.md``).
+
+    Where the margin raises the flag, the table records the velocities of that minimum
+    and their covariance (``VelocityTable.alternative``, ``alternative_covariance``). At
+    each of the 33 flagged wrong epochs they are the injected pair. One epoch does not
+    decide between the two minima, and an orbit does
+    (:func:`albireo.rvorbit.assign_by_orbit`). Without one a flagged epoch is left out.
+
+    One limit applies. The margin counts the minima the search refined. Where the lines
+    are closer than their width the two minima merge into one elongated minimum, which
+    is flagged only where the correlation of the two velocities exceeds 0.9 and has no
+    other minimum to record.
+
     Velocities are barycentric. For topocentric data the shift searched is
     ``xi(v) - xi(v_bary)`` in log-wavelength (``docs/math.md`` §1.2). The composition is
     exact because log-shifts add (§10.5).
@@ -1492,6 +1782,8 @@ def todcor(
     phi_of = _resolve_correlation(noise_correlation, dataset)
 
     if mode == "global":
+        # The first pass supplies the light fractions only, so it does not search for the
+        # second minima that the blend flag of the table needs.
         first = _run(
             dataset,
             templates,
@@ -1507,6 +1799,7 @@ def todcor(
             scale,
             phi_of,
             progress,
+            blend=False,
         )
         per_instrument = _global_light(first)
         table = _run(
@@ -1571,6 +1864,225 @@ def _resolve_correlation(noise_correlation, dataset: Dataset) -> dict[str, float
     return out
 
 
+def _lower_of(best, candidate):
+    """The candidate where its chi-square is finite and below that of ``best``, else ``best``."""
+    if best is None or (np.isfinite(candidate[0]) and not candidate[0] >= best[0]):
+        return candidate
+    return best
+
+
+def _refine_at(
+    centre: np.ndarray,
+    edge: np.ndarray,
+    stack,
+    work: _EpochWork,
+    amps,
+    amp_mode: str,
+    window: tuple[np.ndarray, np.ndarray],
+    radius: int,
+    n_fine: int,
+    n_fine_raw: int,
+    blend: tuple[float, float],
+):
+    """The refined minimum of one epoch's chi-square reached from the integer shifts ``centre``.
+
+    The fine pass evaluates every integer shift in a window of ``n_fine_raw`` shifts per
+    template around ``centre``. The refinement below a pixel (:func:`_refine`) is started
+    from ``centre`` and from each minimum of the window that can be its lowest
+    (:func:`_candidate_minima`). A refined position inside the window is a minimum of the
+    surface, and the lowest of these is kept. While the lowest point of the window is on
+    its edge, an integer shift or the position a refinement reached, the minimum there is
+    not bracketed, and the window is centred on that point and evaluated again, up to
+    ``_WINDOW_MOVES`` times. The window is kept inside ``window``, the shift range the
+    coarse pass searched, so that no reported velocity lies outside the requested
+    ``v_range``.
+
+    Returns the solution and the minima found. The solution is ``(chi2, position,
+    amplitudes, refined, evaluated_start, fine, terms, edge)``. ``position`` is in pixels
+    from ``evaluated_start``, the start of the window in which the result was evaluated,
+    and ``fine`` and ``terms`` are that window's. The result is the lowest minimum inside a
+    window, with ``edge`` as given (per template, a coarse point on the end of its range).
+    Where the point on the edge of the last window is lower still, the surface is
+    decreasing where the search stops. That point is then returned, with the templates on
+    the edge added to ``edge``, and nothing is measured for them.
+
+    The minima found are every refined minimum inside a window, each in the form of the
+    solution and the solution among them. Each window is also refined from its local minima
+    that can lie within the blend threshold of its lowest (``blend`` sets that threshold,
+    :func:`_blend_slack`), so that a second minimum inside the window of the first is
+    recorded.
+    """
+    n_tmpl = centre.shape[0]
+    window_lo, window_hi = window
+    last = n_fine_raw - 1
+    inside = None  # the lowest refined minimum inside a window, with that window's terms
+    found = []  # every refined minimum inside a window, in the form of the solution
+    fine_start = np.clip(centre - radius, window_lo, window_hi)
+    for attempt in range(_WINDOW_MOVES):
+        evaluated_start = fine_start
+        fine = np.stack([evaluated_start[i] + np.arange(n_fine) for i in range(n_tmpl)]).astype(
+            np.int32
+        )
+        out = _epoch_terms(
+            stack,
+            work.rows,
+            work.cols,
+            work.vals,
+            work.z,
+            work.w,
+            jnp.asarray(fine),
+            work.basis,
+            chunk=_SHIFT_CHUNK,
+        )
+        terms = _terms_numpy(out, n_fine_raw)
+        if amps is None:
+            fine_surface = np.asarray(_chi2_grid_free(*out))
+        else:
+            fine_surface = np.asarray(
+                _chi2_grid_fixed(*out, jnp.asarray(amps), free_scale=amp_mode == "scale")
+            )
+        fine_surface = fine_surface[(slice(0, n_fine_raw),) * n_tmpl]
+        # The integer shifts do not resolve which of two basins inside the window is the
+        # lower, and a basin need not contain a local minimum of the integer shifts, so
+        # the refinement starts from each candidate and, in the first window, from the
+        # centre asked for. The first start is the lowest integer shift.
+        finite = fine_surface[np.isfinite(fine_surface)]
+        slack = _blend_slack(float(finite.min()), blend) if finite.size else 0.0
+        starts, _ = _candidate_minima(fine_surface, _FINE_STARTS, interior=True, slack=slack)
+        asked = centre - evaluated_start
+        if (
+            attempt == 0
+            and np.all((asked >= 0) & (asked <= last))
+            and not any(np.array_equal(asked, start) for start in starts)
+        ):
+            starts.append(asked)
+        lowest = None
+        for start in starts:
+            result = _refine(terms, start, amps, amp_mode)
+            lowest = _lower_of(lowest, result)
+            if result[3] and np.all((result[1] > 0.0) & (result[1] < last)):
+                bracketed = (*result, evaluated_start, fine, terms, edge)
+                inside = _lower_of(inside, bracketed)
+                found.append(bracketed)
+        on_edge = (lowest[1] <= 0.0) | (lowest[1] >= last)
+        if not on_edge.any():
+            break
+        fine_start = np.clip(
+            evaluated_start + np.rint(lowest[1]).astype(int) - radius, window_lo, window_hi
+        )
+        if np.array_equal(fine_start, evaluated_start):
+            break  # the window is already at the end of the requested range
+    unbracketed = (*lowest, evaluated_start, fine, terms, edge | on_edge)
+    solution = _lower_of(inside, unbracketed) if on_edge.any() or inside is None else inside
+    return solution, found
+
+
+def _blend_threshold(dof: int, errors: str) -> tuple[float, float]:
+    """``(a, b)`` such that the blend threshold at a minimum of chi-square ``c`` is ``a c + b``.
+
+    ``_BLEND_CHI2`` times the reduced chi-square under ``errors="profiled"``, which
+    estimates the noise level from the residuals as the quoted errors do, and
+    ``_BLEND_CHI2`` otherwise.
+    """
+    return (_BLEND_CHI2 / dof, 0.0) if errors == "profiled" else (0.0, _BLEND_CHI2)
+
+
+def _blend_slack(chi2: float, blend: tuple[float, float]) -> float:
+    """The rise in chi-square within which another minimum raises the blend flag.
+
+    ``blend`` is the pair of :func:`_blend_threshold`, or ``(0, 0)`` for a search that
+    keeps no second minimum.
+    """
+    return blend[0] * max(chi2, 0.0) + blend[1]
+
+
+def _reported_velocities(grid: LogGrid, templates, shift, frame: str, bary_pix: float):
+    """The velocities reported for templates at ``shift`` pixels, zero points composed."""
+    v, _ = _velocity_from_shift(grid, shift, frame, bary_pix)
+    return np.array(
+        [float(_compose(v[i], t.v_zero_kms, grid.relativistic)) for i, t in enumerate(templates)]
+    )
+
+
+def _margin(chi2_min: float, velocity, sigma, alternatives) -> tuple[float, int | None]:
+    """The rise in chi-square to the lowest other minimum that gives different velocities.
+
+    ``alternatives`` holds the chi-square and the velocities of every minimum the search
+    refined, the one returned among them. An alternative gives the same velocities where,
+    in some order of its components, every velocity is within ``_BLEND_SIGMAS`` quoted
+    errors of the one returned. Returns the rise and the index of that minimum in
+    ``alternatives``: infinity and ``None`` where no alternative gives different ones.
+
+    The order is free because the surface of two alike stars has a second minimum with the
+    two velocities interchanged at every separation, as deep as the first for equal light
+    fractions. That minimum gives the same pair of velocities and a different assignment
+    to the stars, which one epoch does not determine and an orbit does
+    (:func:`albireo.rvorbit.assign_components`). A flag that counted it marked every
+    epoch of three benchmark systems of 10 to 15 epochs and 272 of 1037 usable epochs of
+    the 33 (``docs/benchmarks.md``).
+    """
+    velocity = np.asarray(velocity, dtype=np.float64)
+    tolerance = _BLEND_SIGMAS * np.asarray(sigma, dtype=np.float64)
+    margin, index = np.inf, None
+    for k, (chi2, other) in enumerate(alternatives):
+        if not chi2 - chi2_min < margin:
+            continue
+        other = np.asarray(other, dtype=np.float64)
+        same = any(
+            np.all(np.abs(other[list(order)] - velocity) <= tolerance)
+            for order in itertools.permutations(range(velocity.size))
+        )
+        if not same:
+            margin, index = float(chi2 - chi2_min), k
+    return margin, index
+
+
+def _velocity_covariance(
+    grid: LogGrid, stack, work, minimum, amps, amp_mode: str, phi: float, frame: str
+):
+    """The covariance of the velocities at a refined minimum, and whether it is defined.
+
+    ``minimum`` has the form of the solution of :func:`_refine_at`. The covariance is in
+    (km/s)^2 on the scale of the weights as given: twice the inverse curvature of the
+    chi-square, or, with the noise correlated along the pixel index (``phi``), the sandwich
+    through it evaluated from the model's Jacobian at the minimum (``docs/math.md`` §10.4).
+    It is undefined where the curvature is not positive definite.
+    """
+    _, pos, fitted_amps, _, evaluated_start, fine, terms, _ = minimum
+    n_tmpl = terms.n_tmpl
+    hess = _hessian(terms, pos, amps, amp_mode)
+    try:
+        cov_pix = 2.0 * np.linalg.inv(hess)
+        defined = bool(np.all(np.linalg.eigvalsh(hess) > 0.0))
+    except np.linalg.LinAlgError:
+        cov_pix = np.full((n_tmpl, n_tmpl), np.nan)
+        defined = False
+    if defined and phi != 0.0:
+        cov_pix = _correlated_covariance(stack, work, fine, pos, fitted_amps, amp_mode, phi)
+        defined = bool(np.all(np.isfinite(cov_pix)))
+    total = evaluated_start + pos + (work.bary_pix if frame == "topocentric" else 0.0)
+    jac = _dv_dpix(grid, total)
+    return jac[:, None] * cov_pix * jac[None, :], defined
+
+
+def _exchanged_shifts(shift: np.ndarray, weights: np.ndarray, i: int, k: int) -> np.ndarray:
+    """The shifts with components ``i`` and ``k`` exchanged about their weighted mean.
+
+    Two overlapping line systems of weights ``w_i`` and ``w_k`` (light times line strength)
+    at shifts ``s_i`` and ``s_k`` give a blended profile whose first two moments are set by
+    the mean ``c = (w_i s_i + w_k s_k) / (w_i + w_k)`` and by the square of the difference
+    ``d = s_i - s_k``. The pair with the same mean and the difference ``-d`` has the same
+    two moments, and the chi-square has a second minimum near it. For equal weights it is
+    the two shifts interchanged.
+    """
+    out = np.array(shift, dtype=np.float64)
+    w_i, w_k = float(weights[i]), float(weights[k])
+    total = w_i + w_k
+    out[i] = ((w_i - w_k) * shift[i] + 2.0 * w_k * shift[k]) / total
+    out[k] = (2.0 * w_i * shift[i] + (w_k - w_i) * shift[k]) / total
+    return out
+
+
 def _run(
     dataset,
     templates,
@@ -1586,6 +2098,7 @@ def _run(
     scale,
     phi_of,
     progress,
+    blend: bool = True,
 ) -> VelocityTable:
     n_tmpl = len(templates)
     names = tuple(t.name for t in templates)
@@ -1645,6 +2158,9 @@ def _run(
     n_pixels = np.zeros(n_ep, dtype=int)
     delta_chi2 = np.full((n_tmpl, n_ep), np.nan)
     blended = np.zeros(n_ep, dtype=bool)
+    margin = np.full(n_ep, np.nan)
+    alternative = np.full((n_tmpl, n_ep), np.nan)
+    alternative_covariance = np.full((n_ep, n_tmpl, n_tmpl), np.nan)
     at_edge = np.zeros((n_tmpl, n_ep), dtype=bool)
     refined = np.zeros(n_ep, dtype=bool)
     instruments = []
@@ -1657,6 +2173,8 @@ def _run(
         if work.n_good < max(8, n_par + 2):
             warnings.warn(f"epoch {j}: only {work.n_good} weighted pixels; skipped", stacklevel=3)
             continue
+        dof = max(work.n_good - n_par, 1)
+        threshold = _blend_threshold(dof, errors) if blend else (0.0, 0.0)
         bary = work.bary_pix if frame == "topocentric" else 0.0
         amps = None
         if mode == "fixed":
@@ -1695,99 +2213,107 @@ def _run(
             index = [slice(None)] * n_tmpl
             index[i] = slice(int(valid_count[i]), None)
             surface[tuple(index)] = np.inf
-        flat = int(np.nanargmin(surface))
-        coarse_idx = np.array(np.unravel_index(flat, surface.shape))
-        for i in range(n_tmpl):
-            at_edge[i, j] = coarse_idx[i] == 0 or coarse_idx[i] >= valid_count[i] - 1
-        centre = deltas[np.arange(n_tmpl), coarse_idx]
-
-        # Fine pass: full resolution around the coarse minimum, advanced if the minimum is
-        # on the window's edge. The window is kept inside the shift range the coarse pass
-        # searched, so that no reported velocity lies outside the requested v_range.
-        # `evaluated_start` records the window in which the terms were evaluated. The
-        # advance below happens after the evaluation, so the two starts differ at the last
-        # attempt.
-        window_lo = starts
-        window_hi = np.maximum(starts, ends - (n_fine_raw - 1))
-        fine_start = np.clip(centre - radius, window_lo, window_hi)
-        for _attempt in range(4):
-            evaluated_start = fine_start
-            fine = np.stack([evaluated_start[i] + np.arange(n_fine) for i in range(n_tmpl)]).astype(
-                np.int32
+        # The coarse stride does not resolve which of two basins of similar depth is the
+        # lower, so every coarse minimum that can be the lowest (`_candidate_minima`) is
+        # refined and the lowest refined chi-square is the solution. The first candidate
+        # is the lowest coarse point, which is kept on a tie. The minima that can lie within
+        # the blend threshold of the lowest are refined as well, and every refined minimum
+        # is kept, for the margin of the solution (`_margin`).
+        search = (
+            stacks[epoch_keys[j]],
+            work,
+            amps,
+            amp_mode,
+            (starts, np.maximum(starts, ends - (n_fine_raw - 1))),
+            radius,
+            n_fine,
+            n_fine_raw,
+            threshold,
+        )
+        best = None
+        minima = []  # every refined minimum of the epoch: its chi-square and its shifts
+        finite = surface[np.isfinite(surface)]
+        slack = _blend_slack(float(finite.min()), threshold) if finite.size else 0.0
+        coarse_starts, floors = _candidate_minima(surface, _COARSE_STARTS, slack=slack)
+        for index, floor in zip(coarse_starts, floors, strict=True):
+            if best is not None and floor > best[0] + _blend_slack(best[0], threshold):
+                continue  # this basin cannot be lower than the minimum refined, or near it
+            edge = np.array(
+                [index[i] == 0 or index[i] >= valid_count[i] - 1 for i in range(n_tmpl)]
             )
-            out = _epoch_terms(
-                stacks[epoch_keys[j]],
-                work.rows,
-                work.cols,
-                work.vals,
-                work.z,
-                work.w,
-                jnp.asarray(fine),
-                work.basis,
-                chunk=_SHIFT_CHUNK,
-            )
-            terms = _terms_numpy(out, n_fine_raw)
-            if amps is None:
-                fine_surface = np.asarray(_chi2_grid_free(*out))
-            else:
-                fine_surface = np.asarray(
-                    _chi2_grid_fixed(*out, jnp.asarray(amps), free_scale=amp_mode == "scale")
-                )
-            fine_surface = fine_surface[(slice(0, n_fine_raw),) * n_tmpl]
-            fine_idx = np.array(
-                np.unravel_index(
-                    int(np.argmin(np.where(np.isfinite(fine_surface), fine_surface, np.inf))),
-                    fine_surface.shape,
-                )
-            )
-            interior = np.all(fine_idx > 0) & np.all(fine_idx < n_fine_raw - 1)
-            if interior:
-                break
-            fine_start = np.clip(evaluated_start + (fine_idx - radius), window_lo, window_hi)
-            if np.array_equal(fine_start, evaluated_start):
-                break  # the window is already at the end of the requested range
-        # With the minimum still on the window's edge nothing is measured: the surface is
-        # still decreasing where the search must stop. The component is flagged as the
-        # coarse pass flags its own edge.
-        at_edge[:, j] |= (fine_idx <= 0) | (fine_idx >= n_fine_raw - 1)
-        chi2_min, pos, fitted_amps, ok = _refine(terms, fine_idx, amps, amp_mode)
+            solution, found = _refine_at(deltas[np.arange(n_tmpl), index], edge, *search)
+            best = _lower_of(best, solution)
+            minima += found
+        # Two components whose lines overlap have a second minimum with the pair exchanged
+        # about their weighted mean (`_exchanged_shifts`). It lies on the same narrow valley
+        # of the surface as the solution, where the coarse samples do not separate the
+        # two, so the search is also started from it for every pair of components. The
+        # start is left out where the coarse samples around the exchanged pair, less twice
+        # the sampling bound of the lowest coarse minimum, are above the minimum found by
+        # more than the blend threshold: the lines do not overlap there, and the exchanged
+        # pair is a basin of its own that the coarse minima cover.
+        strength = np.abs(convolved[epoch_keys[j]]).sum(axis=1)
+        allowance = 2.0 * (float(surface[tuple(coarse_starts[0])]) - floors[0])
+        for i, k in itertools.combinations(range(n_tmpl), 2):
+            weights = np.asarray(best[2], dtype=np.float64) * strength
+            if not (np.all(np.isfinite(weights[[i, k]])) and np.all(weights[[i, k]] > 0.0)):
+                continue
+            exchanged = _exchanged_shifts(best[4] + best[1], weights, i, k)
+            centre = np.rint(exchanged).astype(int)
+            node = np.clip(np.rint((centre - starts) / coarse_step).astype(int), 0, valid_count - 1)
+            around = surface[tuple(slice(max(int(n) - 1, 0), int(n) + 2) for n in node)]
+            around = around[np.isfinite(around)]
+            near = best[0] + _blend_slack(best[0], threshold)
+            if around.size == 0 or float(around.min()) - allowance > near:
+                continue
+            solution, found = _refine_at(centre, np.zeros(n_tmpl, dtype=bool), *search)
+            best = _lower_of(best, solution)
+            minima += found
+        chi2_min, pos, fitted_amps, ok, evaluated_start, _, terms, edge = best
+        at_edge[:, j] = edge
         refined[j] = bool(ok)
         shift = evaluated_start + pos
-        v_bary_frame, total = _velocity_from_shift(grid, shift, frame, work.bary_pix)
+        v_bary_frame, _ = _velocity_from_shift(grid, shift, frame, work.bary_pix)
 
-        # Curvature, covariance, and the scale.
-        hess = _hessian(terms, pos, amps, amp_mode)
-        jac = _dv_dpix(grid, total)
-        try:
-            cov_pix = 2.0 * np.linalg.inv(hess)
-            eig = np.linalg.eigvalsh(hess)
-            pd = bool(np.all(eig > 0.0))
-        except np.linalg.LinAlgError:
-            cov_pix = np.full((n_tmpl, n_tmpl), np.nan)
-            pd = False
+        # Curvature, covariance, and the scale. The curvature is the white-noise covariance.
+        # With the noise correlated along the pixel index the estimator's covariance is the
+        # sandwich through it, evaluated from the model's Jacobian at the solution
+        # (math.md 10.4).
         phi = phi_of.get(epoch.instrument, 0.0)
-        if pd and phi != 0.0:
-            # The curvature is the white-noise covariance. With the noise correlated
-            # along the pixel index the estimator's covariance is the sandwich through
-            # it, evaluated from the model's Jacobian at the solution (math.md 10.4).
-            cov_pix = _correlated_covariance(
-                stacks[epoch_keys[j]], work, fine, pos, fitted_amps, amp_mode, phi
-            )
-            pd = bool(np.all(np.isfinite(cov_pix)))
-        cov_v = jac[:, None] * cov_pix * jac[None, :]
-        dof = max(work.n_good - n_par, 1)
-        scale = chi2_min / dof if errors == "profiled" else 1.0
+        curvature = (grid, stacks[epoch_keys[j]], work)
+        cov_v, pd = _velocity_covariance(*curvature, best, amps, amp_mode, phi, frame)
+        rescale = chi2_min / dof if errors == "profiled" else 1.0
         if pd:
             diag = np.diag(cov_v)
             sigma_ivar[:, j] = np.sqrt(np.clip(diag, 0.0, None))
-            sigma[:, j] = sigma_ivar[:, j] * math.sqrt(scale)
-            covariance[j] = cov_v * scale
+            sigma[:, j] = sigma_ivar[:, j] * math.sqrt(rescale)
+            covariance[j] = cov_v * rescale
             with np.errstate(invalid="ignore", divide="ignore"):
                 corr = cov_v / np.sqrt(np.outer(diag, diag))
             off = corr[~np.eye(n_tmpl, dtype=bool)]
             blended[j] = bool(off.size and np.any(np.abs(off) > 0.9))
         else:
             blended[j] = True
+        if pd and not edge.any():
+            # Another minimum that fits as well and gives different velocities: the epoch
+            # does not determine them, whatever the curvature at the minimum returned.
+            found = [
+                (m[0], _reported_velocities(grid, templates, m[4] + m[1], frame, work.bary_pix))
+                for m in minima
+            ]
+            returned = _reported_velocities(grid, templates, shift, frame, work.bary_pix)
+            margin[j], other = _margin(chi2_min, returned, sigma[:, j], found)
+            if margin[j] < _blend_slack(chi2_min, threshold):
+                blended[j] = True
+                # The velocities of that minimum and their covariance, on the scale of its
+                # own chi-square, so that an orbit can choose between the two.
+                cov_other, defined = _velocity_covariance(
+                    *curvature, minima[other], amps, amp_mode, phi, frame
+                )
+                if defined:
+                    scale_other = found[other][0] / dof if errors == "profiled" else 1.0
+                    alternative[:, j] = found[other][1]
+                    alternative_covariance[j] = cov_other * scale_other
         # Nothing was measured for a component whose minimum was on an edge, so its
         # velocity and uncertainty stay NaN. The diagnostics of the point evaluated are
         # kept, since they show that the epoch is at the edge rather than at a peak.
@@ -1848,6 +2374,9 @@ def _run(
         refined=refined,
         absolute=tuple(t.absolute for t in templates),
         frame=frame,
+        margin=margin,
+        alternative=alternative,
+        alternative_covariance=alternative_covariance,
         settings={
             "v_range": ranges.tolist(),
             "coarse_step": int(coarse_step),

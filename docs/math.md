@@ -1873,7 +1873,8 @@ which is searched on the integer shifts of the template grid (one segment-sum bu
 shifted, projected column, and one matrix product per template pair gives every $`G_{ik}`$)
 and then refined below a pixel (§10.3). The search costs $`O(N^2 S^2 n_{\rm pix})`$ for $`S`$ shifts
 per component, so the global pass steps through the grid by the narrowest LSF sigma, which
-cannot skip a correlation peak, and the fine pass runs at full resolution around its minimum.
+cannot skip a correlation peak, and the fine pass runs at full resolution around every minimum
+of the coarse surface that can contain the lowest one (§10.3).
 
 ### 10.2 Relation to TODCOR
 
@@ -1919,10 +1920,12 @@ The shift operator is linear in the template and, for a fractional shift $`n + f
 $`\mathbf{T}(n + f)\, t = (1 - f)\,\mathbf{T}(n)\, t + f\,\mathbf{T}(n + 1)\, t`$ (§1.1). Every inner
 product above is therefore bilinear in the fractional parts, and $`\chi^2(\mathbf{s})`$ with
 held amplitudes is an exact quadratic in $`f \in [0, 1]^N`$ inside each unit cell of the
-integer grid. It is reconstructed from $`3^N`$ exact evaluations and minimized in closed form,
-with the amplitude solve alternating when the amplitudes are profiled. The sub-pixel minimum
-and the curvature at it are therefore computed for the same operator the forward model uses,
-and not from a parabola through three grid points.
+integer grid. Its coefficients are differences of the integer-shift inner products at the
+corners of the cell, and its minimum over the cell is found in closed form. The surface is
+continuous and piecewise quadratic, so the refinement moves from cell to cell until no cell
+touching the position is lower, with the amplitude solve alternating when the amplitudes are
+profiled. The sub-pixel minimum and the curvature at it are therefore computed for the same
+operator the forward model uses, and not from a parabola through three grid points.
 
 That operator has a known artifact. At $`f = \tfrac12`$ the two-tap interpolation is a
 $`[\tfrac12, \tfrac12]`$ smoothing, which lowers a Gaussian line of width $`\sigma_{\rm px}`$ by
@@ -1933,6 +1936,90 @@ data simulated at four times the template resolution, the largest error is 0.03 
 per sigma, 0.015 at two, 0.006 at five and 0.002 at ten (benchmarks.md). At three pixels per LSF
 sigma it is below a hundredth of a pixel. `Fit.templates()` upsamples the components to that,
 and `todcor` warns below two.
+
+**The exchanged minimum of two blended components.** Where the lines of two components
+overlap, the blended profile is fixed to second order by its first two moments. For
+components of weights $`w_i`$ (light fraction times line strength) at shifts $`s_1`$ and
+$`s_2`$ these are the mean $`c = (w_1 s_1 + w_2 s_2)/(w_1 + w_2)`$ and a variance that depends
+on the shifts through $`d^2`$ only, with $`d = s_1 - s_2`$. The pair with the same mean and
+the difference of the opposite sign,
+
+```math
+s_1' = c - \frac{w_2}{w_1 + w_2}\, d, \qquad s_2' = c + \frac{w_1}{w_1 + w_2}\, d,
+```
+
+has the same two moments, and $`\chi^2`$ has a second minimum near it. For equal weights it is
+the two shifts interchanged. The two minima lie on a valley of constant $`c`$, whose width is
+the error of the mean and whose length is of order $`d`$. They differ in depth through the
+third moment of the profile, which is proportional to $`w_1 w_2 (w_1 - w_2)\, d^3`$. It
+vanishes for equal weights and is small while $`d`$ is below the line width.
+
+Three properties of this surface determine the search. A sample at a displacement
+$`\delta`$ from a minimum lies $`\tfrac12\, \delta^{\!\top}\mathbf{H}\,\delta`$ above it,
+and the curvature across the valley is large, so neither the coarse samples nor the integer
+shifts show which minimum is the lower. The lowest integer sample is the one nearest the
+floor of the valley, and can be several pixels from either minimum. A basin need not contain
+a local minimum of the samples. `todcor` therefore refines every local minimum of a sampled
+surface that can contain its lowest. For a quadratic basin the minimum lies at most
+$`\tfrac14 \sum_i [f(+e_i) + f(-e_i) - 2 f(0)]`$ below its lowest sample $`f(0)`$, the sum
+being over the axes. The refinement moves from cell to cell, and the search is repeated from
+the exchanged pair of every pair of components, unless the coarse samples around it, less
+twice that bound, are above the minimum already found by more than the threshold of the
+margin below. The lowest refined $`\chi^2`$ is the solution. On simulated Gaia RVS epochs
+it equals the minimum of a lattice of an eighth of a pixel at every epoch tested
+(benchmarks.md).
+
+The estimator is not unique there. Noise changes the depths of the two minima by different
+amounts, and where their difference is within the noise the exchanged pair can be the
+lower. The two velocities are then wrong by $`2 w_2 d / (w_1 + w_2)`$ and
+$`2 w_1 d / (w_1 + w_2)`$, of the order of their separation, and the curvature errors
+describe the wrong minimum. On the same epochs, at a resolving power of 11,500 and
+light fractions of 0.625 and 0.375, either velocity was more than five quoted errors and
+3 km/s from the injected one at 46, 17, 1 and 0 of 480 epochs at a S/N of 15, 40, 100 and
+300 per pixel, all with the lines 10 to 40 km/s apart, where the FWHM of the line-spread
+function is 27.5 km/s. The minimum returned was the exchanged pair at 63 of these 64
+epochs, and at all of them the injected pair was another minimum, at most 8.4 above in
+$`\chi^2`$. The curvature at the minimum returned is regular, so the correlation of the two
+shifts (§10.4) does not show it.
+
+**The margin of the solution.** The search keeps every minimum it refines. Let
+$`\Delta\chi^2`$ be the rise from the solution $`\mathbf{v}`$, with quoted errors
+$`\sigma_i`$, to another refined minimum $`\mathbf{v}'`$. The two give different velocities
+where, for every permutation $`\pi`$ of the components, some velocity differs by more than
+three quoted errors,
+
+```math
+\min_{\pi}\; \max_i\; \frac{|v'_{\pi(i)} - v_i|}{\sigma_i} > 3 .
+```
+
+The margin of the epoch is the lowest $`\Delta\chi^2`$ over the minima that give different
+velocities, and infinite when there is none. It raises the blending flag of §10.4 where it
+is below $`9\,\chi^2_{\min}/(n_{\rm pix} - p)`$: nine in units of the noise level that the
+quoted errors use, or 9 with the weights taken as given. The search therefore also refines
+the minima that can lie within that threshold of the lowest: the local minima of a sampled
+surface whose sample, less the bound above, is within the threshold of the lowest sample.
+
+The permutation is the substance of the definition. Two alike components give a surface
+that is nearly symmetric under the exchange of the two shifts, and the minimum with the two
+velocities interchanged is present at every separation, as deep as the solution for equal
+weights. It gives the same pair of velocities and the other assignment to the stars. The
+pair is measured there, and the assignment is made by an orbit (§10.6). A flag on every
+second minimum marked every epoch of three benchmark systems of alike stars, and 272 of the
+1037 usable epochs of the 33 (benchmarks.md).
+
+On the epochs above, the margin flags 33 of the 64 wrong epochs and 96 epochs that were
+measured correctly. At the other 31 the two minima are the same pair in the two orders to
+within three quoted errors, and with the two velocities interchanged 30 of them are within
+five quoted errors or 3 km/s of the injected ones. Thresholds of 16 and 25 in place of 9
+flag the same 33 wrong epochs and 158 and 217 correct ones, and a threshold of 4 flags 27
+and 46.
+
+**The second minimum.** Where the margin raises the flag, the table records the minimum it
+refers to: its velocities $`\mathbf{v}'`$ and their covariance $`\mathbf{C}'`$, evaluated
+as in §10.4 at that minimum and scaled by its own reduced chi-square. At each of the 33
+flagged wrong epochs above, $`\mathbf{v}'`$ is the injected pair, and at 95 of the 96
+flagged correct ones it is a wrong pair. One epoch does not decide between $`\mathbf{v}`$
+and $`\mathbf{v}'`$. An orbit does (§10.6).
 
 ### 10.4 Uncertainties and detection
 
@@ -1948,7 +2035,9 @@ the Hessian. In the chi-square form the same profiling gives
 the curvature error rescaled by the reduced chi-square (what `errors="profiled"` reports),
 against $`2\mathbf{H}^{-1}`$ with the declared weights taken as given (`errors="ivar"`). The
 off-diagonal of $`\mathbf{H}^{-1}`$ is the blending diagnostic: near conjunction the two shifts
-are measured along a ridge, their correlation approaches one, and the table flags the epoch.
+are measured along a ridge, their correlation approaches one, and the table flags the epoch
+where it exceeds 0.9. The table raises the same flag where the margin of §10.3 is below its
+threshold, which the curvature at the minimum does not show.
 
 Both forms take the pixels as independent. A pipeline that resampled the spectra onto a
 common step correlates neighbouring pixels (§1.4a; Gaia's RVS grids have lag-one
@@ -2000,6 +2089,98 @@ absorbed into the semi-amplitudes. Errors are the curvature errors rescaled by t
 chi-square, because a template fit's per-epoch errors do not include template mismatch. The
 minimum masses follow from $`M_{1,2}\sin^3 i = 1.0361\times10^{-7}\,(1 - e^2)^{3/2}\,(K_1 + K_2)^2 K_{2,1}\,P`$
 in solar masses with $`K`$ in km/s and $`P`$ in days.
+
+**The assignment of two alike components.** For two alike spectra at alike light fractions
+each epoch gives the pair of velocities in one of the two orders (§10.3). With the period
+known, `assign_components` finds the assignment and the orbit together. A Keplerian is
+fitted, an epoch is exchanged where that reduces the residual of its relative velocity
+$`r = v_1 - v_2`$ by more than three times its error, and the fit is repeated until no epoch
+moves. This descent is started from the table as measured and from up to three assignments
+made from the period alone. The magnitude $`|r|`$ does not depend on the assignment. It is
+fitted with $`A\,|c(t)|`$ for every curve of a grid of Keplerian relative velocities of unit
+amplitude,
+
+```math
+c(t) = \cos(\nu(t) + \omega) + e \cos\omega ,
+```
+
+with $`A`$ solved by weighted least squares: 60 phases at $`e = 0`$, and 60 phases of
+periastron at each of eight values of $`\omega`$ for $`e`$ of 0.2, 0.4, 0.6 and 0.8. The sign
+of a curve assigns the epochs, and the best curves that give distinct assignments are the
+starts. The assignment reached from the table as measured is kept unless the best of the
+others lowers $`\chi^2`$ by more than nine times its reduced value. The lowest $`\chi^2`$ is
+not taken as it stands, because the assignments are many and a table of few epochs can be
+fitted by a wrong one: on a benchmark table of 10 usable epochs, two exchanged epochs and
+an orbit of eccentricity 0.88, with semi-amplitudes eight times the injected ones, lowered
+$`\chi^2`$ from 23.1 to 18.8. No epoch is exchanged
+where the two light fractions differ by more than a factor of three, since the two orders
+are then not equivalent solutions of the correlation. Which star is the first component is
+not determined for alike stars: the orbit with the two components exchanged at every epoch,
+$`K_1`$ and $`K_2`$ interchanged and $`\omega`$ advanced by $`\pi`$, fits equally. On simulated
+tables of twelve epochs of such a pair, each epoch in a random order, one exchange recovers
+both semi-amplitudes for 2, 1, 2 and 0 of 60 tables at eccentricities of 0, 0.3, 0.6 and
+0.8, and the descent from these starts for 60, 60, 48 and 12 (benchmarks.md).
+
+**A period known to a fraction of the frequency resolution.** An assignment is the sign of
+the predicted relative velocity at each epoch. With $`T`$ the time span of the epochs, a
+period that is off by $`x/T`$ in frequency puts the phase off by $`x/2`$ of a cycle at
+either end of the span. The epochs within that phase of a conjunction are assigned wrongly,
+and the fit that follows does not leave the assignment. On the same tables a period given
+with $`x`$ of 0.25, 0.5 and 1 recovers 29, 6 and 1 of the 60 circular tables. With
+`period_window` $`= w`$ the curves $`c(t)`$ are also evaluated at the frequencies
+$`1/P + k/(8T)`$ for $`|k| \le 8w`$, the curves of all the periods are ranked together, each
+start is fitted from the period of its curve, and the table as measured is fitted from the
+best of those periods as well. With $`w = 1`$ all 60 are recovered at each of the three
+offsets, and at an eccentricity of 0.6, where 48 are recovered at the period itself, 46, 46
+and 44. The spacing leaves the phase within a sixteenth of half a cycle of the nearest
+sampled period at either end of the span.
+
+**The second minimum of a blended epoch.** At an epoch flagged for a second minimum (§10.3)
+the table holds two pairs: $`\mathbf{v}`$ with covariance $`\mathbf{C}`$, and
+$`\mathbf{v}'`$ with $`\mathbf{C}'`$, higher by the margin $`\Delta\chi^2`$ in the
+chi-square of the spectrum. Given predicted velocities $`\mathbf{p}`$, each is compared by
+
+```math
+q = \mathbf{e}^{\!\top} \mathbf{C}^{-1} \mathbf{e},
+\qquad
+q' = \mathbf{e}'^{\!\top} \mathbf{C}'^{-1} \mathbf{e}'
+     + \frac{\Delta\chi^2}{\chi^2_{\min}/(n_{\rm pix} - p)},
+\qquad
+\mathbf{e} = \mathbf{v} - \mathbf{p} - \mathbf{o},
+```
+
+with $`\mathbf{o}`$ the median difference between the table and the prediction over the
+usable epochs, one value per component, and the other minimum is taken where $`q' < q`$.
+The last term of $`q'`$ is the rise in the chi-square of the spectrum in units of the noise
+level that the quoted errors use (the divisor is 1 with the weights taken as given), so
+each of $`q`$ and $`q'`$ is the chi-square of the spectrum and of the orbit together, up to
+a constant they share. The covariances are used whole: the two velocities of a blended
+epoch are correlated, and the two minima differ along the valley of §10.3, a direction that
+the two errors alone do not describe. Where the components may be exchanged, the order of
+each pair is decided first, by the rule above with the variance of $`r`$ taken from the
+covariance. Every flagged epoch at which both minima are measured and neither lies on a
+ridge is decided, and none is left out, so that orbits fitted at different periods or to
+different assignments have the same velocities and their chi-squares are comparable.
+`assign_by_orbit` makes the decision for a given prediction, and `assign_components` in
+every round of its descent.
+
+On the pair of §10.3 observed at 240 epochs over ten orbits, 8 epochs are flagged for a
+second minimum at a S/N of 15 and 6 at 40. The orbit decides all of them and takes the
+other minimum at 2 and 1, and with the exchange of the unflagged pairs none of the 6 and 2
+epochs that were wrong as measured is wrong afterwards. The quoted errors of a decided
+epoch are the curvature errors at one of two minima of a valley, and they are smaller than
+its errors: the pull rms of those 8 and 6 epochs is 1.9 and 1.5 at a S/N of 15, and 1.5 and
+0.7 at 40.
+
+On the 33 systems of the benchmark the orbit decides 34 epochs under templates at the
+injected labels, one of them wrongly. Under templates in error the decided epochs share the
+mismatch of the templates, which the quoted errors do not include: 20 of 63 are wrong
+afterwards under the label errors of a classification and 55 of 126 under generic
+templates, where 5 and 25 percent of the other usable epochs are. At a known period the
+numbers of systems with both semi-amplitudes within 5 percent are those of the tables with
+the flagged epochs left out, to within one system either way. In the ranking of the
+candidate periods of a search, where every candidate must be fitted to the same velocities,
+the decisions put the injected period first for one further system of 32 (benchmarks.md).
 
 ## References
 
