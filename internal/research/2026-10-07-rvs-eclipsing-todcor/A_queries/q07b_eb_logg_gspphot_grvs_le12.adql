@@ -1,0 +1,19 @@
+SELECT FLOOR(u.grvs) AS mbin, FLOOR(u.logg_gspphot / 0.5) AS lbin,
+       FLOOR(LEAST(GREATEST(u.parallax_over_error, 0.0), 10.0) / 10.0) AS plxok, COUNT(*) AS n
+FROM (
+  SELECT t.x AS x, t.rp AS rp, t.logg_gspphot AS logg_gspphot, t.parallax_over_error AS parallax_over_error,
+         IF_THEN_ELSE(t.x <= 1.2,
+             t.rp + (-0.0397 - 0.2852*t.x - 0.0330*t.x*t.x - 0.0867*t.x*t.x*t.x),
+             t.rp + (-4.0618 + 10.0187*t.x - 9.0532*t.x*t.x + 2.6089*t.x*t.x*t.x)) AS grvs
+  FROM (
+    SELECT g.phot_rp_mean_mag AS rp,
+           g.phot_g_mean_mag - g.phot_rp_mean_mag AS x,
+           g.logg_gspphot AS logg_gspphot,
+           g.parallax_over_error AS parallax_over_error
+    FROM gaiadr3.vari_eclipsing_binary AS v
+    JOIN gaiadr3.gaia_source AS g ON g.source_id = v.source_id
+  ) AS t
+) AS u
+WHERE u.x >= -0.15 AND u.x <= 1.7 AND u.grvs <= 12.0
+GROUP BY mbin, lbin, plxok
+ORDER BY mbin, lbin, plxok

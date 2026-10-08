@@ -1,0 +1,4 @@
+SELECT TOP 5 source_id, phot_g_mean_mag,
+       CASE WHEN phot_g_mean_mag < 18 THEN 1 ELSE 0 END AS flag
+FROM gaiadr3.gaia_source
+WHERE random_index < 5

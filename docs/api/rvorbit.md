@@ -328,6 +328,57 @@ The quoted errors of a decided epoch are those of the curvature at one of two mi
 valley, and they are smaller than its errors: the pull rms of those 8 and 6 epochs is 1.9
 and 1.5 at a S/N of 15, and 1.5 and 0.7 at 40.
 
+## The fit at a held ephemeris
+
+An eclipsing binary has a photometric ephemeris. Its period and the time of its primary
+eclipse are known to a precision that no velocity table of tens of epochs reaches, so
+`fit_rv_ephemeris` holds both. With the eccentricity and the argument of periastron held
+as well, the velocity of component $`i`$ is
+
+```math
+v_i(t) = \gamma_i + s_i K_i \, c(t), \qquad c(t) = \cos(\nu(t) + \omega) + e \cos \omega,
+```
+
+with $`s_1 = +1`$ and $`s_2 = -1`$. The model is linear in the semi-amplitudes and the
+systemic velocity or velocities, which are found by weighted linear least squares with
+$`K_i \ge 0`$ and need no starting value. The time of conjunction is the superior
+conjunction of the first component, $`\nu + \omega = \pi / 2`$, the time of its eclipse.
+For a circular orbit $`c(t) = -\sin[2 \pi (t - t_{\rm conj}) / P]`$: the first component
+approaches after its eclipse. With `fit_eccentricity` the two shape parameters
+$`(\sqrt{e} \cos \omega, \sqrt{e} \sin \omega)`$ are fitted around the linear
+solution, from the three best points of a scan over 73 shapes. The fit is evaluated in
+NumPy and compiles nothing.
+
+`assign_by_ephemeris` makes the decisions of `assign_components` with that fit. The
+search over starting assignments is not needed. The ephemeris gives the sign of
+$`v_1 - v_2`$ at every epoch, and the pairs measured in the other order by more than
+`threshold` times the error of their difference are exchanged before the first fit. On
+simulated tables of two alike stars (semi-amplitudes of 61 and 64 km/s, each epoch in a
+random order) with the shape of the orbit held, it recovers both semi-amplitudes within 2
+percent for 20 of 20 tables at eccentricities of 0 and 0.35, in 0.9 ms per table, where
+`assign_components` takes 43 to 74 ms and recovers 20 and 19. The ephemeris also names the
+stars: the semi-amplitudes come out in the order of the components, and not in either
+order as from the period alone.
+
+The sign is that of the velocity curve, and the curve depends on its shape: at the
+conjunction of an eccentric orbit $`c = e \cos \omega`$, not zero. Where the eccentricity
+is fitted the shape is not known beforehand, so each of the 73 shapes of the scan orders
+the pairs in its own way and is fitted with the shape held, the rounds start from each of
+the three orders whose fit is best, and the assignment with the lowest chi-square is
+returned. An earlier form took the order from the circular curve. On tables of 24 epochs
+with every pair already in the injected order it then recovered both semi-amplitudes
+within 5 percent for 16 of 20 tables at $`e = 0.4`$ and 12 of 20 at 0.6, with errors up to
+53 percent, because it exchanged epochs that were measured correctly. With the scan the
+counts are 20 of 20 at eccentricities of 0.2, 0.4 and 0.6, for pairs in the injected order
+and in a random one, at 0.1 s per table.
+
+On the 7,800 simulated Gaia RVS eclipsing binaries of the
+[report](../reports/gaia-rvs-eclipsing-binaries.md) the two fits recover the same share of
+systems: the shares with both semi-amplitudes within 10 percent differ by at most
+2 percentage points in any half magnitude of G_RVS from 6.0 to 13.5,
+once the semi-amplitudes of the fit with the period alone are compared in the order that
+fits. At a known period the ephemeris names the stars and does not add recovered orbits.
+
 Background and references: [science overview](../science.md).
 
 ::: albireo.rvorbit

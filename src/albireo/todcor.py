@@ -75,14 +75,15 @@ import numpy as np
 
 from albireo.data import Dataset, EpochData
 from albireo.forward import _is_per_epoch
-from albireo.grids import C_KMS, LogGrid, log_doppler_shift
+from albireo.grids import C_KMS, LogGrid, _in_epoch_blocks, log_doppler_shift
 from albireo.operators import (
+    _gaussian_kernel_numpy,
+    _rotational_kernel_numpy,
     convolve_spectrum,
     convolve_varying,
     gaussian_kernel,
     gaussian_lsf_profiles,
     rebin_operator,
-    rotational_kernel,
 )
 
 __all__ = [
@@ -261,10 +262,10 @@ class Template:
         if vsini_kms < 0.0 or macro_kms < 0.0:
             raise ValueError(f"template {name!r}: vsini_kms and macro_kms must be non-negative")
         if vsini_kms > 0.0:
-            kernel = np.asarray(rotational_kernel(vsini_kms / grid.dv_kms, epsilon=epsilon))
+            kernel = _rotational_kernel_numpy(vsini_kms / grid.dv_kms, epsilon=epsilon)
             deviation = np.convolve(deviation, kernel, mode="same")
         if macro_kms > 0.0:
-            kernel = np.asarray(gaussian_kernel(macro_kms / grid.dv_kms))
+            kernel = _gaussian_kernel_numpy(macro_kms / grid.dv_kms)
             deviation = np.convolve(deviation, kernel, mode="same")
         sigma = 0.0
         if resolving_power is not None:
@@ -2136,7 +2137,8 @@ def _run(
     # Shift ranges in log-wavelength pixels (barycentric); composed per epoch below.
     xi_lo = np.asarray(log_doppler_shift(ranges[:, 0], relativistic=relativistic)) / grid.dx
     xi_hi = np.asarray(log_doppler_shift(ranges[:, 1], relativistic=relativistic)) / grid.dx
-    bary_all = np.asarray(grid.velocity_to_pixels(dataset.v_bary), dtype=np.float64)
+    # In blocks of epochs: outside jit the conversion is compiled once per array length.
+    bary_all = _in_epoch_blocks(grid.velocity_to_pixels, dataset.v_bary)
     bary_span = (bary_all.max() - bary_all.min()) if frame == "topocentric" else 0.0
     _check_margins(grid, dataset, float(xi_lo.min() - bary_span), float(xi_hi.max() + bary_span))
     n_coarse = math.ceil((xi_hi - xi_lo).max() / coarse_step) + 1
@@ -2282,6 +2284,11 @@ def _run(
         phi = phi_of.get(epoch.instrument, 0.0)
         curvature = (grid, stacks[epoch_keys[j]], work)
         cov_v, pd = _velocity_covariance(*curvature, best, amps, amp_mode, phi, frame)
+        # Two templates that are the same spectrum, fitted with free amplitudes at nearly
+        # equal shifts, give normal equations that are singular to rounding. The minimum
+        # chi-square can then be negative and a variance of the sandwich not positive.
+        # Such an epoch has no error and is flagged, as one with an indefinite curvature.
+        pd = pd and chi2_min > 0.0 and bool(np.all(np.diag(cov_v) > 0.0))
         rescale = chi2_min / dof if errors == "profiled" else 1.0
         if pd:
             diag = np.diag(cov_v)

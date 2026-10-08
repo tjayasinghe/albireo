@@ -1,0 +1,28 @@
+SELECT SUM(w.a_literal) AS a_literal, SUM(w.a_hinge_lower) AS a_hinge_lower,
+       SUM(w.a_no_quadratic_lower) AS a_no_quadratic_lower,
+       SUM(w.a_lower_le) AS a_upper_only, COUNT(*) AS n_twogaussians,
+       SUM(w.tie) AS n_depth_ties, MIN(w.ss) AS min_ss, MIN(w.sp) AS min_sp
+FROM (
+  SELECT b.sp AS sp, b.ss AS ss,
+         IF_THEN_ELSE(LEAST(b.ss - (-0.007406 + 0.7*b.sp + 0.4*POWER(4.3*b.sp - 0.1, 2)),
+                            LEAST(0.0119 + 1.26*b.sp - 0.6*POWER(2.0*b.sp - 0.1, 2), 0.14 - 1.4*b.sp) - b.ss) > 0.0,
+                      1.0, 0.0) AS a_literal,
+         IF_THEN_ELSE(LEAST(b.ss - (-0.007406 + 0.7*b.sp + 0.4*POWER(GREATEST(4.3*b.sp - 0.1, 0.0), 2)),
+                            LEAST(0.0119 + 1.26*b.sp - 0.6*POWER(2.0*b.sp - 0.1, 2), 0.14 - 1.4*b.sp) - b.ss) > 0.0,
+                      1.0, 0.0) AS a_hinge_lower,
+         IF_THEN_ELSE(LEAST(b.ss - (-0.007406 + 0.7*b.sp),
+                            LEAST(0.0119 + 1.26*b.sp - 0.6*POWER(2.0*b.sp - 0.1, 2), 0.14 - 1.4*b.sp) - b.ss) > 0.0,
+                      1.0, 0.0) AS a_no_quadratic_lower,
+         IF_THEN_ELSE(LEAST(0.0119 + 1.26*b.sp - 0.6*POWER(2.0*b.sp - 0.1, 2), 0.14 - 1.4*b.sp) - b.ss > 0.0,
+                      1.0, 0.0) AS a_lower_le,
+         IF_THEN_ELSE(b.d1 = b.d2, 1.0, 0.0) AS tie
+  FROM (
+    SELECT IF_THEN_ELSE(v.geom_model_gaussian1_depth >= v.geom_model_gaussian2_depth,
+                        v.geom_model_gaussian1_sigma, v.geom_model_gaussian2_sigma) AS sp,
+           IF_THEN_ELSE(v.geom_model_gaussian1_depth >= v.geom_model_gaussian2_depth,
+                        v.geom_model_gaussian2_sigma, v.geom_model_gaussian1_sigma) AS ss,
+           v.geom_model_gaussian1_depth AS d1, v.geom_model_gaussian2_depth AS d2
+    FROM gaiadr3.vari_eclipsing_binary AS v
+    WHERE v.num_model_parameters = 8
+  ) AS b
+) AS w

@@ -49,6 +49,8 @@ nav:
       - Benchmark TODCOR on Gaia RVS spectra, step by step: tutorials/gaia-rvs-todcor.ipynb
   - Mathematical foundations: math.md
   - Benchmarks: benchmarks.md
+  - Reports:
+      - Gaia DR4 eclipsing binaries in the RVS: reports/gaia-rvs-eclipsing-binaries.md
   - API reference:
       - Overview: api/index.md
       - Disentangler (experimental): api/facade.md
@@ -68,6 +70,8 @@ nav:
       - Orbits from velocity tables: api/rvorbit.md
       - Pipeline and command line: api/pipeline.md
       - Gaia RVS simulator, populations, benchmark: api/gaia.md
+      - Eclipsing-binary populations: api/eclipsing.md
+      - Correlation survey: api/survey.md
       - Results and plotting: api/results.md
       - Downstream handoff: api/handoff.md
       - Simulator: api/simulate.md

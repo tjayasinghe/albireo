@@ -1,0 +1,6 @@
+SELECT n.nss_solution_type, FLOOR(g.phot_g_mean_mag) AS gbin, COUNT(*) AS n
+FROM gaiadr3.nss_two_body_orbit AS n
+JOIN gaiadr3.gaia_source AS g ON g.source_id = n.source_id
+WHERE n.nss_solution_type IN ('EclipsingBinary', 'EclipsingSpectro', 'SB2', 'SB2C', 'SB1')
+GROUP BY n.nss_solution_type, gbin
+ORDER BY n.nss_solution_type, gbin

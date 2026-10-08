@@ -31,6 +31,67 @@ This file records what changed. The reasons are recorded elsewhere:
 
 ### Added
 
+- **A simulated survey of Gaia DR4 eclipsing binaries, measured by correlation alone.**
+  [`docs/reports/gaia-rvs-eclipsing-binaries.md`](docs/reports/gaia-rvs-eclipsing-binaries.md)
+  reports 7,800 detached eclipsing binaries simulated as DR4 RVS epoch spectra, with both
+  velocities of every transit measured by `todcor` against library templates and an orbit
+  fitted at the photometric ephemeris. With templates from a classification, both
+  semi-amplitudes are within 10 percent for 61 percent of the systems brighter than G_RVS =
+  9, 53 percent at 10 to 11, 43 percent at 11 to 12 and 15 percent at 12 to 13. Among the
+  systems whose secondary has more than a fifth of the primary's flux the shares are 80, 81,
+  70 and 25 percent. With the injected templates the scatter of a transit's velocity about
+  the velocity in its spectrum is 0.93 times the photon-limited prediction. The simulated
+  transits are at the photon limit, and the scatter that the errors of Gaia DR3 imply for
+  one transit of a single dwarf is 1.2, 1.5 and 1.6 times larger at G_RVS = 8, 10 and 12,
+  the equivalent of 0.5, 0.7 and 0.6 mag, which the page gives as its first limit. An
+  unresolved third star that the analysis is not told of lowers the share recovered from 51
+  to 33 percent among the systems that have one, and Ca II emission at the strength of
+  saturated activity from 45 to 28 percent. One system takes 6.4 s under three template
+  declarations. The page, its sixteen figures in a light and a dark rendering, the binned
+  tables behind them and every number are written by `scripts/rvs_eb_report.py` from the
+  runs of `scripts/rvs_eb_run.py`, and `tests/test_survey_report.py` holds the page to its
+  numbers and tables.
+- **`albireo.survey` (experimental): a population measured by correlation.** `run_system`
+  simulates one system with its eclipses and measures it under three declarations of the
+  templates (`injected`, `classified`, `catalogue`), with the transits in eclipse kept out
+  of the orbit and a single-template measurement beside the double-lined one. `run_survey`
+  runs a population in worker processes, one resumable file per chunk, each system from its
+  own seed, and `collect` joins the chunks into one table per system and one per epoch with
+  a manifest. Four variants add one effect to the baseline: the primary alone (`null`), an
+  unmodelled third star, Ca II emission in the line cores, and a background and a
+  normalisation residual that vary between transits.
+- **`albireo.eclipsing` (experimental): detached eclipsing binaries as a catalogue lists
+  them.** `draw_eclipsing_population` draws a sample stratified in G_RVS and in the
+  temperature class of the primary: stars on evolutionary tracks, the companion
+  distributions of Moe & Di Stefano (2017) from q = 0.1, orientations kept where the system
+  eclipses and the photometry would find it, selection by the volume the combined light
+  reaches, and tidal rotation. `StellarTracks` reads a table of MIST v1.2 tracks kept in the
+  package (219 kB, `scripts/build_mist_tracks.py`). `eclipse_light` gives the light
+  fractions of two limb-darkened spheres at any epoch, `LibrarySet` joins library boxes into
+  one label space with one continuum scale, and `catalogue_weights` maps the sample onto
+  catalogue counts. The twin excess is 0.3 of the published fraction, rising from q = 0.85:
+  the published form gives 53 percent of twins where two eclipsing samples have 30.
+- **An orbit fit at a held ephemeris.** `rvorbit.fit_rv_ephemeris` holds the period and the
+  time of conjunction, as the light curve of an eclipsing binary gives them. The model is
+  then linear in the semi-amplitudes and the systemic velocity, which are found without a
+  starting value; the eccentricity can be fitted around that solution. `assign_by_ephemeris`
+  makes the decisions of `assign_components` with it, from the order of the pair that the
+  ephemeris gives. On tables of two alike stars with every epoch in a random order it
+  recovers 20 of 20 in 0.9 ms per table, where `assign_components` takes 43 to 74 ms. Where
+  the eccentricity is fitted, the order of the pairs depends on a shape that is not yet
+  known, so each of 73 trial shapes orders them in its own way and the rounds start from the
+  three whose held fit is best: 20 of 20 tables at eccentricities of 0.2, 0.4 and 0.6. The
+  ephemeris names the two stars. It does not add recovered orbits: on the 7,800 simulated
+  systems the share with both semi-amplitudes within 10 percent is within 2 percentage
+  points of that of `assign_components` at the known period in every half magnitude.
+- **A cool BOSZ box in the RVS band.** `fetch_library("bosz2024-cool-rvs")` builds 140 nodes
+  from 3200 to 4000 K (185 MB of downloads, 1.6 MB cached), for the secondaries of pairs
+  whose primaries the FGK and hot boxes hold. Its continuum equals that of the FGK box at
+  the shared 4000 K nodes.
+- **`kepler.true_anomaly_numpy`**, the true anomaly in NumPy for callers that evaluate many
+  orbits at different numbers of epochs and need no derivative, and
+  **`simulate_rvs_dataset(response_order=, response_amplitude=)`**, which passes a
+  normalisation residual per transit to the detector epochs.
 - **A step-by-step TODCOR notebook on Gaia RVS spectra.** `docs/tutorials/gaia-rvs-todcor.ipynb`
   measures the epoch velocities of simulated Gaia RVS binaries by `todcor` against library
   templates, with nothing disentangled and the outputs committed. It measures one binary and
@@ -359,6 +420,17 @@ This file records what changed. The reasons are recorded elsewhere:
 
 ### Changed
 
+- **A library read from a file has read-only arrays, and what is derived from it is kept.**
+  `load_library` and `fetch_library` return arrays that cannot be written to. For such a
+  library `SpectralLibrary.resampled_to` returns the same object for the same grid and
+  medium. It keeps the most recently used results up to 96 MB per library, which holds a
+  simulation grid and a template grid of the Gaia RVS band and no optical grid of 20,000
+  pixels. `library_interpolator` builds the interpolator of a read-only library of at most
+  96 MB once per method. A library built from arrays that can be written to is resampled on
+  every call, as before, since a change in place would make a kept result wrong. Two
+  templates on a shared grid take 0.012 s where they took 0.16 s. Code that changed the
+  arrays of a loaded library in place now raises an error; `SpectralLibrary.replace` makes
+  the changed copy.
 - **The pipeline decides the open epochs of a table with the orbit (D68).** The candidate
   fits of the period search (`period = "search"`) call `assign_components` with a
   `period_window` of 1 in place of one exchange by the first fit: the exchange is repeated
@@ -585,6 +657,41 @@ This file records what changed. The reasons are recorded elsewhere:
 
 ### Fixed
 
+- **`todcor` on two identical templates with free amplitudes.** Where two templates are the
+  same spectrum and their shifts nearly coincide, the normal equations are singular to
+  rounding, the minimum chi-square can come out negative and a variance of the error
+  sandwich not positive. Such an epoch raised `ValueError: math domain error` or was
+  returned with an error of zero. It is now flagged `blended` and has no error, as an epoch
+  with an indefinite curvature is.
+- **`solve_kepler` and `radial_velocity` are compiled once per array shape outside `jit`.**
+  The Newton step of the solver was a closure made on every call. Outside `jit`, JAX compiles
+  a loop once per body function and keeps the program, so every call compiled the loop again:
+  29 to 40 ms and 1.9 MB of retained memory per call, over 1500 calls of `radial_velocity` on
+  arrays of one shape. The step is now a function of the module, with the eccentricity and the
+  mean anomaly in the loop state. The same calls take 0.5 ms each and the memory does not
+  grow. The values are unchanged bit for bit outside `jit`, under `jit` and `vmap`, and
+  through the derivative rule. `RVOrbit.predict` had been given a compiled predictor for this
+  reason, and keeps it.
+- **A simulated population no longer compiles array programs for every system.**
+  `benchmark.simulate_system` built a model grid whose length followed from each system's
+  velocities and rotation. Outside `jit`, JAX compiles an array operation once per array
+  length and keeps the program: 59 compilations, 1.36 s and 87 MB of retained memory per
+  system, 2.4 GB after 24 systems drawn from the FGK box. Four changes remove it.
+  `simulate_system` rounds the number of pixels of the grid it builds up to a multiple of 512
+  at the red end, where the library extends that far (`rvs_model_grid(length_multiple=...)`).
+  `simulate_dataset` evaluates the Keplerian velocities and the velocity-to-pixel conversions
+  in blocks of 32 epochs; a new number of epochs had cost 17 compilations, 0.38 s and 28 MB.
+  `todcor` converts the barycentric velocities of a dataset in the same blocks, where it
+  compiled once per number of epochs.
+  `SpectralLibrary.resampled_to` is a sparse matrix product in SciPy and compiles nothing, and
+  `Template.from_library` and `library_component` build their kernels in NumPy. The
+  simulation now takes 0.13 to 0.17 s per system and compiles nothing after the first
+  systems, and the memory of the process is flat. The delivered epochs, the noiseless
+  detector spectra, the injected velocities and the templates of the 24 systems are unchanged
+  bit for bit. The component spectra returned with a system differ in the last 3 to 47 pixels
+  of the unrounded grid, where its rotation kernel met the zero-filled end; those pixels are
+  in the margin and do not reach the detector. The record of a run has the rounded `grid_n`
+  (`docs/benchmarks.md`).
 - **`VelocityTable.settings["scale"]` records the `scale` option.** The loop over the epochs
   reused the name for the rescaling of the errors, so the entry held the reduced chi-square
   of the last epoch, or 1.0 under `errors="ivar"`. Nothing in the package read it.

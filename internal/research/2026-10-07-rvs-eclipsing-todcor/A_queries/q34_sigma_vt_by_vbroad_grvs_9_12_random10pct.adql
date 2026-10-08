@@ -1,0 +1,27 @@
+SELECT s.tcls AS tcls, s.mbin AS mbin, s.vcat AS vcat, FLOOR(LOG10(s.sig) / 0.05) AS sbin,
+       COUNT(*) AS n
+FROM (
+  SELECT IF_THEN_ELSE(g.rv_template_teff < 3500.0, 0.0,
+         IF_THEN_ELSE(g.rv_template_teff < 4500.0, 1.0,
+         IF_THEN_ELSE(g.rv_template_teff < 5500.0, 2.0,
+         IF_THEN_ELSE(g.rv_template_teff < 6500.0, 3.0,
+         IF_THEN_ELSE(g.rv_template_teff < 7500.0, 4.0,
+         IF_THEN_ELSE(g.rv_template_teff <= 10000.0, 5.0, 6.0)))))) AS tcls,
+         FLOOR(g.grvs_mag) AS mbin,
+         IF_THEN_ELSE(g.vbroad < 20.0, 0.0,
+         IF_THEN_ELSE(g.vbroad < 50.0, 1.0,
+         IF_THEN_ELSE(g.vbroad < 100.0, 2.0,
+         IF_THEN_ELSE(g.vbroad >= 100.0, 3.0, 4.0)))) AS vcat,
+         SQRT(GREATEST(g.radial_velocity_error * g.radial_velocity_error - 0.012769, 0.00000001)
+              * 2.0 * g.rv_nb_transits / PI()) AS sig
+  FROM gaiadr3.gaia_source AS g
+  WHERE g.grvs_mag >= 9.0 AND g.grvs_mag < 12.0
+    AND g.random_index < 181170977
+    AND g.rv_method_used = 1
+    AND g.rv_nb_transits >= 8
+    AND g.rv_template_logg >= 3.5
+    AND (g.rv_chisq_pvalue > 0.01 OR g.rv_renormalised_gof <= 4.0
+         OR g.rv_chisq_pvalue IS NULL OR g.rv_renormalised_gof IS NULL)
+) AS s
+GROUP BY tcls, mbin, vcat, sbin
+ORDER BY tcls, mbin, vcat, sbin

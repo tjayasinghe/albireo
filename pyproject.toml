@@ -112,6 +112,9 @@ ignore = ["E741"]
 # ambiguous-character rule fires on typography that is correct where it is rendered (a
 # sigma, a multiplication sign, an en dash).
 "scripts/build_*_notebook.py" = ["RUF001"]
+# The report builder holds its page as a string literal, with Markdown tables whose rows
+# are one line each.
+"scripts/rvs_eb_report.py" = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

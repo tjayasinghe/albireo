@@ -1,0 +1,361 @@
+declaration,class,systems,grvs_low,n,both_within_5pct,both_within_10pct,catalogue_weight_per_system
+injected,K,all,6,130,124,126,0
+injected,K,all,6.5,130,122,125,0
+injected,K,all,7,130,117,122,0.011850312
+injected,K,all,7.5,130,113,118,0.021923077
+injected,K,all,8,130,117,119,0.032620012
+injected,K,all,8.5,130,114,116,0.063219134
+injected,K,all,9,130,113,118,0.083638962
+injected,K,all,9.5,130,107,111,0.14241245
+injected,K,all,10,130,95,101,0.3732073
+injected,K,all,10.5,130,97,102,0.70350734
+injected,K,all,11,130,79,87,1.0076885
+injected,K,all,11.5,130,75,85,1.79088
+injected,K,all,12,130,31,45,2.8186485
+injected,K,all,12.5,130,25,40,4.8987994
+injected,K,all,13,130,4,9,7.5223619
+injected,K,flux ratio above 0.2,6,73,73,73,0
+injected,K,flux ratio above 0.2,6.5,66,66,66,0
+injected,K,flux ratio above 0.2,7,73,73,73,0.011850312
+injected,K,flux ratio above 0.2,7.5,64,64,64,0.021923077
+injected,K,flux ratio above 0.2,8,72,71,71,0.032620012
+injected,K,flux ratio above 0.2,8.5,69,68,68,0.063219134
+injected,K,flux ratio above 0.2,9,79,79,79,0.083638962
+injected,K,flux ratio above 0.2,9.5,76,75,75,0.14241245
+injected,K,flux ratio above 0.2,10,73,72,73,0.3732073
+injected,K,flux ratio above 0.2,10.5,82,82,82,0.70350734
+injected,K,flux ratio above 0.2,11,72,68,71,1.0076885
+injected,K,flux ratio above 0.2,11.5,82,68,76,1.79088
+injected,K,flux ratio above 0.2,12,66,31,44,2.8186485
+injected,K,flux ratio above 0.2,12.5,72,25,40,4.8987994
+injected,K,flux ratio above 0.2,13,70,4,9,7.5223619
+injected,G,all,6,130,112,117,0.011538462
+injected,G,all,6.5,130,112,115,0.022307692
+injected,G,all,7,130,116,120,0.011850312
+injected,G,all,7.5,130,108,111,0.032884615
+injected,G,all,8,130,100,107,0.15222672
+injected,G,all,8.5,130,101,105,0.12643827
+injected,G,all,9,130,98,104,0.37637533
+injected,G,all,9.5,130,97,102,0.56964981
+injected,G,all,10,130,74,76,1.2795679
+injected,G,all,10.5,130,75,80,2.0564061
+injected,G,all,11,130,70,74,4.0629144
+injected,G,all,11.5,130,50,62,5.5739815
+injected,G,all,12,130,35,53,9.416374
+injected,G,all,12.5,130,14,38,14.355088
+injected,G,all,13,130,3,10,22.98765
+injected,G,flux ratio above 0.2,6,67,67,67,0.011538462
+injected,G,flux ratio above 0.2,6.5,74,73,74,0.022307692
+injected,G,flux ratio above 0.2,7,79,79,79,0.011850312
+injected,G,flux ratio above 0.2,7.5,64,64,64,0.032884615
+injected,G,flux ratio above 0.2,8,57,57,57,0.15222672
+injected,G,flux ratio above 0.2,8.5,66,66,66,0.12643827
+injected,G,flux ratio above 0.2,9,66,66,66,0.37637533
+injected,G,flux ratio above 0.2,9.5,79,79,79,0.56964981
+injected,G,flux ratio above 0.2,10,62,61,61,1.2795679
+injected,G,flux ratio above 0.2,10.5,65,64,65,2.0564061
+injected,G,flux ratio above 0.2,11,63,60,62,4.0629144
+injected,G,flux ratio above 0.2,11.5,63,47,57,5.5739815
+injected,G,flux ratio above 0.2,12,68,34,51,9.416374
+injected,G,flux ratio above 0.2,12.5,77,13,36,14.355088
+injected,G,flux ratio above 0.2,13,67,2,9,22.98765
+injected,F,all,6,130,117,123,0.057692308
+injected,F,all,6.5,130,116,118,0.022307692
+injected,F,all,7,130,122,123,0.11850312
+injected,F,all,7.5,130,103,107,0.26307692
+injected,F,all,8,130,113,116,0.4675535
+injected,F,all,8.5,130,101,103,0.97989657
+injected,F,all,9,130,105,112,1.1814003
+injected,F,all,9.5,130,104,105,2.3005088
+injected,F,all,10,130,86,92,3.4654964
+injected,F,all,10.5,130,83,94,5.2600703
+injected,F,all,11,130,77,87,8.7261538
+injected,F,all,11.5,130,51,69,13.426302
+injected,F,all,12,130,26,43,18.780551
+injected,F,all,12.5,130,4,24,27.776594
+injected,F,all,13,130,3,4,39.246274
+injected,F,flux ratio above 0.2,6,70,70,70,0.057692308
+injected,F,flux ratio above 0.2,6.5,84,83,83,0.022307692
+injected,F,flux ratio above 0.2,7,74,74,74,0.11850312
+injected,F,flux ratio above 0.2,7.5,74,70,70,0.26307692
+injected,F,flux ratio above 0.2,8,83,82,83,0.4675535
+injected,F,flux ratio above 0.2,8.5,82,81,81,0.97989657
+injected,F,flux ratio above 0.2,9,83,82,83,1.1814003
+injected,F,flux ratio above 0.2,9.5,87,85,85,2.3005088
+injected,F,flux ratio above 0.2,10,73,69,70,3.4654964
+injected,F,flux ratio above 0.2,10.5,76,71,76,5.2600703
+injected,F,flux ratio above 0.2,11,84,71,78,8.7261538
+injected,F,flux ratio above 0.2,11.5,74,49,64,13.426302
+injected,F,flux ratio above 0.2,12,71,25,41,18.780551
+injected,F,flux ratio above 0.2,12.5,77,4,24,27.776594
+injected,F,flux ratio above 0.2,13,74,3,4,39.246274
+injected,A,all,6,130,121,124,0.034615385
+injected,A,all,6.5,130,122,123,0.044615385
+injected,A,all,7,130,111,118,0.2014553
+injected,A,all,7.5,130,109,115,0.20826923
+injected,A,all,8,130,108,117,0.39144014
+injected,A,all,8.5,130,100,108,0.63219134
+injected,A,all,9,130,84,97,0.88866397
+injected,A,all,9.5,130,85,100,1.4460341
+injected,A,all,10,130,69,89,2.1965915
+injected,A,all,10.5,130,56,75,3.2902497
+injected,A,all,11,130,50,67,4.9955623
+injected,A,all,11.5,130,26,40,8.4457477
+injected,A,all,12,130,7,18,11.577338
+injected,A,all,12.5,130,0,2,16.081714
+injected,A,all,13,130,1,1,24.918421
+injected,A,flux ratio above 0.2,6,87,86,86,0.034615385
+injected,A,flux ratio above 0.2,6.5,81,79,79,0.044615385
+injected,A,flux ratio above 0.2,7,90,82,87,0.2014553
+injected,A,flux ratio above 0.2,7.5,83,79,81,0.20826923
+injected,A,flux ratio above 0.2,8,90,84,88,0.39144014
+injected,A,flux ratio above 0.2,8.5,80,72,76,0.63219134
+injected,A,flux ratio above 0.2,9,74,64,71,0.88866397
+injected,A,flux ratio above 0.2,9.5,79,62,74,1.4460341
+injected,A,flux ratio above 0.2,10,80,59,74,2.1965915
+injected,A,flux ratio above 0.2,10.5,78,47,65,3.2902497
+injected,A,flux ratio above 0.2,11,82,45,59,4.9955623
+injected,A,flux ratio above 0.2,11.5,78,26,39,8.4457477
+injected,A,flux ratio above 0.2,12,83,7,16,11.577338
+injected,A,flux ratio above 0.2,12.5,83,0,2,16.081714
+injected,A,flux ratio above 0.2,13,75,0,0,24.918421
+classified,K,all,6,130,103,108,0
+classified,K,all,6.5,130,88,93,0
+classified,K,all,7,130,93,96,0.011850312
+classified,K,all,7.5,130,81,88,0.021923077
+classified,K,all,8,130,85,92,0.032620012
+classified,K,all,8.5,130,87,94,0.063219134
+classified,K,all,9,130,98,101,0.083638962
+classified,K,all,9.5,130,91,97,0.14241245
+classified,K,all,10,130,77,91,0.3732073
+classified,K,all,10.5,130,87,90,0.70350734
+classified,K,all,11,130,66,75,1.0076885
+classified,K,all,11.5,130,55,73,1.79088
+classified,K,all,12,130,29,40,2.8186485
+classified,K,all,12.5,130,20,33,4.8987994
+classified,K,all,13,130,1,9,7.5223619
+classified,K,flux ratio above 0.2,6,73,69,71,0
+classified,K,flux ratio above 0.2,6.5,66,63,65,0
+classified,K,flux ratio above 0.2,7,73,72,72,0.011850312
+classified,K,flux ratio above 0.2,7.5,64,63,64,0.021923077
+classified,K,flux ratio above 0.2,8,72,69,71,0.032620012
+classified,K,flux ratio above 0.2,8.5,69,64,64,0.063219134
+classified,K,flux ratio above 0.2,9,79,79,79,0.083638962
+classified,K,flux ratio above 0.2,9.5,76,73,75,0.14241245
+classified,K,flux ratio above 0.2,10,73,66,73,0.3732073
+classified,K,flux ratio above 0.2,10.5,82,79,80,0.70350734
+classified,K,flux ratio above 0.2,11,72,62,69,1.0076885
+classified,K,flux ratio above 0.2,11.5,82,52,70,1.79088
+classified,K,flux ratio above 0.2,12,66,29,40,2.8186485
+classified,K,flux ratio above 0.2,12.5,72,20,33,4.8987994
+classified,K,flux ratio above 0.2,13,70,1,9,7.5223619
+classified,G,all,6,130,83,88,0.011538462
+classified,G,all,6.5,130,82,94,0.022307692
+classified,G,all,7,130,92,100,0.011850312
+classified,G,all,7.5,130,82,89,0.032884615
+classified,G,all,8,130,77,82,0.15222672
+classified,G,all,8.5,130,80,88,0.12643827
+classified,G,all,9,130,82,89,0.37637533
+classified,G,all,9.5,130,84,92,0.56964981
+classified,G,all,10,130,65,73,1.2795679
+classified,G,all,10.5,130,62,73,2.0564061
+classified,G,all,11,130,61,68,4.0629144
+classified,G,all,11.5,130,41,55,5.5739815
+classified,G,all,12,130,18,33,9.416374
+classified,G,all,12.5,130,6,21,14.355088
+classified,G,all,13,130,5,9,22.98765
+classified,G,flux ratio above 0.2,6,67,66,66,0.011538462
+classified,G,flux ratio above 0.2,6.5,74,70,74,0.022307692
+classified,G,flux ratio above 0.2,7,79,76,78,0.011850312
+classified,G,flux ratio above 0.2,7.5,64,62,62,0.032884615
+classified,G,flux ratio above 0.2,8,57,56,57,0.15222672
+classified,G,flux ratio above 0.2,8.5,66,62,64,0.12643827
+classified,G,flux ratio above 0.2,9,66,64,64,0.37637533
+classified,G,flux ratio above 0.2,9.5,79,75,78,0.56964981
+classified,G,flux ratio above 0.2,10,62,58,60,1.2795679
+classified,G,flux ratio above 0.2,10.5,65,58,63,2.0564061
+classified,G,flux ratio above 0.2,11,63,58,62,4.0629144
+classified,G,flux ratio above 0.2,11.5,63,39,52,5.5739815
+classified,G,flux ratio above 0.2,12,68,18,33,9.416374
+classified,G,flux ratio above 0.2,12.5,77,6,21,14.355088
+classified,G,flux ratio above 0.2,13,67,5,9,22.98765
+classified,F,all,6,130,66,82,0.057692308
+classified,F,all,6.5,130,87,93,0.022307692
+classified,F,all,7,130,78,85,0.11850312
+classified,F,all,7.5,130,66,80,0.26307692
+classified,F,all,8,130,73,87,0.4675535
+classified,F,all,8.5,130,71,79,0.97989657
+classified,F,all,9,130,74,89,1.1814003
+classified,F,all,9.5,130,70,80,2.3005088
+classified,F,all,10,130,63,74,3.4654964
+classified,F,all,10.5,130,64,78,5.2600703
+classified,F,all,11,130,58,72,8.7261538
+classified,F,all,11.5,130,40,59,13.426302
+classified,F,all,12,130,17,36,18.780551
+classified,F,all,12.5,130,0,14,27.776594
+classified,F,all,13,130,0,2,39.246274
+classified,F,flux ratio above 0.2,6,70,50,58,0.057692308
+classified,F,flux ratio above 0.2,6.5,84,75,79,0.022307692
+classified,F,flux ratio above 0.2,7,74,59,63,0.11850312
+classified,F,flux ratio above 0.2,7.5,74,58,64,0.26307692
+classified,F,flux ratio above 0.2,8,83,66,72,0.4675535
+classified,F,flux ratio above 0.2,8.5,82,65,69,0.97989657
+classified,F,flux ratio above 0.2,9,83,61,73,1.1814003
+classified,F,flux ratio above 0.2,9.5,87,65,72,2.3005088
+classified,F,flux ratio above 0.2,10,73,56,65,3.4654964
+classified,F,flux ratio above 0.2,10.5,76,60,68,5.2600703
+classified,F,flux ratio above 0.2,11,84,56,69,8.7261538
+classified,F,flux ratio above 0.2,11.5,74,39,57,13.426302
+classified,F,flux ratio above 0.2,12,71,17,36,18.780551
+classified,F,flux ratio above 0.2,12.5,77,0,13,27.776594
+classified,F,flux ratio above 0.2,13,74,0,2,39.246274
+classified,A,all,6,130,58,76,0.034615385
+classified,A,all,6.5,130,63,77,0.044615385
+classified,A,all,7,130,65,78,0.2014553
+classified,A,all,7.5,130,58,65,0.20826923
+classified,A,all,8,130,65,76,0.39144014
+classified,A,all,8.5,130,60,76,0.63219134
+classified,A,all,9,130,46,57,0.88866397
+classified,A,all,9.5,130,52,68,1.4460341
+classified,A,all,10,130,42,55,2.1965915
+classified,A,all,10.5,130,35,45,3.2902497
+classified,A,all,11,130,38,48,4.9955623
+classified,A,all,11.5,130,11,28,8.4457477
+classified,A,all,12,130,5,7,11.577338
+classified,A,all,12.5,130,0,1,16.081714
+classified,A,all,13,130,0,1,24.918421
+classified,A,flux ratio above 0.2,6,87,49,65,0.034615385
+classified,A,flux ratio above 0.2,6.5,81,46,58,0.044615385
+classified,A,flux ratio above 0.2,7,90,55,65,0.2014553
+classified,A,flux ratio above 0.2,7.5,83,45,51,0.20826923
+classified,A,flux ratio above 0.2,8,90,56,65,0.39144014
+classified,A,flux ratio above 0.2,8.5,80,43,57,0.63219134
+classified,A,flux ratio above 0.2,9,74,41,49,0.88866397
+classified,A,flux ratio above 0.2,9.5,79,43,55,1.4460341
+classified,A,flux ratio above 0.2,10,80,38,50,2.1965915
+classified,A,flux ratio above 0.2,10.5,78,32,41,3.2902497
+classified,A,flux ratio above 0.2,11,82,36,44,4.9955623
+classified,A,flux ratio above 0.2,11.5,78,11,27,8.4457477
+classified,A,flux ratio above 0.2,12,83,4,6,11.577338
+classified,A,flux ratio above 0.2,12.5,83,0,1,16.081714
+classified,A,flux ratio above 0.2,13,75,0,1,24.918421
+catalogue,K,all,6,130,77,87,0
+catalogue,K,all,6.5,130,69,80,0
+catalogue,K,all,7,130,70,84,0.011850312
+catalogue,K,all,7.5,130,69,79,0.021923077
+catalogue,K,all,8,130,72,81,0.032620012
+catalogue,K,all,8.5,130,71,81,0.063219134
+catalogue,K,all,9,130,80,86,0.083638962
+catalogue,K,all,9.5,130,75,84,0.14241245
+catalogue,K,all,10,130,69,75,0.3732073
+catalogue,K,all,10.5,130,76,86,0.70350734
+catalogue,K,all,11,130,59,64,1.0076885
+catalogue,K,all,11.5,130,49,60,1.79088
+catalogue,K,all,12,130,26,36,2.8186485
+catalogue,K,all,12.5,130,20,31,4.8987994
+catalogue,K,all,13,130,3,11,7.5223619
+catalogue,K,flux ratio above 0.2,6,73,60,64,0
+catalogue,K,flux ratio above 0.2,6.5,66,59,63,0
+catalogue,K,flux ratio above 0.2,7,73,58,64,0.011850312
+catalogue,K,flux ratio above 0.2,7.5,64,58,62,0.021923077
+catalogue,K,flux ratio above 0.2,8,72,59,64,0.032620012
+catalogue,K,flux ratio above 0.2,8.5,69,60,63,0.063219134
+catalogue,K,flux ratio above 0.2,9,79,67,69,0.083638962
+catalogue,K,flux ratio above 0.2,9.5,76,64,67,0.14241245
+catalogue,K,flux ratio above 0.2,10,73,63,64,0.3732073
+catalogue,K,flux ratio above 0.2,10.5,82,71,80,0.70350734
+catalogue,K,flux ratio above 0.2,11,72,56,61,1.0076885
+catalogue,K,flux ratio above 0.2,11.5,82,49,57,1.79088
+catalogue,K,flux ratio above 0.2,12,66,26,35,2.8186485
+catalogue,K,flux ratio above 0.2,12.5,72,20,31,4.8987994
+catalogue,K,flux ratio above 0.2,13,70,3,11,7.5223619
+catalogue,G,all,6,130,62,70,0.011538462
+catalogue,G,all,6.5,130,74,80,0.022307692
+catalogue,G,all,7,130,77,86,0.011850312
+catalogue,G,all,7.5,130,67,73,0.032884615
+catalogue,G,all,8,130,60,69,0.15222672
+catalogue,G,all,8.5,130,61,71,0.12643827
+catalogue,G,all,9,130,71,79,0.37637533
+catalogue,G,all,9.5,130,67,78,0.56964981
+catalogue,G,all,10,130,59,65,1.2795679
+catalogue,G,all,10.5,130,53,65,2.0564061
+catalogue,G,all,11,130,53,60,4.0629144
+catalogue,G,all,11.5,130,42,55,5.5739815
+catalogue,G,all,12,130,21,34,9.416374
+catalogue,G,all,12.5,130,10,29,14.355088
+catalogue,G,all,13,130,5,13,22.98765
+catalogue,G,flux ratio above 0.2,6,67,57,62,0.011538462
+catalogue,G,flux ratio above 0.2,6.5,74,64,68,0.022307692
+catalogue,G,flux ratio above 0.2,7,79,69,74,0.011850312
+catalogue,G,flux ratio above 0.2,7.5,64,58,60,0.032884615
+catalogue,G,flux ratio above 0.2,8,57,53,56,0.15222672
+catalogue,G,flux ratio above 0.2,8.5,66,54,58,0.12643827
+catalogue,G,flux ratio above 0.2,9,66,59,62,0.37637533
+catalogue,G,flux ratio above 0.2,9.5,79,66,72,0.56964981
+catalogue,G,flux ratio above 0.2,10,62,54,59,1.2795679
+catalogue,G,flux ratio above 0.2,10.5,65,49,57,2.0564061
+catalogue,G,flux ratio above 0.2,11,63,51,58,4.0629144
+catalogue,G,flux ratio above 0.2,11.5,63,40,52,5.5739815
+catalogue,G,flux ratio above 0.2,12,68,21,34,9.416374
+catalogue,G,flux ratio above 0.2,12.5,77,10,29,14.355088
+catalogue,G,flux ratio above 0.2,13,67,5,13,22.98765
+catalogue,F,all,6,130,45,55,0.057692308
+catalogue,F,all,6.5,130,79,89,0.022307692
+catalogue,F,all,7,130,47,62,0.11850312
+catalogue,F,all,7.5,130,49,61,0.26307692
+catalogue,F,all,8,130,64,78,0.4675535
+catalogue,F,all,8.5,130,55,63,0.97989657
+catalogue,F,all,9,130,59,76,1.1814003
+catalogue,F,all,9.5,130,55,69,2.3005088
+catalogue,F,all,10,130,49,61,3.4654964
+catalogue,F,all,10.5,130,50,62,5.2600703
+catalogue,F,all,11,130,53,66,8.7261538
+catalogue,F,all,11.5,130,38,55,13.426302
+catalogue,F,all,12,130,18,36,18.780551
+catalogue,F,all,12.5,130,4,14,27.776594
+catalogue,F,all,13,130,2,3,39.246274
+catalogue,F,flux ratio above 0.2,6,70,38,44,0.057692308
+catalogue,F,flux ratio above 0.2,6.5,84,66,74,0.022307692
+catalogue,F,flux ratio above 0.2,7,74,41,50,0.11850312
+catalogue,F,flux ratio above 0.2,7.5,74,48,56,0.26307692
+catalogue,F,flux ratio above 0.2,8,83,58,66,0.4675535
+catalogue,F,flux ratio above 0.2,8.5,82,53,60,0.97989657
+catalogue,F,flux ratio above 0.2,9,83,56,69,1.1814003
+catalogue,F,flux ratio above 0.2,9.5,87,55,65,2.3005088
+catalogue,F,flux ratio above 0.2,10,73,45,54,3.4654964
+catalogue,F,flux ratio above 0.2,10.5,76,47,58,5.2600703
+catalogue,F,flux ratio above 0.2,11,84,53,65,8.7261538
+catalogue,F,flux ratio above 0.2,11.5,74,37,54,13.426302
+catalogue,F,flux ratio above 0.2,12,71,18,36,18.780551
+catalogue,F,flux ratio above 0.2,12.5,77,4,14,27.776594
+catalogue,F,flux ratio above 0.2,13,74,2,3,39.246274
+catalogue,A,all,6,130,32,44,0.034615385
+catalogue,A,all,6.5,130,31,45,0.044615385
+catalogue,A,all,7,130,26,42,0.2014553
+catalogue,A,all,7.5,130,19,35,0.20826923
+catalogue,A,all,8,130,28,45,0.39144014
+catalogue,A,all,8.5,130,21,37,0.63219134
+catalogue,A,all,9,130,23,36,0.88866397
+catalogue,A,all,9.5,130,22,37,1.4460341
+catalogue,A,all,10,130,19,31,2.1965915
+catalogue,A,all,10.5,130,18,27,3.2902497
+catalogue,A,all,11,130,22,35,4.9955623
+catalogue,A,all,11.5,130,12,23,8.4457477
+catalogue,A,all,12,130,4,9,11.577338
+catalogue,A,all,12.5,130,0,0,16.081714
+catalogue,A,all,13,130,0,0,24.918421
+catalogue,A,flux ratio above 0.2,6,87,32,44,0.034615385
+catalogue,A,flux ratio above 0.2,6.5,81,29,41,0.044615385
+catalogue,A,flux ratio above 0.2,7,90,26,42,0.2014553
+catalogue,A,flux ratio above 0.2,7.5,83,19,34,0.20826923
+catalogue,A,flux ratio above 0.2,8,90,28,43,0.39144014
+catalogue,A,flux ratio above 0.2,8.5,80,21,36,0.63219134
+catalogue,A,flux ratio above 0.2,9,74,23,35,0.88866397
+catalogue,A,flux ratio above 0.2,9.5,79,21,36,1.4460341
+catalogue,A,flux ratio above 0.2,10,80,19,31,2.1965915
+catalogue,A,flux ratio above 0.2,10.5,78,18,27,3.2902497
+catalogue,A,flux ratio above 0.2,11,82,22,35,4.9955623
+catalogue,A,flux ratio above 0.2,11.5,78,12,23,8.4457477
+catalogue,A,flux ratio above 0.2,12,83,4,9,11.577338
+catalogue,A,flux ratio above 0.2,12.5,83,0,0,16.081714
+catalogue,A,flux ratio above 0.2,13,75,0,0,24.918421

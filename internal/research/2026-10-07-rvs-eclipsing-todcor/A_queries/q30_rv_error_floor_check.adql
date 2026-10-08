@@ -1,0 +1,7 @@
+SELECT rv_method_used, COUNT(*) AS n, MIN(radial_velocity_error) AS min_err,
+       MIN(rv_nb_transits) AS min_nb, MAX(grvs_mag) AS max_grvs,
+       COUNT(rv_renormalised_gof) AS n_gof, COUNT(rv_chisq_pvalue) AS n_pvalue,
+       COUNT(rv_amplitude_robust) AS n_amp, COUNT(vbroad) AS n_vbroad
+FROM gaiadr3.gaia_source
+WHERE grvs_mag < 9.0
+GROUP BY rv_method_used

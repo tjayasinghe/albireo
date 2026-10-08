@@ -1,0 +1,18 @@
+SELECT IF_THEN_ELSE(t.x < -0.15, 1.0, IF_THEN_ELSE(t.x > 1.7, 2.0, 0.0)) AS cat,
+       FLOOR(t.gmag) AS gbin, FLOOR(t.rp) AS rpbin, COUNT(*) AS n,
+       COUNT(t.x) AS n_with_colour,
+       COUNT(t.grvs_mag) AS n_grvs_mag,
+       COUNT(t.radial_velocity) AS n_radial_velocity,
+       COUNT(t.rv_nb_transits) AS n_rv_nb_transits
+FROM (
+    SELECT g.phot_rp_mean_mag AS rp, g.phot_g_mean_mag AS gmag,
+           g.phot_g_mean_mag - g.phot_rp_mean_mag AS x,
+           g.grvs_mag AS grvs_mag,
+           g.radial_velocity AS radial_velocity,
+           g.rv_nb_transits AS rv_nb_transits
+    FROM gaiadr3.vari_eclipsing_binary AS v
+    JOIN gaiadr3.gaia_source AS g ON g.source_id = v.source_id
+) AS t
+WHERE t.x IS NULL OR t.x < -0.15 OR t.x > 1.7
+GROUP BY cat, gbin, rpbin
+ORDER BY cat, gbin, rpbin

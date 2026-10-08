@@ -169,6 +169,56 @@ def test_truth_velocities_match_kepler():
     )
 
 
+def test_per_epoch_quantities_are_evaluated_in_blocks_of_epochs(compilations):
+    # A function of an array of one length per dataset is compiled once per length outside
+    # jit. The simulator pads the epochs to a multiple of a block, which changes no value.
+    import jax.numpy as jnp
+
+    from albireo.grids import _EPOCH_BLOCK, _in_epoch_blocks
+
+    # On the development machine the padded and the unpadded values are equal bit for bit
+    # for 2 to 140 epochs. An element can be evaluated by a vector or by a scalar routine
+    # according to its position, so the tolerance here is a few units in the last place.
+    rng = np.random.default_rng(5)
+    for n in (1, 5, _EPOCH_BLOCK - 1, _EPOCH_BLOCK, _EPOCH_BLOCK + 1, 3 * _EPOCH_BLOCK + 7):
+        for shape in ((n,), (2, n)):
+            values = rng.uniform(-300.0, 300.0, shape)
+            in_blocks = _in_epoch_blocks(GRID.velocity_to_pixels, values)
+            assert in_blocks.shape == shape
+            np.testing.assert_allclose(
+                in_blocks,
+                np.asarray(GRID.velocity_to_pixels(jnp.asarray(values))),
+                rtol=1e-14,
+                atol=0,
+            )
+        t = np.sort(rng.uniform(0.0, 40.0, n))
+        direct = radial_velocity(
+            jnp.asarray(t),
+            period=ORBIT.period,
+            t_peri=ORBIT.t_peri,
+            ecc=ORBIT.ecc,
+            omega=ORBIT.omega,
+            k=ORBIT.k[0],
+            gamma=ORBIT.gamma,
+        )
+        np.testing.assert_allclose(
+            ORBIT.component_velocities(t)[0], np.asarray(direct), rtol=1e-13, atol=1e-12
+        )
+    # A single epoch is passed as it is, and its values are those of the function exactly.
+    one = np.array([123.4])
+    np.testing.assert_array_equal(
+        _in_epoch_blocks(GRID.velocity_to_pixels, one),
+        np.asarray(GRID.velocity_to_pixels(jnp.asarray(one))),
+    )
+
+    # Within one block, a new number of epochs compiles nothing.
+    counts = range(2, _EPOCH_BLOCK)
+    assert (
+        compilations(lambda: [ORBIT.component_velocities(np.linspace(0.0, 7.0, n)) for n in counts])
+        == 0
+    )
+
+
 def test_response_polynomial_applied():
     ds, truth = simulate_dataset(
         GRID,

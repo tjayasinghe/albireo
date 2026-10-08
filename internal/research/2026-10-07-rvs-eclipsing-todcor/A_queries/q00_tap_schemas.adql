@@ -1,0 +1,1 @@
+SELECT schema_name FROM tap_schema.schemas

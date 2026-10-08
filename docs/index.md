@@ -31,6 +31,9 @@ The name refers to Albireo, the double star in Cygnus.
   labels and epoch velocities.
 - [Benchmarks](benchmarks.md): the validation and performance record, including the
   closed-loop recovery tests and the degeneracy analyses.
+- [Gaia DR4 eclipsing binaries in the RVS](reports/gaia-rvs-eclipsing-binaries.md): a
+  simulated survey of 7800 detached eclipsing binaries, with both velocities of every
+  transit measured by correlation and the orbits and masses that follow.
 
 ## Source
 

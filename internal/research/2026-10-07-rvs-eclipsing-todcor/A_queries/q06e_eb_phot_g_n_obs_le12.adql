@@ -1,0 +1,17 @@
+SELECT FLOOR(u.grvs / 10.0) AS faint, FLOOR(u.phot_g_n_obs / 5.0) AS vbin, COUNT(*) AS n
+FROM (
+  SELECT t.x AS x, t.rp AS rp, t.phot_g_n_obs AS phot_g_n_obs,
+         IF_THEN_ELSE(t.x <= 1.2,
+             t.rp + (-0.0397 - 0.2852*t.x - 0.0330*t.x*t.x - 0.0867*t.x*t.x*t.x),
+             t.rp + (-4.0618 + 10.0187*t.x - 9.0532*t.x*t.x + 2.6089*t.x*t.x*t.x)) AS grvs
+  FROM (
+    SELECT g.phot_rp_mean_mag AS rp,
+           g.phot_g_mean_mag - g.phot_rp_mean_mag AS x,
+           g.phot_g_n_obs AS phot_g_n_obs
+    FROM gaiadr3.vari_eclipsing_binary AS v
+    JOIN gaiadr3.gaia_source AS g ON g.source_id = v.source_id
+  ) AS t
+) AS u
+WHERE u.x >= -0.15 AND u.x <= 1.7 AND u.grvs <= 12.0
+GROUP BY faint, vbin
+ORDER BY faint, vbin

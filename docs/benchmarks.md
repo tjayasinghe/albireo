@@ -4073,3 +4073,196 @@ statistics of the scanning law and not its phase. The quoted errors of a decided
 those of one minimum of a blended surface and are smaller than its errors. The period
 decision is measured as the ranking of the candidate periods on the tables, and the runs
 of the pipeline were not repeated.
+
+## Simulating a population: array programs compiled per system (2026-10-07)
+
+Machine: the same desktop, CPU only, float64, JAX 0.11.0. It was shared with other work
+during the measurements, so the times are indicative; the counts of compilations and the
+memory are not affected. The systems are those of `draw_population(kind="eclipsing")` from
+the BOSZ FGK box in the RVS band, with periods of 0.5 to 20 d, each simulated by
+`benchmark.simulate_system` as DR4 epochs, half of them with one resolving power per
+transit. The measurements were made with throw-away scripts and are recorded in
+`internal/research/2026-10-07-rvs-eclipsing-todcor/C_pilot.md`.
+
+Outside `jit`, JAX compiles an array operation once per argument shape and keeps the
+compiled program for the life of the process. Three lengths followed from the system being
+simulated: that of the model grid, whose margin is the system's velocity amplitude and
+rotation, the number of epochs, and that of the rotation kernel. A fourth cause did not
+depend on a shape: the Newton step of `solve_kepler` was a closure made on every call, and a
+loop is compiled once per body function. A population therefore compiled for every system,
+at a cost that the 400 to 800 s of a disentangling had hidden.
+
+| quantity | before | after |
+|---|---|---|
+| distinct lengths of the model grid over 24 systems | 21 (4380 to 4570 pixels) | 1 (4608) |
+| compilations per system, after the first systems | 59 | 0 |
+| simulation per system [s] | 1.36 | 0.13 to 0.17 |
+| resident memory after 24 systems [GB] | 2.40 | 0.77 |
+| growth of the resident memory | 87 MB per system | none from the 20th to the 60th system |
+| two templates on a shared grid [s] | 0.16 | 0.012 |
+| `radial_velocity` outside `jit`, per call | 29 to 40 ms and 1.9 MB retained | 0.5 ms, nothing retained |
+| a new number of epochs | 17 compilations, 0.38 s, 28 MB | 0.02 s, 1.6 MB |
+
+The changes are four. `simulate_system` rounds the number of pixels of the grid it builds
+up to a multiple of 512 by adding pixels at the red end, beyond the margin
+(`rvs_model_grid(length_multiple=...)`). `simulate_dataset` evaluates the Keplerian
+velocities and the velocity-to-pixel conversions in blocks of 32 epochs, and `todcor` does
+the same for the barycentric velocities of a dataset. The Newton step is a function of the
+module, with the eccentricity and the mean anomaly in the loop state.
+`SpectralLibrary.resampled_to` is a sparse matrix product in SciPy, and for a library whose
+arrays are read-only its result and the interpolator are kept, up to 96 MB per library.
+
+**The values are unchanged.** The 24 systems were simulated before and after with the same
+seeds. The delivered flux and inverse variance, the noiseless detector spectra, the
+injected velocities, the S/N and the lag-one correlation of every epoch, 16 templates and a
+resampled library are equal bit for bit, 186 arrays in all. The component spectra returned
+with a system differ in the last 3 to 47 pixels of the unrounded grid, by up to 0.014 of
+the continuum: the rotation kernel of the unrounded grid met its zero-filled end there, and
+the rounded grid has the library's spectrum beyond it. Those pixels lie in the margin and
+do not reach the detector. The Kepler solver in its new form equals the old one bit for
+bit outside `jit`, under `jit` and `vmap`, and through `grad` and `jacfwd` (34 comparisons).
+Padding the epochs to a block changes no bit for 2 to 140 epochs. For a single epoch it
+changed the last bit of the velocity-to-pixel conversion, and a single epoch is not padded.
+
+**What is not changed.** In the chain of the preceding section (simulation, two templates,
+`todcor`, `assign_components`), the first three compile nothing after the first ten
+systems. `assign_components` still compiles for each new number of usable epochs, two to
+four programs per system over the first 80 systems, during which the process grew by 8 MB
+per system, against 33 MB before the changes.
+
+## Gaia RVS: a population of eclipsing binaries measured by correlation alone (2026-10-07)
+
+Machine: the same desktop, CPU only, float64, shared with other work during the runs. The
+experiment is reported in full in [Gaia DR4 eclipsing binaries in the
+RVS](reports/gaia-rvs-eclipsing-binaries.md), with its figures and the binned tables behind
+them. This section records the numbers that other pages quote and the checks that tie the
+experiment to the records above.
+
+**The experiment.** 7,800 detached eclipsing binaries were drawn in fifteen bins of G_RVS
+from 6.0 to 13.5 by four classes of the primary's temperature, 130 per cell
+([`albireo.eclipsing`](api/eclipsing.md)): stars on MIST tracks, periods and mass ratios of
+Moe & Di Stefano (2017) from q = 0.1, isotropic orientations kept where they eclipse, and
+weights that map the cells onto the 36,131 Gaia DR3 candidates of the detached light-curve
+classes. Each system was simulated as DR4 epoch spectra with its eclipses and measured by
+[`albireo.survey`](api/survey.md): `todcor` against BOSZ templates under three declarations
+of what is known about them, and an orbit fitted with the photometric period and time of
+eclipse held (`assign_by_ephemeris`). The runs are those of `scripts/rvs_eb_run.py`, and
+`scripts/rvs_eb_report.py` writes the report from their tables.
+
+**Recovery.** Percent of systems with both semi-amplitudes within 10 percent of the injected
+ones, the four classes weighted to the catalogue. The last column is for the systems whose
+secondary has less than a tenth of the primary's flux, and gives the share whose primary's
+semi-amplitude is within 10 percent when the transits are measured with the primary's
+classified template alone.
+
+| G_RVS | injected templates | classified | one catalogue template | classified, flux ratio above 0.2 | K1 from one template, flux ratio below 0.1 |
+|---|---|---|---|---|---|
+| 6 to 9 | 85 | 61 | 44 | 80 | 97 |
+| 9 to 10 | 80 | 60 | 47 | 81 | 97 |
+| 10 to 11 | 67 | 53 | 41 | 81 | 97 |
+| 11 to 12 | 52 | 43 | 39 | 70 | 94 |
+| 12 to 13 | 22 | 15 | 16 | 25 | 79 |
+| 13 to 13.5 | 4 | 3 | 4 | 6 | 57 |
+
+A stratum contains every mass ratio from 0.1, and 57 percent of the weighted sample has a
+secondary with more than a fifth of the primary's flux. Half of those systems are recovered
+at G_RVS = 12.2, 12.0 and 12.0 under the three declarations.
+
+**Single transits.** With the injected templates the scatter of the primary's velocity about
+the velocity in its spectrum is 0.93 times the photon-limited prediction at S/N above 10,
+and the pulls have robust widths of 0.98 and 1.01 for the two stars. With classified
+templates the widths are 1.23 and 1.46, and with the catalogue template 2.11 and 2.11. Every
+transit also carries a zero point of 0.17 km/s that no quoted error contains: against the
+orbit the scatter is 0.99 times the prediction, and 1.11 times at S/N above 100. Among the
+systems with a flux ratio above 0.2, 1.1, 6.5 and 20.1 percent of the usable transits have a
+velocity more than five quoted errors and 3 km/s from the injected one under the three
+declarations.
+
+**Orbits.** For the recovered systems the pulls of the two semi-amplitudes have robust
+widths of 0.95 and 0.99 with the injected templates and of 1.62 and 2.40 with classified
+ones. The quoted error of a semi-amplitude contains the photon noise of the transits and not
+the mismatch of the templates.
+
+**The ephemeris.** The fit with the period and the time of eclipse held recovers 56, 33 and
+6 percent of the systems at G_RVS 6 to 11, 11 to 12.5 and 12.5 to 13.5. `assign_components`
+with the period alone recovers 55, 33 and 7 percent where its semi-amplitudes are compared
+with the injected ones in the order that fits, which 20 percent of its tables needed. The
+two shares differ by at most 2 percentage points in any half magnitude. At a known period
+the time of eclipse names the two stars and does not add recovered orbits.
+
+**Effects outside the baseline.** Twenty systems of every cell were simulated again with one
+effect that the analysis does not model, on the same transits and noise seeds. The shares
+are of systems with both semi-amplitudes within 10 percent under classified templates, and
+the last column is the change of the scatter of the primary's velocity.
+
+| effect | systems affected | recovered without it [%] | recovered with it [%] | change of the scatter [%] |
+|---|---|---|---|---|
+| an unmodelled third star | 590 | 51 | 33 | +28 |
+| a third star above 10 percent of the light | 259 | 51 | 12 | +165 |
+| Ca II emission in the line cores | 530 | 45 | 28 | +79 |
+| background and normalisation of a transit | 1200 | 50 | 52 | +8 |
+| the same, systems fainter than G_RVS = 11 | 400 | 25 | 26 | +4 |
+
+In the model of the population 49 percent of the systems have an unresolved third star
+(Tokovinin et al. 2006) and 44 percent a star with saturated activity, whose emission fills
+the Ca II cores at the strong end of what RAVE observed in this band. These are the two
+effects that the baseline leaves out and that matter, and they act in opposite directions:
+among the affected systems with a flux ratio above 0.2 and G_RVS below 11, the median errors
+of the two semi-amplitudes are -6.7 and -29.2 percent under a third light above a tenth,
+whose lines stand at the systemic velocity, and +2.1 and +3.6 percent under the emission.
+
+**Scale of the noise.** The primaries of the null run, measured with their own template
+alone, are single stars. Their scatter about the velocity in the spectrum is 0.87 times the
+photon-limited prediction at S/N above 10, and their pulls have a robust width of 0.96. For
+those of 5500 to 6500 K that rotate below 20 km/s the scatter of a transit about the orbit
+is 0.20, 0.30, 0.73 and 2.63 km/s at G_RVS 6.0 to 6.5, 7.5 to 8.5, 9.5 to 10.5 and 11.5 to
+12.0. The errors that Gaia DR3 publishes for such stars imply 0.20, 0.36, 1.07 and 4.31 km/s
+in the same ranges, which is 1.0, 1.2, 1.5 and 1.6 times the simulated scatter. With the
+zero point of 0.17 km/s taken from both, a transit of DR3 has the scatter of a simulated
+transit 0.5, 0.7 and 0.6 mag fainter at G_RVS = 8, 10 and 12. The simulation is at the
+photon limit of the S/N that DPAC expects for a source, with the mission's median background
+at every transit, and DR3's transits were not. A background that is up to 5.5 times the
+median or below it raises the standard deviation of the noise of a transit by 6 percent at
+G_RVS = 10 and 15 percent at 12 in the S/N model, a small part of the difference, and the
+experiment does not separate the rest. If the transits of DR4 are as DR3 measured them, a
+recovery quoted here at a magnitude holds about that much brighter.
+
+**Detection and yield.** On 900 single stars analysed with the two templates of a pair, one
+in a hundred has a secondary's semi-amplitude above 3.0, 6.4 and 7.7 times its quoted error
+under the three declarations, and these values are the detection thresholds. Weighted to the
+catalogue, with classified templates, the simulation gives 4,789 double-lined orbits
+brighter than G_RVS = 12 and 7,123 brighter than 13.5, of 10,082 and 36,131 candidates, with
+both minimum masses to 10 percent for 4,880 systems and to 3 percent for 1,552.
+
+**Checks.**
+
+- The 33 systems of the recorded disentangling runs, simulated from their recorded seeds and
+  measured by the new chain with the injected templates, give 93.4 percent of usable epochs
+  and both semi-amplitudes within 5 percent for 21 of 22 systems above 100 km/s of
+  separation and 9 of 11 below. These are the numbers of the TODCOR notebook (D66).
+- The tables of 96 systems are identical when run by one process and by six.
+- 0 of the 7,800 systems raised an error.
+- An earlier form of `assign_by_ephemeris` took the order of the two velocities of a transit
+  from the sign of a circular curve where the eccentricity was fitted. It exchanged
+  correctly measured transits of eccentric pairs of alike stars: on tables of 24 epochs it
+  recovered both semi-amplitudes within 5 percent for 16 of 20 tables at e = 0.4 and 12 of
+  20 at 0.6, and 20 of 20 after the correction, in which every trial shape orders the pairs
+  in its own way. The runs reported here were made after it.
+
+**Cost.** The 7,800 systems, 313,125 transits, took 109 minutes on 8 processes of the
+32-thread desktop, at 1.0 GB per process. The stages of one system sum to 6.4 s with the
+eight processes running (0.2 s for the simulation, 5.7 s for the correlations under three
+declarations and 0.6 s for the orbit fits), and to 4.8 s in one process alone (60 systems,
+one of every cell). The orbit fit with a free conjunction compiled one set of array programs
+for every number of usable epochs, and a process that fitted the tables of a population grew
+by 16 MB per system. The survey evaluates that fit on epochs padded to whole blocks
+(`rvorbit._epoch_blocks`), which removed the growth. The padding changes the fitted values
+of 5 of 40 tables, by at most 1.4e-10 of their size, so it is not the default of
+`fit_rv_orbit`.
+
+**What the population needed.** The published twin excess of Moe & Di Stefano makes 53
+percent of a magnitude-limited eclipsing sample have q above 0.95. The compilation of Eker
+et al. (2018) has 30 percent, and the Gaia DR3 candidates of the detached classes at most 28
+percent of equal eclipse depths. The draw takes 0.3 of the published excess, rising from q =
+0.85, and then has 31, 50 and 86 percent above 0.95, 0.9 and 0.7 among its systems with a
+flux ratio above 0.1, against 30, 49 and 83 in the compilation.

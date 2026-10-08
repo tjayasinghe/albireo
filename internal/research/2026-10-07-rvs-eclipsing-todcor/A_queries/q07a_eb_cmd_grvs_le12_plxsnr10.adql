@@ -1,0 +1,22 @@
+SELECT FLOOR(u.bp_rp / 0.1) AS cbin,
+       FLOOR((u.phot_g_mean_mag + 5.0 * LOG10(GREATEST(u.parallax, 0.0001)) - 10.0) / 0.5) AS mgbin,
+       COUNT(*) AS n
+FROM (
+  SELECT t.x AS x, t.rp AS rp, t.bp_rp AS bp_rp, t.parallax AS parallax, t.parallax_over_error AS parallax_over_error, t.phot_g_mean_mag AS phot_g_mean_mag,
+         IF_THEN_ELSE(t.x <= 1.2,
+             t.rp + (-0.0397 - 0.2852*t.x - 0.0330*t.x*t.x - 0.0867*t.x*t.x*t.x),
+             t.rp + (-4.0618 + 10.0187*t.x - 9.0532*t.x*t.x + 2.6089*t.x*t.x*t.x)) AS grvs
+  FROM (
+    SELECT g.phot_rp_mean_mag AS rp,
+           g.phot_g_mean_mag - g.phot_rp_mean_mag AS x,
+           g.bp_rp AS bp_rp,
+           g.parallax AS parallax,
+           g.parallax_over_error AS parallax_over_error,
+           g.phot_g_mean_mag AS phot_g_mean_mag
+    FROM gaiadr3.vari_eclipsing_binary AS v
+    JOIN gaiadr3.gaia_source AS g ON g.source_id = v.source_id
+  ) AS t
+) AS u
+WHERE u.x >= -0.15 AND u.x <= 1.7 AND u.grvs <= 12.0 AND u.parallax_over_error > 10.0
+GROUP BY cbin, mgbin
+ORDER BY cbin, mgbin

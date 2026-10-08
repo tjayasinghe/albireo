@@ -28,6 +28,13 @@ velocities of two alike components (:func:`reassign_by_orbit`), and the minimum 
 that the table flags for a second one (:func:`assign_by_orbit`). :func:`assign_components`
 makes both decisions while it fits the orbit at a known period (``docs/math.md`` §10.6).
 
+An eclipsing binary has a photometric ephemeris, which is far more precise than any
+element a velocity table of tens of epochs determines. :func:`fit_rv_ephemeris` holds the
+period and the time of conjunction at it, and the model is then linear in the
+semi-amplitudes and the systemic velocity for a circular orbit. :func:`assign_by_ephemeris`
+makes the decisions above with that fit, starting from the order of the pair that the
+ephemeris gives: it states which star recedes after the primary eclipse.
+
 Minimum masses and projected semi-axes follow Hilditch (2001), eqs. 3.17 and 3.18, with the
 IAU 2015 nominal constants. :func:`find_period` is the floating-mean, weighted generalized
 Lomb-Scargle periodogram of Zechmeister and Kürster (2009) (Lomb 1976; Scargle 1982;
@@ -44,6 +51,7 @@ Zechmeister, M. & Kürster, M. 2009, A&A, 496, 577
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import math
 import warnings
@@ -53,15 +61,23 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from albireo.grids import C_KMS
-from albireo.kepler import _NEWTON_ITERATIONS, radial_velocity, t_peri_from_t_conj
+from albireo.grids import _EPOCH_BLOCK, C_KMS, _in_epoch_blocks
+from albireo.kepler import (
+    _NEWTON_ITERATIONS,
+    _t_peri_from_t_conj_numpy,
+    radial_velocity,
+    t_peri_from_t_conj,
+    true_anomaly_numpy,
+)
 
 __all__ = [
     "Assignment",
     "RVOrbit",
+    "assign_by_ephemeris",
     "assign_by_orbit",
     "assign_components",
     "find_period",
+    "fit_rv_ephemeris",
     "fit_rv_orbit",
     "reassign_by_orbit",
 ]
@@ -582,8 +598,8 @@ class RVOrbit:
         fixed-count Newton loop at every call, and the period search calls this once per
         candidate.
         """
-        values = _predictor(int(self.k.size))(
-            jnp.asarray(t, dtype=jnp.float64),
+        predictor = _predictor(int(self.k.size))
+        elements = (
             float(self.period),
             float(self.t_peri),
             float(self.ecc),
@@ -591,7 +607,9 @@ class RVOrbit:
             jnp.asarray(self.k, dtype=jnp.float64),
             jnp.asarray(self.gamma, dtype=jnp.float64),
         )
-        return np.asarray(values)
+        # In blocks of epochs: the predictor is compiled once per array length, and the
+        # tables of a population have every length.
+        return _in_epoch_blocks(lambda times: predictor(times, *elements), t)
 
     def to_theta(self) -> dict:
         """The elements as the ``theta`` dictionary :func:`albireo.orbit_velocities` takes.
@@ -733,6 +751,35 @@ def _predictor(n_comp: int):
         )
 
     return jax.jit(predict)
+
+
+_PAD_EPOCHS = False
+
+
+@contextlib.contextmanager
+def _epoch_blocks():
+    """Fit orbits on epochs padded to whole blocks, for the duration of the context.
+
+    :func:`fit_rv_orbit` compiles its residuals and their Jacobian once for every number
+    of usable epochs, and the rounds of :func:`assign_components` change that number
+    within one table. A process that fits the tables of a population holds hundreds of
+    such programs: on simulated Gaia RVS tables it grew by 16 MB per system. Inside this
+    context the epochs are padded to a multiple of 32 with zero weight and the padded rows
+    are cropped before the optimizer sees them, so every table shares a few programs.
+
+    Each row depends on its own epoch alone, but a compiled program does not evaluate the
+    elements of arrays of different lengths to the same last bit, and the optimizer
+    carries the difference: of 40 tables fitted both ways, 5 differed, by at most 1.4e-10
+    of the fitted values. The padding is therefore not the default, and results recorded
+    without it are reproduced bit for bit.
+    """
+    global _PAD_EPOCHS
+    previous = _PAD_EPOCHS
+    _PAD_EPOCHS = True
+    try:
+        yield
+    finally:
+        _PAD_EPOCHS = previous
 
 
 def _semi_amplitude_start(y) -> float:
@@ -891,7 +938,23 @@ def fit_rv_orbit(
     omega0 = 0.0 if omega is None else float(omega)
 
     objective = _objective(bool(circular), int(n_comp), int(n_gamma))
-    data = (jnp.asarray(t), jnp.asarray(y), jnp.asarray(np.sqrt(w)))
+    # Inside `_epoch_blocks()` the compiled residuals and their Jacobian are evaluated on
+    # the epochs padded to a whole number of blocks, with zero weight on the padding, and
+    # cropped before SciPy sees them (see `_epoch_blocks`).
+    n_fit = int(t.size)
+    pad = -n_fit % _EPOCH_BLOCK if _PAD_EPOCHS and n_fit >= 2 else 0
+    data = (
+        jnp.asarray(np.pad(t, (0, pad), mode="edge")),
+        jnp.asarray(np.pad(y, ((0, 0), (0, pad)))),
+        jnp.asarray(np.pad(np.sqrt(w), ((0, 0), (0, pad)))),
+    )
+
+    def crop(values):
+        values = np.asarray(values)
+        if pad == 0:
+            return values
+        shaped = values.reshape(n_comp, n_fit + pad, *values.shape[1:])
+        return shaped[:, :n_fit].reshape(n_comp * n_fit, *values.shape[1:])
 
     def pack(tc):
         head = [period, tc]
@@ -905,7 +968,7 @@ def fit_rv_orbit(
         chi2_trials = []
         for phase in trial_phases:
             params = pack(t.min() + phase * period)
-            r = np.asarray(objective.residuals(jnp.asarray(params), *data))
+            r = crop(objective.residuals(jnp.asarray(params), *data))
             chi2_trials.append(float(r @ r))
         t_conj = t.min() + trial_phases[int(np.argmin(chi2_trials))] * period
     x0 = pack(float(t_conj))
@@ -928,16 +991,16 @@ def fit_rv_orbit(
         fun_jit, jac_jit = objective.residuals, objective.jacobian
 
     result = least_squares(
-        lambda x: np.asarray(fun_jit(jnp.asarray(x), *extra)),
+        lambda x: crop(fun_jit(jnp.asarray(x), *extra)),
         x0[free],
-        jac=lambda x: np.asarray(jac_jit(jnp.asarray(x), *extra)),
+        jac=lambda x: crop(jac_jit(jnp.asarray(x), *extra)),
         bounds=(lower[free], upper[free]),
         max_nfev=max_iterations,
         x_scale="jac",
     )
     x = np.array(x0)
     x[free] = result.x
-    jac = np.asarray(jac_jit(jnp.asarray(result.x), *extra))
+    jac = crop(jac_jit(jnp.asarray(result.x), *extra))
     chi2 = float(result.fun @ result.fun)
     dof = max(n_points - n_par, 1)
     scale = chi2 / dof
@@ -980,8 +1043,10 @@ def fit_rv_orbit(
         "k": k_err,
         "gamma": g_err,
     }
-    model_all = np.asarray(
-        objective.model(jnp.asarray(x), jnp.asarray(table.bjd, dtype=jnp.float64))
+    fitted_parameters = jnp.asarray(x)
+    model_all = _in_epoch_blocks(
+        lambda times: objective.model(fitted_parameters, times),
+        np.asarray(table.bjd, dtype=np.float64),
     )
     resid = np.where(valid, v - model_all, np.nan)
     with warnings.catch_warnings():
@@ -1009,6 +1074,318 @@ def fit_rv_orbit(
         covariance=cov,
         parameter_names=tuple(par_names),
         held=tuple(name for name, h in zip(names, held_components, strict=True) if h),
+    )
+
+
+def _ephemeris_curve(t, period: float, t_conj: float, ecc: float, omega: float) -> np.ndarray:
+    """``cos(nu + omega) + e cos(omega)`` of the first component at the times ``t``, in NumPy.
+
+    The velocity of the first component is its systemic velocity plus its semi-amplitude
+    times this curve, and that of the second its own with the opposite sign. For a circular
+    orbit the curve is ``-sin[2 pi (t - t_conj) / P]``: the first component approaches
+    after its eclipse.
+    """
+    t_peri = _t_peri_from_t_conj_numpy(float(t_conj), period=period, ecc=ecc, omega=omega)
+    nu = true_anomaly_numpy(t, period=period, t_peri=t_peri, ecc=ecc)
+    return np.cos(nu + omega) + ecc * math.cos(omega)
+
+
+@dataclass(frozen=True)
+class _EphemerisOrbit(RVOrbit):
+    """An :class:`RVOrbit` whose :meth:`predict` is evaluated in NumPy.
+
+    :meth:`RVOrbit.predict` is compiled once for every number of epochs. The rounds of
+    :func:`assign_by_ephemeris` call it on tables of any length, for thousands of systems
+    in one process.
+    """
+
+    def predict(self, t) -> np.ndarray:
+        curve = _ephemeris_curve(t, self.period, self.t_conj, self.ecc, self.omega)
+        signs = np.where(np.arange(self.k.size) % 2 == 0, 1.0, -1.0)
+        return self.gamma[:, None] + (self.k * signs)[:, None] * curve[None, :]
+
+
+def _fit_rv_ephemeris(
+    table,
+    *,
+    period: float,
+    t_conj: float,
+    ecc: float = 0.0,
+    omega: float = 0.0,
+    fit_eccentricity: bool = False,
+    gamma: str | None = None,
+    components=None,
+) -> _EphemerisOrbit:
+    from scipy.optimize import least_squares, lsq_linear
+
+    names, v, s, absolute, valid = _table_arrays(table, components)
+    n_comp = len(names)
+    if gamma is None:
+        gamma = "shared" if all(absolute) else "per-component"
+    if gamma not in ("shared", "per-component"):
+        raise ValueError("gamma must be 'shared' or 'per-component'")
+    if not period > 0.0:
+        raise ValueError("period must be positive")
+    if not 0.0 <= ecc < 1.0:
+        raise ValueError(f"ecc must lie in [0, 1); got {ecc}")
+
+    # The velocities that enter, and the components held, as in `fit_rv_orbit`.
+    valid = valid & (np.where(np.isfinite(s), s, 0.0) > 0.0)
+    n_gamma = 1 if gamma == "shared" else n_comp
+    own_parameters = 1 if n_gamma == 1 else 2
+    held_components = valid.sum(axis=1) <= own_parameters
+    valid = valid & ~held_components[:, None]
+    good = np.any(valid, axis=0)
+    mask = valid[:, good]
+    t = np.asarray(table.bjd, dtype=np.float64)[good]
+    y = np.where(mask, v[:, good], 0.0)
+    sqrt_w = np.where(mask, 1.0 / np.where(mask, s[:, good], 1.0), 0.0)
+    signs = np.where(np.arange(n_comp) % 2 == 0, 1.0, -1.0)
+
+    # Linear parameters: one semi-amplitude per component, then the systemic velocity or
+    # velocities. A held component keeps its starting values and is not fitted.
+    held = np.zeros(n_comp + n_gamma, dtype=bool)
+    held[:n_comp] = held_components
+    if n_gamma > 1:
+        held[n_comp:] = held_components
+    free = ~held
+    n_linear = int(free.sum())
+    n_shape = 2 if fit_eccentricity else 0
+    n_par = n_linear + n_shape
+    n_points = int(mask.sum())
+    if n_points <= n_par:
+        if bool(mask.all()):
+            raise ValueError(
+                f"{t.size} usable epochs x {n_comp} components is not enough to fit "
+                f"{n_par} parameters"
+            )
+        raise ValueError(
+            f"{n_points} usable velocities of {n_comp} components over {t.size} epochs is not "
+            f"enough to fit {n_par} parameters"
+        )
+    start = np.zeros(n_comp + n_gamma)
+    start[:n_comp] = 1e-3
+    lower = np.full(n_comp + n_gamma, -np.inf)
+    lower[:n_comp] = 0.0
+    rows = mask.reshape(-1)
+
+    def design(e_val: float, om: float) -> np.ndarray:
+        curve = _ephemeris_curve(t, period, t_conj, e_val, om)
+        matrix = np.zeros((n_comp, t.size, n_comp + n_gamma))
+        for i in range(n_comp):
+            matrix[i, :, i] = signs[i] * curve
+            matrix[i, :, n_comp + (0 if n_gamma == 1 else i)] = 1.0
+        return (matrix * sqrt_w[:, :, None]).reshape(-1, n_comp + n_gamma)[rows]
+
+    target = (y * sqrt_w).reshape(-1)[rows]
+
+    def solve(e_val: float, om: float):
+        matrix = design(e_val, om)
+        rhs = target - matrix[:, held] @ start[held]
+        result = lsq_linear(matrix[:, free], rhs, bounds=(lower[free], np.inf))
+        x = np.array(start)
+        x[free] = result.x
+        return x, rhs - matrix[:, free] @ result.x, matrix
+
+    def unpack(shape):
+        e_val = min(float(shape[0] ** 2 + shape[1] ** 2), 0.95)
+        return e_val, (math.atan2(shape[1], shape[0]) if e_val > 0.0 else 0.0)
+
+    shape = np.zeros(2)
+    if fit_eccentricity:
+        # The chi-square has several minima in (e, omega): a scan first, then a
+        # least-squares fit from each of the three best points, with the linear
+        # parameters solved for at every trial.
+        trials = _shape_trials()
+        chi2_trials = [float(np.sum(solve(e_val, om)[1] ** 2)) for e_val, om in trials]
+        best = None
+        for index in np.argsort(chi2_trials)[:3]:
+            e_val, om = trials[int(index)]
+            x0 = math.sqrt(e_val) * np.array([math.cos(om), math.sin(om)])
+            result = least_squares(
+                lambda p: solve(*unpack(p))[1], x0, bounds=(-0.95, 0.95), max_nfev=200
+            )
+            if best is None or result.cost < best.cost:
+                best = result
+        shape = np.asarray(best.x, dtype=np.float64)
+        ecc_fit, omega_fit = unpack(shape)
+    else:
+        ecc_fit, omega_fit = float(ecc), float(omega)
+    x, residual, matrix = solve(ecc_fit, omega_fit)
+    chi2 = float(residual @ residual)
+    dof = max(n_points - n_par, 1)
+
+    # Covariance: the curvature at the optimum scaled by the reduced chi-square. The
+    # columns of the shape parameters are central differences at the fitted linear ones.
+    columns = [matrix[:, free]]
+    if fit_eccentricity:
+        steps = []
+        for axis in range(2):
+            h = np.zeros(2)
+            h[axis] = 1e-4
+            up = design(*unpack(shape + h)) @ x
+            down = design(*unpack(shape - h)) @ x
+            steps.append((up - down) / 2e-4)
+        columns.insert(0, np.stack(steps, axis=1))
+    jac = np.hstack(columns)
+    size = n_shape + n_comp + n_gamma
+    index = np.concatenate([np.ones(n_shape, dtype=bool), free])
+    cov = np.full((size, size), np.nan)
+    try:
+        cov[np.ix_(index, index)] = np.linalg.inv(jac.T @ jac) * (chi2 / dof)
+    except np.linalg.LinAlgError:
+        cov = np.full((size, size), np.nan)
+    diag = np.sqrt(np.clip(np.diag(cov), 0.0, None))
+    ecc_err, omega_err = 0.0, 0.0
+    if fit_eccentricity:
+        h, g = float(shape[0]), float(shape[1])
+        jac_e = np.array([2.0 * h, 2.0 * g])
+        jac_w = np.array([-g, h]) / max(h * h + g * g, 1e-30)
+        ecc_err = math.sqrt(max(float(jac_e @ cov[:2, :2] @ jac_e), 0.0))
+        omega_err = math.sqrt(max(float(jac_w @ cov[:2, :2] @ jac_w), 0.0))
+    k_fit = np.asarray(x[:n_comp], dtype=np.float64)
+    gam = np.asarray(x[n_comp:], dtype=np.float64)
+    k_err = diag[n_shape : n_shape + n_comp]
+    g_err = diag[n_shape + n_comp :]
+    if n_gamma == 1:
+        gam, g_err = np.repeat(gam, n_comp), np.repeat(g_err, n_comp)
+    curve_all = _ephemeris_curve(
+        np.asarray(table.bjd, dtype=np.float64), period, t_conj, ecc_fit, omega_fit
+    )
+    model_all = gam[:, None] + (k_fit * signs)[:, None] * curve_all[None, :]
+    resid = np.where(valid, v - model_all, np.nan)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # a component with no usable velocity
+        rms = np.sqrt(np.nanmean(resid**2, axis=1))
+    par_names = ["secosw", "sesinw"] if fit_eccentricity else []
+    par_names += [f"k_{n}" for n in names]
+    par_names += ["gamma"] if n_gamma == 1 else [f"gamma_{n}" for n in names]
+    return _EphemerisOrbit(
+        names=tuple(names),
+        period=float(period),
+        t_conj=float(t_conj),
+        ecc=float(ecc_fit),
+        omega=float(omega_fit),
+        k=k_fit,
+        gamma=gam,
+        gamma_mode="shared" if n_gamma == 1 else "one per component",
+        errors={
+            "period": 0.0,
+            "t_conj": 0.0,
+            "ecc": ecc_err,
+            "omega": omega_err,
+            "k": k_err,
+            "gamma": g_err,
+        },
+        chi2=chi2,
+        n_points=n_points,
+        n_parameters=int(n_par),
+        residuals=resid,
+        rms=rms,
+        used=good,
+        covariance=cov,
+        parameter_names=tuple(par_names),
+        held=tuple(name for name, h in zip(names, held_components, strict=True) if h),
+    )
+
+
+def _shape_trials() -> list[tuple[float, float]]:
+    """The 73 shapes ``(e, omega)`` from which a fit of the eccentricity starts: the circular
+    orbit, and six eccentricities at twelve arguments of periastron each."""
+    trials = [(0.0, 0.0)]
+    for e_val in (0.03, 0.1, 0.2, 0.35, 0.5, 0.7):
+        trials += [(e_val, w) for w in np.linspace(0.0, 2.0 * math.pi, 12, endpoint=False)]
+    return trials
+
+
+def _plain_orbit(orbit: RVOrbit) -> RVOrbit:
+    from dataclasses import fields
+
+    return RVOrbit(**{f.name: getattr(orbit, f.name) for f in fields(RVOrbit)})
+
+
+def fit_rv_ephemeris(
+    table,
+    *,
+    period: float,
+    t_conj: float,
+    ecc: float = 0.0,
+    omega: float = 0.0,
+    fit_eccentricity: bool = False,
+    gamma: str | None = None,
+    components=None,
+) -> RVOrbit:
+    """Fit the semi-amplitudes and the systemic velocity with the ephemeris held.
+
+    The period and the time of conjunction are taken as known, as the light curve of an
+    eclipsing binary gives them, and are not fitted. With the eccentricity and the argument
+    of periastron held as well, the velocity of component ``i`` is
+
+        v_i(t) = gamma_i + s_i K_i c(t),    c(t) = cos(nu(t) + omega) + e cos(omega),
+
+    with ``s_i = +1`` for the first component and ``-1`` for the second, so the model is
+    linear in the semi-amplitudes and the systemic velocity or velocities. They are found
+    by weighted linear least squares with ``K_i >= 0``, and no starting value is needed.
+    With ``fit_eccentricity`` the two shape parameters ``(sqrt(e) cos w, sqrt(e) sin w)``
+    are fitted around that linear solution, from the three best points of a scan over 73
+    shapes.
+
+    A fit that holds the ephemeris has two parameters fewer than :func:`fit_rv_orbit`,
+    and it names the stars: the first component is the one eclipsed at ``t_conj``, where
+    a fit that knows the period alone returns the semi-amplitudes of two alike stars in
+    either order. It does not recover more orbits. On 7,800 simulated Gaia RVS
+    tables of eclipsing binaries the share with both semi-amplitudes within 10 percent
+    was within 2 percentage points of that of :func:`assign_components`
+    at the known period, in every half magnitude of ``G_RVS`` from 6.0 to 13.5, once the
+    latter was compared in the order that fits (``docs/benchmarks.md``).
+
+    Parameters
+    ----------
+    table
+        A :class:`~albireo.todcor.VelocityTable`. The velocities that enter, and the
+        components that are held for want of velocities, are those of
+        :func:`fit_rv_orbit`.
+    period
+        The period [d], held.
+    t_conj
+        The time of conjunction, held: the superior conjunction of the first component,
+        ``nu + omega = pi / 2``, which is the time of its eclipse.
+    ecc, omega
+        The eccentricity and the argument of periastron of the first component [rad]:
+        held, or the reference of nothing where ``fit_eccentricity`` is set. The default
+        is a circular orbit.
+    fit_eccentricity
+        Fit ``(sqrt(e) cos w, sqrt(e) sin w)``, each within 0.95 and with ``e`` at most
+        0.95, in place of holding ``ecc`` and ``omega``.
+    gamma
+        ``"shared"`` or ``"per-component"``, as in :func:`fit_rv_orbit`.
+    components
+        Component names to fit (default all).
+
+    Returns
+    -------
+    RVOrbit
+        With ``period`` and ``t_conj`` as given and zero errors on both, and on ``ecc``
+        and ``omega`` where they were held. ``covariance`` covers the parameters in
+        ``parameter_names``: the two shape parameters where they were fitted, the
+        semi-amplitudes and the systemic velocity or velocities.
+
+    Raises
+    ------
+    ValueError
+        If the table has no more usable velocities than parameters.
+    """
+    return _plain_orbit(
+        _fit_rv_ephemeris(
+            table,
+            period=period,
+            t_conj=t_conj,
+            ecc=ecc,
+            omega=omega,
+            fit_eccentricity=fit_eccentricity,
+            gamma=gamma,
+            components=components,
+        )
     )
 
 
@@ -1346,6 +1723,136 @@ def assign_components(
     reduced = other[1].chi2 / max(other[1].n_points - other[1].n_parameters, 1)
     gain = measured[1].chi2 - other[1].chi2
     return other if gain > float(threshold) ** 2 * reduced else measured
+
+
+def assign_by_ephemeris(
+    table,
+    *,
+    period: float,
+    t_conj: float,
+    ecc: float = 0.0,
+    omega: float = 0.0,
+    fit_eccentricity: bool = False,
+    gamma: str | None = None,
+    threshold: float = 3.0,
+    max_rounds: int = 6,
+    exchange: bool = True,
+    light_ratio_max: float | None = _EXCHANGE_LIGHT_RATIO,
+):
+    """Fit an orbit at a held ephemeris and decide by it what the epochs leave open.
+
+    The decisions are those of :func:`assign_components`: the order of the two velocities
+    of an epoch, and the minimum at an epoch flagged for a second one. The search over
+    starting assignments that :func:`assign_components` makes from the period alone is not
+    needed here. The ephemeris gives the sign of ``v_1 - v_2`` at every epoch, since the
+    first component approaches after its eclipse, and the pairs measured in the other
+    order by more than ``threshold`` times the error of their difference are exchanged
+    before the first fit. The rounds of decisions and fits then follow, with
+    :func:`fit_rv_ephemeris` as the fit.
+
+    The sign is that of the velocity curve, which depends on the eccentricity and the
+    argument of periastron: at the conjunction of an eccentric orbit the curve is
+    ``e cos(omega)`` and not zero. With ``fit_eccentricity`` the shape is not known, so
+    every shape of the scan of :func:`fit_rv_ephemeris` orders the pairs in its own way and
+    is fitted with the shape held, and the rounds start from each of the three orders whose
+    fit is best. The assignment with the lowest chi-square is returned. Taking the order
+    from a circular curve instead exchanged correctly measured epochs: on tables of two
+    alike stars with every epoch in the injected order it recovered both semi-amplitudes
+    within 5 percent for 16 of 20 tables at ``e = 0.4`` and 12 of 20 at ``e = 0.6``.
+
+    Parameters
+    ----------
+    table
+        A two-component :class:`~albireo.todcor.VelocityTable`. A table with another
+        number of components is fitted as it is.
+    period, t_conj, ecc, omega, fit_eccentricity, gamma
+        Passed to :func:`fit_rv_ephemeris`. With ``fit_eccentricity`` the shape at ``ecc``
+        and ``omega`` is one of those from which a starting order is taken.
+    threshold, max_rounds, exchange, light_ratio_max
+        As in :func:`assign_components`. The starting order by the sign is taken only
+        with one systemic velocity for both components, since two zero points move the
+        sign of the difference.
+
+    Returns
+    -------
+    (VelocityTable, RVOrbit, Assignment)
+        As :func:`assign_components` returns them.
+
+    Raises
+    ------
+    ValueError
+        From the first fit, for a table that cannot support it.
+    """
+
+    def fit(candidate):
+        return _fit_rv_ephemeris(
+            candidate,
+            period=period,
+            t_conj=t_conj,
+            ecc=ecc,
+            omega=omega,
+            fit_eccentricity=fit_eccentricity,
+            gamma=gamma,
+        )
+
+    nothing = Assignment.none(table.n_epochs)
+    if table.n_components != 2:
+        return table, _plain_orbit(fit(table)), nothing
+    exchange = bool(exchange) and _alike_light(table, light_ratio_max)
+    open_epochs = _open_epochs(table)
+    if not exchange and not open_epochs.any():
+        return table, _plain_orbit(fit(table)), nothing
+    starts = [nothing.exchanged]
+    shared = gamma == "shared" or (gamma is None and all(table.absolute))
+    if exchange and shared:
+        v = np.asarray(table.velocity, dtype=np.float64)
+        s = np.asarray(table.sigma, dtype=np.float64)
+        times = np.asarray(table.bjd, dtype=np.float64)
+        orderable = np.asarray(table.good, dtype=bool) & ~open_epochs
+        with np.errstate(invalid="ignore"):
+            difference = (v[0] - v[1]) / np.hypot(s[0], s[1])
+
+        def order_by(e_val: float, om: float) -> np.ndarray:
+            """The epochs measured against the sign of the curve of one shape."""
+            curve = _ephemeris_curve(times, period, t_conj, e_val, om)
+            with np.errstate(invalid="ignore"):
+                wrong = difference * np.sign(curve) < -float(threshold)
+            return orderable & np.nan_to_num(wrong, nan=0.0).astype(bool)
+
+        if not fit_eccentricity:
+            starts = [order_by(float(ecc), float(omega))]
+        else:
+            scored = []
+            for e_val, om in [(float(ecc), float(omega)), *_shape_trials()]:
+                start = order_by(e_val, om)
+                candidate = _exchanged(table, start) if start.any() else table
+                try:
+                    held = _fit_rv_ephemeris(
+                        candidate, period=period, t_conj=t_conj, ecc=e_val, omega=om, gamma=gamma
+                    )
+                except ValueError:
+                    continue
+                scored.append((held.chi2, start))
+            starts = []
+            for _, start in sorted(scored, key=lambda item: item[0]):
+                if not any(np.array_equal(start, other) for other in starts):
+                    starts.append(start)
+                if len(starts) == 3:
+                    break
+            starts = starts or [nothing.exchanged]
+    best, error = None, None
+    for start in starts:
+        try:
+            reached = _settled_assignment(table, start, fit, threshold, int(max_rounds), exchange)
+        except ValueError as raised:
+            error = raised
+            continue
+        if best is None or reached[1].chi2 < best[1].chi2:
+            best = reached
+    if best is None:
+        raise error
+    assigned, orbit, decided = best
+    return assigned, _plain_orbit(orbit), decided
 
 
 def _alike_light(table, ratio_max: float | None) -> bool:

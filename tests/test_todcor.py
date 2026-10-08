@@ -219,6 +219,24 @@ def test_fixed_light_recovers_the_injected_velocities(sb2, fixed_table):
     np.testing.assert_allclose(table.light, _col(LIGHT, table), rtol=0, atol=0)
 
 
+def test_another_number_of_epochs_compiles_nothing(sb2, fixed_table, compilations):
+    # The programs of an epoch depend on its pixel count. The one array of the length of
+    # the dataset, the barycentric velocities, is converted to pixels in blocks of epochs
+    # (albireo.grids._in_epoch_blocks); as an array of its own length it was compiled once
+    # per number of epochs, for every star of a survey.
+    dataset, _, templates = sb2
+
+    def measure_subsets():
+        for n in (5, 6, 7):
+            subset = Dataset(epochs=dataset.epochs[:n], frame=dataset.frame)
+            table = todcor(subset, templates, light=LIGHT, **COMMON)
+            np.testing.assert_allclose(
+                table.velocity, fixed_table.velocity[:, :n], rtol=0, atol=1e-9
+            )
+
+    assert compilations(measure_subsets) == 0
+
+
 def test_the_detection_statistic_is_large_for_both_stars(fixed_table):
     assert np.all(fixed_table.delta_chi2 > 1e3)
     assert np.all(fixed_table.r_squared > 0.9)

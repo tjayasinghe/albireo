@@ -34,7 +34,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from albireo.data import Dataset, EpochData
-from albireo.grids import LogGrid
+from albireo.grids import LogGrid, _in_epoch_blocks
 from albireo.kepler import radial_velocity
 from albireo.operators import (
     convolve_spectrum,
@@ -139,19 +139,19 @@ class OrbitParams:
         rows = []
         for i, k_i in enumerate(self.k):
             omega_i = self.omega + (i % 2) * np.pi  # secondary opposes primary
-            rows.append(
-                np.asarray(
-                    radial_velocity(
-                        jnp.asarray(bjd),
-                        period=self.period,
-                        t_peri=self.t_peri,
-                        ecc=self.ecc,
-                        omega=omega_i,
-                        k=k_i,
-                        gamma=self.gamma,
-                    )
+
+            def velocity(t, omega_i=omega_i, k_i=k_i):
+                return radial_velocity(
+                    t,
+                    period=self.period,
+                    t_peri=self.t_peri,
+                    ecc=self.ecc,
+                    omega=omega_i,
+                    k=k_i,
+                    gamma=self.gamma,
                 )
-            )
+
+            rows.append(_in_epoch_blocks(velocity, bjd))
         return np.stack(rows)
 
 
@@ -536,8 +536,8 @@ def simulate_dataset(
     elif nebular_amplitudes is not None:
         raise ValueError("nebular_amplitudes given without a nebular spectrum")
 
-    bary_pix = np.asarray(grid.velocity_to_pixels(v_bary))
-    star_pix = np.asarray(grid.velocity_to_pixels(vel))  # (n_comp, n_ep)
+    bary_pix = _in_epoch_blocks(grid.velocity_to_pixels, v_bary)
+    star_pix = _in_epoch_blocks(grid.velocity_to_pixels, vel)  # (n_comp, n_ep)
     neb_pix = np.full(n_ep, float(np.asarray(grid.velocity_to_pixels(float(nebular_v_kms)))))
     if frame == "topocentric":
         star_pix = star_pix - bary_pix[None, :]
@@ -963,7 +963,7 @@ def library_component(
     (Cambridge: Cambridge University Press)
     """
     from albireo.library import library_interpolator
-    from albireo.operators import rotational_kernel
+    from albireo.operators import _rotational_kernel_numpy
 
     resampled = library.resampled_to(grid, medium=medium)
     missing = [axis for axis in resampled.label_names if axis not in labels]
@@ -976,6 +976,6 @@ def library_component(
     if vsini_kms < 0.0:
         raise ValueError("vsini_kms must be non-negative")
     if vsini_kms > 0.0:
-        kernel = np.asarray(rotational_kernel(vsini_kms / grid.dv_kms, epsilon=epsilon))
+        kernel = _rotational_kernel_numpy(vsini_kms / grid.dv_kms, epsilon=epsilon)
         deviation = np.convolve(deviation, kernel, mode="same")
     return deviation

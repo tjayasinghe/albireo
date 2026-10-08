@@ -1,0 +1,6 @@
+SELECT TOP 5 source_id, phot_g_mean_mag,
+       SIGN(phot_g_mean_mag - 18.0) AS s,
+       GREATEST(phot_g_mean_mag, 18.0) AS gr,
+       LEAST(phot_g_mean_mag, 18.0) AS le
+FROM gaiadr3.gaia_source
+WHERE random_index < 5

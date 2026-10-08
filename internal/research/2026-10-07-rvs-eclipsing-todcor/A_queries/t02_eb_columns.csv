@@ -1,0 +1,40 @@
+column_name,datatype,unit,indexed,description
+solution_id,long,,0,Solution Identifier
+global_ranking,float,,0,Number between 0 (worst) and 1 (best)
+reference_time,double,d,0,Reference time used for the geometric model fit
+frequency,double,d**-1,0,Frequency of geometric model of the eclipsing binary light curve
+frequency_error,float,d**-1,0,Uncertainty of \texttt{frequency}
+geom_model_reference_level,float,mag,0,Magnitude reference level of geometric model
+geom_model_reference_level_error,float,mag,0,Uncertainty of \texttt{geomModelReferenceLevel}
+geom_model_gaussian1_phase,float,,0,Phase of the Gaussian 1 component
+geom_model_gaussian1_phase_error,float,,0,Uncertainty of \texttt{geomModelGaussian1Phase}
+geom_model_gaussian1_sigma,float,,0,Standard deviation [phase] of Gaussian 1 component
+geom_model_gaussian1_sigma_error,float,,0,Uncertainty of \texttt{geomModelGaussian1Sigma}
+geom_model_gaussian1_depth,float,mag,0,Magnitude depth of Gaussian 1 component
+geom_model_gaussian1_depth_error,float,mag,0,Uncertainty of \texttt{geomModelGaussian1Depth}
+geom_model_gaussian2_phase,float,,0,Phase of Gaussian 2 component
+geom_model_gaussian2_phase_error,float,,0,Uncertainty of \texttt{geomModelGaussian2Phase}
+geom_model_gaussian2_sigma,float,,0,Standard deviation [phase] of Gaussian 2 component
+geom_model_gaussian2_sigma_error,float,,0,Uncertainty of \texttt{geomModelGaussian2Sigma}
+geom_model_gaussian2_depth,float,mag,0,Magnitude depth of Gaussian2 component
+geom_model_gaussian2_depth_error,float,mag,0,Uncertainty of \texttt{geomModelGaussian2Depth}
+geom_model_cosine_half_period_amplitude,float,mag,0,Amplitude of the cosine component with half the period of the geometric model
+geom_model_cosine_half_period_amplitude_error,float,mag,0,Uncertainty of \texttt{geomModelCosineHalfPeriodAmplitude}
+geom_model_cosine_half_period_phase,float,,0,Reference phase of the cosine component with half the period of the geometric model
+geom_model_cosine_half_period_phase_error,float,,0,Uncertainty of \texttt{geomModelCosineHalfPeriodPhase}
+model_type,char,,0,Type of geometrical model of the light curve
+num_model_parameters,short,,0,Number of free parameters of the geometric model
+reduced_chi2,float,,0,Reduced Chi2 of the geometrical model fit
+derived_primary_ecl_phase,float,,0,"Primary eclipse: phase at geometrically deepest point "
+derived_primary_ecl_phase_error,float,,0,Primary eclipse: uncertainty of \texttt{derivedPrimaryEclPhase}
+derived_primary_ecl_duration,float,,0,Primary eclipse: duration [phase fraction]
+derived_primary_ecl_duration_error,float,,0,Primary eclipse: uncertainty of \texttt{derivedPrimaryEclDuration}
+derived_primary_ecl_depth,float,mag,0,Primary eclipse: depth
+derived_primary_ecl_depth_error,float,mag,0,Primary eclipse: uncertainty of \texttt{derivedPrimaryEclDepth}
+derived_secondary_ecl_phase,float,,0,"Secondary eclipse: phase at geometrically second deepest point "
+derived_secondary_ecl_phase_error,float,,0,Secondary eclipse: uncertainty of \texttt{derivedSecondaryEclPhase}
+derived_secondary_ecl_duration,float,,0,Secondary eclipse: duration [phase fraction]
+derived_secondary_ecl_duration_error,float,,0,Secondary eclipse: uncertainty of \texttt{derivedSecondaryEclDuration}
+derived_secondary_ecl_depth,float,mag,0,Secondary eclipse: depth
+derived_secondary_ecl_depth_error,float,mag,0,Secondary eclipse: uncertainty of \texttt{derivedSecondaryEclDepth}
+source_id,long,,1,Unique source identifier

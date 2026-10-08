@@ -123,13 +123,23 @@ def gaussian_kernel(sigma_px, *, truncate: float = 4.0):
     velocity width ``sigma_v`` has ``sigma_px = sigma_v / grid.dv_kms``. The kernel has
     odd length ``2*radius + 1`` and sums to exactly 1.
     """
+    return jnp.asarray(_gaussian_kernel_numpy(sigma_px, truncate=truncate))
+
+
+def _gaussian_kernel_numpy(sigma_px, *, truncate: float = 4.0) -> np.ndarray:
+    """:func:`gaussian_kernel` as a NumPy array, for callers that convolve in NumPy.
+
+    Converting a NumPy array to a JAX array compiles a conversion once per array length,
+    and the length of a kernel follows from its width. A caller that takes the kernel
+    straight back to NumPy therefore calls this function.
+    """
     sigma = float(sigma_px)
     if sigma <= 0:
         raise ValueError("sigma_px must be positive")
     radius = max(1, int(np.ceil(truncate * sigma)))
     offsets = np.arange(-radius, radius + 1, dtype=np.float64)
     kernel = np.exp(-0.5 * (offsets / sigma) ** 2)
-    return jnp.asarray(kernel / kernel.sum())
+    return kernel / kernel.sum()
 
 
 def gaussian_kernel_traced(sigma_px, radius: int):
@@ -241,6 +251,11 @@ def rotational_kernel(vsini_px, *, epsilon: float = 0.6):
     Gray, D. F. 2005, The Observation and Analysis of Stellar Photospheres, 3rd ed.
     (Cambridge University Press)
     """
+    return jnp.asarray(_rotational_kernel_numpy(vsini_px, epsilon=epsilon))
+
+
+def _rotational_kernel_numpy(vsini_px, *, epsilon: float = 0.6) -> np.ndarray:
+    """:func:`rotational_kernel` as a NumPy array (see :func:`_gaussian_kernel_numpy`)."""
     vsini = float(vsini_px)
     if vsini <= 0:
         raise ValueError("vsini_px must be positive")
@@ -251,7 +266,7 @@ def rotational_kernel(vsini_px, *, epsilon: float = 0.6):
     hi = _rotational_antiderivative((offsets + 0.5) / vsini, epsilon, np)
     lo = _rotational_antiderivative((offsets - 0.5) / vsini, epsilon, np)
     kernel = hi - lo
-    return jnp.asarray(kernel / kernel.sum())
+    return kernel / kernel.sum()
 
 
 def rotational_kernel_traced(vsini_px, radius: int, *, epsilon: float = 0.6):

@@ -121,6 +121,16 @@ recomputed on 2025-09-25 to correct its hydrogen lines and OH⁺ strength withou
 name, so the build date is recorded in `meta["retrieved"]`, and an older build is a
 different calculation.
 
+**A library read from a file is read-only.** `fetch_library` and `load_library` return
+arrays that cannot be written to, and `SpectralLibrary.replace` makes a changed copy. For
+such a library `resampled_to` returns the same object for the same grid and medium, and
+`library_interpolator` builds its interpolator once per method, so rendering many
+templates on one grid resamples the library once (0.012 s for two templates of the RVS
+box, against 0.16 s when each resamples it). The results kept per library are the most
+recently used, up to 96 MB: a simulation grid and a template grid of the Gaia RVS band,
+and no optical grid of 20,000 pixels. A library built from arrays that can be written to,
+`synthetic_library` among them, is resampled on every call.
+
 ## Above 7000 K: the hot box
 
 `bosz2024-hot-rvs` and `bosz2024-hot-r20000` cover Teff 7000 to 10,000 K in 250 K steps,

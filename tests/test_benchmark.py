@@ -37,6 +37,7 @@ from albireo.gaia import (
     GostTransits,
     rvs_delivered_sigma_kms,
     rvs_lsf_sigma_kms,
+    rvs_model_grid,
     rvs_transit_times_from_gost,
 )
 from albireo.grids import C_KMS
@@ -149,6 +150,76 @@ def test_each_tier_becomes_the_declaration_it_describes(systems, library):
 
     blind = build_star(system, TIERS["blind"], **kwargs)
     assert blind.searching and blind.measures_light and blind.period == "search"
+
+
+def _unrounded_grid(system):
+    """The model grid `simulate_system` built before it rounded the length."""
+    v_max = abs(system.gamma) + max(system.k1, system.k2) * (1.0 + system.ecc) + 30.0
+    return rvs_model_grid(v_max, vsini_max_kms=max(system.vsini1, system.vsini2, 1.0))
+
+
+def test_the_rounded_model_grid_delivers_the_epochs_of_the_unrounded_one(systems, library):
+    system = systems[0]
+    unrounded = _unrounded_grid(system)
+    dataset, truth, grid, components = simulate_system(system, library=library, seed=4)
+    assert grid.n % 512 == 0 and grid.n - unrounded.n > 50
+    assert (grid.x0, grid.dx) == (unrounded.x0, unrounded.dx)
+
+    plain, plain_truth, _, plain_components = simulate_system(
+        system, library=library, seed=4, grid=unrounded
+    )
+    # On the development machine the arrays are equal bit for bit (docs/benchmarks.md).
+    # The tolerance is that of an operation rounded differently on another platform,
+    # eight orders of magnitude below a pixel of the margin reaching the detector.
+    for epoch, expected in zip(dataset, plain, strict=True):
+        np.testing.assert_allclose(epoch.flux, expected.flux, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(epoch.ivar, expected.ivar, rtol=1e-12, atol=0)
+    np.testing.assert_array_equal(truth.velocities, plain_truth.velocities)
+    # The components agree up to the end of the unrounded grid, where its rotation kernel
+    # met the zero fill. Those pixels are in the margin and do not reach the detector.
+    edge = int(np.ceil(max(system.vsini1, system.vsini2, 1.0) / grid.dv_kms)) + 2
+    for rendered, expected in zip(components, plain_components, strict=True):
+        keep = unrounded.n - edge
+        np.testing.assert_allclose(rendered[:keep], expected[:keep], rtol=0, atol=1e-12)
+
+    # A library that ends before the added pixels keeps the unrounded grid.
+    short = library.sliced(8400.0, float(unrounded.wave[-1]) + 1.0)
+    assert simulate_system(system, library=short, seed=4)[2].n == unrounded.n
+
+
+def test_a_population_is_simulated_without_compiling_for_every_system(
+    systems, library, compilations
+):
+    # Eight systems that differ in amplitude, rotation and number of epochs. Each has its
+    # own unrounded grid length, for which every array operation of the simulation was
+    # compiled again: 59 compilations, 1.4 s and 87 MB per system on the BOSZ box.
+    base = systems[0].to_dict()
+    variants = [
+        BinarySystem.from_dict(
+            {
+                **base,
+                "name": f"variant-{i}",
+                "k1": base["k1"] * (0.8 + 0.07 * i),
+                "k2": base["k2"] * (0.8 + 0.07 * i),
+                "vsini1": 5.0 + 6.0 * i,
+                "n_transits": 9 + 2 * i,
+            }
+        )
+        for i in range(8)
+    ]
+    assert len({_unrounded_grid(system).n for system in variants}) == 8
+    for system in variants[:2]:
+        simulate_system(system, library=library, seed=1)
+    lengths = set()
+
+    def simulate_the_rest():
+        for system in variants[2:]:
+            lengths.add(simulate_system(system, library=library, seed=1)[2].n)
+
+    # A new number of overlaps between model and detector pixels can still compile the
+    # rebinning once; nothing is compiled per system.
+    assert compilations(simulate_the_rest) <= 6
+    assert len(lengths) == 1
 
 
 def test_build_stars_skips_what_does_not_apply(systems, library, tmp_path):

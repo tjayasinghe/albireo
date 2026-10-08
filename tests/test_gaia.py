@@ -127,6 +127,27 @@ def test_the_model_grid_covers_the_shifted_band():
     assert grid.dv_kms == pytest.approx(2.0, rel=1e-6)
 
 
+def test_the_model_grid_length_can_be_rounded_up_at_the_red_end():
+    # Systems of different velocity amplitude have grids of different lengths, and JAX
+    # compiles an array program once per length. A rounded length is shared.
+    grid = rvs_model_grid(137.0, vsini_max_kms=21.0)
+    rounded = rvs_model_grid(137.0, vsini_max_kms=21.0, length_multiple=512)
+    assert rounded.n % 512 == 0 and 0 < rounded.n - grid.n < 512
+    assert (rounded.x0, rounded.dx, rounded.relativistic) == (grid.x0, grid.dx, grid.relativistic)
+    np.testing.assert_array_equal(rounded.wave[: grid.n], grid.wave)
+    lengths = {rvs_model_grid(v, vsini_max_kms=s).n for v in (60.0, 137.0, 240.0) for s in (5, 60)}
+    shared = {
+        rvs_model_grid(v, vsini_max_kms=s, length_multiple=512).n
+        for v in (60.0, 137.0, 240.0)
+        for s in (5, 60)
+    }
+    assert len(lengths) == 6 and len(shared) <= 2
+    assert rvs_model_grid(137.0, vsini_max_kms=21.0, length_multiple=grid.n).n == grid.n
+    for bad in (0, -4, 2.5):
+        with pytest.raises(ValueError, match="length_multiple"):
+            rvs_model_grid(137.0, length_multiple=bad)
+
+
 def test_epoch_time_helpers_follow_the_reference_implementation():
     t = uniform_phase_times(4.0, 10)
     np.testing.assert_allclose(t, np.linspace(0.0, 4.0, 10))
@@ -829,3 +850,36 @@ def test_the_notebook_system_closes_the_loop_through_the_disentangler():
     k = [fit.star("primary")["k"], fit.star("secondary")["k"]]
     assert abs(k[0] - 87.70) < 0.01 * 87.70, k
     assert abs(k[1] - 95.00) < 0.01 * 95.00, k
+
+
+def test_a_normalisation_residual_is_passed_to_the_detector_epochs():
+    """`response_order` and `response_amplitude` give each transit its own polynomial, and
+    the default leaves the normalisation exact."""
+    from albireo.gaia import rvs_components, rvs_model_grid, simulate_rvs_dataset
+    from albireo.simulate import synthetic_library
+
+    library = synthetic_library((8440.0, 8720.0), n_pix=700, medium="vacuum")
+    grid = rvs_model_grid(60.0, vsini_max_kms=10.0)
+    labels = [{"teff": 5500.0, "logg": 4.5, "mh": 0.0}, {"teff": 5000.0, "logg": 4.5, "mh": 0.0}]
+    components = rvs_components(library, labels, grid, vsini_kms=[8.0, 6.0])
+    common = {
+        "bjd": np.linspace(0.0, 9.0, 6),
+        "light_fractions": (0.7, 0.3),
+        "velocities": np.array(
+            [[20.0, 5.0, -15.0, -20.0, 0.0, 18.0], [-30.0, -8.0, 22.0, 30.0, 0.0, -27.0]]
+        ),
+        "snr": 200.0,
+        "library": library,
+        "seed": 4,
+    }
+    exact, truth = simulate_rvs_dataset(components, grid, **common)
+    assert all(coefficients.size == 0 for coefficients in truth.simulation.response_coeffs)
+    tilted, record = simulate_rvs_dataset(
+        components, grid, response_order=2, response_amplitude=0.03, **common
+    )
+    coefficients = np.array(record.simulation.response_coeffs)
+    assert coefficients.shape == (6, 3) and 0.005 < coefficients.std() < 0.1
+    # The first coefficient is a scale: the mean flux of an epoch moves by it.
+    for a, b, c in zip(exact, tilted, coefficients, strict=True):
+        ratio = np.mean(b.flux[b.ivar > 0]) / np.mean(a.flux[a.ivar > 0])
+        assert ratio == pytest.approx(1.0 + c[0], abs=0.03)

@@ -212,6 +212,9 @@ complete analysis of archival FEROS spectra.
 - [`docs/math.md`](docs/math.md): the forward model, the marginal likelihood, the
   degeneracy analysis, and the estimators for labels and epoch velocities.
 - [`docs/benchmarks.md`](docs/benchmarks.md): the validation and performance record.
+- [`docs/reports/`](docs/reports/gaia-rvs-eclipsing-binaries.md): a simulated survey of
+  7800 Gaia DR4 eclipsing binaries, with both velocities of every RVS transit measured by
+  correlation and the orbits that follow.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): development setup and test requirements.
 
 The pages above are the published documentation, built with MkDocs Material:

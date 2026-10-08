@@ -1,0 +1,4 @@
+SELECT TOP 5 source_id, phot_g_mean_mag,
+       IF_THEN_ELSE(phot_g_mean_mag < 18.0, 1.0, 0.0) AS f
+FROM gaiadr3.gaia_source
+WHERE random_index < 5

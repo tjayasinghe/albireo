@@ -414,6 +414,7 @@ def rvs_model_grid(
     lsf_sigma_kms: float | None = None,
     band=RVS_BAND,
     extra_pixels: int = 8,
+    length_multiple: int = 1,
 ) -> LogGrid:
     """A model grid covering the band with the margin the shifted components need.
 
@@ -421,6 +422,15 @@ def rvs_model_grid(
     plus the systemic velocity plus headroom), the rotational half-width, and four
     line-spread sigmas. A component shifted to the edge of its range then still covers
     the detector grid without zero-fill.
+
+    The number of pixels follows from the margin, so two systems with different velocity
+    amplitudes have grids of different lengths, and JAX compiles every array operation
+    again for each new length. ``length_multiple`` rounds the number of pixels up to a
+    multiple by adding pixels at the red end. The first pixel, the pixel width and every
+    pixel the unrounded grid has are unchanged, the added pixels lie beyond the margin, and
+    the spectra simulated on the two grids are equal on the detector. A population
+    simulated with a multiple of a few hundred pixels has a few grid lengths
+    (:func:`albireo.benchmark.simulate_system` uses 512).
 
     Parameters
     ----------
@@ -436,9 +446,14 @@ def rvs_model_grid(
         The band to cover, vacuum Angstrom.
     extra_pixels
         Slack on each side.
+    length_multiple
+        Round the number of pixels up to a multiple of this number, at the red end.
+        Default 1: the grid ends where the margin does.
     """
     if v_max_kms < 0.0 or vsini_max_kms < 0.0:
         raise ValueError("v_max_kms and vsini_max_kms must be non-negative")
+    if int(length_multiple) != length_multiple or length_multiple < 1:
+        raise ValueError(f"length_multiple must be a positive integer; got {length_multiple!r}")
     sigma = rvs_lsf_sigma_kms() if lsf_sigma_kms is None else float(lsf_sigma_kms)
     dx = float(log_doppler_shift(dv_kms))
     margin = (
@@ -447,7 +462,11 @@ def rvs_model_grid(
     )
     lo = math.exp(math.log(float(band[0])) - margin)
     hi = math.exp(math.log(float(band[1])) + margin)
-    return LogGrid.from_wavelength_range(lo, hi, dv_kms)
+    grid = LogGrid.from_wavelength_range(lo, hi, dv_kms)
+    multiple = int(length_multiple)
+    if grid.n % multiple:
+        grid = dataclasses.replace(grid, n=grid.n + multiple - grid.n % multiple)
+    return grid
 
 
 def rvs_components(
@@ -1442,6 +1461,8 @@ def simulate_rvs_dataset(
     resolving_power=None,
     declare_lsf: str = "nominal",
     shot_noise: bool = True,
+    response_order: int = 0,
+    response_amplitude: float = 0.0,
     seed: int = 0,
 ) -> tuple[Dataset, RVSTruth]:
     """Gaia RVS epoch spectra of a binary: the reference implementation's chain in one call.
@@ -1498,6 +1519,13 @@ def simulate_rvs_dataset(
         of the real product has; ``"truth"`` puts each epoch's own width on it.
     shot_noise
         Photon-counting noise (default) or a uniform sigma.
+    response_order, response_amplitude
+        A multiplicative Chebyshev polynomial of this order on every detector epoch,
+        with coefficients drawn from a normal distribution of this standard
+        deviation, as :func:`albireo.simulate.simulate_dataset` applies it: the
+        residual of a normalisation. The coefficient of order zero is a scale, so an
+        order of two gives each transit a scale, a slope and a curvature. The
+        default amplitude of zero leaves the normalisation exact.
     seed
         Seed for the noise.
 
@@ -1575,6 +1603,8 @@ def simulate_rvs_dataset(
         v_bary=np.zeros(n_ep),
         frame="barycentric",
         epoch_snr=snr_ep,
+        response_order=response_order,
+        response_amplitude=response_amplitude,
         seed=seed,
     )
     declared = sigma_true if declare_lsf == "truth" else np.full(n_ep, rvs_lsf_sigma_kms())

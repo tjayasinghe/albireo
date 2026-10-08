@@ -1,0 +1,38 @@
+SELECT FLOOR(c.grvs) AS mbin, FLOOR(c.lp / 0.2) AS pbin, c.cls AS cls, COUNT(*) AS n
+FROM (
+  SELECT b.grvs AS grvs, b.lp AS lp,
+         IF_THEN_ELSE(b.npar = 8,
+           IF_THEN_ELSE(LEAST(b.ss - (-0.007406 + 0.7*b.sp + 0.4*POWER(4.3*b.sp - 0.1, 2)), LEAST(0.0119 + 1.26*b.sp - 0.6*POWER(2.0*b.sp - 0.1, 2), 0.14 - 1.4*b.sp) - b.ss) > 0.0, 1.0,
+           IF_THEN_ELSE(LEAST(b.ss - GREATEST(0.14 - 1.4*b.sp, -0.013972 + 0.88624*b.sp), LEAST(0.012 + 1.26*b.sp, 0.43 - 1.6*b.sp) - b.ss) > 0.0, 2.0,
+           IF_THEN_ELSE(b.ss > GREATEST(0.18 - 0.2*b.sp, GREATEST(0.43 - 1.6*b.sp, 0.204 - 51.0*(b.sp - 0.146))), 3.0,
+           IF_THEN_ELSE(LEAST(b.ss - b.sp, 0.02 - b.sp) > 0.0, 4.0,
+           IF_THEN_ELSE(b.ss > b.sp, 5.0, 6.0))))),
+         IF_THEN_ELSE(b.npar = 9,
+           IF_THEN_ELSE(ABS(ABS(b.ph1 - b.ph2) - 0.5) >= 0.07, 9.0,
+           IF_THEN_ELSE(2.0*b.aell < 0.11, 7.0, 8.0)),
+         IF_THEN_ELSE(b.npar = 5, 10.0, IF_THEN_ELSE(b.npar = 6, 11.0, 12.0)))) AS cls
+  FROM (
+    SELECT a.npar AS npar, a.x AS x,
+           IF_THEN_ELSE(a.x <= 1.2,
+               a.rp + (-0.0397 - 0.2852*a.x - 0.0330*a.x*a.x - 0.0867*a.x*a.x*a.x),
+               a.rp + (-4.0618 + 10.0187*a.x - 9.0532*a.x*a.x + 2.6089*a.x*a.x*a.x)) AS grvs,
+           IF_THEN_ELSE(a.d1 >= a.d2, a.s1, a.s2) AS sp,
+           IF_THEN_ELSE(a.d1 >= a.d2, a.s2, a.s1) AS ss,
+           a.ph1 AS ph1, a.ph2 AS ph2, a.aell AS aell, a.lp AS lp
+    FROM (
+      SELECT g.phot_rp_mean_mag AS rp, g.phot_g_mean_mag - g.phot_rp_mean_mag AS x,
+           v.num_model_parameters AS npar, v.model_type AS model_type,
+           v.geom_model_gaussian1_depth AS d1, v.geom_model_gaussian2_depth AS d2,
+           v.geom_model_gaussian1_sigma AS s1, v.geom_model_gaussian2_sigma AS s2,
+           v.derived_primary_ecl_phase AS ph1, v.derived_secondary_ecl_phase AS ph2,
+           v.geom_model_cosine_half_period_amplitude AS aell,
+           LOG10(1.0 / v.frequency) AS lp
+      FROM gaiadr3.vari_eclipsing_binary AS v
+      JOIN gaiadr3.gaia_source AS g ON g.source_id = v.source_id
+    ) AS a
+  ) AS b
+  WHERE b.x >= -0.15 AND b.x <= 1.7
+) AS c
+WHERE c.grvs < 14.0
+GROUP BY mbin, pbin, cls
+ORDER BY mbin, pbin, cls

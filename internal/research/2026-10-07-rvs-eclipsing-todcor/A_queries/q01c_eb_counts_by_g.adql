@@ -1,0 +1,6 @@
+SELECT FLOOR(g.phot_g_mean_mag) AS gbin, COUNT(*) AS n,
+       COUNT(g.radial_velocity) AS n_radial_velocity
+FROM gaiadr3.vari_eclipsing_binary AS v
+JOIN gaiadr3.gaia_source AS g ON g.source_id = v.source_id
+GROUP BY gbin
+ORDER BY gbin

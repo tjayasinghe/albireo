@@ -51,6 +51,37 @@ def rng():
     return np.random.default_rng(20260813)
 
 
+@pytest.fixture
+def compilations():
+    """Count the XLA compilations a call makes: ``compilations(function) -> int``.
+
+    Outside ``jit``, JAX compiles an operation once per array shape and keeps the program,
+    so code that meets a new shape on every call is slow and its process grows. A test
+    that such code reuses its programs asserts a count of zero after a first call.
+    """
+    import jax.monitoring
+
+    def count(function) -> int:
+        events = []
+        active = [True]
+
+        def listener(event, duration, **kwargs):
+            if active[0] and event == "/jax/core/compile/backend_compile_duration":
+                events.append(duration)
+
+        jax.monitoring.register_event_duration_secs_listener(listener)
+        try:
+            function()
+        finally:
+            active[0] = False
+            unregister = getattr(jax.monitoring, "unregister_event_duration_listener", None)
+            if unregister is not None:
+                unregister(listener)
+        return len(events)
+
+    return count
+
+
 @pytest.fixture(scope="session")
 def small_grid():
     """A small log-wavelength grid, big enough to contain lines and small enough to be instant."""

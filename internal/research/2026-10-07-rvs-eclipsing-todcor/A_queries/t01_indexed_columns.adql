@@ -1,0 +1,3 @@
+SELECT table_name, column_name, datatype, unit, indexed
+FROM tap_schema.columns
+WHERE table_name = 'gaiadr3.gaia_source' AND indexed = 1

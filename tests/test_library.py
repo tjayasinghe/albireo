@@ -12,6 +12,7 @@ and the air/vacuum measurement is exercised on spectra built with a known conven
 """
 
 import dataclasses
+import gc
 import gzip
 import io
 import urllib.error
@@ -33,6 +34,7 @@ from albireo.library import (
     library_interpolator,
     line_core_medium,
 )
+from albireo.operators import rebin_operator
 
 RNG = np.random.default_rng(20260827)
 
@@ -215,6 +217,94 @@ def test_resampled_to_converts_medium_before_rebinning(library):
         - grid.wave[int(np.argmin(air.normalized[0]))]
     )
     assert 1.0 < offset < 1.9
+
+
+def read_only(library):
+    """A copy of a library whose arrays cannot be written to, as `load_library` returns."""
+    arrays = {}
+    for name in ("nodes", "normalized", "log_continuum", "wave"):
+        arrays[name] = np.array(getattr(library, name))
+        arrays[name].flags.writeable = False
+    return library.replace(**arrays)
+
+
+def test_resampled_to_is_the_rebin_operator_applied_to_every_node(library):
+    # The projection is a sparse matrix product in SciPy. It is the pixel-integral operator
+    # of albireo.operators, applied here through JAX as the forward model applies it.
+    for dv_kms in (3.0, 8.0):  # finer and coarser than the library's 4.8 km/s pixels
+        grid = ab.LogGrid.from_wavelength_range(5170.0, 5230.0, dv_kms=dv_kms)
+        projected = library.resampled_to(grid, medium="air")
+        operator = rebin_operator(library.wave, np.asarray(grid.wave))
+        for name in ("normalized", "log_continuum"):
+            expected = np.asarray(jax.vmap(operator)(jnp.asarray(getattr(library, name))))
+            np.testing.assert_allclose(getattr(projected, name), expected, rtol=1e-13, atol=0)
+        assert not projected.normalized.flags.writeable
+        assert not projected.log_continuum.flags.writeable
+        assert not projected.wave.flags.writeable
+
+
+def test_a_read_only_library_is_resampled_once_per_grid(library):
+    frozen = read_only(library)
+    grid = ab.LogGrid.from_wavelength_range(5170.0, 5230.0, dv_kms=3.0)
+    first = frozen.resampled_to(grid, medium="air")
+    assert frozen.resampled_to(grid, medium="air") is first
+    # an equal grid built again is the same key; another medium or grid is not
+    again = ab.LogGrid.from_wavelength_range(5170.0, 5230.0, dv_kms=3.0)
+    assert frozen.resampled_to(again, medium="air") is first
+    assert frozen.resampled_to(grid, medium="vacuum") is not first
+    other = ab.LogGrid.from_wavelength_range(5172.0, 5228.0, dv_kms=3.0)
+    assert frozen.resampled_to(other, medium="air") is not first
+    np.testing.assert_array_equal(
+        first.normalized, library.resampled_to(grid, medium="air").normalized
+    )
+    # the result is read-only, so its interpolator is built once per method
+    assert library_interpolator(first) is library_interpolator(first)
+    assert library_interpolator(first, method="linear") is not library_interpolator(first)
+    # a slice of a read-only library is read-only, and keeps its own results
+    window = frozen.sliced(5165.0, 5235.0)
+    assert window.resampled_to(grid, medium="air") is window.resampled_to(grid, medium="air")
+
+
+def test_a_writable_library_is_resampled_on_every_call(library):
+    # An array that can be changed in place can make a kept result wrong, so nothing is kept.
+    mutable = library.replace(normalized=np.array(library.normalized))
+    grid = ab.LogGrid.from_wavelength_range(5170.0, 5230.0, dv_kms=3.0)
+    first = mutable.resampled_to(grid, medium="air")
+    assert mutable.resampled_to(grid, medium="air") is not first
+    mutable.normalized[:] = 1.0
+    np.testing.assert_allclose(
+        mutable.resampled_to(grid, medium="air").normalized, 1.0, rtol=0, atol=1e-12
+    )
+    assert library_interpolator(mutable) is not library_interpolator(mutable)
+
+
+def test_the_resampled_copies_kept_are_bounded_by_their_size(library, monkeypatch):
+    frozen = read_only(library)
+    grids = [ab.LogGrid.from_wavelength_range(5170.0 + k, 5230.0, dv_kms=3.0) for k in range(4)]
+    size = frozen.resampled_to(grids[0], medium="air")._flux_bytes()
+    monkeypatch.setattr(lib_mod, "_KEPT_BYTES", int(2.5 * size))
+    results = [frozen.resampled_to(grid, medium="air") for grid in grids]
+    # the two used last are kept, and the first has been dropped and is computed again
+    assert frozen.resampled_to(grids[3], medium="air") is results[3]
+    assert frozen.resampled_to(grids[2], medium="air") is results[2]
+    assert frozen.resampled_to(grids[0], medium="air") is not results[0]
+    # a result above the bound is not kept, and neither is its interpolator
+    monkeypatch.setattr(lib_mod, "_KEPT_BYTES", size // 2)
+    large = frozen.resampled_to(grids[1], medium="air")
+    assert frozen.resampled_to(grids[1], medium="air") is not large
+    assert library_interpolator(large) is not library_interpolator(large)
+
+
+def test_what_is_kept_for_a_library_is_dropped_with_it(library):
+    frozen = read_only(library)
+    grid = ab.LogGrid.from_wavelength_range(5170.0, 5230.0, dv_kms=3.0)
+    resampled = frozen.resampled_to(grid, medium="air")
+    library_interpolator(resampled)
+    keys = id(frozen), id(resampled)
+    assert keys[0] in lib_mod._RESAMPLED and keys[1] in lib_mod._INTERPOLATORS
+    del frozen, resampled
+    gc.collect()
+    assert keys[0] not in lib_mod._RESAMPLED and keys[1] not in lib_mod._INTERPOLATORS
 
 
 # ---------------------------------------------------------------------------
@@ -998,6 +1088,8 @@ def test_saving_and_loading_round_trips(tmp_path):
     assert back.medium == "vacuum"
     assert back.meta["citation"] == "nobody 2026"
     assert back.normalized.dtype == np.float64  # stored as float32, restored to x64
+    # a library read from a file cannot be changed in place, so what is derived from it is kept
+    assert back._is_immutable() and not back.normalized.flags.writeable
     np.testing.assert_array_equal(back.nodes, lib.nodes)
     np.testing.assert_allclose(back.normalized, lib.normalized, rtol=1e-6)
 

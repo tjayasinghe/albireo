@@ -45,6 +45,8 @@ import gzip
 import hashlib
 import json
 import urllib.error
+import weakref
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -78,6 +80,33 @@ __all__ = [
 
 SUPPORTED_MEDIA = ("air", "vacuum")
 """The two wavelength scales a library may declare. There is no default."""
+
+_KEPT_BYTES = 96 * 2**20
+"""Largest total size of the resampled copies kept per library, and the largest library
+whose interpolator is kept (:meth:`SpectralLibrary.resampled_to`,
+:func:`library_interpolator`).
+
+A BOSZ box of 455 nodes in the Gaia RVS band is 37 MB on a simulation grid of 5000 pixels
+and 17 MB on a template grid of 2400, so both are kept. The same box on an optical grid of
+20,000 pixels is 146 MB and is not kept."""
+
+# Results that depend only on a library's content, kept per library object and dropped
+# when it is collected. They are kept only for a library whose arrays are read-only
+# (SpectralLibrary._is_immutable), so that a kept result cannot differ from a new
+# computation, and only up to _KEPT_BYTES, so that a process does not grow by a library
+# per grid.
+_RESAMPLED: dict[int, OrderedDict] = {}
+_INTERPOLATORS: dict[int, dict[str, Any]] = {}
+
+
+def _kept(store: dict, library, factory):
+    """The entry of ``store`` for one library object, created on first use."""
+    key = id(library)
+    entry = store.get(key)
+    if entry is None:
+        entry = store[key] = factory()
+        weakref.finalize(library, store.pop, key, None)
+    return entry
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +196,20 @@ class SpectralLibrary:
             raise ValueError("nodes must be finite")
         if nodes.shape[0] != len({tuple(row) for row in nodes}):
             raise ValueError("nodes contains duplicate label vectors")
+
+    def _is_immutable(self) -> bool:
+        """Whether no array of the library can be written to.
+
+        The dataclass is frozen, but an array it was built from can still be changed in
+        place. A library read by :func:`load_library` or returned by :meth:`resampled_to`
+        has read-only arrays, as have its slices and its copies in another medium.
+        """
+        arrays = (self.nodes, self.normalized, self.log_continuum, self.wave)
+        return not any(array.flags.writeable for array in arrays)
+
+    def _flux_bytes(self) -> int:
+        """Size in bytes of the two flux arrays, which dominate the library's memory."""
+        return int(self.normalized.nbytes + self.log_continuum.nbytes)
 
     # -- geometry ----------------------------------------------------------
 
@@ -297,7 +340,20 @@ class SpectralLibrary:
         fitted ``(v sin i)^2`` by about 8 km^2/s^2 (``docs/math.md`` §9.2a).
 
         This moves the model onto the data's grid. The data are never resampled.
+
+        The projection is a sparse matrix product in NumPy and SciPy, so its cost does not
+        depend on whether a grid of that length has been used before. For a library whose
+        arrays are read-only (one read by :func:`load_library` or :func:`fetch_library`,
+        and its slices) the result is kept and returned again, as the same object, for the
+        same grid and medium. The most recently used results are kept, up to 96 MB in all
+        per library: a simulation grid and a template grid of the Gaia RVS band, and no
+        optical grid of 20,000 pixels. The arrays of the result are read-only.
         """
+        kept = _kept(_RESAMPLED, self, OrderedDict) if self._is_immutable() else None
+        key = (grid, medium)
+        if kept is not None and key in kept:
+            kept.move_to_end(key)
+            return kept[key]
         library = self.in_medium(medium)
         target = np.asarray(grid.wave, dtype=np.float64)
         if library.wave[0] > target[0] or library.wave[-1] < target[-1]:
@@ -307,17 +363,36 @@ class SpectralLibrary:
                 f"[{target[0]:.2f}, {target[-1]:.2f}]. Fetch a wider band, or narrow the "
                 "analysis window."
             )
+        from scipy.sparse import csr_matrix  # scipy ships with jax; kept local
+
         operator = rebin_operator(library.wave, target)
-        apply = jax.jit(jax.vmap(operator))
-        return SpectralLibrary(
+        # The operator as a matrix, one row per model pixel. A row sums its entries in the
+        # order of the input pixels, as the segment sum of `RebinOperator.__call__` does.
+        matrix = csr_matrix(
+            (np.asarray(operator.vals), (np.asarray(operator.rows), np.asarray(operator.cols))),
+            shape=(operator.n_out, operator.n_in),
+        )
+
+        def project(values: np.ndarray) -> np.ndarray:
+            out = np.ascontiguousarray((matrix @ values.T).T)
+            out.flags.writeable = False
+            return out
+
+        target.flags.writeable = False
+        resampled = SpectralLibrary(
             label_names=library.label_names,
             nodes=library.nodes,
-            normalized=np.asarray(apply(jnp.asarray(library.normalized))),
-            log_continuum=np.asarray(apply(jnp.asarray(library.log_continuum))),
+            normalized=project(library.normalized),
+            log_continuum=project(library.log_continuum),
             wave=target,
             medium=medium,
             meta={**library.meta, "resampled_to_grid": True},
         )
+        if kept is not None and resampled._flux_bytes() <= _KEPT_BYTES:
+            kept[key] = resampled
+            while sum(entry._flux_bytes() for entry in kept.values()) > _KEPT_BYTES:
+                kept.popitem(last=False)
+        return resampled
 
     def replace(self, **changes) -> SpectralLibrary:
         """A copy with fields replaced (``dataclasses.replace``, re-validated)."""
@@ -570,10 +645,25 @@ def library_interpolator(
     Returns
     -------
     BoxInterpolator or SimplexInterpolator
-        A callable pytree, safe to pass through ``jit`` as a traced model argument.
+        A callable pytree, safe to pass through ``jit`` as a traced model argument. For a
+        library of at most 96 MB whose arrays are read-only, such as the result of
+        :meth:`SpectralLibrary.resampled_to` on a grid of the Gaia RVS band, the
+        interpolator is built once per method and the same object is returned afterwards.
     """
     if method not in ("auto", "linear", "cubic", "simplex"):
         raise ValueError(f"method must be auto, linear, cubic or simplex; got {method!r}")
+    if not library._is_immutable() or library._flux_bytes() > _KEPT_BYTES:
+        return _build_interpolator(library, method)
+    kept = _kept(_INTERPOLATORS, library, dict)
+    if method not in kept:
+        kept[method] = _build_interpolator(library, method)
+    return kept[method]
+
+
+def _build_interpolator(
+    library: SpectralLibrary, method: str
+) -> BoxInterpolator | SimplexInterpolator:
+    """The interpolator of :func:`library_interpolator`, built anew."""
     axes = None if method == "simplex" else library.axes()
 
     if axes is not None:
@@ -861,6 +951,31 @@ _BOSZ_HOT_AXES: dict[str, Any] = {
     "mh": [-1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5],
 }
 
+# The cool box is the M-dwarf end below the FGK box: the secondaries of K and G primaries.
+# BOSZ steps by 100 K below 4000 K; every second node is taken so that the axis is uniform,
+# as the Catmull-Rom weights assume, and its top node is the bottom node of the FGK box.
+# Verified against the archive on 2026-10-07 by one HEAD request per node: all 140 are
+# published at a+0.00, c+0.00, v2, r20000, 185.4 MB in all. log g starts at 4.0 because the
+# box is for dwarfs, which keeps every node plane-parallel.
+_BOSZ_COOL_AXES: dict[str, Any] = {
+    "teff": [3200.0, 3400.0, 3600.0, 3800.0, 4000.0],
+    "logg": [4.0, 4.5, 5.0, 5.5],
+    "mh": [-1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5],
+}
+
+_BOSZ_COOL_CAVEATS = (
+    "The temperature axis has every second BOSZ node (200 K where the grid has 100 K), so "
+    "the interpolation error measured by Meszaros & Allende Prieto (2013) on 250 K does "
+    "not transfer; molecular bands change faster with temperature here than atomic lines "
+    "do in the FGK box. crossval_library measures it on a build.",
+    "Below about 3800 K the band holds TiO absorption as well as the Ca II triplet, and "
+    "the pseudo-continuum is not a continuum. The light ratio of a pair with one such star "
+    "rests on log_continuum, which is the model's true continuum.",
+    "Microturbulence is pinned at 2 km/s, as in the other boxes.",
+    "Everything is LTE with MARCS plane-parallel atmospheres. The cores of the Ca II "
+    "triplet of an active M dwarf are filled by chromospheric emission that no node has.",
+)
+
 _BOSZ_CAVEATS = (
     "MARCS switches geometry inside the log g axis: spherical below log g 3.5, "
     "plane-parallel at and above it. That is the upstream's own arrangement, confirmed "
@@ -1013,6 +1128,29 @@ _LIBRARIES: dict[str, _Library] = {
         # first requires no download.
         download_mb=532.0,
         cache_mb=4.0,
+    ),
+    "bosz2024-cool-rvs": _Library(
+        name="bosz2024-cool-rvs",
+        description=(
+            "BOSZ 2024 (MARCS) M dwarfs in the Gaia RVS band, R = 20,000, 8350-8850 Angstrom"
+        ),
+        source="bosz2024",
+        version="1",
+        wave_range=(8350.0, 8850.0),
+        medium="air",
+        label_names=("teff", "logg", "mh"),
+        axes=_BOSZ_COOL_AXES,
+        fixed=_BOSZ_FIXED,
+        licence="CC BY 4.0",
+        citation="Meszaros et al. 2024, A&A 688, A197 (arXiv:2407.10872)",
+        doi="10.17909/T95G68",
+        upstream_note=_BOSZ_RECOMPUTE_NOTE,
+        caveats=(*_BOSZ_COOL_CAVEATS, _BOSZ_RVS_MEDIUM_CAVEAT),
+        known_gaps=(),
+        # The download is the sum of the archive's file sizes on 2026-10-07; the cache is
+        # the built file.
+        download_mb=185.0,
+        cache_mb=1.6,
     ),
     "pollux-ob-smc24": _Library(
         name="pollux-ob-smc24",
@@ -1189,14 +1327,19 @@ def load_library(path) -> SpectralLibrary:
     """Read a library written by :func:`save_library`."""
     path = Path(path)
     with np.load(path, allow_pickle=True) as handle:
+        arrays = {
+            name: handle[name].astype(np.float64)
+            for name in ("nodes", "normalized", "log_continuum", "wave")
+        }
+        # Read-only, so that what is derived from the library can be kept
+        # (SpectralLibrary.resampled_to). A changed library is a new one (replace()).
+        for array in arrays.values():
+            array.flags.writeable = False
         library = SpectralLibrary(
             label_names=tuple(str(name) for name in handle["label_names"]),
-            nodes=handle["nodes"].astype(np.float64),
-            normalized=handle["normalized"].astype(np.float64),
-            log_continuum=handle["log_continuum"].astype(np.float64),
-            wave=handle["wave"].astype(np.float64),
             medium=str(handle["medium"]),
             meta=json.loads(str(handle["meta"])),
+            **arrays,
         )
     return library
 

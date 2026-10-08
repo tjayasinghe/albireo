@@ -254,3 +254,7 @@ albireo.toml
 # and would add 12 MB to a repository whose record of them is docs/benchmarks.md.
 internal/research/**/figures/
 internal/research/**/velocities.csv
+
+# Runs of the eclipsing-binary survey experiment (scripts/rvs_eb_run.py): the chunks and the
+# row-level tables are reproducible from the manifest that the report keeps.
+internal/research/**/runs/

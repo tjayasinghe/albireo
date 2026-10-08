@@ -1,0 +1,13 @@
+{
+ "seed": 20261007,
+ "per_cell": 130,
+ "n_systems": 7800,
+ "catalogue_all": 40179.0,
+ "catalogue_outside_classes": 4047.9310431711847,
+ "seconds": 155.8081094000081,
+ "catalogue_total": 36131.068956828814,
+ "share_outside_period_support": 0.09298792789035171,
+ "largest_period_margin_departure": 0.7760500552253791,
+ "effective_size_cell": 1981.388349625483,
+ "effective_size_raked": 1480.9447744651495
+}

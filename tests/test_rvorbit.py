@@ -9,11 +9,14 @@ import numpy as np
 import pytest
 
 import albireo as ab
+from albireo.kepler import t_conj_from_t_peri
 from albireo.rvorbit import (
     Assignment,
+    assign_by_ephemeris,
     assign_by_orbit,
     assign_components,
     find_period,
+    fit_rv_ephemeris,
     fit_rv_orbit,
     reassign_by_orbit,
 )
@@ -1105,3 +1108,143 @@ def test_argument_validation():
         fit_rv_orbit(table, period=-1.0)
     with pytest.raises(ValueError, match="period_range"):
         find_period(table, period_range=(5.0, 1.0))
+
+
+# ---------------------------------------------------------------------------
+# The fit at a held ephemeris
+# ---------------------------------------------------------------------------
+
+
+def _conjunction(orbit) -> float:
+    return float(
+        t_conj_from_t_peri(orbit.t_peri, period=orbit.period, ecc=orbit.ecc, omega=orbit.omega)
+    )
+
+
+def test_the_fit_at_a_held_ephemeris_is_linear_and_agrees_with_the_free_fit():
+    table, _, orbit = make_table(n_epochs=20, sigma=0.5, ecc=0.0)
+    held = fit_rv_ephemeris(table, period=P, t_conj=_conjunction(orbit))
+    free = fit_rv_orbit(table, period=P, circular=True)
+    # Three parameters where the free fit has five, and the ephemeris as given.
+    assert held.n_parameters == 3 and held.parameter_names == ("k_A", "k_B", "gamma")
+    assert held.period == P and held.errors["period"] == 0.0 and held.errors["t_conj"] == 0.0
+    assert held.ecc == 0.0 and held.errors["ecc"] == 0.0
+    np.testing.assert_allclose(held.k, [K1, K2], atol=4 * 0.2)
+    np.testing.assert_allclose(held.k, free.k, atol=3 * float(np.max(free.errors["k"])))
+    assert held.gamma[0] == pytest.approx(GAMMA, abs=0.5) and held.gamma_mode == "shared"
+    # The errors are those of the linear model, scaled by its own reduced chi-square.
+    np.testing.assert_allclose(held.errors["k"], free.errors["k"], rtol=0.15)
+    assert held.chi2 >= free.chi2 - 1e-6
+    assert held.covariance.shape == (3, 3)
+    # The orbit predicts the velocities it was fitted to, through the compiled predictor.
+    residual = table.velocity - held.predict(table.bjd)
+    np.testing.assert_allclose(residual, held.residuals, atol=1e-8)
+    assert "K_A" in held.summary()
+
+
+def test_a_held_eccentric_shape_and_a_fitted_one():
+    table, _, orbit = make_table(n_epochs=30, sigma=0.3, ecc=0.4)
+    t_conj = _conjunction(orbit)
+    held = fit_rv_ephemeris(table, period=P, t_conj=t_conj, ecc=0.4, omega=OMEGA)
+    np.testing.assert_allclose(held.k, [K1, K2], atol=0.5)
+    assert held.ecc == 0.4 and held.omega == OMEGA and held.n_parameters == 3
+    fitted = fit_rv_ephemeris(table, period=P, t_conj=t_conj, fit_eccentricity=True)
+    assert fitted.n_parameters == 5
+    assert fitted.parameter_names[:2] == ("secosw", "sesinw")
+    assert fitted.ecc == pytest.approx(0.4, abs=5 * max(fitted.errors["ecc"], 1e-3))
+    assert math.remainder(fitted.omega - OMEGA, 2 * math.pi) == pytest.approx(0.0, abs=0.05)
+    np.testing.assert_allclose(fitted.k, [K1, K2], atol=0.5)
+    assert 0.0 < fitted.errors["ecc"] < 0.02 and fitted.covariance.shape == (5, 5)
+    # A circular model of the same velocities fits far worse.
+    assert fit_rv_ephemeris(table, period=P, t_conj=t_conj).chi2 > 50.0 * fitted.chi2
+
+
+def test_the_held_fit_gives_differential_components_their_own_gamma():
+    table, _, orbit = make_table(n_epochs=20, absolute=(False, False), offsets=(3.0, -2.0), ecc=0.0)
+    fit = fit_rv_ephemeris(table, period=P, t_conj=_conjunction(orbit))
+    assert fit.gamma_mode == "one per component" and fit.n_parameters == 4
+    np.testing.assert_allclose(fit.gamma, [GAMMA + 3.0, GAMMA - 2.0], atol=0.1)
+    np.testing.assert_allclose(fit.k, [K1, K2], atol=0.1)
+
+
+def test_the_held_fit_holds_a_component_without_velocities_and_refuses_too_few():
+    table, _, orbit = make_table(n_epochs=12, ecc=0.0)
+    t_conj = _conjunction(orbit)
+    velocity = np.array(table.velocity)
+    velocity[1] = np.nan
+    single = fit_rv_ephemeris(replace(table, velocity=velocity), period=P, t_conj=t_conj)
+    assert single.held == ("B",) and single.n_parameters == 2
+    assert single.k[0] == pytest.approx(K1, abs=0.1) and np.isnan(single.errors["k"][1])
+    assert single.mass_ratio is None
+    velocity[0, 1:] = np.nan
+    with pytest.raises(ValueError, match="not enough"):
+        fit_rv_ephemeris(replace(table, velocity=velocity), period=P, t_conj=t_conj)
+    with pytest.raises(ValueError, match="period"):
+        fit_rv_ephemeris(table, period=0.0, t_conj=t_conj)
+    with pytest.raises(ValueError, match="ecc"):
+        fit_rv_ephemeris(table, period=P, t_conj=t_conj, ecc=1.2)
+
+
+def _twin_ephemeris(seed, n_epochs, ecc):
+    """The periastron time and argument that :func:`_twin_table` drew, as a conjunction."""
+    rng = np.random.default_rng(seed)
+    rng.uniform(0.0, 40.0, size=n_epochs)
+    t_peri, omega = rng.uniform(0.0, P), rng.uniform(0.0, 2.0 * np.pi)
+    return float(t_conj_from_t_peri(t_peri, period=P, ecc=ecc, omega=omega)), omega
+
+
+@pytest.mark.parametrize("ecc", [0.0, 0.3])
+def test_the_ephemeris_orders_the_velocities_of_alike_stars(ecc):
+    for seed in range(8):
+        table, truth, exchanged = _twin_table(seed, ecc=ecc)
+        t_conj, omega = _twin_ephemeris(seed, table.n_epochs, ecc)
+        assigned, fitted, decided = assign_by_ephemeris(
+            table, period=P, t_conj=t_conj, ecc=ecc, omega=omega
+        )
+        # The ephemeris names the stars: the semi-amplitudes come out in the injected
+        # order, and not in either order as from the period alone.
+        np.testing.assert_allclose(fitted.k, TWIN_K, rtol=0.02)
+        np.testing.assert_allclose(assigned.velocity, truth, atol=4.0)
+        # The exchanges are the injected ones wherever the two velocities differ by more
+        # than their errors. Near a conjunction either order is the same measurement.
+        resolved = np.abs(truth[0] - truth[1]) > 5.0
+        assert np.array_equal(decided.exchanged[resolved], exchanged[resolved])
+
+
+def test_the_ephemeris_does_not_exchange_unalike_light_fractions():
+    table, _, _ = _twin_table(0, ecc=0.0)
+    t_conj, _ = _twin_ephemeris(0, table.n_epochs, 0.0)
+    unalike = replace(table, light=np.repeat(np.array([[0.9], [0.1]]), table.n_epochs, axis=1))
+    same, _, decided = assign_by_ephemeris(unalike, period=P, t_conj=t_conj)
+    assert same is unalike and not decided.changes
+    _, _, forced = assign_by_ephemeris(unalike, period=P, t_conj=t_conj, light_ratio_max=None)
+    assert forced.exchanged.any()
+
+
+@pytest.mark.parametrize("ecc", [0.4, 0.6])
+def test_the_order_on_an_eccentric_orbit_does_not_need_its_shape(ecc):
+    """With the eccentricity fitted, the pairs are ordered by the shape that fits.
+
+    The sign of ``v_1 - v_2`` is that of the velocity curve, and at the conjunction of an
+    eccentric orbit the curve is ``e cos(omega)``, not zero. Ordering the pairs by the
+    circular curve exchanged epochs that were measured in the right order, and the fit
+    kept them: 16 of 20 such tables were recovered at ``e = 0.4`` and 12 of 20 at 0.6.
+    """
+    for seed in range(8):
+        table, truth, exchanged = _twin_table(seed, n_epochs=24, ecc=ecc)
+        t_conj, _ = _twin_ephemeris(seed, table.n_epochs, ecc)
+        _, fitted, decided = assign_by_ephemeris(
+            table, period=P, t_conj=t_conj, fit_eccentricity=True
+        )
+        np.testing.assert_allclose(fitted.k, TWIN_K, rtol=0.05)
+        assert fitted.ecc == pytest.approx(ecc, abs=0.05)
+        resolved = np.abs(truth[0] - truth[1]) > 5.0
+        assert np.array_equal(decided.exchanged[resolved], exchanged[resolved])
+        # The same table with every pair already in the injected order is left alone.
+        ordered = replace(table, velocity=np.where(exchanged, table.velocity[::-1], table.velocity))
+        _, again, kept = assign_by_ephemeris(
+            ordered, period=P, t_conj=t_conj, fit_eccentricity=True
+        )
+        assert not kept.exchanged[resolved].any()
+        # The two fits differ only in the order of the pairs too close to tell apart.
+        np.testing.assert_allclose(again.k, fitted.k, rtol=0.01)

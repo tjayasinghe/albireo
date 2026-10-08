@@ -38,6 +38,12 @@ provide a simulator of Gaia RVS epoch spectra, populations of double-lined binar
 from the field or from real catalogues, and a benchmark that runs them through the pipeline
 under knowledge tiers and reports the recovery.
 
+[`albireo.eclipsing`](eclipsing.md) and [`albireo.survey`](survey.md) are a second test of
+the path that skips the disentangling. The first draws detached eclipsing binaries as a
+magnitude-limited catalogue lists them, with evolved stars, eclipse geometry and library
+boxes that cover 3200 to 10,000 K. The second measures such a population by correlation
+alone, a few seconds per system, and writes one table per system and one per epoch.
+
 [`albireo.simulate`](simulate.md) is outside that path and provides its test data. Every
 closed-loop test is written against the injected values it generates.
 

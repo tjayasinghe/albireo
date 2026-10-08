@@ -1,0 +1,29 @@
+SELECT SUM(w.v_c004) AS coef_0p04, SUM(w.v_k34) AS inner_3p4, SUM(w.v_c02) AS coef_0p2,
+       SUM(w.v_c03) AS coef_0p3, SUM(w.v_k40) AS inner_4p0, SUM(w.v_le_only) AS ss_lt_sp_and_upper,
+       SUM(w.v_g1roles) AS literal_with_g1_roles, SUM(w.v_derived) AS literal_with_derived_width_roles
+FROM (
+  SELECT IF_THEN_ELSE(LEAST(b.ss - (-0.007406 + 0.7*b.sp + 0.04*POWER(4.3*b.sp - 0.1, 2)), b.up - b.ss) > 0.0, 1.0, 0.0) AS v_c004,
+         IF_THEN_ELSE(LEAST(b.ss - (-0.007406 + 0.7*b.sp + 0.4*POWER(3.4*b.sp - 0.1, 2)), b.up - b.ss) > 0.0, 1.0, 0.0) AS v_k34,
+         IF_THEN_ELSE(LEAST(b.ss - (-0.007406 + 0.7*b.sp + 0.2*POWER(4.3*b.sp - 0.1, 2)), b.up - b.ss) > 0.0, 1.0, 0.0) AS v_c02,
+         IF_THEN_ELSE(LEAST(b.ss - (-0.007406 + 0.7*b.sp + 0.3*POWER(4.3*b.sp - 0.1, 2)), b.up - b.ss) > 0.0, 1.0, 0.0) AS v_c03,
+         IF_THEN_ELSE(LEAST(b.ss - (-0.007406 + 0.7*b.sp + 0.4*POWER(4.0*b.sp - 0.1, 2)), b.up - b.ss) > 0.0, 1.0, 0.0) AS v_k40,
+         IF_THEN_ELSE(LEAST(b.sp - b.ss, b.up - b.ss) > 0.0, 1.0, 0.0) AS v_le_only,
+         IF_THEN_ELSE(LEAST(b.s2 - (-0.007406 + 0.7*b.s1 + 0.4*POWER(4.3*b.s1 - 0.1, 2)),
+                            LEAST(0.0119 + 1.26*b.s1 - 0.6*POWER(2.0*b.s1 - 0.1, 2), 0.14 - 1.4*b.s1) - b.s2) > 0.0, 1.0, 0.0) AS v_g1roles,
+         IF_THEN_ELSE(LEAST(b.ws - (-0.007406 + 0.7*b.wp + 0.4*POWER(4.3*b.wp - 0.1, 2)),
+                            LEAST(0.0119 + 1.26*b.wp - 0.6*POWER(2.0*b.wp - 0.1, 2), 0.14 - 1.4*b.wp) - b.ws) > 0.0, 1.0, 0.0) AS v_derived
+  FROM (
+    SELECT a.sp AS sp, a.ss AS ss, a.s1 AS s1, a.s2 AS s2, a.wp AS wp, a.ws AS ws,
+           LEAST(0.0119 + 1.26*a.sp - 0.6*POWER(2.0*a.sp - 0.1, 2), 0.14 - 1.4*a.sp) AS up
+    FROM (
+      SELECT IF_THEN_ELSE(v.geom_model_gaussian1_depth >= v.geom_model_gaussian2_depth,
+                          v.geom_model_gaussian1_sigma, v.geom_model_gaussian2_sigma) AS sp,
+             IF_THEN_ELSE(v.geom_model_gaussian1_depth >= v.geom_model_gaussian2_depth,
+                          v.geom_model_gaussian2_sigma, v.geom_model_gaussian1_sigma) AS ss,
+             v.geom_model_gaussian1_sigma AS s1, v.geom_model_gaussian2_sigma AS s2,
+             v.derived_primary_ecl_duration / 5.6 AS wp, v.derived_secondary_ecl_duration / 5.6 AS ws
+      FROM gaiadr3.vari_eclipsing_binary AS v
+      WHERE v.num_model_parameters = 8
+    ) AS a
+  ) AS b
+) AS w

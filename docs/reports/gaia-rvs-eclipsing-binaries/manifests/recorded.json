@@ -1,0 +1,65 @@
+{
+ "albireo": "0.1.0.dev0",
+ "commit": "77a3a32fac85e116bf9444c1413c82e3ac453d0a",
+ "uncommitted_changes": true,
+ "created": "2026-10-08T00:56:38+00:00",
+ "machine": "Windows 11, AMD64 Family 26 Model 68 Stepping 0, AuthenticAMD, 32 threads",
+ "python": "3.13.9",
+ "numpy": "2.5.2",
+ "config": {
+  "declarations": [
+   "injected",
+   "classified",
+   "catalogue"
+  ],
+  "variant": "baseline",
+  "simulation": "recorded",
+  "period_fit": [
+   "injected",
+   "classified",
+   "catalogue"
+  ],
+  "v_search_kms": 350.0,
+  "v_max_kms": 700.0,
+  "vsini_max_kms": 320.0,
+  "span_days": 2005.0,
+  "zero_point_kms": 0.17,
+  "libraries": [
+   "bosz2024-fgk-rvs"
+  ],
+  "classification": [
+   150.0,
+   0.03,
+   0.2,
+   0.15,
+   0.2
+  ],
+  "background_factor": 5.5,
+  "response_order": 2,
+  "response_amplitude": 0.02
+ },
+ "declarations": [
+  "injected",
+  "classified",
+  "catalogue"
+ ],
+ "n_systems": 33,
+ "n_system_rows": 99,
+ "n_epoch_rows": 3222,
+ "failures": [],
+ "content_sha256": {
+  "systems": "d702bf4ceb45261a2584300288fce530e572d3c99a82c13fd5fdb3b27340b777",
+  "epochs": "faff182e679ecf777c9ddab8faf7413795af576f6f3f112c8f66cbfcffbead18"
+ },
+ "run": "recorded",
+ "wall_clock_seconds": 66.84074040001724,
+ "chunks_kept_from_an_earlier_invocation": 0,
+ "workers": 4,
+ "definitions": {
+  "usable_epoch": "out of eclipse, both velocities measured, not flagged after the assignment by the ephemeris",
+  "wrong_velocity": "more than 5 quoted errors and 3 km/s from the injected one",
+  "recovered": "both semi-amplitudes of the fit at the held ephemeris within 0.1 of the injected ones",
+  "detected_secondary": "K2 / sigma(K2) above the value that 0.01 of the null systems exceed",
+  "double_lined_by_design": "flux ratio of at least 0.2"
+ }
+}

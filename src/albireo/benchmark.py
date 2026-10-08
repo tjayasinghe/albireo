@@ -107,6 +107,12 @@ CADENCES: tuple[str, ...] = ("scanning-law", "uniform-phase", "gost")
 """The epoch-time models: the scanning law's structure without its phase, evenly spaced
 phases over one period, and the real forecast of the Gaia Observation Forecast Tool."""
 
+_MODEL_GRID_LENGTH_MULTIPLE = 512
+"""The multiple to which :func:`simulate_system` rounds the length of the model grid it
+builds, so that the systems of a population share a few lengths
+(:func:`albireo.gaia.rvs_model_grid`). The grids of drawn systems have 4300 to 5000 pixels
+of 2 km/s, which gives the lengths 4608 and 5120."""
+
 
 @dataclasses.dataclass(frozen=True)
 class Tier:
@@ -392,6 +398,15 @@ def simulate_system(
     ``bjd`` given). The S/N follows from G_RVS with one transit per epoch, and the
     delivered product is the one requested.
 
+    Without a ``grid`` the model grid is that of :func:`albireo.gaia.rvs_model_grid` for
+    the system's velocities and rotation, with its number of pixels rounded up to a
+    multiple of 512 at the red end where the library extends that far. The grids of a
+    population then have a few lengths, and the array programs that JAX compiles for one
+    system are reused for the next. The added pixels lie beyond the margin, and the
+    delivered epochs are those of the unrounded grid, bit for bit on the 24 systems they
+    were compared on. The component spectra differ in the last pixels of the unrounded
+    grid, where its rotation kernel met the zero-filled end (``docs/benchmarks.md``).
+
     Returns
     -------
     (Dataset, RVSTruth, LogGrid, list of arrays)
@@ -402,7 +417,13 @@ def simulate_system(
     labels1, labels2 = system.labels
     if grid is None:
         v_max = abs(system.gamma) + max(system.k1, system.k2) * (1.0 + system.ecc) + 30.0
-        grid = rvs_model_grid(v_max, vsini_max_kms=max(system.vsini1, system.vsini2, 1.0))
+        vsini_max = max(system.vsini1, system.vsini2, 1.0)
+        grid = rvs_model_grid(v_max, vsini_max_kms=vsini_max)
+        rounded = rvs_model_grid(
+            v_max, vsini_max_kms=vsini_max, length_multiple=_MODEL_GRID_LENGTH_MULTIPLE
+        )
+        if float(library.in_medium("vacuum").wave[-1]) >= float(rounded.wave[-1]):
+            grid = rounded
     components = rvs_components(
         library, [labels1, labels2], grid, vsini_kms=[system.vsini1, system.vsini2]
     )
