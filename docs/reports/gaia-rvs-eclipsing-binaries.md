@@ -10,56 +10,75 @@ written by `scripts/rvs_eb_report.py` from the tables of the runs (albireo 77a3a
 
 ## Summary
 
-- **Recovery.** With templates from a classification of the two stars, both
-  semi-amplitudes are within 10 percent of the injected ones for 61
-  percent of the systems brighter than G_RVS = 9, 53 percent at
-  10 to 11, 43 percent at 11 to 12 and
-  15 percent at 12 to 13, in the catalogue's mixture of classes.
-  Among the systems whose secondary has more than a fifth of the primary's flux the shares
-  are 80, 81, 70
-  and 25 percent, and half of them are recovered at
-  G_RVS = 12.0.
-- **Single transits.** With the injected templates the scatter of a transit's velocity
-  about the velocity in its spectrum is 0.93 times the
-  photon-limited prediction, and the quoted errors are calibrated: the robust width of the
-  pulls is 0.98 for the primaries and 1.01 for the secondaries. With
-  the zero point of 0.17 km/s that every transit carries, the scatter of a G-type primary
-  about its orbit is 0.69, 1.75 and 8.27 km/s in the half
-  magnitudes that begin at G_RVS = 8, 10 and 12.
-- **Templates.** Template knowledge costs more than photons at the bright end. At G_RVS
-  below 9 the three declarations recover 85 (injected templates),
-  61 (classified) and 44 percent (one template
-  from the colour of the pair).
-- **Single-lined systems.** Where the secondary has less than a tenth of the primary's
-  flux, the primary's semi-amplitude from its template alone is within 10 percent for
-  97 percent of the systems brighter than G_RVS = 9,
-  94 percent at 11 to 12 and 79 percent at
-  12 to 13.
-- **Scale of the noise.** A simulated transit is at the photon limit of the S/N that DPAC
-  expects for it. The scatter of one transit that the errors of Gaia DR3 imply for single
-  dwarfs is 1.2, 1.5 and 1.6 times that of
-  the simulated single stars at G_RVS = 8, 10 and 12, the equivalent of
-  0.5, 0.7 and 0.6 mag. If the transits of
-  DR4 are as DR3 measured them, a recovery quoted here at a magnitude holds that much
-  brighter ([Limits](#limits)).
-- **Third light and emission.** In the model of the population 49
-  percent of the systems have an unresolved third star. Left out of the analysis, it
-  lowers the share recovered among them from 51 to 33
-  percent, and to 12 percent where it gives more than a tenth of the
-  light. Emission in the Ca II cores at the strength of saturated activity, in the
-  44 percent of systems with a star that qualifies, lowers it from
-  45 to 28 percent. A background that varies between
-  transits changes it by +2.0 points. These are shares of a sample
-  with equal numbers at every magnitude and class.
-- **Yield.** Weighted to the 36,131 Gaia DR3 candidates of the detached
-  light-curve classes with G_RVS between 6 and 13.5, the baseline gives
-  4,789 double-lined orbits brighter than G_RVS = 12 and 7,123 brighter than
-  13.5, with both masses to 10 percent for 4,880 systems and to 3 percent for
-  1,552. The baseline has no third light and photon-limited transits.
-- **Cost.** One system takes 6.4 s for three template declarations
-  with 8 processes running: 0.2 s for the simulation, 5.7 s for
-  the correlations and 0.6 s for the orbit fits. The 7,800 systems,
-  313,125 transits, took 109 minutes on a desktop.
+Five findings on the extraction of radial velocities from RVS epoch spectra. Each is
+developed in a section below.
+
+1. **Precision of a single transit.** With the injected templates the scatter of a
+   transit's velocity about the velocity in its spectrum is 0.93
+   times the photon-limited prediction, and the quoted errors are calibrated: the robust
+   width of the pulls is 0.98 for the primaries and 1.01 for the
+   secondaries. With the zero point of 0.17 km/s that every transit carries, the scatter of
+   a G-type primary about its orbit is 0.69, 1.75 and 8.27
+   km/s in the half magnitudes that begin at G_RVS = 8, 10 and 12.
+2. **Cost of imperfect templates.** At the bright end the result is limited by the
+   templates. Brighter than G_RVS = 9, both semi-amplitudes are within 10 percent of the
+   injected ones for 85 percent of the systems with the injected
+   templates, 61 percent with templates from a classification and
+   44 percent with one template from the colour of the pair. A-type
+   primaries lose the most: among the pairs with a flux ratio above 0.2 and G_RVS below 10
+   the three declarations recover 95,
+   69 and 46 percent of them.
+   The quoted errors do not contain the mismatch. For the recovered systems the pulls of
+   the two semi-amplitudes have robust widths of 1.62 and
+   2.40 with classified templates.
+3. **Faint limit and the scale of the noise.** With classified templates, among the
+   systems whose secondary has more than a fifth of the primary's flux, both
+   semi-amplitudes are within 10 percent for 80 percent brighter
+   than G_RVS = 9, 81 percent at 10 to 11,
+   70 percent at 11 to 12 and 25 percent
+   at 12 to 13. Half of them are recovered at G_RVS = 12.0. Over all
+   systems in the catalogue's
+   mixture of classes, which include every mass ratio from 0.1, the shares are
+   61, 53, 43 and
+   15 percent. A simulated transit is at the photon limit of the
+   S/N that DPAC expects for it. The scatter of one transit that the errors of Gaia DR3
+   imply for single dwarfs is 1.2, 1.5 and
+   1.6 times that of the simulated single stars at G_RVS = 8, 10 and 12,
+   the equivalent of 0.5, 0.7 and 0.6 mag.
+   If the transits of DR4 are as DR3 measured them, a recovery quoted here at a magnitude
+   holds that much brighter ([Limits](#limits)).
+4. **Blended lines and faint companions.** For the pairs with a flux ratio above 0.2, at
+   S/N above 30 with classified templates, 100 percent of the transits whose
+   lines are separated by more than 1.5 line widths are usable, and 1.7 percent
+   of those have a velocity more than five quoted errors and 3 km/s from the injected one.
+   Below 0.6 widths the numbers are 90 and 34.9 percent. Where the
+   secondary has less than a tenth of the primary's flux, the primary's semi-amplitude
+   from its template alone is within 10 percent for 97 percent of the
+   systems brighter than G_RVS = 9, 94 percent at 11 to 12 and
+   79 percent at 12 to 13.
+5. **Third light and chromospheric emission.** In the model of the population
+   49 percent of the systems have an unresolved third star. Left out of
+   the analysis, it lowers the share recovered among them from 51 to
+   33 percent, and to 12 percent where it gives more
+   than a tenth of the light. Its lines stand at the systemic velocity and draw the
+   semi-amplitudes low: in that case the median errors of the two are -6.7
+   and -29.2 percent among the pairs with a flux ratio above 0.2 and G_RVS
+   below 11. Emission in the Ca II cores at the strength of saturated activity, in the
+   44 percent of systems with a star that qualifies, lowers the share from
+   45 to 28 percent, with median errors of +2.1
+   and +3.6 percent. A background that varies between transits changes the share
+   by +2.0 points. These are shares of a sample with equal numbers at
+   every magnitude and class.
+
+Weighted to the 36,131 Gaia DR3 candidates of the detached light-curve
+classes with G_RVS between 6 and 13.5, the baseline gives 4,789 double-lined orbits
+brighter than G_RVS = 12 and 7,123 brighter than 13.5, with both masses to 10
+percent for 4,880 systems and to 3 percent for 1,552. The baseline has
+no third light, no emission and photon-limited transits. One system takes
+6.4 s for three template declarations with 8 processes
+running: 0.2 s for the simulation, 5.7 s for the correlations and
+0.6 s for the orbit fits. The 7,800 systems, 313,125 transits,
+took 109 minutes on a desktop.
 
 ## Question and scope
 
