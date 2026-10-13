@@ -1,0 +1,40 @@
+mixed-0000                 n  47 good  46 below gate 0.00 0.00 |      1    0.7  77 L 4 |      1    0.7  77 L 4 |      1    0.7  77 L 4 |      1    0.7  77 L 4
+mixed-0002                 n  28 good  26 below gate 0.00 0.00 |      1    1.9  78 L 4 |      1    1.9  78 L 4 |      1    1.9  78 L 4 |      1    1.9  78 L 4
+mixed-0003                 n  53 good  48 below gate 0.00 0.00 |      1    0.6  78 L 4 |      1    0.6  78 L 4 |      1    0.6  78 L 4 |      1    0.6  78 L 4
+mixed-0004                 n  80 good  26 below gate 0.00 0.46 |      1   44.9 110 L 4 |      1   44.9  72 L 4 |      1   46.8 110 L 4 |      1   46.8  72 L 4
+mixed-0005                 n  29 good  16 below gate 0.00 1.00 | absent    nan  50 - 1 | absent    nan  81 - 4 | absent    nan  50 - 1 | absent    nan  81 - 4
+mixed-0006                 n  53 good  52 below gate 0.00 0.00 |      1   27.8  80 L 4 |      1   27.8  80 L 4 |      1   27.8  80 L 4 |      1   27.8  80 L 4
+mixed-0007                 n  38 good  24 below gate 0.29 1.00 |      1  100.0  50 L 1 |      1  100.0  84 L 4 |      1   15.8  50 L 1 |      1   15.8  84 L 4
+mixed-0008                 n  38 good  34 below gate 0.00 1.00 |      1  100.0  50 L 1 |      1  100.0  84 L 4 |      1   37.7  50 L 1 |      1   37.7  84 L 4
+mixed-0009                 n  35 good  33 below gate 0.00 0.00 |      1    0.9  74 L 4 |      1    0.9  74 L 4 |      1    0.9  74 L 4 |      1    0.9  74 L 4
+mixed-0010                 n  62 good  17 below gate 0.00 0.65 |      1   82.9 103 - 4 |      1   82.9  97 L 4 |      2   79.2 103 - 4 |      2   79.2  97 L 4
+mixed-0011                 n  24 good  18 below gate 0.00 0.00 | absent    nan  82 - 4 | absent    nan  82 - 4 | absent    nan  82 - 4 | absent    nan  82 - 4
+mixed-0012                 n 100 good 100 below gate 0.00 0.00 |      1    0.2  73 L 4 |      1    0.2  73 L 4 |      1    0.2  73 L 4 |      1    0.2  73 L 4
+mixed-0013                 n  43 good  42 below gate 0.00 0.00 |      1  130.3  80 L 4 |      1  130.3  80 L 4 |      1  130.3  80 L 4 |      1  130.3  80 L 4
+mixed-0014                 n  48 good  46 below gate 0.00 0.00 |      1    1.3  65 L 4 |      1    1.3  65 L 4 |      1    1.3  65 L 4 |      1    1.3  65 L 4
+mixed-0015                 n  27 good  15 below gate 0.00 1.00 |      1  100.0  50 L 1 |      1  100.0  96 L 4 | absent    nan  50 L 1 | absent    nan  96 L 4
+mixed-0016                 n  50 good  46 below gate 0.00 0.00 |      1    4.9  70 L 4 |      1    4.9  70 L 4 |      1    4.9  70 L 4 |      1    4.9  70 L 4
+mixed-0017                 n  22 good  12 below gate 0.33 0.00 |      1   11.2  83 L 4 |      1   11.2  83 L 4 |      1   11.2  83 L 4 |      1   11.2  83 L 4
+mixed-0018                 n  71 good  71 below gate 0.00 0.00 |      1    2.8  72 L 4 |      1    2.8  72 L 4 |      1    2.8  72 L 4 |      1    2.8  72 L 4
+mixed-0019                 n  11 good   8 below gate 0.00 0.50 | absent    nan  75 - 3 | absent    nan  92 - 4 | absent    nan  75 - 3 | absent    nan  92 - 4
+gaia-7289006178185856      n  10 good   8 below gate 0.00 0.00 | absent    nan  65 - 4 | absent    nan  65 - 4 | absent    nan  65 - 4 | absent    nan  65 - 4
+gaia-17170287112790656     n  11 good   8 below gate 0.00 0.00 | absent    nan  84 L 4 | absent    nan  84 L 4 | absent    nan  84 L 4 | absent    nan  84 L 4
+gaia-37608387208382848     n  15 good  15 below gate 0.00 0.00 |      1    0.6  70 L 4 |      1    0.6  70 L 4 |      1    0.6  70 L 4 |      1    0.6  70 L 4
+gaia-40041022325608704     n  12 good  12 below gate 0.00 0.17 |      1    2.0  81 L 4 |      1    2.0  80 L 4 |      2    3.1  81 L 4 |      2    3.1  80 L 4
+gaia-45354171749336960     n  25 good  25 below gate 0.00 0.00 |      1    0.2  78 L 4 |      1    0.2  78 L 4 |      1    0.2  78 L 4 |      1    0.2  78 L 4
+gaia-45788547559850496     n  15 good  14 below gate 0.00 0.00 |      1    4.2  79 L 4 |      1    4.2  79 L 4 |      1    4.2  79 L 4 |      1    4.2  79 L 4
+gaia-47620265212420096     n  13 good  12 below gate 0.00 0.00 |      1    0.3  82 L 4 |      1    0.3  82 L 4 |      1    0.3  82 L 4 |      1    0.3  82 L 4
+gaia-50868531799454720     n  16 good  16 below gate 0.00 0.00 |      1    1.7  75 L 4 |      1    1.7  75 L 4 |      1    1.7  75 L 4 |      1    1.7  75 L 4
+gaia-51574864941234048: no table (star 'gaia-51574864941234048__blind': bootstrap: the correla)
+gaia-51884824140205824     n  24 good  22 below gate 0.00 0.00 |      1    0.9  69 L 4 |      1    0.9  69 L 4 |      1    0.9  69 L 4 |      1    0.9  69 L 4
+gaia-53290511099783296     n  16 good  16 below gate 0.00 0.00 |     36  250.3  76 L 4 |     36  250.3  76 L 4 |     36  250.3  76 L 4 |     36  250.3  76 L 4
+gaia-53680017390963072     n  17 good  17 below gate 0.00 0.00 |      1    8.9  80 L 4 |      1    8.9  80 L 4 |      1    8.9  80 L 4 |      1    8.9  80 L 4
+gaia-56716765427964800     n  12 good  12 below gate 0.00 0.00 |      1    1.9  83 L 4 |      1    1.9  83 L 4 |      1    1.9  83 L 4 |      1    1.9  83 L 4
+gaia-56861694804053120     n  15 good  14 below gate 0.00 0.00 |      1    4.2  81 L 4 |      1    4.2  81 L 4 |      1    4.2  81 L 4 |      1    4.2  81 L 4
+
+| search, fits | tables | listed | rank 1 | first 4 | absent | rank 1 and K within 5% | rank 1 and K within 10% |
+|---|---|---|---|---|---|---|---|
+| gate, gate | 32 | 27 | 26 | 26 | 5 | 17 | 18 |
+| no gate, gate | 32 | 28 | 26 | 26 | 5 | 17 | 18 |
+| gate, no gate | 32 | 27 | 23 | 25 | 6 | 16 | 17 |
+| no gate, no gate | 32 | 28 | 23 | 25 | 6 | 16 | 17 |

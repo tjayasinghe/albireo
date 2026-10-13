@@ -1,0 +1,5 @@
+phi | white-noise threshold: lost of total | threshold with the correlation: lost of total
+0.00 | 0 of 114 | 0 of 114
+0.27 | 0 of 114 | 0 of 114
+0.50 | 3 of 114 | 0 of 114
+0.80 | 11 of 114 | 0 of 114

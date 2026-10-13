@@ -1,0 +1,14 @@
+A-11-000 G 11.54 good   6  template/quoted median 0.150 0.137  max 0.21 0.22
+K-12-000 G 12.05 good  20  template/quoted median 0.033 0.036  max 0.08 0.07
+G-02-001 G  7.33 good  17  template/quoted median 0.058 0.052  max 0.14 0.13
+F-09-000 G 10.89 good  47  template/quoted median 0.039 0.041  max 0.09 0.08
+K-00-001 G  6.43 good 108  template/quoted median 0.038 0.037  max 0.08 0.08
+G-05-001 G  8.83 good  25  template/quoted median 0.057 0.052  max 0.12 0.11
+F-10-000 G 11.32 good  29  template/quoted median 0.053 0.033  max 0.09 0.09
+A-00-001 G  6.01 good  26  template/quoted median 0.061 0.062  max 0.12 0.11
+K-01-001 G  6.57 good  36  template/quoted median 0.039 0.040  max 0.09 0.09
+G-06-001 G  9.07 good  58  template/quoted median 0.046 0.048  max 0.08 0.08
+F-12-000 G 12.32 good  30  template/quoted median 0.035 0.033  max 0.08 0.08
+A-02-001 G  7.41 good  46  template/quoted median 0.089 0.081  max 0.10 0.11
+
+47 systems; error from the templates over the quoted error, median over the usable epochs of a system: median over systems 0.056 and 0.052; 90th percentile 0.150 and 0.153; star exchanges 0

@@ -19,6 +19,8 @@ from albireo.survey import SurveyConfig, collect, read_tables, run_survey, run_s
 
 systems = draw_eclipsing_population(10, seed=1)
 result = run_system(systems[0], SurveyConfig())            # one system, three declarations
+fitted = SurveyConfig(declarations=("classified", "classified-fitted"))
+result = run_system(systems[0], fitted)                    # with its templates fitted
 run_survey(systems, SurveyConfig(), "runs/first", workers=6)
 manifest = collect("runs/first")
 table, epochs = read_tables("runs/first")
@@ -34,6 +36,16 @@ templates, on the same epochs.
 | `injected` | the injected labels and rotation | held at the injected values |
 | `classified` | labels with the errors of a classification, drawn once per system | measured |
 | `catalogue` | one template for both stars, from the colour of the pair | measured |
+| `classified-fitted` | fitted to the transits out of eclipse ([`fit_templates`](templatefit.md)), started from the classified labels with the classification errors as Gaussian priors | fitted |
+| `catalogue-fitted` | the same fit started from the catalogue template, with the wide priors of `catalogue_errors` | fitted |
+
+A configuration measures the first three unless `declarations` names others. A fit keeps
+the order of the table it starts from where the declared labels do not tell the stars
+apart, and the correlation returns two alike templates in either order, at a transit or
+throughout. Under a fitted declaration the ephemeris is therefore used twice. The table
+the fit starts from is put in the order the ephemeris gives, in whichever order of its
+components fits it better, and the table measured with the fitted templates is fitted at
+the ephemeris in both orders of its components, as that of `catalogue` is.
 
 A run simulates one variant.
 
@@ -75,7 +87,7 @@ and whether the package or the scripts had changes that the commit does not hold
 
 With identical templates the correlation does not name the stars and the ephemeris does:
 the table is fitted in both orders of its components and the order of the lower chi-square
-is kept.
+is kept. The same is done with the table of a fitted declaration.
 
 ## The tables
 
@@ -116,11 +128,13 @@ transit.
 | `quality1`, `quality2`, `snr_k1`, `snr_k2` | velocity information of each spectrum per unit S/N, and the predicted S/N of each semi-amplitude |
 | `light1`, `light2`, `fallback` | light fractions as measured, and whether no transit gave both a positive amplitude |
 | `e_k1`, `e_k2`, `e_k1_err`, `e_k2_err`, `e_gamma`, `e_gamma_err`, `e_ecc`, `e_omega`, `e_chi2`, `e_npts`, `e_npar` | the fit at the held ephemeris |
-| `e_ok`, `e_nx`, `e_no`, `e_held`, `e_light1`, `e_light2`, `swapped` | whether it was made; transits exchanged relative to the table as measured; other minima taken; components held; light fractions of the two stars; under identical templates, whether the fit kept is that of the table with its two components interchanged as a whole (with alike light fractions both orders reach the same assignment and the first is recorded) |
+| `e_ok`, `e_nx`, `e_no`, `e_held`, `e_light1`, `e_light2`, `swapped` | whether it was made; transits exchanged relative to the table as measured; other minima taken; components held; light fractions of the two stars; under identical templates or a fitted declaration, whether the fit kept is that of the table with its two components interchanged as a whole (with alike light fractions both orders reach the same assignment and the first is recorded) |
 | `p_*` | the same for the fit with the period alone; `p_swapped` marks a table compared in the other order |
 | `s_k1`, `s_k1_err`, `s_gamma`, `s_gamma_err`, `s_chi2`, `s_npts`, `s_light`, `s_ok` | the fit of the first template alone |
 | `sum_d1`, `sum_d2`, `med_d2` | detection statistics summed over the usable transits |
-| `t_sim`, `t_todcor`, `t_orbit` | wall-clock seconds of the stages |
+| `f_ok`, `f_converged`, `f_passes`, `f_exchanged`, `f_chi2` | under a fitted declaration: whether the template fit was made (the declaration it starts from is kept where it was not); whether its velocities converged; the number of alternations; whether the fit continued from the solution with the two stars exchanged, as the declared priors name them; its reduced chi-square |
+| `f_teff1`, `f_teff2`, `f_logg1`, `f_logg2`, `f_mh`, `f_vsini1`, `f_vsini2`, `f_light2`, and `f_teff1_err`, `f_teff2_err`, `f_vsini1_err`, `f_vsini2_err`, `f_light2_err` | the fitted labels, rotation and light fraction of the first and of the second template, and their errors |
+| `t_sim`, `t_todcor`, `t_fit`, `t_orbit` | wall-clock seconds of the stages; `t_todcor` includes `t_fit` |
 
 ## Cost and memory
 

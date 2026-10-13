@@ -1,0 +1,14 @@
+     logg_B    true     4.28  start     4.21  fit     4.26 +-   0.01
+     mh_B      true    -0.18  start    -0.42  fit    -0.19 +-   0.01
+     vsini_B   true    78.57  start    79.90  fit    78.83 +-   0.46
+     outer: converged         it  3 ev   8 chi2/dof 0.994 used 46 moved 311.732 km/s
+     outer: stalled           it  1 ev  14 chi2/dof 0.993 used 46 moved 116.195 km/s
+     outer: stalled           it  1 ev  14 chi2/dof 0.993 used 46 moved 0.007 km/s
+
+48 systems
+arm            n_fit  both<10%  both<5%   med|dK1|% med|dK2|%  p68|pull1| p68|pull2|
+injected         47     93.8     85.4       0.31     0.32       0.92     1.01
+classified       48     77.1     72.9       0.58     1.60       2.01     3.58
+fitted           48     91.7     83.3       0.34     0.39       1.30     1.17
+fitted+m         48     91.7     83.3       0.35     0.40       1.30     1.21
+median seconds: baseline chain (two declarations) 1.1, template fit 2.4

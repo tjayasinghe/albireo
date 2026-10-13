@@ -643,6 +643,35 @@ were silently dropped), which is fixed. The scaling of a batch across worker pro
 in [the benchmark record](../docs/benchmarks.md): 2.0× for four workers and 2.5× for eight. The
 per-worker thread cap, kept as a precaution, made no measurable difference there.
 
+### 12. Templates fitted to the epochs (done, D70)
+
+`albireo.todcor` measures velocities against templates that are given, and the simulated survey of
+eclipsing binaries (D69) measured what that costs. With templates from a classification, 62 percent
+of the systems brighter than G_RVS = 9 had both semi-amplitudes within 10 percent where the injected
+templates gave 86, and the quoted errors of the semi-amplitudes were 1.6 and 2.5 times too small.
+`albireo.templatefit` fits the labels, the rotation and the light fractions of the library templates
+to the same epochs, with the velocities of every epoch at their own minimum, and alternates with a
+new measurement by `todcor`. It needs what a correlation already needs: the epochs, a library, and a
+classification, whose errors are the priors. With it the share is 84 percent, and the pulls of the
+semi-amplitudes have widths of 1.03 and 1.12. The fit also records the sensitivity of every velocity
+to the fitted parameters on the table, which is the part of a velocity's error that the epochs
+share.
+
+Three things were measured and not adopted. Solving for the template parameters in the orbit fit
+makes the errors of unfitted templates nearly honest and recovers no further system, and after the
+fit the template part of a velocity's error is 0.06 of its quoted error. Starting a loosely declared
+label from several values recovered the same systems at twice the time. A learned proposal for the
+period was measured against the pipeline's periodograms
+(`internal/research/2026-10-12-period-proposals/`): a density over the orbital elements cannot
+resolve a peak of a periodogram, and a network that scores trial periods lists the injected period
+more often and higher but leaves the orbit decided after the fits unchanged on all but three of 150
+tables, and is below the periodograms alone on the benchmark's own tables. That experiment found
+that the detection gate removes the pipeline's relative-velocity searches on faint tables, which is
+recorded there as a candidate for a change.
+
+This does not reopen the non-goal on synthesis below. The templates are interpolated in the
+published grids of `albireo.library`, and the labels fitted are the four of `albireo.match`.
+
 ## Tier 3: later work
 
 **Time-variable component spectra.** The core assumption of disentangling is that each component's
@@ -711,7 +740,9 @@ These are recorded so that they are not reconsidered.
   or an eclipsing-binary model is still referred to `albireo.handoff` and the codes above.
   `albireo.todcor` (D56) does not reopen it either: it correlates against templates that the user
   already has (the disentangled components, a label-matched grid point, or a library rendering) and
-  synthesizes none.
+  synthesizes none. Nor does `albireo.templatefit` (D70), which fits the same four labels to the
+  epochs so that the templates of a correlation agree with the stars, and interpolates them in the
+  same grids.
 - **No GUI**, per the v1 non-goals.
 
 ## Conditions that would change this plan

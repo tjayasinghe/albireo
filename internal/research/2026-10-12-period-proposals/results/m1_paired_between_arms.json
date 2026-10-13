@@ -1,0 +1,67 @@
+{
+ "Becl vs C": {
+  "only_first": 12,
+  "only_second": 29,
+  "p_value": 0.011507789735333063
+ },
+ "Becl vs D": {
+  "only_first": 0,
+  "only_second": 29,
+  "p_value": 3.725290298461914e-09
+ },
+ "C vs D": {
+  "only_first": 1,
+  "only_second": 13,
+  "p_value": 0.0018310546875
+ },
+ "Anogate vs D": {
+  "only_first": 0,
+  "only_second": 42,
+  "p_value": 4.547473508864641e-13
+ },
+ "Anogate vs Becl": {
+  "only_first": 10,
+  "only_second": 23,
+  "p_value": 0.03508203336969018
+ },
+ "Ktile vs C": {
+  "only_first": 6,
+  "only_second": 54,
+  "p_value": 9.722961671898567e-11
+ },
+ "Biso vs A": {
+  "only_first": 22,
+  "only_second": 19,
+  "p_value": 0.755228657504631
+ },
+ "Cwin vs C": {
+  "only_first": 8,
+  "only_second": 9,
+  "p_value": 1.0
+ },
+ "A+Ktile vs A+C": {
+  "only_first": 9,
+  "only_second": 17,
+  "p_value": 0.16863754391670227
+ },
+ "A+Becl vs A+C": {
+  "only_first": 13,
+  "only_second": 29,
+  "p_value": 0.019520472782460274
+ },
+ "A+C vs A+D": {
+  "only_first": 4,
+  "only_second": 15,
+  "p_value": 0.0192108154296875
+ },
+ "A+Becl vs A+D": {
+  "only_first": 2,
+  "only_second": 29,
+  "p_value": 4.628673195838928e-07
+ },
+ "A+Anogate vs A+D": {
+  "only_first": 0,
+  "only_second": 33,
+  "p_value": 2.3283064365386963e-10
+ }
+}

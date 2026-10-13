@@ -163,6 +163,14 @@ per-component detection statistic $`\Delta\chi^2`$ (the increase in chi-square w
 component is removed, small for a companion not detected at that epoch) and the Wilson
 slope, which equals $`-K_2/K_1`$ and is independent of both zero points.
 
+The errors of a table are those of a fit against templates that are taken as exact. A
+table measured by [`fit_templates`](templatefit.md), which fits the templates to the same
+epochs, also holds the derivative of every velocity with respect to every fitted
+parameter of the templates (`sensitivity`, with `parameter_names` and
+`parameter_covariance`), and `template_sigma` is the error of each velocity that the
+uncertainty of the templates contributes. That part is common to the epochs and is not
+in `sigma` ([§10.7](../math.md#107-templates-fitted-to-the-epochs)).
+
 The theory is in
 [§10](../math.md#10-epoch-velocities-by-n-dimensional-correlation).
 

@@ -1,0 +1,139 @@
+{
+ "split": "test",
+ "n_tables": 1200,
+ "n_below": 13,
+ "tables": [
+  {
+   "system": 1151,
+   "period": 6.255287941553916,
+   "shortest_searched": 22.347341150045395,
+   "n_first": 12,
+   "n_out": 19,
+   "below": true
+  },
+  {
+   "system": 1544,
+   "period": 0.4369861918176089,
+   "shortest_searched": 15.727191319689155,
+   "n_first": 10,
+   "n_out": 21,
+   "below": true
+  },
+  {
+   "system": 2301,
+   "period": 0.6019200679354988,
+   "shortest_searched": 10.144104987382889,
+   "n_first": 16,
+   "n_out": 43,
+   "below": true
+  },
+  {
+   "system": 2422,
+   "period": 0.5520637946688915,
+   "shortest_searched": 9.025165104307234,
+   "n_first": 9,
+   "n_out": 9,
+   "below": true
+  },
+  {
+   "system": 4004,
+   "period": 0.660012440307561,
+   "shortest_searched": 46.11909795738757,
+   "n_first": 14,
+   "n_out": 47,
+   "below": true
+  },
+  {
+   "system": 4133,
+   "period": 8.75743475870393,
+   "shortest_searched": 10.849237629212439,
+   "n_first": 12,
+   "n_out": 19,
+   "below": true
+  },
+  {
+   "system": 4753,
+   "period": 1.144339278971373,
+   "shortest_searched": 65.25533855706453,
+   "n_first": 11,
+   "n_out": 32,
+   "below": true
+  },
+  {
+   "system": 5246,
+   "period": 26.345804863198854,
+   "shortest_searched": 103.71040747221559,
+   "n_first": 10,
+   "n_out": 51,
+   "below": true
+  },
+  {
+   "system": 5277,
+   "period": 3.981054326376833,
+   "shortest_searched": 19.031561243347824,
+   "n_first": 11,
+   "n_out": 33,
+   "below": true
+  },
+  {
+   "system": 6236,
+   "period": 4.078779836532443,
+   "shortest_searched": 41.67717603780329,
+   "n_first": 13,
+   "n_out": 55,
+   "below": true
+  },
+  {
+   "system": 6910,
+   "period": 1.4917838597070188,
+   "shortest_searched": 10.897181768901646,
+   "n_first": 11,
+   "n_out": 20,
+   "below": true
+  },
+  {
+   "system": 7316,
+   "period": 3.8117697840904428,
+   "shortest_searched": 51.02172503154725,
+   "n_first": 9,
+   "n_out": 22,
+   "below": true
+  },
+  {
+   "system": 7572,
+   "period": 1.2737629552904914,
+   "shortest_searched": 96.69236637093127,
+   "n_first": 9,
+   "n_out": 23,
+   "below": true
+  }
+ ],
+ "A": {
+  "listed": 0,
+  "at_budget": 0
+ },
+ "Adeep": {
+  "listed": 0,
+  "at_budget": 0
+ },
+ "Becl": {
+  "listed": 0,
+  "at_budget": 0
+ },
+ "C": {
+  "listed": 13,
+  "at_budget": 13
+ },
+ "Cwin": {
+  "listed": 13,
+  "at_budget": 13
+ },
+ "D": {
+  "listed": 13,
+  "at_budget": 13
+ },
+ "A+D": {
+  "listed": 12,
+  "at_budget": 12
+ }
+}

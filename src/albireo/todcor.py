@@ -1270,6 +1270,14 @@ class VelocityTable:
         is reported, with its curvature).
     absolute
         Per component: whether the velocities have an absolute zero point.
+    sensitivity, parameter_names, parameter_covariance
+        Set by :func:`albireo.fit_templates`, and ``None`` otherwise. ``sensitivity`` is
+        ``(n_comp, n_epochs, n_parameters)``: the derivative of each velocity, in km/s,
+        with respect to each fitted parameter of the templates (``parameter_names``),
+        ``nan`` where nothing was measured. ``parameter_covariance`` is the covariance
+        of those parameters. An error of a template moves the velocities of every
+        epoch together, so this part of the velocity error is correlated between
+        epochs, and ``covariance`` does not contain it (``docs/math.md`` §10.7).
     """
 
     names: tuple[str, ...]
@@ -1294,6 +1302,9 @@ class VelocityTable:
     alternative: np.ndarray | None = None
     alternative_covariance: np.ndarray | None = None
     settings: dict = field(default_factory=dict, repr=False)
+    sensitivity: np.ndarray | None = field(default=None, repr=False)
+    parameter_names: tuple[str, ...] = ()
+    parameter_covariance: np.ndarray | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if self.margin is None:
@@ -1347,6 +1358,29 @@ class VelocityTable:
         scale = 1.0 if self.settings.get("errors") == "ivar" else self.reduced_chi2
         with np.errstate(invalid="ignore"):
             return np.asarray(self.margin < _BLEND_CHI2 * scale, dtype=bool)
+
+    @property
+    def template_sigma(self) -> np.ndarray | None:
+        """``(n_comp, n_epochs)`` km/s: the error of each velocity from the templates.
+
+        The square root of the diagonal of ``J C J^T``, with ``J`` the ``sensitivity``
+        and ``C`` the ``parameter_covariance``, over the parameters whose variance is
+        defined: a parameter that ended on a bound, or that the epochs do not constrain,
+        has none and contributes nothing, so the value is then a lower limit. It is
+        common to the epochs and is not part of ``sigma``. ``None`` for a table that
+        carries no sensitivities, and ``nan`` where no parameter has a variance.
+        """
+        if self.sensitivity is None or self.parameter_covariance is None:
+            return None
+        covariance = np.asarray(self.parameter_covariance, dtype=np.float64)
+        with np.errstate(invalid="ignore"):
+            keep = np.isfinite(np.diag(covariance)) & (np.diag(covariance) > 0.0)
+        if not keep.any():
+            return np.full(np.shape(self.velocity), np.nan)
+        jacobian = np.asarray(self.sensitivity, dtype=np.float64)[:, :, keep]
+        variance = np.einsum("cep,pq,ceq->ce", jacobian, covariance[np.ix_(keep, keep)], jacobian)
+        with np.errstate(invalid="ignore"):
+            return np.sqrt(np.where(variance >= 0.0, variance, np.nan))
 
     @property
     def good(self) -> np.ndarray:

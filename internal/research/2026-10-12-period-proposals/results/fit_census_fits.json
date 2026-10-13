@@ -1,0 +1,18 @@
+{
+ "directory": "fits",
+ "n_tables": 150,
+ "n_fits": 46879,
+ "n_failed": 0,
+ "n_with_a_held_component": 6582,
+ "seconds_per_fit_mean": 0.2480911600312489,
+ "seconds_per_fit_median": 0.2450478000100702,
+ "fitted_period_moved_from_start_quantiles_50_90_99": [
+  0.0002855831764734251,
+  0.003164931664794373,
+  0.02566171352669031
+ ],
+ "share_moved_more_than_2pct": 0.01314021203523966,
+ "starts_within_2pct_of_injected": 436,
+ "of_those_ended_within_2pct": 428,
+ "of_those_ended_within_0.1pct": 210
+}

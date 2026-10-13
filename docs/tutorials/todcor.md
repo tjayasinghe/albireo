@@ -36,6 +36,7 @@ mean:
 | `fit.templates()`, the disentangled components themselves | differential: each component's rest frame is not identified ([§5.3](../math.md#53-systemic-velocity-zero-point)) | the system has been disentangled and the per-epoch table it implies is wanted |
 | `Template.from_labels(match, name)`, the label fit's model spectrum | absolute, because the label fit measured the disentangled frame's offset | after [turning a component into an RV template](labels.md) |
 | `Template.from_library(...)`, a published grid at assumed labels | absolute | a survey of similar stars, or a star that has not been disentangled |
+| `fit_templates(...).templates`, a published grid at labels fitted to the same epochs | absolute | a classification of each star is at hand, or one catalogue temperature for the pair: the labels, the rotation and the light fractions are fitted with the velocities ([templates fitted to the epochs](../api/templatefit.md), `examples/15_fit_templates.py`) |
 
 Every velocity table records which zero point applies (`table.absolute`), and `summary()`
 states it in the first lines. A constant offset does not affect the semi-amplitudes, the

@@ -1,0 +1,183 @@
+
+## fitted: 1200 systems, variant baseline, 4017 s on 8 processes
+
+Both K within 10 percent, weighted share [%] by G_RVS
+
+| declaration | 6-9 | 9-10 | 10-11 | 11-12 | 12-13 | 13-13.5 | all |
+|---|---|---|---|---|---|---|---|
+| injected | 86 | 78 | 67 | 59 | 18 | 5 | 26 |
+| classified | 62 | 56 | 52 | 48 | 12 | 2 | 19 |
+| catalogue | 47 | 42 | 42 | 42 | 13 | 2 | 17 |
+| classified-fitted | 84 | 76 | 66 | 51 | 14 | 2 | 22 |
+| catalogue-fitted | 76 | 68 | 63 | 51 | 12 | 0 | 20 |
+
+Both K within 5 percent, weighted share [%] by G_RVS
+
+| declaration | 6-9 | 9-10 | 10-11 | 11-12 | 12-13 | 13-13.5 | all |
+|---|---|---|---|---|---|---|---|
+| injected | 82 | 73 | 58 | 48 | 6 | 4 | 19 |
+| classified | 53 | 45 | 44 | 35 | 3 | 0 | 12 |
+| catalogue | 35 | 33 | 30 | 31 | 7 | 2 | 12 |
+| classified-fitted | 79 | 69 | 58 | 41 | 6 | 0 | 16 |
+| catalogue-fitted | 75 | 65 | 57 | 40 | 3 | 0 | 15 |
+
+Systems per range: 6-9: 480, 9-10: 160, 10-11: 160, 11-12: 160, 12-13: 160, 13-13.5: 80
+
+| declaration | pull width K1 | pull width K2 | recovered | fit made | converged | median fit [s] |
+|---|---|---|---|---|---|---|
+| injected | 0.95 | 1.05 | 794 | - | - | - |
+| classified | 1.57 | 2.54 | 602 | - | - | - |
+| catalogue | 2.02 | 3.16 | 486 | - | - | - |
+| classified-fitted | 1.03 | 1.12 | 761 | 100% | 82% | 2.6 |
+| catalogue-fitted | 1.03 | 1.15 | 711 | 100% | 75% | 3.7 |
+
+Fitted labels against the injected ones, for the systems with both K within 10 percent (median absolute error). The stars are named by the orbit at the ephemeris: the fit's first star is the second where most transits were exchanged against the table as measured.
+
+| declaration | G_RVS | n | Teff 1 [K] | Teff 2 [K] | log g 1 | log g 2 | v sin i 1 [km/s] | v sin i 2 [km/s] | light fraction 2 | fits in the other order [%] |
+|---|---|---|---|---|---|---|---|---|---|---|
+| classified-fitted | 6-10 | 543 | 12 | 25 | 0.02 | 0.05 | 0.65 | 1.10 | 0.001 | 0 |
+| classified-fitted | 10-12 | 190 | 45 | 76 | 0.07 | 0.12 | 1.94 | 3.35 | 0.008 | 0 |
+| classified-fitted | 12-13 | 26 | 115 | 144 | 0.14 | 0.14 | 5.14 | 5.43 | 0.030 | 4 |
+| catalogue-fitted | 6-10 | 505 | 12 | 25 | 0.02 | 0.06 | 0.70 | 1.41 | 0.001 | 4 |
+| catalogue-fitted | 10-12 | 181 | 56 | 89 | 0.09 | 0.17 | 2.62 | 5.00 | 0.008 | 1 |
+| catalogue-fitted | 12-13 | 24 | 191 | 264 | 0.18 | 0.24 | 7.88 | 13.62 | 0.025 | 0 |
+
+Fitted against the declaration it starts from, on the same systems (both K within 10 percent; the difference of the weighted shares with the 16th and 84th percentiles of a bootstrap over systems)
+
+| pair | G_RVS | n | both | gained | lost | base [%] | fitted [%] | difference [points] |
+|---|---|---|---|---|---|---|---|---|
+| classified to classified-fitted | 6-9 | 480 | 309 | 106 | 2 | 61.7 | 83.8 | +22.2 (+18.9, +25.4) |
+| classified to classified-fitted | 9-10 | 160 | 102 | 26 | 0 | 56.1 | 75.5 | +19.4 (+15.5, +23.4) |
+| classified to classified-fitted | 10-11 | 160 | 87 | 20 | 2 | 52.2 | 65.8 | +13.6 (+10.1, +17.4) |
+| classified to classified-fitted | 11-12 | 160 | 71 | 12 | 3 | 48.2 | 51.1 | +2.9 (+0.6, +5.2) |
+| classified to classified-fitted | 12-13 | 160 | 19 | 7 | 5 | 11.7 | 13.6 | +1.9 (-0.2, +4.0) |
+| classified to classified-fitted | 13-13.5 | 80 | 1 | 1 | 1 | 1.6 | 2.4 | +0.8 (-0.4, +2.1) |
+| classified to classified-fitted | 6-13.5 | 1200 | 589 | 172 | 13 | 19.1 | 22.3 | +3.2 (+2.1, +4.2) |
+| catalogue to catalogue-fitted | 6-9 | 480 | 241 | 142 | 0 | 46.8 | 75.6 | +28.8 (+25.2, +32.4) |
+| catalogue to catalogue-fitted | 9-10 | 160 | 82 | 40 | 0 | 42.5 | 67.9 | +25.4 (+20.8, +29.9) |
+| catalogue to catalogue-fitted | 10-11 | 160 | 72 | 28 | 1 | 41.6 | 62.7 | +21.1 (+16.9, +25.2) |
+| catalogue to catalogue-fitted | 11-12 | 160 | 62 | 19 | 3 | 41.8 | 50.7 | +8.9 (+6.4, +11.7) |
+| catalogue to catalogue-fitted | 12-13 | 160 | 15 | 9 | 8 | 12.8 | 11.9 | -0.9 (-3.6, +1.9) |
+| catalogue to catalogue-fitted | 13-13.5 | 80 | 0 | 1 | 2 | 2.5 | 0.4 | -2.1 (-4.2, +0.0) |
+| catalogue to catalogue-fitted | 6-13.5 | 1200 | 472 | 239 | 14 | 17.4 | 20.4 | +2.9 (+1.6, +4.4) |
+
+On the systems recovered under both members of a pair: the robust widths of the K pulls and the median errors of K, base to fitted
+
+| pair | n | pull width K1 | pull width K2 | median error K1 [%] | median error K2 [%] |
+|---|---|---|---|---|---|
+| classified to classified-fitted | 589 | 1.59 to 1.10 | 2.62 to 1.07 | 0.48 to 0.25 | 1.35 to 0.36 |
+| catalogue to catalogue-fitted | 472 | 2.12 to 1.11 | 3.23 to 1.09 | 0.87 to 0.23 | 1.76 to 0.29 |
+
+The convergence of the alternation as a flag: systems with both K within 10 percent among the fits that converged and among those that did not (unweighted)
+
+| declaration | G_RVS | fits | converged | recovered of converged [%] | recovered of the others [%] | ephemeris order exchanged [%] |
+|---|---|---|---|---|---|---|
+| classified-fitted | 6-10 | 640 | 594 | 90 | 20 | 0 |
+| classified-fitted | 10-12 | 320 | 256 | 71 | 11 | 2 |
+| classified-fitted | 12-13 | 160 | 101 | 21 | 8 | 11 |
+| catalogue-fitted | 6-10 | 639 | 549 | 90 | 14 | 5 |
+| catalogue-fitted | 10-12 | 320 | 231 | 72 | 16 | 7 |
+| catalogue-fitted | 12-13 | 160 | 77 | 23 | 7 | 15 |
+
+## activity-fitted: 600 systems, variant activity, 887 s on 8 processes
+
+Both K within 10 percent, weighted share [%] by G_RVS
+
+| declaration | 6-9 | 9-10 | 10-11 | 11-12 | 12-13 | 13-13.5 | all |
+|---|---|---|---|---|---|---|---|
+| classified | 56 | 51 | 39 | 33 | 4 | 0 | 12 |
+| classified-fitted | 77 | 67 | 47 | 34 | 5 | 2 | 15 |
+
+Both K within 5 percent, weighted share [%] by G_RVS
+
+| declaration | 6-9 | 9-10 | 10-11 | 11-12 | 12-13 | 13-13.5 | all |
+|---|---|---|---|---|---|---|---|
+| classified | 45 | 35 | 27 | 16 | 2 | 0 | 7 |
+| classified-fitted | 69 | 61 | 39 | 21 | 2 | 0 | 10 |
+
+Systems per range: 6-9: 240, 9-10: 80, 10-11: 80, 11-12: 80, 12-13: 80, 13-13.5: 40
+
+| declaration | pull width K1 | pull width K2 | recovered | fit made | converged | median fit [s] |
+|---|---|---|---|---|---|---|
+| classified | 1.99 | 2.98 | 251 | - | - | - |
+| classified-fitted | 1.29 | 1.19 | 304 | 100% | 78% | 3.1 |
+
+Fitted labels against the injected ones, for the systems with both K within 10 percent (median absolute error). The stars are named by the orbit at the ephemeris: the fit's first star is the second where most transits were exchanged against the table as measured.
+
+| declaration | G_RVS | n | Teff 1 [K] | Teff 2 [K] | log g 1 | log g 2 | v sin i 1 [km/s] | v sin i 2 [km/s] | light fraction 2 | fits in the other order [%] |
+|---|---|---|---|---|---|---|---|---|---|---|
+| classified-fitted | 6-10 | 228 | 18 | 43 | 0.02 | 0.06 | 1.09 | 1.57 | 0.004 | 4 |
+| classified-fitted | 10-12 | 70 | 58 | 101 | 0.07 | 0.15 | 3.28 | 3.18 | 0.013 | 1 |
+| classified-fitted | 12-13 | 5 | 40 | 186 | 0.17 | 0.07 | 5.89 | 5.74 | 0.039 | 0 |
+
+Fitted against the declaration it starts from, on the same systems (both K within 10 percent; the difference of the weighted shares with the 16th and 84th percentiles of a bootstrap over systems)
+
+| pair | G_RVS | n | both | gained | lost | base [%] | fitted [%] | difference [points] |
+|---|---|---|---|---|---|---|---|---|
+| classified to classified-fitted | 6-9 | 240 | 126 | 45 | 10 | 56.3 | 77.2 | +20.9 (+15.6, +25.7) |
+| classified to classified-fitted | 9-10 | 80 | 47 | 10 | 2 | 51.3 | 66.7 | +15.4 (+10.2, +20.6) |
+| classified to classified-fitted | 10-11 | 80 | 30 | 10 | 5 | 39.1 | 46.8 | +7.7 (+1.2, +13.9) |
+| classified to classified-fitted | 11-12 | 80 | 23 | 7 | 4 | 33.1 | 34.1 | +1.0 (-2.9, +5.1) |
+| classified to classified-fitted | 12-13 | 80 | 2 | 3 | 2 | 3.8 | 5.2 | +1.4 (-0.9, +3.4) |
+| classified to classified-fitted | 13-13.5 | 40 | 0 | 1 | 0 | 0.0 | 2.4 | +2.4 (+0.0, +4.9) |
+| classified to classified-fitted | 6-13.5 | 600 | 228 | 76 | 23 | 11.9 | 14.6 | +2.7 (+1.3, +4.1) |
+
+On the systems recovered under both members of a pair: the robust widths of the K pulls and the median errors of K, base to fitted
+
+| pair | n | pull width K1 | pull width K2 | median error K1 [%] | median error K2 [%] |
+|---|---|---|---|---|---|
+| classified to classified-fitted | 228 | 2.09 to 1.30 | 3.44 to 1.15 | 0.71 to 0.29 | 1.81 to 0.41 |
+
+The convergence of the alternation as a flag: systems with both K within 10 percent among the fits that converged and among those that did not (unweighted)
+
+| declaration | G_RVS | fits | converged | recovered of converged [%] | recovered of the others [%] | ephemeris order exchanged [%] |
+|---|---|---|---|---|---|---|
+| classified-fitted | 6-10 | 320 | 284 | 78 | 17 | 3 |
+| classified-fitted | 10-12 | 160 | 118 | 53 | 19 | 2 |
+| classified-fitted | 12-13 | 80 | 45 | 9 | 3 | 12 |
+
+## activity-emission: 600 systems, variant activity, 621 s on 8 processes
+
+Both K within 10 percent, weighted share [%] by G_RVS
+
+| declaration | 6-9 | 9-10 | 10-11 | 11-12 | 12-13 | 13-13.5 | all |
+|---|---|---|---|---|---|---|---|
+| classified-fitted | 81 | 72 | 59 | 38 | 7 | 2 | 17 |
+
+Both K within 5 percent, weighted share [%] by G_RVS
+
+| declaration | 6-9 | 9-10 | 10-11 | 11-12 | 12-13 | 13-13.5 | all |
+|---|---|---|---|---|---|---|---|
+| classified-fitted | 76 | 65 | 47 | 25 | 3 | 0 | 11 |
+
+Systems per range: 6-9: 240, 9-10: 80, 10-11: 80, 11-12: 80, 12-13: 80, 13-13.5: 40
+
+| declaration | pull width K1 | pull width K2 | recovered | fit made | converged | median fit [s] |
+|---|---|---|---|---|---|---|
+| classified-fitted | 1.11 | 1.08 | 353 | 100% | 79% | 2.8 |
+
+Fitted labels against the injected ones, for the systems with both K within 10 percent (median absolute error). The stars are named by the orbit at the ephemeris: the fit's first star is the second where most transits were exchanged against the table as measured.
+
+| declaration | G_RVS | n | Teff 1 [K] | Teff 2 [K] | log g 1 | log g 2 | v sin i 1 [km/s] | v sin i 2 [km/s] | light fraction 2 | fits in the other order [%] |
+|---|---|---|---|---|---|---|---|---|---|---|
+| classified-fitted | 6-10 | 264 | 11 | 25 | 0.02 | 0.05 | 0.71 | 1.03 | 0.002 | 0 |
+| classified-fitted | 10-12 | 81 | 44 | 82 | 0.07 | 0.13 | 2.10 | 2.56 | 0.011 | 0 |
+| classified-fitted | 12-13 | 7 | 109 | 236 | 0.22 | 0.05 | 5.88 | 8.38 | 0.039 | 0 |
+
+## Emission in the Ca II cores: the 282 systems with emission that the three runs share (unweighted)
+
+| simulation | templates | both K within 10 percent [%] | within 5 percent [%] |
+|---|---|---|---|
+| without emission | classified | 48 | 41 |
+| without emission | classified-fitted | 60 | 51 |
+| with emission | classified | 29 | 15 |
+| with emission | classified-fitted | 34 | 27 |
+| with emission, fitted with the labels | classified-fitted | 50 | 48 |
+
+Fitting the emission: 49 systems gained and 3 lost against the fit without it, of 282.
+stars with emission, G_RVS 6-10: 210; injected equivalent width, median 0.62; fitted, median 0.61; median absolute error 0.01 [angstrom]
+stars with emission, G_RVS 10-12: 125; injected equivalent width, median 0.64; fitted, median 0.54; median absolute error 0.06 [angstrom]
+stars with emission, G_RVS 12-13.5: 99; injected equivalent width, median 0.64; fitted, median 0.00; median absolute error 0.44 [angstrom]
+stars without, G_RVS 6-10: 430; injected equivalent width, median 0.00; fitted, median 0.00; median absolute error 0.00 [angstrom]
+stars without, G_RVS 10-12: 195; injected equivalent width, median 0.00; fitted, median 0.00; median absolute error 0.00 [angstrom]
+stars without, G_RVS 12-13.5: 141; injected equivalent width, median 0.00; fitted, median 0.00; median absolute error 0.00 [angstrom]

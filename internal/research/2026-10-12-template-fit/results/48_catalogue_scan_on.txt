@@ -1,0 +1,6 @@
+
+48 systems
+arm            n_fit  both<10%  both<5%   med|dK1|% med|dK2|%  p68|pull1| p68|pull2|   s
+catalogue        48     68.8     54.2       0.98     2.64       3.38     6.58    1.9
+cat-fitted       47     83.3     83.3       0.34     0.38       1.32     1.29   11.6
+cat-fitted+m     47     83.3     83.3       0.35     0.38       1.31     1.27    nan

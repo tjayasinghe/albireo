@@ -4266,3 +4266,187 @@ et al. (2018) has 30 percent, and the Gaia DR3 candidates of the detached classe
 percent of equal eclipse depths. The draw takes 0.3 of the published excess, rising from q =
 0.85, and then has 31, 50 and 86 percent above 0.95, 0.9 and 0.7 among its systems with a
 flux ratio above 0.1, against 30, 49 and 83 in the compilation.
+
+## Gaia RVS: templates fitted to the epochs (2026-10-13)
+
+Machine: the same desktop, CPU only, float64, shared with other work during the runs. The
+method is in [§10.7](math.md#107-templates-fitted-to-the-epochs) and the interface is
+[`fit_templates`](api/templatefit.md). The runs are those of `scripts/rvs_eb_run.py`
+(`fitted`, `activity-fitted` and `activity-emission`), and `scripts/template_fit_bench.py`
+tabulates them.
+
+**The experiment.** Twenty systems of every cell of the population of the section above,
+1,200 in all, were simulated on the transits and the noise seeds of its runs and measured
+under five declarations of the templates. Three are those of that section. Under the other
+two the templates are fitted to the transits out of eclipse
+([`albireo.survey`](api/survey.md)). `classified-fitted` starts from the classified labels,
+with the errors of the classification as Gaussian priors: 150 K or 3 percent in
+temperature, 0.2 dex in log g, 0.15 dex in [M/H] and 20 percent in the rotation.
+`catalogue-fitted` starts from one catalogue template for both stars, with priors of 1000 K
+or 20 percent, 0.5 dex, 0.3 dex and 50 percent. The light fractions are fitted with the
+labels. The table a fit starts from is put in the order the photometric ephemeris gives,
+every later step uses the fitted templates and the velocities measured with them, and the
+orbit is fitted at the ephemeris in both orders of the table, as under the catalogue
+declaration.
+
+**Recovery.** Percent of systems with both semi-amplitudes within 10 percent of the
+injected ones, the four classes weighted to the catalogue. The second number of the fitted
+columns is the share within 5 percent.
+
+| G_RVS | systems | injected templates | classified | one catalogue template | fitted from the classified ones | fitted from the catalogue template |
+|---|---|---|---|---|---|---|
+| 6 to 9 | 480 | 86 | 62 | 47 | 84, 79 | 76, 75 |
+| 9 to 10 | 160 | 78 | 56 | 42 | 76, 69 | 68, 65 |
+| 10 to 11 | 160 | 67 | 52 | 42 | 66, 58 | 63, 57 |
+| 11 to 12 | 160 | 59 | 48 | 42 | 51, 41 | 51, 40 |
+| 12 to 13 | 160 | 18 | 12 | 13 | 14, 6 | 12, 3 |
+| 13 to 13.5 | 80 | 5 | 2 | 2 | 2, 0 | 0, 0 |
+
+The shares within 5 percent are 82, 73, 58, 48, 6 and 4 with the injected templates and
+53, 45, 44, 35, 3 and 0 with the classified ones. Of the points between the classified and
+the injected templates, the fit from a classification recovers 22 of 24 at G_RVS 6 to 9,
+20 of 22 at 9 to 10 and 14 of 15 at 10 to 11. Of those between the catalogue template and
+the injected ones, the fit from the catalogue template recovers 29 of 39, 26 of 36 and 21
+of 25. Fainter than 11 the noise of the transits limits the orbit and the fit recovers
+little.
+
+**System by system.** The fitted declarations against the ones they start from, on the
+same systems: the systems gained and lost, and the difference of the weighted shares with
+the 16th and 84th percentiles of a bootstrap over systems.
+
+| G_RVS | from the classified templates: gained, lost | difference [points] | from the catalogue template: gained, lost | difference [points] |
+|---|---|---|---|---|
+| 6 to 9 | 106, 2 | +22.2 (+18.9, +25.4) | 142, 0 | +28.8 (+25.2, +32.4) |
+| 9 to 10 | 26, 0 | +19.4 (+15.5, +23.4) | 40, 0 | +25.4 (+20.8, +29.9) |
+| 10 to 11 | 20, 2 | +13.6 (+10.1, +17.4) | 28, 1 | +21.1 (+16.9, +25.2) |
+| 11 to 12 | 12, 3 | +2.9 (+0.6, +5.2) | 19, 3 | +8.9 (+6.4, +11.7) |
+| 12 to 13 | 7, 5 | +1.9 (-0.2, +4.0) | 9, 8 | -0.9 (-3.6, +1.9) |
+| 13 to 13.5 | 1, 1 | +0.8 (-0.4, +2.1) | 1, 2 | -2.1 (-4.2, +0.0) |
+
+Over the 1,200 systems the fit from the classified templates gains 172 and loses 13, and
+the fit from the catalogue template gains 239 and loses 14.
+
+**The semi-amplitudes of the recovered systems.** The robust widths of the pulls of the
+two semi-amplitudes over the systems recovered under each declaration are 0.95 and 1.05
+with the injected templates, 1.57 and 2.54 with the classified ones, 2.02 and 3.16 with the
+catalogue template, 1.03 and 1.12 after the fit from the classified templates and 1.03 and
+1.15 after the fit from the catalogue template. On the 589 systems recovered with the
+classified templates and with the fit from them, the median errors of the two
+semi-amplitudes fall from 0.48 and 1.35 percent to 0.25 and 0.36 percent. On the 472
+recovered with the catalogue template and with the fit from it, they fall from 0.87 and
+1.76 percent to 0.23 and 0.29 percent.
+
+**The fitted parameters.** Median absolute errors over the systems with both
+semi-amplitudes within 10 percent, with the stars named by the orbit at the ephemeris.
+
+| start | G_RVS | systems | Teff 1 [K] | Teff 2 [K] | log g 1 | log g 2 | v sin i 1 [km/s] | v sin i 2 [km/s] | light fraction |
+|---|---|---|---|---|---|---|---|---|---|
+| classified | 6 to 10 | 543 | 12 | 25 | 0.02 | 0.05 | 0.65 | 1.10 | 0.001 |
+| classified | 10 to 12 | 190 | 45 | 76 | 0.07 | 0.12 | 1.94 | 3.35 | 0.008 |
+| classified | 12 to 13 | 26 | 115 | 144 | 0.14 | 0.14 | 5.14 | 5.43 | 0.030 |
+| catalogue | 6 to 10 | 505 | 12 | 25 | 0.02 | 0.06 | 0.70 | 1.41 | 0.001 |
+| catalogue | 10 to 12 | 181 | 56 | 89 | 0.09 | 0.17 | 2.62 | 5.00 | 0.008 |
+| catalogue | 12 to 13 | 24 | 191 | 264 | 0.18 | 0.24 | 7.88 | 13.62 | 0.025 |
+
+These are errors against the labels of the same library that rendered the simulated stars.
+They do not contain the error of a library against a real star.
+
+**Convergence of the alternation.** The velocities of the last two measurements agree for
+82 percent of the fits from the classified templates and 75 percent of those from the
+catalogue template. A fit that did not converge marks a table that is not to be trusted:
+at G_RVS 6 to 10 both semi-amplitudes are within 10 percent for 90 percent of the
+converged fits and for 20 and 14 percent of the others, and at 10 to 12 for 71 and 72
+percent against 11 and 16. For 85 systems the table measured with the templates fitted
+from the classified ones has fewer than three usable transits where the table of the
+classified templates had six or more. None of the 85 was recovered with the classified
+templates. Their median flux ratio is 0.02, and 52 percent of the usable transits of their
+classified tables are more than five quoted errors and 3 km/s from the injected
+velocities, against 15 percent for the other systems: the fitted templates flag transits
+that the classified ones measured wrongly.
+
+**Emission in the Ca II cores.** Ten systems of every cell were simulated again with the
+emission of the activity variant of the section above, and measured with the classified
+templates, with the templates fitted from them, and with the equivalent width of the
+emission in each star's line cores fitted beside the labels (`TemplateDeviation`). Percent
+of the 282 systems with emission that have both semi-amplitudes within 10 and within 5
+percent, unweighted as in the table of effects of that section:
+
+| simulated | templates | within 10 percent | within 5 percent |
+|---|---|---|---|
+| without emission | classified | 48 | 41 |
+| without emission | fitted | 60 | 51 |
+| with emission | classified | 29 | 15 |
+| with emission | fitted, the emission not in the model | 34 | 27 |
+| with emission | fitted, with the emission | 50 | 48 |
+
+Fitting the emission gains 49 systems and loses 3 against the fit without it. The fitted
+equivalent widths have a median error of 0.01 Å at G_RVS 6 to 10 and of 0.06 Å at 10 to
+12, for injected medians of 0.62 and 0.64 Å. Fainter than 12 the emission is not measured:
+the median of the fitted widths is zero. For the stars without emission it is zero in
+every range. Over the 600 systems of the run, the weighted shares with the emission fitted
+are 81, 72, 59, 38 and 7 percent at G_RVS 6 to 9, 9 to 10, 10 to 11, 11 to 12 and 12 to
+13, against 77, 67, 47, 34 and 5 for the fit without it and 56, 51, 39, 33 and 4 for the
+classified templates. The pulls of the semi-amplitudes of the recovered systems have widths
+of 1.11 and 1.08, against 1.29 and 1.19, and 1.99 and 2.98.
+
+**Errors of the fitted parameters under correlated noise.** Sixteen simulated datasets of
+twelve epochs at each lag-one coefficient, on the toy binary of
+`tests/test_templatefit.py`, with eight fitted parameters each.
+
+| coefficient | declared | rms pull of the parameters | rms pull of the velocities |
+|---|---|---|---|
+| 0 | | 1.10 | 1.08 |
+| 0.27 | no | 1.42 | 1.39 |
+| 0.27 | yes | 1.09 | 1.09 |
+| 0.6 | no | 1.98 | 1.97 |
+| 0.6 | yes | 1.06 | 1.11 |
+
+**The order of two alike stars.** Two identical stars of equal light at S/N 60, 24 epochs
+and six realisations at each coefficient, started from a table in the injected order. Of
+the 114 usable epochs with more than 40 km/s between the stars, the table returned has
+none in the other order at coefficients of 0, 0.27, 0.5 and 0.8. With the threshold of the
+order not scaled for the declared correlation it has 0, 0, 3 and 11.
+
+**Measured and not adopted.** Both on 48 systems brighter than G_RVS = 12.6 with a flux
+ratio above 0.1 (`internal/research/2026-10-12-template-fit/`).
+
+- *The template parameters solved for in the orbit fit.* With the covariance of the fit as
+  their prior, 43 systems have both semi-amplitudes within 10 percent where 44 had, and the
+  68th percentiles of the absolute pulls go from 1.30 and 1.25 to 1.25 and 1.27. The error
+  of a velocity from the fitted templates is 0.06 of its quoted error in the median system.
+  With templates that are not fitted and the variances of the classification as the prior,
+  the percentiles go from 2.01 and 3.58 to 1.18 and 1.87 and 38 systems are recovered
+  where 37 were. The orbit fits use the quoted errors alone.
+- *Starting a loosely declared label from several values.* From the catalogue template 40
+  systems are recovered with the scan and 40 without, at 11.6 against 5.1 s per fit
+  (measured with the first form of the fit).
+
+**Checks.**
+
+- The three declarations that are not fitted give, on the 1,200 systems, the numbers of
+  the run of the section above in every column compared (semi-amplitudes and their errors,
+  chi-square, usable transits, light fractions, the fit with the period alone, the
+  single-lined fit, the decisions of the orbit): the largest relative difference is zero.
+- 0 of the 1,200 systems raised an error, and a fit was made for 1,200 and 1,199.
+- An earlier form of the fit put a table measured between two passes in the order of the
+  table before it wherever the other order of a pair was nearer the velocities it had. For
+  two distinct stars it exchanged correctly measured transits to follow a starting table in
+  error: one system at G_RVS = 6.1 had nine of its 52 transits exchanged and the secondary's
+  semi-amplitude 70 percent low. The order of a pair is now decided by the chi-square of
+  its two orders (§10.7). A run of the same 1,200 systems before that correction and the two
+  that followed it, the exchange of the two stars and the use of the ephemeris for their
+  order, recovered 680 and 643 systems under the two fitted declarations, against 761 and
+  711 here. Of the systems brighter than G_RVS = 10 the fit reported here recovers 63 and
+  54 that the earlier one did not, and loses none.
+- The orbit under the classified declaration is fitted in the order of its templates, as in
+  the section above. Its table has the stars in the other order at 80 percent or more of
+  the separated transits for 82 of the 1,200 systems. Fifty-nine of those are recovered,
+  by the exchange of single transits that the orbit makes where the light ratio is below 3,
+  and none of the 10 with a larger light ratio. Under the fitted declarations the orbit of
+  9 and 22 recovered systems is the one of the table in its other order.
+
+**Cost.** The 1,200 systems under five declarations took 67 minutes on 8 processes. A fit
+takes 2.6 s from the classified templates and 3.7 s from the catalogue template in the
+median, 8.5 and 11.5 s at the 90th percentile and 27 s at most, with the eight processes
+running. The alternation ends after two passes for 50 and 45 percent of the fits and runs
+its four for 29 and 36 percent.

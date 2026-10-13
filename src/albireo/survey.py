@@ -23,6 +23,10 @@ templates, on the same epochs:
 ``catalogue``
     One template for both stars, from the colour of the pair, with the light fractions
     measured.
+``classified-fitted``, ``catalogue-fitted``
+    The labels, the rotation and the light fractions fitted to the transits out of eclipse
+    (:func:`albireo.fit_templates`), started from the classified labels or from the
+    catalogue template, with the errors of that declaration as Gaussian priors.
 
 and it can be simulated under a *variant* that adds one effect to the baseline:
 ``"null"`` (the primary alone, to count false detections of a secondary), ``"third-light"``,
@@ -93,11 +97,18 @@ __all__ = [
     "run_system",
 ]
 
-DECLARATIONS = ("injected", "classified", "catalogue")
-"""The declarations of the templates, in the order of the ``decl`` column."""
+_FITTED = {"classified-fitted": "classified", "catalogue-fitted": "catalogue"}
+"""The declarations whose templates are fitted, and the declaration each fit starts from."""
+
+DECLARATIONS = ("injected", "classified", "catalogue", *_FITTED)
+"""The declarations of the templates. A run records those it measured, in the order of its
+``decl`` column, and measures the first three unless told otherwise."""
 
 VARIANTS = ("baseline", "null", "third-light", "activity", "instrument")
 """The variants of the simulation."""
+
+_ADDED_FIELDS = ("catalogue_errors", "fit_emission", "emission_max")
+"""Fields of :class:`SurveyConfig` added after the first recorded runs (D70)."""
 
 # Vacuum wavelengths of the Ca II triplet in Angstrom, and the excess equivalent width of
 # the emission in each line relative to that at 8542 (air).
@@ -129,7 +140,8 @@ class SurveyConfig:
         runs.
     period_fit
         The declarations under which the orbit is also fitted with the period known and
-        the conjunction free (:func:`albireo.rvorbit.assign_components`).
+        the conjunction free (:func:`albireo.rvorbit.assign_components`). A fitted
+        declaration follows the declaration its fit starts from.
     v_search_kms
         Half-width of the velocity range searched for each component.
     v_max_kms, vsini_max_kms
@@ -143,7 +155,20 @@ class SurveyConfig:
     classification
         Errors of the ``classified`` declaration: the temperature error in K and as a
         fraction (the larger applies), the errors of ``log g`` and of ``[M/H]`` in dex, and
-        the fractional error of ``v sin i``.
+        the fractional error of ``v sin i``. They are also the prior widths of
+        ``classified-fitted``.
+    catalogue_errors
+        The prior widths of ``catalogue-fitted``, in the form of ``classification``. One
+        template from the colour of the pair can be more than a thousand kelvin from the
+        secondary, so they are wide.
+    fit_emission
+        Whether a fitted declaration also fits, for each star, the equivalent width of
+        emission in the cores of the Ca II triplet (:class:`albireo.TemplateDeviation`),
+        between zero and ``emission_max`` Angstrom. The profile fitted is the one the
+        ``"activity"`` variant simulates, so the run measures what a component of the
+        right shape recovers, and not the cost of a shape in error.
+    emission_max
+        The upper bound of that equivalent width, in Angstrom.
     background_factor
         ``"instrument"``: the background of a transit is the mission median times a
         factor drawn log-uniformly between the reciprocal of this number and it.
@@ -152,10 +177,10 @@ class SurveyConfig:
         (:func:`albireo.gaia.simulate_rvs_dataset`).
     """
 
-    declarations: tuple[str, ...] = DECLARATIONS
+    declarations: tuple[str, ...] = DECLARATIONS[:3]
     variant: str = "baseline"
     simulation: str = "survey"
-    period_fit: tuple[str, ...] = DECLARATIONS
+    period_fit: tuple[str, ...] = DECLARATIONS[:3]
     v_search_kms: float = 450.0
     v_max_kms: float = 700.0
     vsini_max_kms: float = 320.0
@@ -163,6 +188,9 @@ class SurveyConfig:
     zero_point_kms: float = 0.17
     libraries: tuple[str, ...] = DEFAULT_LIBRARIES
     classification: tuple[float, float, float, float, float] = (150.0, 0.03, 0.2, 0.15, 0.2)
+    catalogue_errors: tuple[float, float, float, float, float] = (1000.0, 0.2, 0.5, 0.3, 0.5)
+    fit_emission: bool = False
+    emission_max: float = 3.0
     background_factor: float = 5.5
     response_order: int = 2
     response_amplitude: float = 0.02
@@ -179,7 +207,16 @@ class SurveyConfig:
             raise ValueError("v_search_kms must be positive")
 
     def to_dict(self) -> dict[str, Any]:
-        return json.loads(json.dumps(dataclasses.asdict(self)))
+        """The configuration as plain values. A field added after the first recorded runs
+        is left out while it has its default, so that the record of a run made before the
+        field existed still describes the same configuration and the run can be read and
+        continued."""
+        out = json.loads(json.dumps(dataclasses.asdict(self)))
+        defaults = {f.name: f.default for f in dataclasses.fields(self)}
+        for name in _ADDED_FIELDS:
+            if getattr(self, name) == defaults[name]:
+                out.pop(name)
+        return out
 
     @classmethod
     def from_dict(cls, data) -> SurveyConfig:
@@ -250,7 +287,8 @@ def declare(system: BinarySystem, declaration: str, libraries: LibrarySet, confi
     system
         The system.
     declaration
-        One of :data:`DECLARATIONS`.
+        One of :data:`DECLARATIONS`. For a fitted declaration the result is that of the
+        declaration its fit starts from.
     libraries
         The library boxes; every label is moved into its box.
     config
@@ -278,6 +316,7 @@ def declare(system: BinarySystem, declaration: str, libraries: LibrarySet, confi
     config = SurveyConfig() if config is None else config
     if declaration not in DECLARATIONS:
         raise ValueError(f"unknown declaration {declaration!r}")
+    declaration = _FITTED.get(declaration, declaration)
     stars = system.labels
     vsini = [float(system.vsini1), float(system.vsini2)]
     light: Any = "global"
@@ -516,7 +555,11 @@ _SYSTEM_DECLARED = (
     "e_nx e_no e_held e_light1 e_light2 "
     "p_ok p_k1 p_k2 p_k1_err p_k2_err p_gamma p_gamma_err p_ecc p_period p_chi2 p_npts p_npar "
     "p_nx p_no p_held p_swapped "
-    "s_ok s_k1 s_k1_err s_gamma s_gamma_err s_chi2 s_npts s_light"
+    "s_ok s_k1 s_k1_err s_gamma s_gamma_err s_chi2 s_npts s_light "
+    "f_ok f_converged f_passes f_exchanged f_chi2 "
+    "f_teff1 f_teff2 f_logg1 f_logg2 f_mh f_vsini1 f_vsini2 "
+    "f_teff1_err f_teff2_err f_vsini1_err f_vsini2_err f_light2 f_light2_err "
+    "f_emission1 f_emission2 t_fit"
 ).split()
 
 
@@ -543,6 +586,115 @@ def _correlate(dataset: Dataset, pair, light, config: SurveyConfig, ctx: _Contex
         if light != "global":
             raise
         return todcor(dataset, pair, light="free", **options), True
+
+
+def _fit_declared(system, declaration, declared, table, dataset, grid, config, ctx, lag1):
+    """The templates of a fitted declaration, or ``None`` where the fit could not be made.
+
+    :func:`albireo.fit_templates` is started from the declared labels and from ``table``,
+    the velocities measured with them, with the errors of the declaration as Gaussian
+    priors. The table is first put in the order the ephemeris gives, in whichever order
+    of its components fits the ephemeris better. One template for both stars leaves the
+    order of the pair at each epoch open, and two templates that are alike are returned
+    in either order, at an epoch or throughout. On 120 systems the fit from the
+    classified table as measured recovered both semi-amplitudes within 10 percent for 66
+    and had the stars in the order of their light for 103, and from the table put in
+    order for 71 and 116.
+    """
+    from albireo.facade import Between, Known
+    from albireo.match import StarLabels
+    from albireo.rvorbit import assign_by_ephemeris
+    from albireo.templatefit import TemplateDeviation, fit_templates, line_deviation
+
+    start = table
+    best = None
+    for candidate in (table, _exchange_all(table)):
+        try:
+            fitted = assign_by_ephemeris(
+                candidate,
+                period=system.period,
+                t_conj=system.t_conj,
+                fit_eccentricity=system.ecc > 0.0 or config.simulation == "recorded",
+            )
+        except (ValueError, np.linalg.LinAlgError):
+            continue
+        if best is None or fitted[1].chi2 < best[1].chi2:
+            best = fitted
+    if best is not None:
+        start = best[0]
+    widths = (
+        config.classification if _FITTED[declaration] == "classified" else config.catalogue_errors
+    )
+    d_teff, f_teff, d_logg, d_mh, f_vsini = widths
+    stars = {}
+    for name, labels, vsini in zip(("A", "B"), declared["labels"], declared["vsini"], strict=True):
+        stars[name] = StarLabels(
+            library=ctx.libraries,
+            teff=Known(labels["teff"], max(d_teff, f_teff * labels["teff"])),
+            logg=Known(labels["logg"], d_logg),
+            vsini=Known(float(vsini), max(f_vsini * float(vsini), 1.0)),
+        )
+    key = dataset.epochs[0].instrument
+    deviations = None
+    if config.fit_emission:
+        cores = line_deviation(
+            grid,
+            [centre for centre, _ in _CA_TRIPLET],
+            _CA_EMISSION_SIGMA,
+            strengths=[ratio for _, ratio in _CA_TRIPLET],
+        )
+        amplitude = Between(0.0, float(config.emission_max), start_at=0.02 * config.emission_max)
+        deviations = {name: [TemplateDeviation("emission", cores, amplitude)] for name in stars}
+    try:
+        return fit_templates(
+            dataset,
+            stars,
+            grid=grid,
+            medium="vacuum",
+            deviations=deviations,
+            mh=Known(float(np.mean([labels["mh"] for labels in declared["labels"]])), d_mh),
+            epsilon=dict(zip(("A", "B"), declared["epsilon"], strict=True)),
+            start=start,
+            v_range=(-config.v_search_kms, config.v_search_kms),
+            lsf_sigma_v={key: ctx.delivered_kms},
+            noise_correlation={key: lag1},
+            scale="free" if config.variant == "instrument" else "fixed",
+        )
+    except (ValueError, np.linalg.LinAlgError):
+        # Too few measured epochs to start from, or templates the correlation cannot
+        # measure with: the declaration the fit starts from is kept.
+        return None
+
+
+def _fit_record(fit, record: dict[str, Any], row: int) -> None:
+    """Write what a template fit found into row ``row`` of the system's columns."""
+    first, second = fit.names
+    light = next(iter(fit.light.values()))
+    light_error = next(iter(fit.light_errors.values()))
+    values = {
+        "f_converged": float(fit.converged),
+        "f_passes": float(len(fit.passes)),
+        "f_exchanged": float(any(entry["stars_exchanged"] for entry in fit.passes)),
+        "f_chi2": fit.reduced_chi2,
+        "f_teff1": fit.labels[first]["teff"],
+        "f_teff2": fit.labels[second]["teff"],
+        "f_logg1": fit.labels[first]["logg"],
+        "f_logg2": fit.labels[second]["logg"],
+        "f_mh": fit.labels[first]["mh"],
+        "f_vsini1": fit.labels[first]["vsini"],
+        "f_vsini2": fit.labels[second]["vsini"],
+        "f_teff1_err": fit.errors[first]["teff"],
+        "f_teff2_err": fit.errors[second]["teff"],
+        "f_vsini1_err": fit.errors[first]["vsini"],
+        "f_vsini2_err": fit.errors[second]["vsini"],
+        "f_light2": float(light[1]),
+        "f_light2_err": float(light_error[1]),
+    }
+    if fit.amplitudes:
+        values["f_emission1"] = float(fit.amplitudes[first][0])
+        values["f_emission2"] = float(fit.amplitudes[second][0])
+    for key, value in values.items():
+        record[key][row] = value
 
 
 def _fill(columns: dict[str, np.ndarray], row: int, where: np.ndarray, table) -> None:
@@ -621,7 +773,12 @@ def run_system(system: BinarySystem, config: SurveyConfig | None = None) -> dict
        :func:`albireo.todcor` measures both velocities at every transit. Transits out of
        eclipse are measured with the declared light fractions, held or measured on those
        transits. Transits in eclipse, which the ephemeris identifies, are measured with
-       the amplitudes of each epoch and do not enter the orbit.
+       the amplitudes of each epoch and do not enter the orbit. Under a fitted
+       declaration the templates and the light fractions are then fitted to the transits
+       out of eclipse (:func:`albireo.fit_templates`), started from that table put in
+       order by the ephemeris, and every later step uses the fitted templates and the
+       velocities measured with them. Where the fit cannot be made, the declaration it
+       starts from is kept and ``f_ok`` is zero.
     3. *Orbit.* :func:`albireo.rvorbit.assign_by_ephemeris` fits the semi-amplitudes and the
        systemic velocity with the period and the time of the primary's eclipse held, and
        the eccentricity fitted where the injected orbit is eccentric. Under the
@@ -634,9 +791,12 @@ def run_system(system: BinarySystem, config: SurveyConfig | None = None) -> dict
 
     With identical templates (``catalogue``) the correlation does not name the stars. The
     ephemeris does: the table is fitted in both orders of its components and the order of
-    the lower chi-square is kept. The fit with the period alone cannot tell the two orders
-    apart, and its semi-amplitudes are compared with the injected ones in the order that
-    fits (``p_swapped``), as for any pair of alike stars.
+    the lower chi-square is kept (``swapped``). The same is done under a fitted
+    declaration. A fit keeps the order of the table it starts from where the declared
+    labels do not tell the stars apart, and the correlation gives two alike templates
+    either order. The fit with the period alone cannot tell the two orders apart, and its
+    semi-amplitudes are compared with the injected ones in the order that fits
+    (``p_swapped``), as for any pair of alike stars.
 
     Parameters
     ----------
@@ -765,6 +925,18 @@ def run_system(system: BinarySystem, config: SurveyConfig | None = None) -> dict
         fallback = False
         if data_out is not None:
             table, fallback = _correlate(data_out, pair, declared["light"], config, ctx, lag1)
+            if declaration in _FITTED:
+                t_fit = time.perf_counter()
+                fit = _fit_declared(
+                    system, declaration, declared, table, data_out, grid, config, ctx, lag1
+                )
+                record["t_fit"][row] = time.perf_counter() - t_fit
+                record["f_ok"][row] = float(fit is not None)
+                if fit is not None:
+                    # A fit started from one template for both stars does not name the
+                    # stars either: ``identical`` stays set, and the ephemeris does.
+                    pair, table = list(fit.templates), fit.table
+                    _fit_record(fit, record, row)
             _fill(epochs, row, index_out, table)
         if data_in is not None:
             eclipsed, _ = _correlate(data_in, pair, "free", config, ctx, lag1)
@@ -810,9 +982,11 @@ def run_system(system: BinarySystem, config: SurveyConfig | None = None) -> dict
             record["s_npts"][row] = float(orbit.n_points)
             with np.errstate(invalid="ignore"):
                 record["s_light"][row] = float(np.nanmedian(single.light[0]))
-        # The orbit at the held ephemeris.
+        # The orbit at the held ephemeris. One template for both stars does not name them,
+        # and a fit of the templates ends with them in the order of its starting table
+        # where the declared labels do not tell them apart: the ephemeris names them.
         candidates = [(False, table)]
-        if declared["identical"]:
+        if declared["identical"] or (declaration in _FITTED and record["f_ok"][row] == 1.0):
             candidates.append((True, _exchange_all(table)))
         best = None
         for swapped, candidate in candidates:
@@ -848,7 +1022,7 @@ def run_system(system: BinarySystem, config: SurveyConfig | None = None) -> dict
             epochs["xe"][row, index_out] = decided.exchanged ^ swapped
             epochs["oe"][row, index_out] = decided.alternative
         # The orbit with the period known and the conjunction free.
-        if declaration in config.period_fit:
+        if _FITTED.get(declaration, declaration) in config.period_fit:
             record["p_ok"][row] = 0.0
             try:
                 # In blocks of epochs, or a process compiles a set of array programs for

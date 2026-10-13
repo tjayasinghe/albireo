@@ -205,6 +205,7 @@ from albireo.simulate import (
     synthetic_nebular_spectrum,
     synthetic_telluric_spectrum,
 )
+from albireo.templatefit import TemplateDeviation, TemplateFit, fit_templates, line_deviation
 from albireo.todcor import (
     Template,
     TodcorBatch,
@@ -323,6 +324,8 @@ __all__ = [
     "StarResult",
     "Telluric",
     "Template",
+    "TemplateDeviation",
+    "TemplateFit",
     "Tier",
     "TodcorBatch",
     "TodcorSurface",
@@ -354,6 +357,7 @@ __all__ = [
     "find_period",
     "fit_continuum",
     "fit_rv_orbit",
+    "fit_templates",
     "from_debcat",
     "from_gaia_sb2",
     "gauss_hermite_kernel_traced",
@@ -370,6 +374,7 @@ __all__ = [
     "library_interpolator",
     "library_names",
     "line_core_medium",
+    "line_deviation",
     "load_config",
     "load_example",
     "load_fit",

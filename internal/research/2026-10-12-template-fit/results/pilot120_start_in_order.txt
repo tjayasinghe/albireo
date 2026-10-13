@@ -1,0 +1,12 @@
+  24/120 systems, 115 s
+  48/120 systems, 242 s
+  72/120 systems, 365 s
+  96/120 systems, 467 s
+  120/120 systems, 581 s
+
+ordered: 120 systems (every 10th from 3), 581 s
+| declaration | both K within 10% | within 5% | converged | median |f_light2 - truth| (in the fit's order) | fits in the order of the light | median passes | median t_fit |
+| classified | 59 | 50 |  |
+| classified-fitted | 71 | 64 | 94/120 | 0.0096 | 116/120 | 3 | 3.1 |
+| catalogue | 49 | 39 |  |
+| catalogue-fitted | 64 | 58 | 83/120 | 0.0174 | 101/120 | 3 | 4.9 |

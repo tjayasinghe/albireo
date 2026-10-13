@@ -2182,6 +2182,191 @@ the flagged epochs left out, to within one system either way. In the ranking of 
 candidate periods of a search, where every candidate must be fitted to the same velocities,
 the decisions put the injected period first for one further system of 32 (benchmarks.md).
 
+### 10.7 Templates fitted to the epochs
+
+The estimator of §10.1 takes the templates as given, and its errors (§10.4) are those of a
+fit against exact templates. `fit_templates` renders the templates from a library and fits
+their parameters with the velocities. Each template is
+
+```math
+\mathbf t_i = \mathsf K(v_i \sin i)\,
+\Bigl[\mathbf s(T_{{\rm eff},i}, \log g_i, [{\rm M/H}]) - \mathbf 1
+      + \sum_k c_{ik}\,\mathbf e_{ik}\Bigr] ,
+```
+
+with $`\mathbf s`$ the library spectrum interpolated at the labels (§9.3), $`\mathsf K`$ the
+rotation kernel, and $`\mathbf e_{ik}`$ optional vectors for components that no library
+spectrum has, such as emission in line cores, each with a fitted amplitude $`c_{ik}`$. The
+parameters divide into two sets. The shifts $`\delta_{ij}`$ and the nuisance
+$`\boldsymbol\beta_j`$ of epoch $`j`$ appear in that epoch alone, and are collected in
+$`\boldsymbol\psi_j`$. The labels, the amplitudes and the light fractions, collected in
+$`\boldsymbol\phi`$, appear in every epoch. The fit minimises
+
+```math
+\chi^2(\boldsymbol\phi, \{\boldsymbol\psi_j\}) =
+\sum_j \bigl\lVert \mathbf z_j - \mathbf m_j(\boldsymbol\phi, \boldsymbol\psi_j)
+\bigr\rVert^2_{\mathsf W_j}
++ \sum_k \frac{(\phi_k - \mu_k)^2}{s_k^2} ,
+```
+
+with $`\mathbf m_j`$ the model of §10.1 and the second sum over the parameters declared with
+a Gaussian prior: a classification with its error.
+
+**The reduced problem.** For given $`\boldsymbol\phi`$ each epoch is minimised over its own
+parameters, and the reduced objective
+$`F(\boldsymbol\phi) = \min_{\{\boldsymbol\psi_j\}} \chi^2`$ is minimised over
+$`\boldsymbol\phi`$ (variable projection; Golub & Pereyra 1973). Let
+$`\mathsf G_j = \mathsf W_j^{1/2}\,\partial\mathbf m_j/\partial\boldsymbol\phi`$ and
+$`\mathsf L_j = \mathsf W_j^{1/2}\,\partial\mathbf m_j/\partial\boldsymbol\psi_j`$ be the
+weighted Jacobians and $`\mathbf r_j`$ the weighted residual at the epoch's minimum, where
+$`\mathsf L_j^{\!\top}\mathbf r_j = 0`$. Then
+
+```math
+\nabla F = -2 \sum_j \mathsf G_j^{\!\top} \mathbf r_j + \nabla(\text{priors}),
+\qquad
+\mathsf S = \sum_j \Bigl[\mathsf G_j^{\!\top}\mathsf G_j
+ - \mathsf G_j^{\!\top}\mathsf L_j\,(\mathsf L_j^{\!\top}\mathsf L_j)^{-1}\,
+   \mathsf L_j^{\!\top}\mathsf G_j\Bigr] ,
+```
+
+and $`2\mathsf S`$ with the curvature of the priors is the Gauss-Newton matrix of $`F`$: the
+Schur complement of the epochs' blocks in the matrix of the whole problem. A bounded
+Levenberg-Marquardt takes its steps with it. Every column is a projected vector of the kind
+the correlation already forms. The column of a shift is the template's slope across its
+cell of the integer shifts, which is exact inside the cell (§10.3). The column of a label
+is the derivative of the template with respect to that label, projected at the shift of
+its star and multiplied by the star's light fraction. The derivative is a central
+difference in the label, of half-steps 5 K, 0.01 dex and 0.1 km/s, and the interpolant is a
+cubic in each label between two nodes. The light fractions sum to one, so the column of
+the fraction of star $`i > 1`$ is the projected template of that star less that of the
+first. That constraint separates a light fraction from a line strength: the data are
+normalized, and a change of a fraction is not absorbed by the metallicity of both stars at
+once.
+
+**The minimum of an epoch.** It is followed locally, from the shifts of the current table.
+Inside a cell of the integer shifts the model is linear in the shifts, so with the nuisance
+solved for the chi-square is a quadratic, and its minimum over the cell is found in closed
+form (§10.3). Where that minimum is on a face of the cell, every cell that touches it is
+minimised as well and the position moves to the lowest, until no cell touching the position
+is lower. A minimum left on a face is a kink of the surface, the pixel-locking of the
+linear shift operator. Such a shift does not respond to a small change of the templates:
+it is not among the columns of $`\mathsf L_j`$, and its sensitivity below is zero. $`F`$ is
+continuous there and its gradient is not.
+
+**Two steps.** A template far from the star can leave an epoch in the wrong minimum of its
+surface (§10.3), which a local step does not leave. After each minimisation every epoch is
+therefore measured again by the search of §10.3 over the whole range, with the fitted
+templates, and the two steps alternate until no velocity changes by more than a tenth of
+its error. A pair measured in another order than the minimisation read it in is such a
+change.
+
+**The order of the two stars.** The search returns each pair of velocities in the order of
+the lower chi-square, and each star's shift is read from its own row of the table. For two
+alike stars the two orders are equally deep and the noise decides between them, so a table
+measured between two passes is compared with the one before it. An epoch is exchanged
+where the other order of its pair is nearer the velocities it had and the chi-square with
+the two velocities exchanged between the templates is above the one returned by less than
+the threshold of the margin (§10.3), $`9\,\chi^2_{\min}/(n_{\rm pix} - p)`$. Above that
+threshold the order returned is a measurement and is kept, whatever the table before. The
+chi-square is taken at the exchanged velocities themselves and not at a minimum followed
+from them, which at a blended epoch of two distinct stars is the minimum returned.
+
+The difference of the chi-squares of two models scatters with the variance of
+$`2\,\mathbf d^{\!\top}\mathbf n`$, with $`\mathbf d`$ the difference of the weighted models
+and $`\mathbf n`$ the standardized noise. Under a declared lag-one correlation that
+variance is larger by
+$`\mathbf d^{\!\top}\mathsf R\,\mathbf d / \mathbf d^{\!\top}\mathbf d`$, up to
+$`(1+\varphi)/(1-\varphi)`$ for a difference that varies slowly along the pixels, and the
+threshold is multiplied by that ratio. Without it the two orders of two identical stars
+differ by more than the threshold at 3 and 11 of 114 well-separated epochs at
+$`\varphi = 0.5`$ and 0.8, and at none with it.
+
+Let $`\mathsf E`$ exchange the labels, the amplitudes and the light fractions of two stars
+together with their rows of the table. It leaves the chi-square of every epoch unchanged
+where nothing is held to either star, and it does not leave the priors $`P`$ unchanged,
+which are those of the stars as declared:
+
+```math
+F(\mathsf E\boldsymbol\phi) - F(\boldsymbol\phi)
+ = P(\mathsf E\boldsymbol\phi) - P(\boldsymbol\phi) .
+```
+
+A starting table with the two stars in the other order at every epoch, as a correlation
+with alike templates returns it, leads the fit to the image of the solution, of the same
+chi-square and larger priors. The epochs do not tell rows in the other order from priors
+given to the other star, so which of the two names the stars is declared. By default the
+priors do: where $`P(\boldsymbol\phi) - P(\mathsf E\boldsymbol\phi) > 9`$ the image is
+fitted, with the rows of the table exchanged, and kept if its objective is the lower. The
+objectives differ beyond the priors only where something is held to each star, a limb
+darkening or a gravity for instance, and the comparison decides there. Below that
+difference of the priors the order of the starting table stays, and an orbit names the
+stars (§10.6).
+
+**The covariance, and the errors of the table.** Let
+$`\boldsymbol\Lambda = {\rm diag}(1/s_k^2)`$, $`\rho`$ the reduced chi-square (one with the
+weights taken as given), and
+$`\tilde{\mathsf G}_j = [\mathsf I - \mathsf L_j(\mathsf L_j^{\!\top}\mathsf L_j)^{-1}\mathsf L_j^{\!\top}]\,\mathsf G_j`$
+the Jacobian of an epoch with its own parameters projected out, so that
+$`\mathsf S = \sum_j \tilde{\mathsf G}_j^{\!\top}\tilde{\mathsf G}_j`$. The covariance of the
+fitted parameters, with the velocities of every epoch marginalised, is
+
+```math
+\mathsf C_\phi = \mathsf H^{-1}\bigl(\mathsf M/\rho + \boldsymbol\Lambda\bigr)\mathsf H^{-1},
+\qquad
+\mathsf H = \mathsf S/\rho + \boldsymbol\Lambda,
+\qquad
+\mathsf M = \sum_j \tilde{\mathsf G}_j^{\!\top}\,\mathsf R_j\,\tilde{\mathsf G}_j ,
+```
+
+with $`\mathsf R_j`$ the correlation of the standardized noise of the epoch along its
+pixels. For white noise $`\mathsf M = \mathsf S`$ and $`\mathsf C_\phi = \mathsf H^{-1}`$.
+With a declared lag-one correlation it is the sandwich of §10.4 on the reduced problem. On
+16 simulated datasets of twelve epochs at each of a coefficient of 0.27 and of 0.6, the
+pulls of the eight fitted parameters have an rms of 1.42 and 1.98 under the white-noise
+form, where $`\sqrt{(1+\varphi)/(1-\varphi)}`$ is 1.32 and 2.0, and of 1.09 and 1.06 with
+the correlation declared (1.10 for white noise).
+
+The same blocks give the response of an epoch's minimum to the global parameters,
+
+```math
+\frac{\partial\boldsymbol\psi_j}{\partial\boldsymbol\phi}
+ = -(\mathsf L_j^{\!\top}\mathsf L_j)^{-1}\,\mathsf L_j^{\!\top}\mathsf G_j ,
+```
+
+whose rows for the shifts, converted to km/s, are the sensitivities $`\mathsf J_j`$ recorded
+on the velocity table. The covariance of the velocities of two epochs is
+
+```math
+{\rm Cov}(\mathbf v_j, \mathbf v_k)
+ = \delta_{jk}\,\mathsf C_j + \mathsf J_j\,\mathsf C_\phi\,\mathsf J_k^{\!\top} ,
+```
+
+with $`\mathsf C_j`$ the covariance of §10.4. The second term is common to the epochs. An
+error of a template moves the velocities of all of them, by an amount that depends on how
+far apart the lines are. For a light fraction or a rotation in error that amount follows
+the orbital phase, so it enters a semi-amplitude and is not removed by a zero point.
+
+**Measured.** On 1,200 simulated eclipsing binaries in the Gaia RVS (benchmarks.md), with the
+templates started from a classification and fitted to the transits out of eclipse, both
+semi-amplitudes are within 10 percent of the injected ones for 84, 76 and 66 percent of the
+systems at $`G_{\rm RVS}`$ 6 to 9, 9 to 10 and 10 to 11. The classified templates give 62,
+56 and 52 percent and the injected ones 86, 78 and 67. Started from one catalogue template
+for both stars the fit gives 76, 68 and 63 percent, against 47, 42 and 42 without it. The
+pulls of the two semi-amplitudes of the recovered systems have robust widths of 1.03 and
+1.12, against 1.57 and 2.54 with the classified templates and 0.95 and 1.05 with the
+injected ones. Fainter than $`G_{\rm RVS} = 11`$ the noise of the transits limits the
+orbit: the shares are 51 against 48 percent at 11 to 12 and 14 against 12 at 12 to 13.
+
+On a sample of 48 of those systems, the error of a velocity from the fitted templates is
+0.06 of its quoted error in the median system and 0.15 at the 90th percentile of the
+systems. An orbit fit that solves for the template parameters beside the orbit, with
+$`\mathsf C_\phi`$ as their prior, leaves 43 systems within 10 percent where 44 were. With
+templates that are not fitted and the variances of the classification as the prior, the
+same orbit fit narrows the pulls of the semi-amplitudes from 2.01 and 3.58 to 1.18 and
+1.87 and recovers 38 systems where 37 were. The orbit fits of §10.6 therefore use the
+first term of the covariance alone, and the second is reported per velocity
+(`VelocityTable.template_sigma`).
+
 ## References
 
 - Blomme, R. et al. 2023, A&A, 674, A7
@@ -2189,11 +2374,13 @@ the decisions put the injected period first for one further system of 32 (benchm
 - Czekala, I. et al. 2015, ApJ, 812, 128
 - Czekala, I. et al. 2017, ApJ, 840, 49
 - Gebruers, S. et al. 2022, A&A, 665, A36
+- Golub, G. H. & Pereyra, V. 1973, SIAM Journal on Numerical Analysis, 10, 413
 - Gray, D. F. 2005, The Observation and Analysis of Stellar Photospheres, 3rd ed. (Cambridge
   University Press)
 - Hadrava, P. 1995, A&AS, 114, 393
 - Hoffman, M. D. & Gelman, A. 2014, Journal of Machine Learning Research, 15, 1593
 - Mészáros, Sz. & Allende Prieto, C. 2013, MNRAS, 430, 3285
+- Nachmani, G., Faigler, S. & Mazeh, T. 2026, arXiv:2602.05610
 - Posbic, H. et al. 2012, A&A, 544, A154
 - Simon, K. P. & Sturm, E. 1994, A&A, 281, 286
 - Takahashi, K., Fagan, J. & Chin, M.-S. 1973, in Proc. 8th PICA Conference, 63

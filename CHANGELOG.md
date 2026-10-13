@@ -14,8 +14,8 @@ The three tiers below state where changes are expected.
   with the action it requires.
 - **Experimental.** These modules are marked as such in their docstrings: `facade` (the
   `Disentangler` declaration), `pipeline` together with the `albireo` command line and the
-  TOML schema it reads, `todcor`, `rvorbit`, `library`, `match`, `forecast`, `archive` and
-  `handoff`. Their names and interfaces are not settled and may change in any release
+  TOML schema it reads, `todcor`, `rvorbit`, `library`, `match`, `templatefit`, `forecast`,
+  `archive` and `handoff`. Their names and interfaces are not settled and may change in any release
   below 1.0. Each is a convenience over the model layer, where the same computation is
   available directly.
 - **Internal.** `assembly` and `solver` have no stability guarantee.
@@ -31,6 +31,64 @@ This file records what changed. The reasons are recorded elsewhere:
 
 ### Added
 
+- **`albireo.templatefit` (experimental): library templates fitted to the epochs.**
+  `fit_templates` fits the effective temperature, the surface gravity and the rotation of
+  every star, a metallicity and the light fractions to a multi-epoch dataset, together with
+  the velocities of every epoch. `todcor` measures against templates that are given, and
+  its accuracy is bounded by how well they agree with the stars. The labels are declared as
+  for the label fit of a disentangled component (`StarLabels`): held, in a range, or with a
+  Gaussian prior, the classification of the star with its error. A bounded
+  Levenberg-Marquardt minimises the sum of the chi-squares of the epochs with every
+  epoch's shifts at their own minimum (variable projection), and alternates with a new
+  measurement of every epoch by `todcor` until the velocities stop changing. The result,
+  `TemplateFit`, has the labels and light fractions with their covariance, the share of each
+  prior that the epochs left (`prior_fraction`), the fitted templates and the velocity
+  table measured with them. `TemplateDeviation` and `line_deviation` add a component that
+  no library spectrum has, such as emission in line cores, with a fitted amplitude. On
+  1,200 simulated eclipsing binaries in the Gaia RVS, templates fitted from a
+  classification give both semi-amplitudes within 10 percent for 84, 76 and 66 percent of
+  the systems at G_RVS 6 to 9, 9 to 10 and 10 to 11, where the classified templates give
+  62, 56 and 52 and the injected ones 86, 78 and 67. Fitted from one catalogue template for
+  both stars they give 76, 68 and 63 percent, against 47, 42 and 42. The pulls of the
+  semi-amplitudes of the recovered systems have robust widths of 1.03 and 1.12, against
+  1.57 and 2.54 with the classified templates. Fainter than G_RVS = 11 the noise of the
+  transits limits the orbit and the fit recovers little: 51 against 48 percent at 11 to
+  12. Emission in the Ca II cores lowers the share recovered among the systems that have it
+  from 48 to 29 percent with classified templates, and 50 percent are recovered when its
+  equivalent width is fitted beside the labels. A fit takes 2.6 s in the median. The joint
+  fit of templates and epoch velocities is the approach of Nachmani, Faigler & Mazeh
+  (2026). The templates here are interpolated in a published grid and nothing is
+  synthesised. The method is in `docs/math.md` §10.7, the numbers in `docs/benchmarks.md`,
+  and `examples/15_fit_templates.py` runs a toy binary.
+- **The order and the names of two stars in the fit.** The correlation returns each pair
+  of velocities in the order of the lower chi-square, which for two alike stars the noise
+  decides. Between two passes `fit_templates` exchanges a pair to the order of the table
+  before only where the chi-square with the two velocities exchanged is within the
+  threshold of the blend flag, scaled for a declared noise correlation, so a starting table
+  in error does not exchange two distinct stars. A starting table with the stars in the
+  other order throughout leads to the solution with their labels exchanged, which the
+  epochs cannot tell from priors given to the other star. `exchange_stars` says which names
+  the stars: the declared priors (default), where their sum is lower at the exchanged
+  solution by more than 9, or the starting table.
+- **The sensitivity of every velocity to the templates, on the table.** A table measured
+  by `fit_templates` records the derivative of each velocity with respect to each fitted
+  parameter (`VelocityTable.sensitivity`, `parameter_names`, `parameter_covariance`). An
+  error of a template moves the velocities of every epoch together, so that part of their
+  error is common to the epochs, and `VelocityTable.template_sigma` gives its size per
+  velocity. After a fit it is 0.06 of the quoted error in the median of 47 simulated
+  systems. An orbit fit that solves for the template parameters beside the orbit was
+  measured and not adopted: it leaves 43 of 48 systems within 10 percent where 44 were, so
+  the orbit fits of `rvorbit` use `sigma` alone.
+- **Two fitted declarations in `albireo.survey`.** `classified-fitted` and
+  `catalogue-fitted` fit the templates of a system to its transits out of eclipse, from the
+  classified labels or from one catalogue template, and use the fitted templates for every
+  later step. The photometric ephemeris orders the table the fit starts from and names the
+  stars of the fitted table. `SurveyConfig` gains `catalogue_errors`, `fit_emission` and
+  `emission_max`, which are left out of a recorded configuration while they have their
+  defaults, so the runs of the report are read and continued as before, and the three
+  declarations that are not fitted reproduce its tables exactly. `scripts/rvs_eb_run.py`
+  has the runs `fitted`, `activity-fitted` and `activity-emission`, and
+  `scripts/template_fit_bench.py` tabulates them.
 - **A simulated survey of Gaia DR4 eclipsing binaries, measured by correlation alone.**
   [`docs/reports/gaia-rvs-eclipsing-binaries.md`](docs/reports/gaia-rvs-eclipsing-binaries.md)
   reports 7,800 detached eclipsing binaries simulated as DR4 RVS epoch spectra, with both

@@ -12,6 +12,8 @@ every Gaia RVS transit by correlation against library templates, with no disenta
     python scripts/rvs_eb_run.py run third-light           # 1200 systems, 20 per cell
     python scripts/rvs_eb_run.py run activity
     python scripts/rvs_eb_run.py run instrument
+    python scripts/rvs_eb_run.py run fitted                # templates fitted to the transits
+    python scripts/rvs_eb_run.py run activity-fitted       # the same with emission, and fitted
     python scripts/rvs_eb_run.py run recorded              # the 33 systems of the D66 notebook
 
 The three runs with one effect added take the first 20 systems of every cell, with the
@@ -45,7 +47,7 @@ from albireo.eclipsing import (
     population_columns,
 )
 from albireo.population import read_population, write_population
-from albireo.survey import SurveyConfig, collect, run_survey
+from albireo.survey import DECLARATIONS, SurveyConfig, collect, run_survey
 
 REPO = Path(__file__).resolve().parent.parent
 RESEARCH = REPO / "internal" / "research" / "2026-10-07-rvs-eclipsing-todcor"
@@ -55,7 +57,8 @@ RECORDED = REPO / "internal" / "research" / "2026-09-09-gaia-rvs-benchmark"
 SEED = 20261007
 PER_CELL = 130
 
-# name of the run: (variant, systems kept per cell, simulation)
+# name of the run: (variant, systems kept per cell), and where it departs from the
+# defaults of the configuration, the fields it sets
 RUNS = {
     "pilot": ("baseline", 5),
     "design": ("baseline", PER_CELL),
@@ -63,6 +66,22 @@ RUNS = {
     "third-light": ("third-light", 20),
     "activity": ("activity", 20),
     "instrument": ("instrument", 20),
+    # The five declarations on the systems of the three runs above: the two whose
+    # templates are fitted to the transits (albireo.fit_templates) beside the three they
+    # are compared with.
+    "fitted": ("baseline", 20, {"declarations": DECLARATIONS}),
+    # The emission run measured again with fitted templates, without and with an emission
+    # component in the fit, on the first 10 systems of every cell.
+    "activity-fitted": (
+        "activity",
+        10,
+        {"declarations": ("classified", "classified-fitted")},
+    ),
+    "activity-emission": (
+        "activity",
+        10,
+        {"declarations": ("classified-fitted",), "fit_emission": True},
+    ),
 }
 _CLASS_CODES = {1: "K", 2: "G", 3: "F", 4: "A"}
 
@@ -165,9 +184,9 @@ def run(args) -> int:
             simulation="recorded", v_search_kms=350.0, libraries=("bosz2024-fgk-rvs",)
         )
     else:
-        variant, per_cell = RUNS[name]
+        variant, per_cell, *fields = RUNS[name]
         systems = _subset(read_population(ROOT / "population.json"), per_cell)
-        config = SurveyConfig(variant=variant)
+        config = SurveyConfig(variant=variant, **(fields[0] if fields else {}))
     if args.limit:
         systems = systems[: args.limit]
     directory = ROOT / (args.tag or name)

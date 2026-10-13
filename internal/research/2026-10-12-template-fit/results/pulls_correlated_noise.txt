@@ -1,0 +1,6 @@
+phi  declared  n  rms pull (parameters)  rms pull (velocities)  statuses
+0.00  False     16    1.10                   1.08                {'converged': 37}
+0.27  False     16    1.42                   1.39                {'converged': 38}
+0.27  True      16    1.09                   1.09                {'converged': 38}
+0.60  False     16    1.98                   1.97                {'converged': 38}
+0.60  True      16    1.06                   1.11                {'converged': 35}

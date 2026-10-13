@@ -162,6 +162,79 @@ def test_one_system_gives_its_epochs_and_its_orbits(measured, systems):
     assert np.median(error) < 2.0
 
 
+def test_a_fitted_declaration_fits_its_templates_to_the_transits(libraries, systems):
+    system = systems[0]
+    names = ("classified", "classified-fitted", "catalogue-fitted")
+    config = dataclasses.replace(CONFIG, declarations=names)
+    # A fit starts from the declaration it is named after.
+    assert declare(system, names[1], libraries, config) == declare(system, names[0], libraries)
+    assert declare(system, names[2], libraries, config)["identical"]
+    out = run_system(system, config)
+    record, epochs = out["system"], out["epochs"]
+    assert np.isnan(record["f_ok"][0]) and np.isnan(record["f_vsini1"][0])
+    for row in (1, 2):
+        assert record["f_ok"][row] == 1.0 and record["f_converged"][row] == 1.0
+        assert record["f_exchanged"][row] == 0.0 and record["f_passes"][row] >= 1.0
+        assert 0.7 < record["f_chi2"][row] < 1.3 and record["t_fit"][row] > 0.0
+        # The rotation and the light ratio are the injected ones, whichever start.
+        assert record["f_vsini1"][row] == pytest.approx(system.vsini1, abs=2.0)
+        assert record["f_vsini2"][row] == pytest.approx(system.vsini2, abs=2.0)
+        assert record["f_light2"][row] == pytest.approx(0.4 / 1.4, abs=0.03)
+        assert record["f_light2_err"][row] > 0.0
+        # Every later step uses the fit: the table is measured with the fitted
+        # fractions, and its velocities are not those of the classified templates.
+        assert record["light2"][row] == pytest.approx(record["f_light2"][row], abs=1e-6)
+        out_of_eclipse = epochs["in_eclipse"] == 0
+        assert np.nanmax(np.abs(epochs["v1"][row] - epochs["v1"][0])[out_of_eclipse]) > 0.05
+        assert record["e_k1"][row] == pytest.approx(system.k1, rel=0.03)
+        assert record["e_k2"][row] == pytest.approx(system.k2, rel=0.03)
+        assert record["swapped"][row] == 0.0
+    # The velocities measured with the fitted templates are those of the table.
+    good = epochs["ge"][1] == 1.0
+    assert np.median(np.abs(epochs["ve1"][1] - epochs["v1_true"])[good]) < 2.0
+
+
+def test_the_ephemeris_names_the_stars_of_a_fitted_table(libraries, monkeypatch):
+    """A fit keeps the order of the table it starts from where the declared labels do not
+    tell the stars apart, so its table can have the two stars in the other order. With a
+    light ratio above 3 no transit is exchanged on its own, and the orbit is found from
+    the table with its components interchanged as a whole (``swapped``)."""
+    system = _system("faint", 31, m2=0.85, r2=0.8, teff2=5000.0, light_ratio=0.2)
+    config = dataclasses.replace(CONFIG, declarations=("classified", "classified-fitted"))
+    direct = run_system(system, config)["system"]
+    assert direct["swapped"][1] == 0.0
+    assert direct["e_k2"][1] == pytest.approx(system.k2, rel=0.05)
+    fit_declared = survey._fit_declared
+
+    def in_the_other_order(*args, **kwargs):
+        fit = fit_declared(*args, **kwargs)
+        return dataclasses.replace(fit, table=survey._exchange_all(fit.table))
+
+    monkeypatch.setattr(survey, "_fit_declared", in_the_other_order)
+    other = run_system(system, config)["system"]
+    # Every transit is then exchanged against the table as measured.
+    assert other["swapped"][1] == 1.0 and other["e_nx"][1] == other["n_out"][1]
+    for key in ("e_k1", "e_k2", "e_chi2"):
+        assert other[key][1] == pytest.approx(direct[key][1], rel=1e-6)
+    # The declaration that is not fitted is measured in the order of its templates.
+    assert np.isnan(other["swapped"][0]) or other["swapped"][0] == 0.0
+
+
+def test_a_fitted_declaration_can_fit_the_emission_of_the_activity_variant(libraries, systems):
+    active = dataclasses.replace(systems[0], meta={**systems[0].meta, "activity_ew": [0.0, 0.6]})
+    config = dataclasses.replace(
+        CONFIG, declarations=("classified-fitted",), variant="activity", fit_emission=True
+    )
+    record = run_system(active, config)["system"]
+    assert record["f_ok"][0] == 1.0
+    # The emission is found on the star that has it, and none on the other.
+    assert record["f_emission2"][0] == pytest.approx(0.6, abs=0.15)
+    assert 0.0 <= record["f_emission1"][0] < 0.1
+    assert record["e_k2"][0] == pytest.approx(active.k2, rel=0.03)
+    plain = run_system(active, dataclasses.replace(config, fit_emission=False))["system"]
+    assert np.isnan(plain["f_emission2"][0]) and plain["f_chi2"][0] > record["f_chi2"][0]
+
+
 def test_the_transits_in_eclipse_are_measured_and_kept_out_of_the_orbit(libraries):
     # An edge-on pair of short period, with many transits: some fall in an eclipse.
     system = _system("eclipsed", 21, period=1.3, incl=math.radians(89.9), n_transits=40)

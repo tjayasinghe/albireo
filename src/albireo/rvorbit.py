@@ -1937,8 +1937,15 @@ def _with_alternative(table, taken):
         dof = np.maximum(np.asarray(table.n_pixels) - n_parameters, 1)
         scale = chi2[taken] / dof[taken]
     sigma_ivar[:, taken] = sigma[:, taken] / np.sqrt(scale)
+    # The sensitivities to the templates were evaluated at the minimum returned and are
+    # not known at the other one.
+    sensitivity = table.sensitivity
+    if sensitivity is not None:
+        sensitivity = np.array(sensitivity, dtype=np.float64)
+        sensitivity[:, taken] = np.nan
     return replace(
         table,
+        sensitivity=sensitivity,
         velocity=velocity,
         sigma=sigma,
         sigma_ivar=sigma_ivar,
@@ -2203,8 +2210,13 @@ def _exchanged(table, swap):
         out[swap] = out[swap][:, ::-1, :][:, :, ::-1]
         return out
 
+    sensitivity = table.sensitivity
+    if sensitivity is not None:
+        sensitivity = np.array(sensitivity, dtype=np.float64)
+        sensitivity[:, swap] = sensitivity[::-1][:, swap]
     return replace(
         table,
+        sensitivity=sensitivity,
         velocity=exchange(table.velocity),
         sigma=exchange(table.sigma),
         sigma_ivar=exchange(table.sigma_ivar),
