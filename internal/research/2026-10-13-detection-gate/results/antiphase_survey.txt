@@ -1,0 +1,31 @@
+outside: 5286 tables, 861 with a velocity the rule returns; 8413 such velocities, 97.3 % right
+| correlation of the two columns | tables | velocities returned | right % | spurious % |
+|---|---|---|---|---|
+| -1.0 to -0.9 | 541 | 7234 | 99.6 | 0.4 |
+| -0.9 to -0.7 | 39 | 409 | 95.1 | 4.9 |
+| -0.7 to -0.5 | 15 | 150 | 92.7 | 7.3 |
+| -0.5 to -0.3 | 10 | 81 | 74.1 | 25.9 |
+| -0.3 to 0.0 | 9 | 75 | 81.3 | 18.7 |
+| 0.0 to 0.3 | 11 | 54 | 63.0 | 37.0 |
+| 0.3 to 1.0 | 23 | 128 | 37.5 | 62.5 |
+| not defined | 213 | 282 | 89.0 | 11.0 |
+correlation below -0.7 over at least 8 epochs: 438 tables, 7000 velocities, 99.4 % right, 0.6 % spurious; the others: 423 tables, 1413 velocities, 87.1 % right
+below -0.3: 605 tables, 7874 velocities, 99.0 % right; the others: 256 tables, 539 velocities, 73.1 % right
+below -0.5: 595 tables, 7793 velocities, 99.2 % right; the others: 266 tables, 620 velocities, 73.2 % right
+below -0.7: 580 tables, 7643 velocities, 99.4 % right; the others: 281 tables, 770 velocities, 77.0 % right
+
+all: 6486 tables, 1073 with a velocity the rule returns; 11323 such velocities, 97.8 % right
+| correlation of the two columns | tables | velocities returned | right % | spurious % |
+|---|---|---|---|---|
+| -1.0 to -0.9 | 725 | 10055 | 99.6 | 0.4 |
+| -0.9 to -0.7 | 45 | 467 | 95.1 | 4.9 |
+| -0.7 to -0.5 | 15 | 150 | 92.7 | 7.3 |
+| -0.5 to -0.3 | 10 | 81 | 74.1 | 25.9 |
+| -0.3 to 0.0 | 9 | 75 | 81.3 | 18.7 |
+| 0.0 to 0.3 | 11 | 54 | 63.0 | 37.0 |
+| 0.3 to 1.0 | 23 | 128 | 37.5 | 62.5 |
+| not defined | 235 | 313 | 89.8 | 10.2 |
+correlation below -0.7 over at least 8 epochs: 602 tables, 9752 velocities, 99.4 % right, 0.6 % spurious; the others: 471 tables, 1571 velocities, 88.2 % right
+below -0.3: 795 tables, 10753 velocities, 99.1 % right; the others: 278 tables, 570 velocities, 74.4 % right
+below -0.5: 785 tables, 10672 velocities, 99.3 % right; the others: 288 tables, 651 velocities, 74.3 % right
+below -0.7: 770 tables, 10522 velocities, 99.4 % right; the others: 303 tables, 801 velocities, 77.8 % right

@@ -1,0 +1,94 @@
+The pipeline end to end under the benchmark's blind tier, with the package before the change (commit 4248adc;
+'committed' and 'head' below) and with the changed one ('changed'), on the same simulated epochs
+(runs/e2e_run.py, runs/e2e_dispatch.py; the measures are in runs/e2e_read.py).
+A star is marked ok where the final period is within 2 % and both semi-amplitudes within 10 % of the injected
+ones, P where the period alone is, and -- otherwise; * where the disentangling chose another candidate than the
+first of the chi-square ranking; x where the components came out in the other order.
+
+faint pairs whose outcome in the candidate fits changes: 21 in the plan, 21 run by both packages
+| measure | committed | changed | gained | lost | p |
+|---|---|---|---|---|---|
+| bootstrap period within 2 % | 10 | 20 | 10 | 0 | 0.002 |
+| final period within 2 % | 10 | 20 | 10 | 0 | 0.002 |
+| final period within 0.1 % | 10 | 20 | 10 | 0 | 0.002 |
+| final orbit, both K within 10 % | 8 | 17 | 9 | 0 | 0.004 |
+| final orbit, both K within 5 % | 6 | 13 | 8 | 1 | 0.039 |
+| disentangling, both K within 10 % | 8 | 17 | 10 | 1 | 0.012 |
+stopped in the disentangling, out of reach of the injected period: head 6, changed 0
+failed: head 0, changed 0; median seconds per star: head 1139, changed 950
+final period and semi-amplitudes identical to every digit on 0 of 21
+period recovered by both on 10: the larger semi-amplitude error is smaller with the changed package on 7 and larger on 3; medians 2.4 % committed, 3.3 % changed
+hours of the runs: head 9.5, changed 5.8; the disentangling chose another candidate than the table's first: head 9, changed 2
+
+faint pairs gated differently with the same outcome there: 14 in the plan, 0 run by both packages
+
+all faint pairs gated differently: 35 in the plan, 21 run by both packages
+| measure | committed | changed | gained | lost | p |
+|---|---|---|---|---|---|
+| bootstrap period within 2 % | 10 | 20 | 10 | 0 | 0.002 |
+| final period within 2 % | 10 | 20 | 10 | 0 | 0.002 |
+| final period within 0.1 % | 10 | 20 | 10 | 0 | 0.002 |
+| final orbit, both K within 10 % | 8 | 17 | 9 | 0 | 0.004 |
+| final orbit, both K within 5 % | 6 | 13 | 8 | 1 | 0.039 |
+| disentangling, both K within 10 % | 8 | 17 | 10 | 1 | 0.012 |
+stopped in the disentangling, out of reach of the injected period: head 6, changed 0
+failed: head 0, changed 0; median seconds per star: head 1139, changed 950
+final period and semi-amplitudes identical to every digit on 0 of 21
+period recovered by both on 10: the larger semi-amplitude error is smaller with the changed package on 7 and larger on 3; medians 2.4 % committed, 3.3 % changed
+hours of the runs: head 9.5, changed 5.8; the disentangling chose another candidate than the table's first: head 9, changed 2
+
+benchmark systems: 5 in the plan, 2 run by both packages
+| measure | committed | changed | gained | lost | p |
+|---|---|---|---|---|---|
+| bootstrap period within 2 % | 2 | 2 | 0 | 0 | 1.000 |
+| final period within 2 % | 2 | 2 | 0 | 0 | 1.000 |
+| final period within 0.1 % | 2 | 2 | 0 | 0 | 1.000 |
+| final orbit, both K within 10 % | 2 | 2 | 0 | 0 | 1.000 |
+| final orbit, both K within 5 % | 2 | 2 | 0 | 0 | 1.000 |
+| disentangling, both K within 10 % | 2 | 2 | 0 | 0 | 1.000 |
+stopped in the disentangling, out of reach of the injected period: head 0, changed 0
+failed: head 0, changed 0; median seconds per star: head 816, changed 723
+final period and semi-amplitudes identical to every digit on 2 of 2
+period recovered by both on 2: the larger semi-amplitude error is smaller with the changed package on 0 and larger on 0; medians 0.4 % committed, 0.4 % changed
+hours of the runs: head 0.5, changed 0.4; the disentangling chose another candidate than the table's first: head 0, changed 0
+
+star by star (injected P, K | committed: bootstrap P, final P, K, K error | changed: the same)
+  mixed-0000               P   5.0242 K [ 67.6,  69.4] | ok  gated  0 kept  0 boot   5.0243  final   5.0242 K [ 67.6,  69.3] err   0.2 %    1112 s | ok  gated  0 kept  0 boot   5.0243  final   5.0242 K [ 67.6,  69.3] err   0.2 %    1082 s
+  gaia-45788547559850496   P   5.6093 K [ 60.5,  91.8] | ok  gated  0 kept  0 boot   5.6093  final   5.6093 K [ 60.5,  92.5] err   0.7 %     521 s | ok  gated  0 kept  0 boot   5.6093  final   5.6093 K [ 60.5,  92.5] err   0.7 %     363 s
+  F-11-059                 P   2.0814 K [111.9, 115.7] | --  gated 14 kept  0 boot   2.1953* final   2.1611 K [ 44.1,  78.1] err  60.6 %     567 s | P   gated  2 kept 12 boot   2.0814  final   2.0814 K [127.4, 123.2] err  13.9 %     604 s
+  K-11-056                 P   3.1364 K [ 83.2,  88.1] | ok  gated  4 kept  0 boot   3.1367* final   3.1365 K [ 85.6,  83.1] err   2.8 % x   663 s | ok  gated  2 kept  2 boot   3.1365  final   3.1365 K [ 87.4,  83.4] err   0.8 % x   666 s
+  F-11-063                 P   1.6105 K [106.4, 131.2] | ok  gated 45 kept  0 boot   1.6106  final   1.6105 K [105.1, 139.8] err   6.5 %     961 s | ok  gated 34 kept 11 boot   1.6106  final   1.6106 K [107.2, 135.9] err   3.5 %    1055 s
+  F-11-100                 P   4.1065 K [ 92.9,  97.8] | --  gated 26 kept  0 boot   1.1450  final   1.1451 K [1229.9, 285.9] err 1223.5 %     914 s | ok  gated  4 kept 22 boot   4.1068  final   4.1063 K [ 93.3,  95.9] err   2.0 %     661 s
+  G-11-032                 P   4.1798 K [ 74.3,  88.3] | ok  gated 49 kept  0 boot   4.1799  final   4.1798 K [ 75.0,  88.9] err   1.0 %    1874 s | ok  gated 13 kept 36 boot   4.1798  final   4.1798 K [ 74.9,  88.6] err   0.7 %    1035 s
+  F-11-042                 P   3.7663 K [ 99.9, 104.3] | ok  gated 48 kept  0 boot   3.7664* final   3.7664 K [101.7, 106.5] err   2.1 %    1139 s | ok  gated 11 kept 37 boot   3.7664  final   3.7664 K [105.7, 107.0] err   5.8 %     922 s
+  F-11-060                 P   4.2163 K [ 97.2, 101.1] | --  stopped after 109 min in the disentangling: boot   0.2589, out of reach of the injected period | ok  gated  7 kept 39 boot   4.2162  final   4.2164 K [101.6, 100.4] err   4.5 %     891 s
+  G-10-041                 P   3.4218 K [ 88.4, 104.5] | ok  gated 30 kept  0 boot   3.4218  final   3.4219 K [ 87.8,  96.8] err   7.4 %     853 s | ok  gated 20 kept 10 boot   3.4218  final   3.4218 K [ 87.2, 101.0] err   3.3 %     950 s
+  K-12-096                 P   0.4242 K [164.7, 166.4] | --  stopped after 77 min in the disentangling: boot   0.5900, out of reach of the injected period | ok  gated  9 kept 30 boot   0.4242  final   0.4242 K [158.2, 182.6] err   9.7 %    1237 s
+  K-12-041                 P   8.7761 K [ 66.9,  67.8] | P   gated 10 kept  0 boot   8.7756  final   8.7805 K [ 14.7,   4.5] err  93.4 %     529 s | P   gated  3 kept  7 boot   8.7762* final   8.7766 K [ 16.0,  14.5] err  78.6 %     624 s
+  K-13-108                 P   1.8795 K [ 92.8, 106.7] | --  gated 49 kept  0 boot   0.9418* final   0.9611 K [ 44.0,  11.2] err  89.5 %    1566 s | --  gated 16 kept 33 boot   5.4080* final   5.4083 K [119.3,  83.5] err  28.5 %    1321 s
+  G-12-114                 P   2.5169 K [ 95.3, 100.6] | --  stopped after 30 min in the disentangling: boot   0.3193, out of reach of the injected period | ok  gated  5 kept 33 boot   2.5169  final   2.5169 K [ 99.2,  92.7] err   2.7 % x  1788 s
+  F-10-015                 P   4.3988 K [102.7, 103.2] | --  stopped after 30 min in the disentangling: boot   0.8560, out of reach of the injected period | ok  gated 17 kept 33 boot   4.3989  final   4.3988 K [103.2, 102.7] err   0.0 % x  1293 s
+  F-11-117                 P   3.1427 K [ 78.8, 102.5] | ok  gated 36 kept  0 boot   3.1427  final   3.1427 K [ 80.5, 101.6] err   2.1 %    1096 s | ok  gated 21 kept 15 boot   3.1427  final   3.1427 K [ 80.4,  99.3] err   3.2 %    1149 s
+  G-11-083                 P   8.1432 K [ 73.9,  80.8] | P   gated 45 kept  0 boot   8.1429  final   8.1436 K [ 75.3,  70.1] err  13.2 %    1113 s | P   gated 33 kept 12 boot   8.1433  final   8.1437 K [ 76.5,  60.0] err  25.7 %     790 s
+  F-11-087                 P   3.1298 K [113.9, 115.2] | --  stopped after 30 min in the disentangling: boot   0.1479, out of reach of the injected period | ok  gated  5 kept 44 boot   3.1299  final   3.1299 K [110.1, 114.6] err   4.4 % x   869 s
+  K-11-117                 P   0.3748 K [154.5, 164.3] | --  stopped after 30 min in the disentangling: boot   0.1592, out of reach of the injected period | ok  gated  0 kept 34 boot   0.3748  final   0.3748 K [159.6, 152.9] err   6.9 %    1105 s
+  F-10-032                 P   9.5313 K [ 63.5,  74.5] | ok  gated 57 kept  0 boot   9.5318  final   9.5317 K [ 63.5,  73.6] err   1.2 %    1103 s | ok  gated 40 kept 17 boot   9.5312  final   9.5317 K [ 63.4,  74.1] err   0.4 %    1170 s
+  K-13-114                 P   0.9761 K [112.8, 132.7] | --  gated 33 kept  0 boot   1.3316* final   1.3315 K [ 28.0,  54.9] err  75.1 %    1141 s | ok  gated 11 kept 22 boot   0.9760  final   0.9761 K [123.9, 112.7] err   6.6 % x   794 s
+  G-10-058                 P   0.9149 K [137.9, 139.0] | --  gated  7 kept  0 boot   0.4574  final   0.4574 K [218.9, 209.3] err  58.7 %     776 s | ok  gated  3 kept  4 boot   0.9149  final   0.9149 K [138.2, 136.9] err   0.7 % x   767 s
+  F-12-075                 P   2.4110 K [ 98.4, 115.0] | ok  gated 54 kept  0 boot   2.4110  final   2.4110 K [ 98.4, 113.2] err   1.6 %    1340 s | ok  gated 30 kept 24 boot   2.4110  final   2.4110 K [ 99.2, 115.2] err   0.8 %    1217 s
+
+Runs stopped by runs/e2e_watch.py (30 minutes after a bootstrap period more than 10 % from the injected one)
+stopped head F-11-060 after 109 min: handed on 0.25887 d, injected 4.21634 d
+stopped head K-12-096 after 77 min: handed on 0.59003 d, injected 0.42420 d
+stopped head G-12-114 after 30 min: handed on 0.31934 d, injected 2.51689 d
+stopped head F-10-015 after 30 min: handed on 0.85604 d, injected 4.39882 d
+stopped head F-11-087 after 30 min: handed on 0.14793 d, injected 3.12981 d
+stopped head K-11-117 after 30 min: handed on 0.15920 d, injected 0.37483 d
+
+The injected period in the chi-square ranking of the candidate fits, on the tables of the same systems
+| tables | first: fixed, changed (gained, lost) | within the first four: fixed, changed (gained, lost) |
+|---|---|---|
+| all 122 tables | 53, 64 (12, 1) | 60, 69 (9, 0) |
+| the 35 gated differently | 21, 32 (12, 1) | 24, 33 (9, 0) |
+| the 21 whose outcome in the candidate fits changes | 8, 19 (12, 1) | 11, 20 (9, 0) |
+ranks on the 21, fixed -> changed (0 is absent): K-12-041:1->3 K-11-056:2->1 K-12-096:35->1 K-13-108:0->19 K-13-114:9->1 K-11-117:10->1 G-11-032:1->1 G-10-041:1->1 G-10-058:4->1 G-11-083:1->1 G-12-114:0->1 F-10-015:0->1 F-10-032:1->1 F-11-042:2->1 F-11-059:32->1 F-11-060:0->1 F-11-063:1->1 F-12-075:1->1 F-11-087:0->1 F-11-100:0->1 F-11-117:1->1

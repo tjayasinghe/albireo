@@ -1,0 +1,9 @@
+152510 usable epochs of 6451 systems; exchange allowed at 89458
+| rule | exchange | epochs with the companion gated | first column: own star % | other star % | neither % |
+|---|---|---|---|---|---|
+| fixed threshold | allowed | 28063 | 87.9 | 11.5 | 0.6 |
+| fixed threshold | not allowed | 32542 | 99.2 | 0.1 | 0.7 |
+| whole-epoch rule, r = 10 | allowed | 19691 | 95.2 | 4.3 | 0.4 |
+| whole-epoch rule, r = 10 | not allowed | 32347 | 99.2 | 0.1 | 0.7 |
+| above the fixed threshold | allowed | 61395 | 76.8 | 20.6 | 2.6 |
+| above the fixed threshold | not allowed | 30510 | 95.8 | 1.3 | 2.9 |

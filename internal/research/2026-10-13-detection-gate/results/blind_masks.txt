@@ -1,0 +1,10 @@
+identical masks on 32 of 32 tables
+tables with a companion velocity below the declared threshold: count, largest share of the whole, lowest threshold, lowest whole
+  mixed-0004                  58  share up to 0.000  lowest threshold 100.0  lowest whole   161673
+  mixed-0005                  29  share up to 0.066  lowest threshold 100.0  lowest whole      687
+  mixed-0007                  38  share up to 0.048  lowest threshold 100.0  lowest whole     1202
+  mixed-0008                  38  share up to 0.017  lowest threshold 100.0  lowest whole     4839
+  mixed-0010                  55  share up to 0.025  lowest threshold 100.0  lowest whole     1514
+  mixed-0015                  26  share up to 0.003  lowest threshold 100.0  lowest whole    16097
+  mixed-0019                   7  share up to 0.026  lowest threshold 100.0  lowest whole      923
+  gaia-40041022325608704       2  share up to 0.028  lowest threshold 100.0  lowest whole     1472

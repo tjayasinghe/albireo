@@ -1,0 +1,43 @@
+1200 tables; this copy of the search equals the source's on 1200
+gated relative search does not run on 218; companion below the gate at every epoch on 167, at half or more on 283
+
+| search | listed | rank 1 | rank 1, both K within 10 % | first 4 | absent after fits | candidates, median | candidates, mean | rank 1 gained, lost (p) | listed gained, lost |
+|---|---|---|---|---|---|---|---|---|---|
+| gate | 1122 | 1075 | 950 | 1089 | 85 | 75 | 72.0 | 0, 0 (1.00) | 0, 0 |
+| nogate | 1162 | 1071 | 949 | 1085 | 62 | 76 | 75.4 | 1, 5 (0.22) | 43, 3 |
+| fallback | 1157 | 1072 | 950 | 1088 | 63 | 76 | 77.2 | 0, 3 (0.25) | 35, 0 |
+| half | 1162 | 1072 | 950 | 1087 | 61 | 76 | 76.1 | 0, 3 (0.25) | 40, 0 |
+
+gated relative search does not run: 218 tables
+  gate      listed  157  rank 1  135  both K   17  first 4  139  candidates, median 50
+  nogate    listed  191  rank 1  132  both K   17  first 4  138  candidates, median 77
+  fallback  listed  191  rank 1  132  both K   17  first 4  138  candidates, median 77
+  half      listed  191  rank 1  132  both K   17  first 4  138  candidates, median 77
+
+it runs: 982 tables
+  gate      listed  965  rank 1  940  both K  933  first 4  950  candidates, median 76
+  nogate    listed  971  rank 1  939  both K  932  first 4  947  candidates, median 75
+  fallback  listed  966  rank 1  940  both K  933  first 4  950  candidates, median 76
+  half      listed  971  rank 1  940  both K  933  first 4  949  candidates, median 76
+
+tables whose place changes at rank 1 (system, true period; per form: listed place, rank, first period, chi-square first, chi-square true)
+ nogate
+  lost     789 P    0.7516 below 1.00 single ran 0 | gate: listed   1 rank   1 first    0.7516 chi2     3.19 true     3.19 | nogate: listed   1 rank   2 first    0.7165 chi2     1.76 true     3.19
+  lost    3153 P   19.2039 below 0.31 single ran 1 | gate: listed  15 rank   1 first   19.2030 chi2    76.20 true    76.20 | nogate: listed   0 rank   0 first  238.3276 chi2   405.19 true      nan
+  lost    3590 P    2.2565 below 1.00 single ran 0 | gate: listed   1 rank   1 first    2.2565 chi2    38.81 true    38.81 | nogate: listed   2 rank  52 first    0.7829 chi2 38860.39 true 107295.52
+  lost    5607 P    1.9421 below 1.00 single ran 0 | gate: listed   1 rank   1 first    1.9421 chi2  4133.79 true  4133.79 | nogate: listed   1 rank   2 first    0.3086 chi2  4116.50 true  4133.79
+  lost    5990 P   11.8419 below 0.07 single ran 1 | gate: listed   8 rank   1 first   11.8409 chi2    51.39 true    51.39 | nogate: listed   0 rank   0 first    5.6382 chi2   218.41 true      nan
+  gained  7073 P    2.4911 below 0.31 single ran 1 | gate: listed   0 rank   0 first   10.1369 chi2    32.54 true      nan | nogate: listed   5 rank   1 first    2.4911 chi2     6.72 true     6.72
+ fallback
+  lost     789 P    0.7516 below 1.00 single ran 0 | gate: listed   1 rank   1 first    0.7516 chi2     3.19 true     3.19 | fallback: listed   1 rank   2 first    0.7165 chi2     1.76 true     3.19
+  lost    3590 P    2.2565 below 1.00 single ran 0 | gate: listed   1 rank   1 first    2.2565 chi2    38.81 true    38.81 | fallback: listed   2 rank  52 first    0.7829 chi2 38860.39 true 107295.52
+  lost    5607 P    1.9421 below 1.00 single ran 0 | gate: listed   1 rank   1 first    1.9421 chi2  4133.79 true  4133.79 | fallback: listed   1 rank   2 first    0.3086 chi2  4116.50 true  4133.79
+ half
+  lost     789 P    0.7516 below 1.00 single ran 0 | gate: listed   1 rank   1 first    0.7516 chi2     3.19 true     3.19 | half: listed   1 rank   2 first    0.7165 chi2     1.76 true     3.19
+  lost    3590 P    2.2565 below 1.00 single ran 0 | gate: listed   1 rank   1 first    2.2565 chi2    38.81 true    38.81 | half: listed   2 rank  52 first    0.7829 chi2 38860.39 true 107295.52
+  lost    5607 P    1.9421 below 1.00 single ran 0 | gate: listed   1 rank   1 first    1.9421 chi2  4133.79 true  4133.79 | half: listed   1 rank   2 first    0.3086 chi2  4116.50 true  4133.79
+
+newly listed true periods and their rank after the gated fits
+  nogate: 43 tables; rank 1 on 1, 2 to 4 on 0, 5 or lower on 25, absent after the fits on 17; median rank 52
+  fallback: 35 tables; rank 1 on 0, 2 to 4 on 0, 5 or lower on 21, absent after the fits on 14; median rank 55
+  half: 40 tables; rank 1 on 0, 2 to 4 on 0, 5 or lower on 24, absent after the fits on 16; median rank 54

@@ -478,6 +478,35 @@ This file records what changed. The reasons are recorded elsewhere:
 
 ### Changed
 
+- **The detection gate of the period search is lower on a weakly detected pair in
+  antiphase (D71).** On the search route (`period = "search"`) a companion's velocity
+  below `detection_min` (100) had no weight in the period search and the candidate fits.
+  It is now kept where its statistic is at least 25 and at least a tenth of the statistic
+  of the epoch as a whole (the table's `chi2_null - chi2`, or the first component's own
+  statistic where that is larger), on a two-component table whose columns have a
+  correlation coefficient below -0.9 over at least eight such epochs. The threshold was
+  measured on tables whose first component is strongly detected. On a faint pair of
+  comparable stars it removed the companion at every epoch, and the first component's
+  column that remained held the velocities of both stars. No velocity of the 32 blind
+  tables of the Gaia RVS benchmark is gated differently. On 1,200 simulated tables of
+  eclipsing binaries measured with classified templates, selected for an orbit that the
+  table gives at the known period, the injected period is first in the chi-square ranking
+  on 1,107 against 1,072, and first with both semi-amplitudes within 10 percent on 1,013
+  against 947. On 400 tables drawn without that selection the numbers are 311 against 306
+  and 184 against 169, and on 122 tables of faint pairs measured by the pipeline with
+  unrotated templates the period is first on 64 against 53. Run through the whole
+  pipeline before and after the change, the 21 of those tables on which the candidate
+  fits decide differently give the injected period on 20 against 10 and both
+  semi-amplitudes within 10 percent as well on 17 against 8, with none lost, and two
+  systems of the benchmark give the same final result to every digit.
+  `bootstrap.detection_gate` of `result.json` gains `kept_below`, the velocities kept
+  under the declared threshold, and `antiphase`, the number of epochs and the coefficient
+  of the test where it was made. A `detection_min` above 100 raises the threshold of a
+  strongly detected pair only. The antiphase test has one known failure, two identical
+  templates narrower than the lines of a single star. Searching the table as measured
+  while the fits stay gated was measured and not adopted: the gated fits do not confirm
+  the periods it adds. The measurements are in `docs/benchmarks.md` and
+  `internal/research/2026-10-13-detection-gate/`.
 - **A library read from a file has read-only arrays, and what is derived from it is kept.**
   `load_library` and `fetch_library` return arrays that cannot be written to. For such a
   library `SpectralLibrary.resampled_to` returns the same object for the same grid and

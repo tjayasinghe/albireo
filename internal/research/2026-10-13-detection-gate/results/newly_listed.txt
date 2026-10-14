@@ -1,0 +1,35 @@
+
+newly listed without the gate: 43 tables
+  G_RVS: median 12.14, quartiles 11.53 to 12.44
+  light ratio: median 0.80, quartiles 0.74 to 0.93
+  share of epochs exchanged: median 0.40, quartiles 0.31 to 0.49
+  share of epochs spurious: median 0.00, quartiles 0.00 to 0.01
+  first component's statistic: median 48.22, quartiles 25.73 to 63.75
+  companion's statistic: median 39.79, quartiles 26.95 to 67.24
+  share of epochs below 100: median 1.00, quartiles 0.91 to 1.00
+  usable epochs: median 23.00, quartiles 16.50 to 33.50
+  period: median 2.74, quartiles 1.48 to 5.25
+  tables with a fifth or more of the usable epochs exchanged: 40; with none: 0
+  light ratio above 1/3 on 43; companion below 100 at every usable epoch on 28
+
+listed with the gate: 1122 tables
+  G_RVS: median 8.74, quartiles 7.29 to 10.23
+  light ratio: median 0.54, quartiles 0.24 to 0.77
+  share of epochs exchanged: median 0.00, quartiles 0.00 to 0.05
+  share of epochs spurious: median 0.00, quartiles 0.00 to 0.00
+  first component's statistic: median 5088.99, quartiles 821.95 to 22489.82
+  companion's statistic: median 685.06, quartiles 144.20 to 3833.66
+  share of epochs below 100: median 0.00, quartiles 0.00 to 0.14
+  usable epochs: median 30.00, quartiles 21.00 to 41.00
+  period: median 2.24, quartiles 1.12 to 4.26
+
+listed by neither: 35 tables
+  G_RVS: median 11.94, quartiles 11.09 to 12.83
+  light ratio: median 0.82, quartiles 0.58 to 0.92
+  share of epochs exchanged: median 0.35, quartiles 0.19 to 0.43
+  share of epochs spurious: median 0.00, quartiles 0.00 to 0.04
+  first component's statistic: median 32.06, quartiles 14.72 to 223.49
+  companion's statistic: median 19.50, quartiles 12.64 to 53.31
+  share of epochs below 100: median 1.00, quartiles 0.91 to 1.00
+  usable epochs: median 12.00, quartiles 10.00 to 18.00
+  period: median 2.42, quartiles 1.22 to 4.42

@@ -997,13 +997,13 @@ def test_the_orbit_loop_merges_fits_and_names_every_ambiguity(monkeypatch):
     assert [round(o.period, 2) for o, _ in decision["ranked"]] == [6.30, 12.62, 3.15]
 
 
-def _orbit_table(bjd, *, sigma=0.3, seed=0):
-    """A two-component ``VelocityTable`` of ``ORBIT`` at ``bjd``, every velocity detected."""
+def _orbit_table(bjd, *, sigma=0.3, seed=0, orbit=ORBIT):
+    """A two-component ``VelocityTable`` of ``orbit`` at ``bjd``, every velocity detected."""
     from albireo.todcor import VelocityTable
 
     bjd = np.asarray(bjd, dtype=float)
     n = bjd.size
-    truth = ORBIT.component_velocities(bjd)
+    truth = orbit.component_velocities(bjd)
     velocity = truth + np.random.default_rng(seed).normal(0.0, sigma, truth.shape)
     errors = np.full(truth.shape, sigma)
     return VelocityTable(
@@ -1220,6 +1220,138 @@ def test_the_detection_gate_takes_the_weight_off_undetected_velocities_only(monk
             Analysis(detection_min=bad)
 
 
+def test_the_detection_gate_is_lower_on_a_weakly_detected_pair_in_antiphase():
+    """A companion of a faint pair is kept at a statistic of 25 and a tenth of the epoch's (D71).
+
+    The threshold of 100 was measured on tables whose first component is strongly detected.
+    On a faint pair of alike stars neither statistic reaches it, and with the epochs in
+    either order the first component's column that remained held both stars. The threshold
+    is lowered only where the table shows a binary: its two columns move in antiphase over
+    eight epochs or more. The same statistics on a strongly detected pair, where a low
+    statistic of both stars marks blended lines, stay gated, and so does a companion that
+    follows the first component, as a second template that takes up the lines of the first
+    star does.
+    """
+    from albireo.pipeline import (
+        _antiphase,
+        _detection_gate,
+        _detection_mask,
+        _detection_thresholds,
+        _in_antiphase,
+        _orbit_over_candidates,
+        _period_candidates,
+    )
+    from albireo.rvorbit import _exchanged
+
+    twins = replace(ORBIT, k=(50.0, 55.0))
+    rng = np.random.default_rng(3)
+    n = 24
+    table = _orbit_table(np.sort(rng.uniform(0.0, 60.0, size=n)), sigma=4.0, seed=3, orbit=twins)
+    swap = rng.random(n) < 0.4
+    assert swap.sum() == 7 and not swap[:3].any()
+    statistic = np.stack([np.full(n, 60.0), np.full(n, 45.0)])
+    statistic[1, :3] = [12.0, 20.0, 24.0]
+    statistic[1, 3] = 25.0  # a statistic at the threshold is kept
+    below_floor = np.arange(n) < 3
+    faint = replace(
+        _exchanged(table, swap),
+        settings=table.settings,
+        delta_chi2=statistic,
+        chi2_null=table.chi2 + 110.0,
+    )
+    blended = replace(faint, chi2_null=table.chi2 + 99000.0)
+
+    # The threshold of an epoch: a tenth of the statistic of the whole, no less than 25 and
+    # no more than the declared one. An epoch without a chi-square keeps the declared one,
+    # and so does one that the templates fit no better than no template. Where the first
+    # component's own statistic is above that of the whole, it is the reference.
+    whole = np.resize([110.0, 300.0, 110.0, 600.0, 2000.0, np.nan, -5.0, 110.0], n)
+    both = np.full((2, n), 50.0)
+    both[0, 0] = 2000.0
+    graded = replace(faint, chi2_null=table.chi2 + whole, delta_chi2=both)
+    expected = np.resize([25.0, 30.0, 25.0, 60.0, 100.0, 100.0, 100.0, 25.0], n)
+    expected[0] = 100.0
+    np.testing.assert_allclose(_detection_thresholds(graded, 100.0), expected)
+    np.testing.assert_array_equal(_detection_mask(graded, 100.0)[1], expected > 50.0)
+    assert not _detection_mask(graded, 100.0)[0].any()
+    # A declared threshold under the floor is the threshold everywhere, zero is no gate, and
+    # a larger one raises the threshold of a strongly detected pair only.
+    np.testing.assert_allclose(_detection_thresholds(graded, 10.0), 10.0)
+    assert not _detection_mask(faint, 10.0).any() and not _detection_mask(faint, 0.0).any()
+    np.testing.assert_allclose(_detection_thresholds(faint, 1000.0), 25.0)
+    np.testing.assert_allclose(_detection_thresholds(blended, 1000.0), 1000.0)
+
+    np.testing.assert_allclose(_detection_thresholds(faint, 100.0), 25.0)
+    gated, mask = _detection_gate(faint, 100.0)
+    np.testing.assert_array_equal(mask, np.vstack([np.zeros(n, dtype=bool), below_floor]))
+    np.testing.assert_array_equal(gated.velocity[:, ~below_floor], faint.velocity[:, ~below_floor])
+    np.testing.assert_allclose(_detection_thresholds(blended, 100.0), 100.0)
+    assert _detection_mask(blended, 100.0)[1].all()
+
+    # The antiphase is the condition. A companion that follows the first component does not
+    # show it, fewer than eight epochs do not, a constant column does not, and it is not
+    # defined for three components.
+    lowered = np.full(n, 25.0)
+    epochs, coefficient = _antiphase(faint, lowered)
+    assert epochs == n - 3 and coefficient < -0.95
+    assert _in_antiphase(faint, lowered)
+    velocity = np.array(faint.velocity)
+    velocity[1] = velocity[0] + 25.0 + rng.normal(0.0, 4.0, n)
+    following = replace(faint, velocity=velocity)
+    assert _antiphase(following, lowered)[1] > 0.9 and not _in_antiphase(following, lowered)
+    np.testing.assert_allclose(_detection_thresholds(following, 100.0), 100.0)
+    assert _detection_mask(following, 100.0)[1].all()
+    few = np.array(statistic)
+    few[1, 10:] = 12.0
+    short = replace(faint, delta_chi2=few)
+    assert _antiphase(short, lowered)[0] == 7 and not _in_antiphase(short, lowered)
+    assert _detection_mask(short, 100.0)[1].all()
+    assert not _in_antiphase(replace(faint, velocity=np.zeros((2, n))), lowered)
+    triple = SimpleNamespace(n_components=3, chi2=np.full(n, 1000.0), chi2_null=np.full(n, 1110.0))
+    np.testing.assert_allclose(_detection_thresholds(triple, 100.0), 100.0)
+    # Stars of unequal semi-amplitudes in either order lie on two lines, and the
+    # coefficient is then short of the cut: the table keeps the declared threshold.
+    unequal = _orbit_table(table.bjd, sigma=4.0, seed=3)
+    mixed = replace(
+        _exchanged(unequal, np.arange(n) % 2 == 0),
+        settings=unequal.settings,
+        delta_chi2=statistic,
+        chi2_null=unequal.chi2 + 110.0,
+    )
+    assert -0.9 < _antiphase(mixed, lowered)[1] < -0.7
+    np.testing.assert_allclose(_detection_thresholds(mixed, 100.0), 100.0)
+
+    # Every search runs on the faint pair, and the candidate fits put its epochs in one
+    # order. Which of two alike stars is the first component is not determined by a table.
+    candidates, searches = _period_candidates(
+        faint, swap_invariant=True, detection_min=100.0, leave_one_out=True
+    )
+    assert all(searches[name] is not None for name in ("single", "harmonic", "first", "invariant"))
+    np.testing.assert_array_equal(searches["single"]["used"], ~below_floor)
+    ctx = SimpleNamespace(settings=Analysis(k_min=2.0, k_max=250.0, ecc_max=0.9), flag=[].append)
+    best, ordered, _ = _orbit_over_candidates(
+        ctx, faint, candidates, circular=False, detection_min=100.0
+    )
+    assert abs(best.period - twins.period) < 0.05 and best.held == ()
+    np.testing.assert_allclose(np.sort(best.k), np.sort(twins.k), atol=4.0)
+    assert best.n_points == 2 * n - 3
+    as_injected = np.all(
+        ordered.velocity[:, ~below_floor] == table.velocity[:, ~below_floor], axis=0
+    )
+    assert as_injected.all() or not as_injected.any()
+
+    # On the strongly detected pair the companion is gated at every epoch: the first
+    # component's column, which holds both stars, is all that is searched and fitted.
+    candidates, searches = _period_candidates(
+        blended, swap_invariant=True, detection_min=100.0, leave_one_out=True
+    )
+    assert searches["single"] is None and searches["invariant"] is None
+    alone, _, _ = _orbit_over_candidates(
+        ctx, blended, candidates, circular=False, detection_min=100.0
+    )
+    assert alone.held == ("B",) and abs(alone.period - twins.period) > 1.0
+
+
 def test_leave_one_epoch_out_peaks_follow_the_merge_on_a_short_table(monkeypatch):
     """The fifth source: three peaks per left-out epoch, after the round robin (D65).
 
@@ -1392,19 +1524,30 @@ def test_the_bootstrap_flags_a_table_on_few_nights_and_honours_the_exchange_rule
     )
     seen: dict = {}
 
-    def table_with(bjd, light):
+    def table_with(bjd, light, *, faint=False):
         n = len(bjd)
         statistic = np.full((2, n), 1e4)
         statistic[1, :3] = [5.0, 40.0, 99.0]
         statistic[0, 3] = 5.0  # a weak first component is never gated
+        whole = np.full(n, 2e4)
+        velocity = np.zeros((2, n))
+        if faint:
+            # A faint pair in antiphase: every statistic is under the threshold (D71).
+            statistic = np.stack([np.full(n, 60.0), np.full(n, 40.0)])
+            statistic[1, :2] = [5.0, 20.0]
+            whole = np.full(n, 110.0)
+            curve = np.sin(2.0 * np.pi * np.arange(n) / 7.3)
+            velocity = np.stack([30.0 * curve, -55.0 * curve])
         return SimpleNamespace(
             names=("A", "B"),
             n_components=2,
             settings={},
             n_epochs=n,
             bjd=np.asarray(bjd, dtype=float),
-            velocity=np.zeros((2, n)),
+            velocity=velocity,
             delta_chi2=statistic,
+            chi2=np.full(n, 1000.0),
+            chi2_null=1000.0 + whole,
             light=np.repeat(np.asarray(light, dtype=float)[:, None], n, axis=1),
             good=np.ones(n, dtype=bool),
             summary=lambda: "  table summary",
@@ -1427,6 +1570,7 @@ def test_the_bootstrap_flags_a_table_on_few_nights_and_honours_the_exchange_rule
             star, tmp_path / name, Analysis(period_decision_candidates=0), library="stub"
         )
         _spec, block = _bootstrap(ctx, dataset, {"TOY": 5.5}, None)
+        seen["text"] = block["text"]
         return ctx, block["report"]
 
     # Nine epochs on five nights, light fractions 0.9 and 0.1.
@@ -1436,7 +1580,13 @@ def test_the_bootstrap_flags_a_table_on_few_nights_and_honours_the_exchange_rule
     assert seen["search"]["leave_one_out"] is True
     assert seen["fits"]["exchange"] is False and report["exchange_allowed"] is False
     assert report["n_nights"] == 5
-    assert report["detection_gate"] == {"threshold": 100.0, "gated": {"A": 0, "B": 3}}
+    assert report["detection_gate"] == {
+        "threshold": 100.0,
+        "gated": {"A": 0, "B": 3},
+        "kept_below": {"A": 0, "B": 0},
+        "antiphase": None,
+    }
+    assert "B 3 velocities without weight in the search\n" in seen["text"]
     assert any("usable epochs fall on 5 night(s), fewer than 8" in f for f in ctx.flags)
     assert any(
         "exchange of the two components in the bootstrap's candidate fits was skipped" in f
@@ -1449,6 +1599,16 @@ def test_the_bootstrap_flags_a_table_on_few_nights_and_honours_the_exchange_rule
     ctx, report = run(table_with(spread, [0.55, 0.45]), "spread")
     assert seen["fits"]["exchange"] is True and report["n_nights"] == 8
     assert not any("night(s)" in f or "was skipped" in f for f in ctx.flags)
+
+    # A faint pair in antiphase: the report counts the velocities kept under the threshold
+    # and records the test of the antiphase.
+    twelve = 2455000.2 + 5.0 * np.arange(12.0)
+    ctx, report = run(table_with(twelve, [0.55, 0.45], faint=True), "faint")
+    gate = report["detection_gate"]
+    assert gate["gated"] == {"A": 0, "B": 2} and gate["kept_below"] == {"A": 0, "B": 10}
+    assert gate["antiphase"]["epochs"] == 10
+    assert gate["antiphase"]["correlation"] == pytest.approx(-1.0)
+    assert "B 2 velocities without weight in the search; 10 below it kept" in seen["text"]
 
 
 def test_the_velocity_products_carry_every_digit_of_the_epoch_time(tmp_path):
@@ -1524,6 +1684,8 @@ def test_the_disentangling_decides_among_the_best_candidate_periods(toy, tmp_pat
         bjd=2455000.25 + 3.0 * np.arange(12.0),
         velocity=np.zeros((2, 12)),
         delta_chi2=np.full((2, 12), 1e4),
+        chi2=np.full(12, 1000.0),
+        chi2_null=np.full(12, 3e4),
         light=np.repeat([[0.6], [0.4]], 12, axis=1),
         good=np.ones(12, dtype=bool),
         summary=lambda: "  table summary",

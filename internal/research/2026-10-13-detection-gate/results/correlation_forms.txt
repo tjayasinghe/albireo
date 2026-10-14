@@ -1,0 +1,28 @@
+Forms of the coefficient: weighted by the quoted errors, at equal weight, and by rank
+
+m2: 150 tables
+  weighted  : acts on 27; rank 1 141 (5 gained, 0 lost); both K 126 (12 gained, 0 lost)
+  unweighted: acts on 27; rank 1 141 (5 gained, 0 lost); both K 126 (12 gained, 0 lost)
+  spearman  : acts on 26; rank 1 141 (5 gained, 0 lost); both K 126 (12 gained, 0 lost)
+  on the tables that pass the weighted form: epochs, median 29; effective epochs, median 28.9, smallest 8.0; effective below 8 on 1 of 127; effective below 4 on 0
+  weighted and unweighted agree on 150 of 150 tables; only weighted 0, only unweighted 0
+
+open: 400 tables
+  weighted  : acts on 26; rank 1 311 (5 gained, 0 lost); both K 184 (15 gained, 0 lost)
+  unweighted: acts on 26; rank 1 311 (5 gained, 0 lost); both K 184 (15 gained, 0 lost)
+  spearman  : acts on 23; rank 1 311 (5 gained, 0 lost); both K 183 (14 gained, 0 lost)
+  on the tables that pass the weighted form: epochs, median 26; effective epochs, median 26.0, smallest 8.0; effective below 8 on 3 of 204; effective below 4 on 0
+  weighted and unweighted agree on 400 of 400 tables; only weighted 0, only unweighted 0
+
+test: 1200 tables
+  weighted  : acts on 164; rank 1 1107 (36 gained, 1 lost); both K 1013 (66 gained, 0 lost)
+  unweighted: acts on 164; rank 1 1107 (36 gained, 1 lost); both K 1013 (66 gained, 0 lost)
+  spearman  : acts on 158; rank 1 1108 (36 gained, 0 lost); both K 1012 (65 gained, 0 lost)
+  on the tables that pass the weighted form: epochs, median 28; effective epochs, median 27.9, smallest 7.9; effective below 8 on 12 of 1055; effective below 4 on 0
+  weighted and unweighted agree on 1200 of 1200 tables; only weighted 0, only unweighted 0
+
+pipeline-built faint tables: 122
+  weighted  : passes on 46; velocities returned 498, right 85.7 %; period first 64, prior 37, open 22, off 3, wrong 58
+  unweighted: passes on 46; velocities returned 498, right 85.7 %; period first 64, prior 37, open 22, off 3, wrong 58
+  spearman  : passes on 41; velocities returned 449, right 88.2 %; period first 64, prior 36, open 24, off 3, wrong 58
+  on the tables that pass the weighted form: effective epochs, median 22.9, smallest 8.0; below 8 on 1 of 46; below 4 on 0

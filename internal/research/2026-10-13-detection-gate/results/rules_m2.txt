@@ -1,0 +1,258 @@
+Rules on the 150 held-out survey tables (m2), the pair exchanged where the pipeline's rule on the light fractions allows it, first set
+
+m2, exchange by rule: 150 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 142 | 141 | 136 | 114 | 138 | 10 | 74 | 0, 0 (1.000) | 0, 0 (1.000) |
+| search none | 147 | 145 | 135 | 114 | 138 | 8 | 76 | 0, 1 (1.000) | 0, 0 (1.000) |
+| none | 147 | 145 | 139 | 135 | 144 | 4 | 76 | 5, 2 (0.453) | 21, 0 (0.000) |
+| epoch r5 | 145 | 144 | 140 | 126 | 142 | 5 | 75 | 5, 1 (0.219) | 12, 0 (0.000) |
+| table r5 | 145 | 144 | 140 | 127 | 142 | 5 | 75 | 5, 1 (0.219) | 13, 0 (0.000) |
+| table r10 | 145 | 144 | 140 | 128 | 142 | 5 | 75 | 5, 1 (0.219) | 14, 0 (0.000) |
+| table r20 | 145 | 144 | 140 | 129 | 143 | 5 | 75 | 5, 1 (0.219) | 15, 0 (0.000) |
+| fixed 25 | 145 | 144 | 140 | 136 | 143 | 5 | 76 | 5, 1 (0.219) | 22, 0 (0.000) |
+
+exchange allowed on 109; seconds per table, median 41
+  fixed: gates other velocities than the fixed threshold on 0 tables; velocities returned to the fits 0
+  search none: gates other velocities than the fixed threshold on 0 tables; velocities returned to the fits 0
+  none: gates other velocities than the fixed threshold on 61 tables; velocities returned to the fits 1219
+  epoch r5: gates other velocities than the fixed threshold on 35 tables; velocities returned to the fits 511
+  table r5: gates other velocities than the fixed threshold on 32 tables; velocities returned to the fits 512
+  table r10: gates other velocities than the fixed threshold on 37 tables; velocities returned to the fits 640
+  table r20: gates other velocities than the fixed threshold on 41 tables; velocities returned to the fits 706
+  fixed 25: gates other velocities than the fixed threshold on 59 tables; velocities returned to the fits 1023
+
+median statistic of the first component 0 to 125: 16 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 9 | 8 | 6 | 3 | 7 | 9 | 50 | 0, 0 (1.000) | 0, 0 (1.000) |
+| search none | 14 | 12 | 6 | 3 | 7 | 7 | 79 | 0, 0 (1.000) | 0, 0 (1.000) |
+| none | 14 | 12 | 9 | 8 | 11 | 3 | 79 | 4, 1 (0.375) | 5, 0 (0.062) |
+| epoch r5 | 12 | 11 | 9 | 8 | 10 | 4 | 78 | 4, 1 (0.375) | 5, 0 (0.062) |
+| table r5 | 12 | 11 | 9 | 8 | 10 | 4 | 78 | 4, 1 (0.375) | 5, 0 (0.062) |
+| table r10 | 12 | 11 | 9 | 8 | 10 | 4 | 78 | 4, 1 (0.375) | 5, 0 (0.062) |
+| table r20 | 12 | 11 | 9 | 8 | 10 | 4 | 78 | 4, 1 (0.375) | 5, 0 (0.062) |
+| fixed 25 | 12 | 11 | 9 | 8 | 10 | 4 | 78 | 4, 1 (0.375) | 5, 0 (0.062) |
+
+median statistic of the first component 125 to 500: 24 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 24 | 24 | 23 | 14 | 23 | 0 | 74 | 0, 0 (1.000) | 0, 0 (1.000) |
+| search none | 24 | 24 | 23 | 14 | 23 | 0 | 76 | 0, 0 (1.000) | 0, 0 (1.000) |
+| none | 24 | 24 | 23 | 22 | 24 | 0 | 76 | 1, 1 (1.000) | 8, 0 (0.008) |
+| epoch r5 | 24 | 24 | 24 | 21 | 24 | 0 | 79 | 1, 0 (1.000) | 7, 0 (0.016) |
+| table r5 | 24 | 24 | 24 | 22 | 24 | 0 | 78 | 1, 0 (1.000) | 8, 0 (0.008) |
+| table r10 | 24 | 24 | 24 | 22 | 24 | 0 | 77 | 1, 0 (1.000) | 8, 0 (0.008) |
+| table r20 | 24 | 24 | 24 | 23 | 24 | 0 | 77 | 1, 0 (1.000) | 9, 0 (0.004) |
+| fixed 25 | 24 | 24 | 24 | 23 | 24 | 0 | 77 | 1, 0 (1.000) | 9, 0 (0.004) |
+
+median statistic of the first component 500 to inf: 110 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 109 | 109 | 107 | 97 | 108 | 1 | 75 | 0, 0 (1.000) | 0, 0 (1.000) |
+| search none | 109 | 109 | 106 | 97 | 108 | 1 | 76 | 0, 1 (1.000) | 0, 0 (1.000) |
+| none | 109 | 109 | 107 | 105 | 109 | 1 | 76 | 0, 0 (1.000) | 8, 0 (0.008) |
+| epoch r5 | 109 | 109 | 107 | 97 | 108 | 1 | 75 | 0, 0 (1.000) | 0, 0 (1.000) |
+| table r5 | 109 | 109 | 107 | 97 | 108 | 1 | 75 | 0, 0 (1.000) | 0, 0 (1.000) |
+| table r10 | 109 | 109 | 107 | 98 | 108 | 1 | 75 | 0, 0 (1.000) | 1, 0 (1.000) |
+| table r20 | 109 | 109 | 107 | 98 | 109 | 1 | 75 | 0, 0 (1.000) | 1, 0 (1.000) |
+| fixed 25 | 109 | 109 | 107 | 105 | 109 | 1 | 76 | 0, 0 (1.000) | 8, 0 (0.008) |
+
+tables on which a rule differs from the fixed threshold (rank, K error %, candidates, gated):
+  86                         good  35 d1     177 d2     28 x1 | fixed:   1 100.0  50  35 | search none:   1 100.0  72  35 | none:   1   3.4  72   0 | epoch r5:   1   5.9 105  23 | table r5:   1   9.5 108  27 | table r10:   1   6.2  78  13 | table r20:   1   6.2  78  13 | fixed 25:   1   6.2  78  13
+  159                        good  44 d1    1083 d2     69 x0 | fixed:   1   3.0  50  42 | search none:   1   3.0  77  42 | none:   1   1.0  77   0 | epoch r5:   1   3.0  50  42 | table r5:   1   3.0  50  42 | table r10:   1   3.0  50  42 | table r20:   1   0.5  82  15 | fixed 25:   1   1.0  77   0
+  160                        good  42 d1     461 d2    117 x1 | fixed:   1   2.4  92   8 | search none:   1   2.4  76   8 | none:   1   2.8  76   0 | epoch r5:   1   2.1  87   6 | table r5:   1   2.5  89   4 | table r10:   1   2.8  76   0 | table r20:   1   2.8  76   0 | fixed 25:   1   2.8  76   0
+  325                        good  29 d1     515 d2     65 x1 | fixed:   1   6.3  95  21 | search none:   1   6.3  74  21 | none:   1   6.8  74   0 | epoch r5:   1   6.3  95  21 | table r5:   1   6.3  95  21 | table r10:   1   7.1  83   9 | table r20:   1   8.0  78   6 | fixed 25:   1   8.0  78   6
+  372                        good  25 d1      71 d2     31 x1 | fixed:   1 100.0  50  25 | search none:   1 100.0  68  25 | none:   1   4.2  68   0 | epoch r5:   1   2.1  83   5 | table r5:   1   2.1  83   5 | table r10:   1   2.1  83   5 | table r20:   1   2.1  83   5 | fixed 25:   1   2.1  83   5
+  488                        good  36 d1    2969 d2     40 x0 | fixed:   1 100.0  50  36 | search none:   1 100.0  75  36 | none:   1   3.1  75   0 | epoch r5:   1 100.0  50  36 | table r5:   1 100.0  50  36 | table r10:   1 100.0  50  36 | table r20:   1 100.0  50  36 | fixed 25:   1   2.1  83   5
+  505                        good  46 d1     238 d2    132 x1 | fixed:   1   1.7  80  10 | search none:   1   1.7  77  10 | none:   1   1.6  77   0 | epoch r5:   1   1.6  77   0 | table r5:   1   1.6  77   0 | table r10:   1   1.6  77   0 | table r20:   1   1.6  77   0 | fixed 25:   1   1.6  77   0
+  536                        good  10 d1      55 d2    120 x1 | fixed:   1  15.9  96   1 | search none:   1  15.9  88   1 | none:   1  11.1  88   0 | epoch r5:   1  11.1  88   0 | table r5:   1  11.1  88   0 | table r10:   1  11.1  88   0 | table r20:   1  11.1  88   0 | fixed 25:   1  11.1  88   0
+  556                        good  18 d1   86120 d2     29 x0 | fixed:   1 100.0  50  18 | search none:   1 100.0  89  18 | none:   1  23.7  89   0 | epoch r5:   1 100.0  50  18 | table r5:   1 100.0  50  18 | table r10:   1 100.0  50  18 | table r20:   1 100.0  50  18 | fixed 25:   1  47.5  84   7
+  578                        good  48 d1    1119 d2    155 x1 | fixed:   1   5.2  79  12 | search none:   1   5.2  69  12 | none:   1   4.3  69   0 | epoch r5:   1   5.2  79  12 | table r5:   1   5.2  79  12 | table r10:   1   5.2  79  12 | table r20:   1   4.4  75   6 | fixed 25:   1   4.4  71   4
+  656                        good  93 d1     206 d2     54 x1 | fixed:   1 100.0  50  92 | search none:   1 100.0  71  92 | none:   1   4.2  71   0 | epoch r5:   1   1.6  82  27 | table r5:   1   1.9  79  27 | table r10:   1   3.8  73   5 | table r20:   1   3.8  73   5 | fixed 25:   1   3.8  73   5
+  788                        good  33 d1    3277 d2     65 x0 | fixed:   1 100.0  50  33 | search none:   1 100.0  85  33 | none:   1   2.7  85   0 | epoch r5:   1 100.0  50  33 | table r5:   1 100.0  50  33 | table r10:   1 100.0  50  33 | table r20:   1 100.0  50  33 | fixed 25:   1   2.7  85   0
+  789                        good   8 d1    2711 d2     25 x0 | fixed:   1 100.0  50   8 | search none:   2 100.0  76   8 | none:   1   1.6  76   0 | epoch r5:   1 100.0  50   8 | table r5:   1 100.0  50   8 | table r10:   1 100.0  50   8 | table r20:   1 100.0  50   8 | fixed 25:   1   1.0  56   4
+  835                        good  34 d1     226 d2    129 x1 | fixed:   1   2.9  91  11 | search none:   1   2.9  78  11 | none:   1   2.9  78   0 | epoch r5:   1   2.9  78   0 | table r5:   1   2.9  78   0 | table r10:   1   2.9  78   0 | table r20:   1   2.9  78   0 | fixed 25:   1   2.9  78   0
+  879                        good  13 d1    1921 d2    130 x0 | fixed:   1   3.3  93   4 | search none:   1   3.3  78   4 | none:   1   3.9  78   0 | epoch r5:   1   3.3  93   4 | table r5:   1   3.3  93   4 | table r10:   1   3.3  93   4 | table r20:   1   3.3  93   4 | fixed 25:   1   3.9  78   0
+  890                        good  13 d1   13593 d2     25 x0 | fixed:   1 100.0  50  13 | search none:   1 100.0 100  13 | none:   1   5.1 100   0 | epoch r5:   1 100.0  50  13 | table r5:   1 100.0  50  13 | table r10:   1 100.0  50  13 | table r20:   1 100.0  50  13 | fixed 25:   1   5.6 103   6
+  993                        good  21 d1   49511 d2    116 x0 | fixed:   1   0.3  96   5 | search none:   1   0.3  80   5 | none:   1   5.7  80   0 | epoch r5:   1   0.3  96   5 | table r5:   1   0.3  96   5 | table r10:   1   0.3  96   5 | table r20:   1   0.3  96   5 | fixed 25:   1   5.7  80   0
+  1092                       good  36 d1      62 d2     36 x1 | fixed:   0   nan  50  36 | search none:  69 100.0  81  36 | none:   1   3.5  81   0 | epoch r5:   1   3.2  87   8 | table r5:   1   3.2  87   8 | table r10:   1   3.2  87   8 | table r20:   1   3.2  87   8 | fixed 25:   1   3.2  87   8
+  1236                       good  40 d1    8115 d2     50 x0 | fixed:   1 100.0  50  40 | search none:   1 100.0  79  40 | none:   1   4.3  79   0 | epoch r5:   1 100.0  50  40 | table r5:   1 100.0  50  40 | table r10:   1 100.0  50  40 | table r20:   1 100.0  50  40 | fixed 25:   1   3.7  79   2
+  1312                       good  56 d1    2217 d2    550 x1 | fixed:   1   0.7  78   1 | search none:   1   0.7  78   1 | none:   1   0.7  78   0 | epoch r5:   1   0.7  78   0 | table r5:   1   0.7  78   1 | table r10:   1   0.7  78   1 | table r20:   1   0.7  78   1 | fixed 25:   1   0.7  78   0
+  1783                       good  11 d1      19 d2     14 x1 | fixed:   0   nan  50  11 | search none:   0   nan  95  11 | none:   2  32.3  95   0 | epoch r5:   0   nan  50   9 | table r5:   0   nan  50   9 | table r10:   0   nan  50   9 | table r20:   0   nan  50   9 | fixed 25:   0   nan  50   9
+  1887                       good  31 d1     141 d2     37 x1 | fixed:   1 100.0  50  30 | search none:   1 100.0  77  30 | none:   1   2.2  77   0 | epoch r5:   1   2.5  92  11 | table r5:   1   4.2  94   9 | table r10:   1   3.6  89   4 | table r20:   1   3.6  89   4 | fixed 25:   1   3.6  89   4
+  1903                       good  23 d1      17 d2     20 x1 | fixed:   0   nan  50  23 | search none:   0   nan  69  23 | none:  33  57.4  69   0 | epoch r5:   0   nan  77  18 | table r5:   0   nan  77  18 | table r10:   0   nan  77  18 | table r20:   0   nan  77  18 | fixed 25:   0   nan  77  18
+  1936                       good  21 d1   99386 d2     94 x0 | fixed:   1   2.4  90  11 | search none:   1   2.4  85  11 | none:   1   0.6  85   0 | epoch r5:   1   2.4  90  11 | table r5:   1   2.4  90  11 | table r10:   1   2.4  90  11 | table r20:   1   2.4  90  11 | fixed 25:   1   0.6  85   0
+  2075                       good  25 d1   25347 d2     71 x0 | fixed:   1   2.4  50  23 | search none:   1   2.4  77  23 | none:   1   2.9  77   0 | epoch r5:   1   2.4  50  23 | table r5:   1   2.4  50  23 | table r10:   1   2.4  50  23 | table r20:   1   2.4  50  23 | fixed 25:   1   2.9  77   0
+  2462                       good  18 d1   71571 d2    118 x0 | fixed:   1   2.2  87   4 | search none:   1   2.2  77   4 | none:   1   1.6  77   0 | epoch r5:   1   2.2  87   4 | table r5:   1   2.2  87   4 | table r10:   1   2.2  87   4 | table r20:   1   2.2  87   4 | fixed 25:   1   1.6  77   0
+  2756                       good  17 d1     173 d2     51 x1 | fixed:   1 100.0  50  17 | search none:   1 100.0  71  17 | none:   1   2.2  71   0 | epoch r5:   1   1.6  82   3 | table r5:   1   1.5  85   2 | table r10:   1   1.8  85   1 | table r20:   1   1.8  85   1 | fixed 25:   1   1.8  85   1
+  2945                       good  46 d1   12882 d2     75 x0 | fixed:   1   3.1  50  43 | search none:   1   3.1  75  43 | none:   1   2.5  75   0 | epoch r5:   1   3.1  50  43 | table r5:   1   3.1  50  43 | table r10:   1   3.1  50  43 | table r20:   1   3.1  50  43 | fixed 25:   1   2.1  75   2
+  3084                       good  15 d1    2441 d2     19 x0 | fixed:   1 100.0  50  15 | search none:   1 100.0  81  15 | none:   1  12.0  81   0 | epoch r5:   1 100.0  50  15 | table r5:   1 100.0  50  15 | table r10:   1 100.0  50  15 | table r20:   1 100.0  50  15 | fixed 25:   1  13.1  50  13
+  3087                       good  37 d1      72 d2     35 x1 | fixed:   2 100.0  50  37 | search none:   2 100.0  80  37 | none:   1   5.6  80   0 | epoch r5:   1   6.4  91  11 | table r5:   1   6.4  91  11 | table r10:   1   6.4  91  11 | table r20:   1   6.4  91  11 | fixed 25:   1   6.4  91  11
+  3161                       good  21 d1     219 d2     69 x1 | fixed:   1   2.9  81  17 | search none:   1   2.9  72  17 | none:   1   3.4  72   0 | epoch r5:   1   3.2  82   3 | table r5:   1   3.4  74   1 | table r10:   1   3.4  72   0 | table r20:   1   3.4  72   0 | fixed 25:   1   3.4  72   0
+  3254                       good  12 d1      15 d2     18 x1 | fixed:   0   nan  50  12 | search none:  17 100.0  83  12 | none:   0   nan  83   0 | epoch r5:  13  37.7  50   9 | table r5:  13  37.7  50   9 | table r10:  13  37.7  50   9 | table r20:  13  37.7  50   9 | fixed 25:  13  37.7  50   9
+  3280                       good  11 d1     502 d2     58 x1 | fixed:   1 100.0  50  11 | search none:   1 100.0  86  11 | none:   1   3.3  86   0 | epoch r5:   1 100.0  50  11 | table r5:   1 100.0  50  11 | table r10:   1   3.5  95   2 | table r20:   1   3.3  86   0 | fixed 25:   1   3.3  86   0
+  3295                       good  36 d1     198 d2     98 x1 | fixed:   1   4.8  76  18 | search none:   1   4.8  65  18 | none:   1   4.8  65   0 | epoch r5:   1   4.8  65   0 | table r5:   1   4.8  65   0 | table r10:   1   4.8  65   0 | table r20:   1   4.8  65   0 | fixed 25:   1   4.8  65   0
+  3384                       good  52 d1     638 d2     71 x1 | fixed:   1   0.9  91  39 | search none:   1   0.9  72  39 | none:   1   1.3  72   0 | epoch r5:   1   0.6  93  37 | table r5:   1   0.9  91  39 | table r10:   1   2.2  85  20 | table r20:   1   1.1  74   1 | fixed 25:   1   1.1  74   1
+  3845                       good  33 d1   11236 d2     44 x0 | fixed:   1 100.0  50  33 | search none:   1 100.0  77  33 | none:   1   3.5  77   0 | epoch r5:   1 100.0  50  33 | table r5:   1 100.0  50  33 | table r10:   1 100.0  50  33 | table r20:   1 100.0  50  33 | fixed 25:   1   4.1  91   5
+  3955                       good  24 d1     170 d2     73 x1 | fixed:   1   3.6  50  22 | search none:   1   3.6  80  22 | none:   1   3.5  80   0 | epoch r5:   1   4.9  81   2 | table r5:   1   3.5  80   0 | table r10:   1   3.5  80   0 | table r20:   1   3.5  80   0 | fixed 25:   1   3.5  80   0
+  4045                       good  71 d1      97 d2    130 x1 | fixed:   1   4.2  77   5 | search none:   1   4.2  66   5 | none:   1   1.2  66   0 | epoch r5:   1   1.2  66   0 | table r5:   1   1.2  66   0 | table r10:   1   1.2  66   0 | table r20:   1   1.2  66   0 | fixed 25:   1   1.2  66   0
+  4181                       good  53 d1     138 d2     44 x1 | fixed:   1 100.0  50  52 | search none:   1 100.0  81  52 | none:   1   2.8  81   0 | epoch r5:   1   3.8  80   4 | table r5:   1   3.1  76   2 | table r10:   1   3.0  75   1 | table r20:   1   3.0  75   1 | fixed 25:   1   3.0  75   1
+  4256                       good  13 d1      59 d2     54 x1 | fixed:   0   nan  50  12 | search none:   0   nan  68  12 | none:   2  13.1  68   0 | epoch r5:   2  13.1  68   0 | table r5:   2  13.1  68   0 | table r10:   2  13.1  68   0 | table r20:   2  13.1  68   0 | fixed 25:   2  13.1  68   0
+  4524                       good  29 d1     105 d2     78 x1 | fixed:   1   5.3  99  20 | search none:   1   5.3  78  20 | none:   1   6.0  78   0 | epoch r5:   1   5.7  84   2 | table r5:   1   5.7  84   2 | table r10:   1   5.7  84   2 | table r20:   1   5.7  84   2 | fixed 25:   1   5.7  84   2
+  4782                       good   8 d1      23 d2     27 x1 | fixed:   1 100.0  50   8 | search none:   1 100.0 109   8 | none:  12  44.0 109   0 | epoch r5:   5  31.0 101   3 | table r5:   5  31.0 101   3 | table r10:   5  31.0 101   3 | table r20:   5  31.0 101   3 | fixed 25:   5  31.0 101   3
+  4926                       good  16 d1    5652 d2     44 x0 | fixed:   1 100.0  50  16 | search none:   1 100.0  80  16 | none:   1   4.0  80   0 | epoch r5:   1 100.0  50  16 | table r5:   1 100.0  50  16 | table r10:   1 100.0  50  16 | table r20:   1 100.0  50  16 | fixed 25:   1   7.0  88   3
+  4975                       good  25 d1     340 d2    128 x1 | fixed:   1   2.2  86   2 | search none:   1   2.2  82   2 | none:   1   2.9  82   0 | epoch r5:   1   2.9  82   0 | table r5:   1   2.9  82   0 | table r10:   1   2.9  82   0 | table r20:   1   2.9  82   0 | fixed 25:   1   2.9  82   0
+  5062                       good  39 d1    5813 d2     56 x0 | fixed:   1   6.3  50  36 | search none:   1   6.3  76  36 | none:   1   2.1  76   0 | epoch r5:   1   6.3  50  36 | table r5:   1   6.3  50  36 | table r10:   1   6.3  50  36 | table r20:   1   6.3  50  36 | fixed 25:   1   1.8  80   2
+  5093                       good  56 d1     538 d2    449 x1 | fixed:   1   1.9  72   2 | search none:   1   1.9  71   2 | none:   1   2.1  71   0 | epoch r5:   1   2.1  71   0 | table r5:   1   1.9  72   2 | table r10:   1   2.1  71   0 | table r20:   1   2.1  71   0 | fixed 25:   1   2.1  71   0
+  5545                       good  26 d1      80 d2     90 x1 | fixed:   0   nan  98  17 | search none:   0   nan  76  17 | none:   1   4.4  76   0 | epoch r5:   1   4.4  76   0 | table r5:   1   4.4  76   0 | table r10:   1   4.4  76   0 | table r20:   1   4.4  76   0 | fixed 25:   1   4.4  76   0
+  5710                       good   9 d1     483 d2     14 x0 | fixed:   1 100.0  50   9 | search none:   1 100.0  96   9 | none:   4  13.9  96   0 | epoch r5:   1 100.0  50   9 | table r5:   1 100.0  50   9 | table r10:   1 100.0  50   8 | table r20:   1 100.0  50   8 | fixed 25:   1 100.0  50   8
+  5726                       good  38 d1      31 d2     71 x1 | fixed:   1   6.0 100  33 | search none:   1   6.0  80  33 | none:   1   2.7  80   0 | epoch r5:   1   2.7  80   0 | table r5:   1   2.7  80   0 | table r10:   1   2.7  80   0 | table r20:   1   2.7  80   0 | fixed 25:   1   2.7  80   0
+  5781                       good  35 d1    5207 d2    312 x0 | fixed:   1   2.9  80   1 | search none:   1   2.9  80   1 | none:   1   2.9  80   0 | epoch r5:   1   2.9  80   1 | table r5:   1   2.9  80   1 | table r10:   1   2.9  80   1 | table r20:   1   2.9  80   1 | fixed 25:   1   2.9  80   1
+  6413                       good  42 d1     201 d2     88 x1 | fixed:   1   1.9  91  24 | search none:   1   1.9  82  24 | none:   1   5.3  82   0 | epoch r5:   1   5.7  84   2 | table r5:   1   5.5  84   4 | table r10:   1   5.7  81   1 | table r20:   1   5.7  81   1 | fixed 25:   1   5.7  81   1
+  6514                       good  15 d1    1289 d2    140 x1 | fixed:   6  28.0  77   1 | search none:   6  28.0  81   1 | none:   4  28.9  81   0 | epoch r5:   6  28.0  77   1 | table r5:   6  28.0  77   1 | table r10:   6  28.0  77   1 | table r20:   4  28.9  81   0 | fixed 25:   4  28.9  81   0
+  6518                       good  25 d1     454 d2     59 x1 | fixed:   1 100.0  50  25 | search none:   1 100.0  76  25 | none:   1   6.1  76   0 | epoch r5:   1 100.0  50  24 | table r5:   1   4.4  50  23 | table r10:   1   4.7  88   4 | table r20:   1   6.1  76   0 | fixed 25:   1   6.1  76   0
+  6593                       good  47 d1     435 d2    120 x1 | fixed:   1   0.3  84  17 | search none:   1   0.3  71  17 | none:   1   0.5  71   0 | epoch r5:   1   0.3  78   8 | table r5:   1   0.2  80  10 | table r10:   1   0.5  71   0 | table r20:   1   0.5  71   0 | fixed 25:   1   0.5  71   0
+  6640                       good  15 d1     491 d2     14 x0 | fixed:   1 100.0  50  15 | search none:   1 100.0  91  15 | none:   1  11.4  91   0 | epoch r5:   1 100.0  50  15 | table r5:   1 100.0  50  15 | table r10:   1 100.0  50  15 | table r20:   1   1.6  83  11 | fixed 25:   1   1.6  83  11
+  7150                       good  47 d1     171 d2     47 x1 | fixed:   1  53.2  50  45 | search none:   1  53.2  75  45 | none:   1   2.9  75   0 | epoch r5:   1   2.2  85   9 | table r5:   1   2.0  85   7 | table r10:   1   2.5  79   2 | table r20:   1   2.5  79   2 | fixed 25:   1   2.5  79   2
+  7238                       good  31 d1     135 d2    132 x1 | fixed:   7   8.3  66   6 | search none:  14   8.3  67   6 | none:   1   3.1  67   0 | epoch r5:   1   3.1  67   0 | table r5:   1   3.1  67   0 | table r10:   1   3.1  67   0 | table r20:   1   3.1  67   0 | fixed 25:   1   3.1  67   0
+  7705                       good  28 d1     100 d2     74 x1 | fixed:   0   nan 107  22 | search none:   0   nan  80  22 | none:   1   1.3  80   0 | epoch r5:   1   1.5  79   1 | table r5:   1   1.5  79   1 | table r10:   1   1.5  79   1 | table r20:   1   1.5  79   1 | fixed 25:   1   1.5  79   1
+
+Rules on the whole-epoch statistic
+
+m2, exchange by rule: 150 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 142 | 141 | 136 | 114 | 138 | 10 | 74 | 0, 0 (1.000) | 0, 0 (1.000) |
+| table r5 | 145 | 144 | 140 | 127 | 142 | 5 | 75 | 5, 1 (0.219) | 13, 0 (0.000) |
+| whole r5 | 144 | 143 | 138 | 124 | 140 | 6 | 75 | 3, 1 (0.625) | 10, 0 (0.002) |
+| whole r10 | 145 | 144 | 140 | 126 | 142 | 5 | 75 | 5, 1 (0.219) | 12, 0 (0.000) |
+| whole r20 | 145 | 144 | 140 | 128 | 142 | 5 | 75 | 5, 1 (0.219) | 14, 0 (0.000) |
+| whole r10 floor 16 | 145 | 144 | 140 | 126 | 142 | 5 | 75 | 5, 1 (0.219) | 12, 0 (0.000) |
+
+exchange allowed on 109; seconds per table, median 15
+  fixed: gates other velocities than the fixed threshold on 0 tables; velocities returned to the fits 0
+  table r5: gates other velocities than the fixed threshold on 32 tables; velocities returned to the fits 512
+  whole r5: gates other velocities than the fixed threshold on 23 tables; velocities returned to the fits 266
+  whole r10: gates other velocities than the fixed threshold on 33 tables; velocities returned to the fits 487
+  whole r20: gates other velocities than the fixed threshold on 38 tables; velocities returned to the fits 646
+  whole r10 floor 16: gates other velocities than the fixed threshold on 33 tables; velocities returned to the fits 534
+
+median statistic of the first component 0 to 125: 16 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 9 | 8 | 6 | 3 | 7 | 9 | 50 | 0, 0 (1.000) | 0, 0 (1.000) |
+| table r5 | 12 | 11 | 9 | 8 | 10 | 4 | 78 | 4, 1 (0.375) | 5, 0 (0.062) |
+| whole r5 | 11 | 10 | 8 | 7 | 9 | 5 | 78 | 3, 1 (0.625) | 4, 0 (0.125) |
+| whole r10 | 12 | 11 | 9 | 8 | 10 | 4 | 78 | 4, 1 (0.375) | 5, 0 (0.062) |
+| whole r20 | 12 | 11 | 9 | 8 | 10 | 4 | 78 | 4, 1 (0.375) | 5, 0 (0.062) |
+| whole r10 floor 16 | 12 | 11 | 9 | 8 | 10 | 4 | 80 | 4, 1 (0.375) | 5, 0 (0.062) |
+
+median statistic of the first component 125 to 500: 24 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 24 | 24 | 23 | 14 | 23 | 0 | 74 | 0, 0 (1.000) | 0, 0 (1.000) |
+| table r5 | 24 | 24 | 24 | 22 | 24 | 0 | 78 | 1, 0 (1.000) | 8, 0 (0.008) |
+| whole r5 | 24 | 24 | 23 | 20 | 23 | 0 | 82 | 0, 0 (1.000) | 6, 0 (0.031) |
+| whole r10 | 24 | 24 | 24 | 21 | 24 | 0 | 78 | 1, 0 (1.000) | 7, 0 (0.016) |
+| whole r20 | 24 | 24 | 24 | 22 | 24 | 0 | 77 | 1, 0 (1.000) | 8, 0 (0.008) |
+| whole r10 floor 16 | 24 | 24 | 24 | 21 | 24 | 0 | 78 | 1, 0 (1.000) | 7, 0 (0.016) |
+
+median statistic of the first component 500 to inf: 110 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 109 | 109 | 107 | 97 | 108 | 1 | 75 | 0, 0 (1.000) | 0, 0 (1.000) |
+| table r5 | 109 | 109 | 107 | 97 | 108 | 1 | 75 | 0, 0 (1.000) | 0, 0 (1.000) |
+| whole r5 | 109 | 109 | 107 | 97 | 108 | 1 | 75 | 0, 0 (1.000) | 0, 0 (1.000) |
+| whole r10 | 109 | 109 | 107 | 97 | 108 | 1 | 75 | 0, 0 (1.000) | 0, 0 (1.000) |
+| whole r20 | 109 | 109 | 107 | 98 | 108 | 1 | 75 | 0, 0 (1.000) | 1, 0 (1.000) |
+| whole r10 floor 16 | 109 | 109 | 107 | 97 | 108 | 1 | 75 | 0, 0 (1.000) | 0, 0 (1.000) |
+
+tables on which a rule differs from the fixed threshold (rank, K error %, candidates, gated):
+  86                         good  35 d1     177 d2     28 x1 | fixed:   1 100.0  50  35 | table r5:   1   9.5 108  27 | whole r5:   1   2.0  50  32 | whole r10:   1   6.5  84  14 | whole r20:   1   6.2  78  13 | whole r10 floor 16:   1   4.7  80   7
+  159                        good  44 d1    1083 d2     69 x0 | fixed:   1   3.0  50  42 | table r5:   1   3.0  50  42 | whole r5:   1   3.0  50  42 | whole r10:   1   3.0  50  42 | whole r20:   1   1.4  77  23 | whole r10 floor 16:   1   3.0  50  42
+  160                        good  42 d1     461 d2    117 x1 | fixed:   1   2.4  92   8 | table r5:   1   2.5  89   4 | whole r5:   1   2.4  92   8 | whole r10:   1   2.7  87   3 | whole r20:   1   2.8  76   0 | whole r10 floor 16:   1   2.7  87   3
+  325                        good  29 d1     515 d2     65 x1 | fixed:   1   6.3  95  21 | table r5:   1   6.3  95  21 | whole r5:   1   6.3  95  21 | whole r10:   1   6.3  95  21 | whole r20:   1   6.8  84  11 | whole r10 floor 16:   1   6.3  95  21
+  372                        good  25 d1      71 d2     31 x1 | fixed:   1 100.0  50  25 | table r5:   1   2.1  83   5 | whole r5:   1   2.1  83   5 | whole r10:   1   2.1  83   5 | whole r20:   1   2.1  83   5 | whole r10 floor 16:   1   4.2  68   0
+  505                        good  46 d1     238 d2    132 x1 | fixed:   1   1.7  80  10 | table r5:   1   1.6  77   0 | whole r5:   1   1.7  82   8 | whole r10:   1   1.6  83   2 | whole r20:   1   1.6  77   0 | whole r10 floor 16:   1   1.6  83   2
+  536                        good  10 d1      55 d2    120 x1 | fixed:   1  15.9  96   1 | table r5:   1  11.1  88   0 | whole r5:   1  11.1  88   0 | whole r10:   1  11.1  88   0 | whole r20:   1  11.1  88   0 | whole r10 floor 16:   1  11.1  88   0
+  656                        good  93 d1     206 d2     54 x1 | fixed:   1 100.0  50  92 | table r5:   1   1.9  79  27 | whole r5:   1   2.9 113  81 | whole r10:   1   1.6  78  29 | whole r20:   1   3.8  76   8 | whole r10 floor 16:   1   1.6  78  29
+  835                        good  34 d1     226 d2    129 x1 | fixed:   1   2.9  91  11 | table r5:   1   2.9  78   0 | whole r5:   1   2.9  91  11 | whole r10:   1   3.3  86   5 | whole r20:   1   2.9  78   0 | whole r10 floor 16:   1   3.3  86   5
+  1092                       good  36 d1      62 d2     36 x1 | fixed:   0   nan  50  36 | table r5:   1   3.2  87   8 | whole r5:   1   3.6  85  15 | whole r10:   1   3.2  87   8 | whole r20:   1   3.2  87   8 | whole r10 floor 16:   1   3.6  79   1
+  1887                       good  31 d1     141 d2     37 x1 | fixed:   1 100.0  50  30 | table r5:   1   4.2  94   9 | whole r5:   1   4.4  94  16 | whole r10:   1   3.6  89   4 | whole r20:   1   3.6  89   4 | whole r10 floor 16:   1   3.7  84   3
+  2756                       good  17 d1     173 d2     51 x1 | fixed:   1 100.0  50  17 | table r5:   1   1.5  85   2 | whole r5:   1   1.8  94   9 | whole r10:   1   1.8  85   1 | whole r20:   1   1.8  85   1 | whole r10 floor 16:   1   1.8  85   1
+  3087                       good  37 d1      72 d2     35 x1 | fixed:   2 100.0  50  37 | table r5:   1   6.4  91  11 | whole r5:   1   6.2  89  12 | whole r10:   1   6.4  91  11 | whole r20:   1   6.4  91  11 | whole r10 floor 16:   1   5.7  86   3
+  3161                       good  21 d1     219 d2     69 x1 | fixed:   1   2.9  81  17 | table r5:   1   3.4  74   1 | whole r5:   1   4.8 109  14 | whole r10:   1   3.4  74   1 | whole r20:   1   3.4  72   0 | whole r10 floor 16:   1   3.4  74   1
+  3254                       good  12 d1      15 d2     18 x1 | fixed:   0   nan  50  12 | table r5:  13  37.7  50   9 | whole r5:  13  37.7  50   9 | whole r10:  13  37.7  50   9 | whole r20:  13  37.7  50   9 | whole r10 floor 16:   7  17.6 109   5
+  3280                       good  11 d1     502 d2     58 x1 | fixed:   1 100.0  50  11 | table r5:   1 100.0  50  11 | whole r5:   1 100.0  50  11 | whole r10:   1 100.0  50  10 | whole r20:   1   3.5  95   2 | whole r10 floor 16:   1 100.0  50  10
+  3295                       good  36 d1     198 d2     98 x1 | fixed:   1   4.8  76  18 | table r5:   1   4.8  65   0 | whole r5:   1   4.8  70   2 | whole r10:   1   4.8  65   0 | whole r20:   1   4.8  65   0 | whole r10 floor 16:   1   4.8  65   0
+  3384                       good  52 d1     638 d2     71 x1 | fixed:   1   0.9  91  39 | table r5:   1   0.9  91  39 | whole r5:   1   0.9  91  39 | whole r10:   1   3.3  93  38 | whole r20:   1   1.2  80  15 | whole r10 floor 16:   1   3.3  93  38
+  3955                       good  24 d1     170 d2     73 x1 | fixed:   1   3.6  50  22 | table r5:   1   3.5  80   0 | whole r5:   1   4.3  88   7 | whole r10:   1   3.5  80   0 | whole r20:   1   3.5  80   0 | whole r10 floor 16:   1   3.5  80   0
+  4045                       good  71 d1      97 d2    130 x1 | fixed:   1   4.2  77   5 | table r5:   1   1.2  66   0 | whole r5:   1   1.2  66   0 | whole r10:   1   1.2  66   0 | whole r20:   1   1.2  66   0 | whole r10 floor 16:   1   1.2  66   0
+  4181                       good  53 d1     138 d2     44 x1 | fixed:   1 100.0  50  52 | table r5:   1   3.1  76   2 | whole r5:   1   1.9  95  21 | whole r10:   1   3.1  76   2 | whole r20:   1   3.0  75   1 | whole r10 floor 16:   1   3.1  76   2
+  4256                       good  13 d1      59 d2     54 x1 | fixed:   0   nan  50  12 | table r5:   2  13.1  68   0 | whole r5:   2  13.1  68   0 | whole r10:   2  13.1  68   0 | whole r20:   2  13.1  68   0 | whole r10 floor 16:   2  13.1  68   0
+  4524                       good  29 d1     105 d2     78 x1 | fixed:   1   5.3  99  20 | table r5:   1   5.7  84   2 | whole r5:   1   5.3  99  20 | whole r10:   1   2.6  83  11 | whole r20:   1   4.0  82   3 | whole r10 floor 16:   1   2.6  83  11
+  4782                       good   8 d1      23 d2     27 x1 | fixed:   1 100.0  50   8 | table r5:   5  31.0 101   3 | whole r5:   5  31.0 101   3 | whole r10:   5  31.0 101   3 | whole r20:   5  31.0 101   3 | whole r10 floor 16:   5  31.0 101   3
+  4975                       good  25 d1     340 d2    128 x1 | fixed:   1   2.2  86   2 | table r5:   1   2.9  82   0 | whole r5:   1   2.2  86   2 | whole r10:   1   2.3  81   1 | whole r20:   1   2.9  82   0 | whole r10 floor 16:   1   2.3  81   1
+  5545                       good  26 d1      80 d2     90 x1 | fixed:   0   nan  98  17 | table r5:   1   4.4  76   0 | whole r5:   1   4.4  76   0 | whole r10:   1   4.4  76   0 | whole r20:   1   4.4  76   0 | whole r10 floor 16:   1   4.4  76   0
+  5726                       good  38 d1      31 d2     71 x1 | fixed:   1   6.0 100  33 | table r5:   1   2.7  80   0 | whole r5:   1   2.7  80   0 | whole r10:   1   2.7  80   0 | whole r20:   1   2.7  80   0 | whole r10 floor 16:   1   2.7  80   0
+  6413                       good  42 d1     201 d2     88 x1 | fixed:   1   1.9  91  24 | table r5:   1   5.5  84   4 | whole r5:   1   1.9  91  24 | whole r10:   1   1.9  89  23 | whole r20:   1   6.1  82   6 | whole r10 floor 16:   1   1.9  89  23
+  6518                       good  25 d1     454 d2     59 x1 | fixed:   1 100.0  50  25 | table r5:   1   4.4  50  23 | whole r5:   1 100.0  50  25 | whole r10:   1 100.0  50  25 | whole r20:   1   4.9  88   9 | whole r10 floor 16:   1 100.0  50  25
+  6593                       good  47 d1     435 d2    120 x1 | fixed:   1   0.3  84  17 | table r5:   1   0.2  80  10 | whole r5:   1   0.3  84  17 | whole r10:   1   0.3  79  13 | whole r20:   1   0.3  71   1 | whole r10 floor 16:   1   0.3  79  13
+  7150                       good  47 d1     171 d2     47 x1 | fixed:   1  53.2  50  45 | table r5:   1   2.0  85   7 | whole r5:   1   2.4  83  32 | whole r10:   1   1.9  83   5 | whole r20:   1   2.5  79   2 | whole r10 floor 16:   1   1.9  83   5
+  7238                       good  31 d1     135 d2    132 x1 | fixed:   7   8.3  66   6 | table r5:   1   3.1  67   0 | whole r5:   7   8.3  66   6 | whole r10:   1   3.4  64   1 | whole r20:   1   3.1  67   0 | whole r10 floor 16:   1   3.4  64   1
+  7705                       good  28 d1     100 d2     74 x1 | fixed:   0   nan 107  22 | table r5:   1   1.5  79   1 | whole r5:   0   nan 107  22 | whole r10:   1   1.8  82   6 | whole r20:   1   1.5  79   1 | whole r10 floor 16:   1   1.8  82   6
+
+The first set with the pair exchanged in every fit, the convention of the experiment of 2026-10-12
+
+m2, exchange by always: 150 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 142 | 141 | 137 | 115 | 138 | 10 | 74 | 0, 0 (1.000) | 0, 0 (1.000) |
+| search none | 147 | 145 | 136 | 115 | 138 | 8 | 76 | 0, 1 (1.000) | 0, 0 (1.000) |
+| none | 147 | 145 | 140 | 136 | 143 | 4 | 76 | 5, 2 (0.453) | 21, 0 (0.000) |
+| epoch r5 | 145 | 144 | 141 | 127 | 142 | 5 | 75 | 5, 1 (0.219) | 12, 0 (0.000) |
+| table r5 | 145 | 144 | 141 | 128 | 142 | 5 | 75 | 5, 1 (0.219) | 13, 0 (0.000) |
+| table r10 | 145 | 144 | 141 | 129 | 142 | 5 | 75 | 5, 1 (0.219) | 14, 0 (0.000) |
+| table r20 | 145 | 144 | 141 | 130 | 143 | 5 | 75 | 5, 1 (0.219) | 15, 0 (0.000) |
+| fixed 25 | 145 | 144 | 141 | 137 | 143 | 5 | 76 | 5, 1 (0.219) | 22, 0 (0.000) |
+
+exchange allowed on 150; seconds per table, median 21
+
+With the condition on the antiphase, assembled from the results above
+m2, exchange by rule: 150 tables; the rule returns a velocity on 33
+| rule | tables on which it acts | rank 1 | rank 1, both K within 10 % | first 4 | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|
+| fixed | 0 | 136 | 114 | 138 | | |
+| whole r10 | 33 | 140 | 126 | 142 | 5, 1 (0.219) | 12, 0 (0.000) |
+| antiphase below -0.3, 4 epochs | 29 | 140 | 126 | 142 | 5, 1 (0.219) | 12, 0 (0.000) |
+| antiphase below -0.5, 4 epochs | 29 | 140 | 126 | 142 | 5, 1 (0.219) | 12, 0 (0.000) |
+| antiphase below -0.7, 4 epochs | 29 | 140 | 126 | 142 | 5, 1 (0.219) | 12, 0 (0.000) |
+| antiphase below -0.5, 8 epochs | 27 | 141 | 126 | 143 | 5, 0 (0.062) | 12, 0 (0.000) |
+| antiphase below -0.7, 8 epochs | 27 | 141 | 126 | 143 | 5, 0 (0.062) | 12, 0 (0.000) |
+| antiphase below -0.9, 8 epochs | 27 | 141 | 126 | 143 | 5, 0 (0.062) | 12, 0 (0.000) |
+| antiphase below -0.5 and two standard errors | 28 | 140 | 126 | 142 | 5, 1 (0.219) | 12, 0 (0.000) |
+
+the rule adopted (antiphase below -0.7 over 8 epochs), by the median statistic of the first component:
+| median statistic | tables | acts on | rank 1: fixed, adopted | both K: fixed, adopted | candidates, median: fixed, adopted |
+|---|---|---|---|---|---|
+| 0 to 125 | 16 | 10 | 6, 10 | 3, 8 | 50, 72 |
+| 125 to 500 | 24 | 16 | 23, 24 | 14, 21 | 74, 78 |
+| 500 to inf | 110 | 1 | 107, 107 | 97, 97 | 75, 75 |
+candidates on the 27 tables the rule acts on: median 77 with the fixed threshold, 83 with the rule; over all tables 74 and 75
+listed within 2 %: fixed 142, adopted 145; within reach: fixed 141, adopted 144
+tables whose place changes under the rule adopted (key, median statistic of the first component, fixed rank and K error %, adopted rank and K error %):
+  86: d1 177; fixed rank 1, 100.0; adopted rank 1, 6.5
+  372: d1 71; fixed rank 1, 100.0; adopted rank 1, 2.1
+  656: d1 206; fixed rank 1, 100.0; adopted rank 1, 1.6
+  1092: d1 62; fixed rank 0, nan; adopted rank 1, 3.2
+  1887: d1 141; fixed rank 1, 100.0; adopted rank 1, 3.6
+  2756: d1 173; fixed rank 1, 100.0; adopted rank 1, 1.8
+  3087: d1 72; fixed rank 2, 100.0; adopted rank 1, 6.4
+  4181: d1 138; fixed rank 1, 100.0; adopted rank 1, 3.1
+  5545: d1 80; fixed rank 0, nan; adopted rank 1, 4.4
+  7150: d1 171; fixed rank 1, 53.2; adopted rank 1, 1.9
+  7238: d1 135; fixed rank 7, 8.3; adopted rank 1, 3.4
+  7705: d1 100; fixed rank 0, nan; adopted rank 1, 1.8
+
+set aside by the condition at -0.5: 4 tables; on them the rule alone gained rank 1 on 0, lost it on 0, gained both K on 0, lost on 0

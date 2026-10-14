@@ -667,7 +667,10 @@ resolve a peak of a periodogram, and a network that scores trial periods lists t
 more often and higher but leaves the orbit decided after the fits unchanged on all but three of 150
 tables, and is below the periodograms alone on the benchmark's own tables. That experiment found
 that the detection gate removes the pipeline's relative-velocity searches on faint tables, which is
-recorded there as a candidate for a change.
+recorded there as a candidate for a change. The change was measured the next day
+(`internal/research/2026-10-13-detection-gate/`, D71). The search without the gate does not change
+the period decided while the candidate fits stay gated, and the threshold was lowered instead, for
+the search and the fits alike, on a weakly detected pair whose two columns move in antiphase.
 
 This does not reopen the non-goal on synthesis below. The templates are interpolated in the
 published grids of `albireo.library`, and the labels fitted are the four of `albireo.match`.

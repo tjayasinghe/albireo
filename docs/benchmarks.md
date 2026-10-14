@@ -4450,3 +4450,180 @@ takes 2.6 s from the classified templates and 3.7 s from the catalogue template 
 median, 8.5 and 11.5 s at the 90th percentile and 27 s at most, with the eight processes
 running. The alternation ends after two passes for 50 and 45 percent of the fits and runs
 its four for 29 and 36 percent.
+
+## Gaia RVS: the detection gate on faint pairs (2026-10-13)
+
+Machine: the same desktop, CPU only, float64, shared with other work during the runs. The
+rule is under [The detection gate](api/pipeline.md) on the pipeline's page, and the
+scripts and their full tables are in `internal/research/2026-10-13-detection-gate/`.
+
+**The question.** In the bootstrap of a binary without a period, a companion's velocity
+has no weight in the period search and the candidate fits where its detection statistic
+is below `detection_min`, 100 (D65, above). On a faint table that removes the searches
+that need the companion. Two changes were measured: searching the table as measured while
+the fits stay gated, and a threshold that is lower where the pair as a whole is weakly
+detected. The first was not made and the second was (D71).
+
+**The samples.** (1) The 32 blind tables of the benchmark, on which the threshold was
+set. (2) Tables of the simulated survey of eclipsing binaries of the sections above, the
+transits out of eclipse measured with classified templates: 1,200 held-out tables
+selected for an orbit at the known period with both semi-amplitudes within 10 percent,
+150 of them, and 400 tables with at least 8 usable epochs drawn without regard to the
+orbit. These tables are rebuilt from stored rows without second minima, so the decision
+of the epochs flagged for one is not exercised on them. (3) 150 systems of that
+population with G_RVS between 11 and 13 and at least 12 transits, simulated by the
+benchmark's simulator and measured by the pipeline's own bootstrap stage with the two
+unrotated templates of the blind tier (6000 and 5000 K), of which 122 have a table and a
+decision. The candidates and the candidate fits are the pipeline's functions in every
+case, with the pair exchanged where the rule on the light fractions allows it.
+
+**The search without the gate.** On the 1,200 tables, with the fits gated:
+
+| search | listed within 2 % | within reach of a fit | rank 1 | rank 1, both K within 10 % |
+|---|---|---|---|---|
+| gated | 1,122 | 1,107 | 1,072 | 947 |
+| the table as measured | 1,162 | 1,151 | 1,069 | 947 |
+
+Within reach is within $`1/T`$ in frequency, $`T`$ being the span of the usable epochs: of
+the candidate fits started within $`0.5/T`$ of the injected period 204 of 210 end on it,
+and of those started beyond $`2/T`$ and within 2 percent none of 209 does. The search of
+the table as measured gains one table at rank 1 and loses four. The periods it adds are
+those of faint pairs of alike stars: on the 43 tables on which it alone lists the period,
+the median G_RVS is 12.1, the light ratio is above a third on all, a median 40 percent of
+the usable epochs have the pair in the other order, and the companion is below 100 at
+every usable epoch on 28. With the companion gated, the first component's column that
+the fits are left with holds the velocities of both stars and has no pair to exchange.
+
+**Companion velocities below the threshold.** The error of a velocity is that of its pair
+against the injected velocities, in the order of the pair that fits better. Over the
+147,796 usable epochs of the 5,286 survey tables outside the 1,200:
+
+| velocities | number | within 20 km/s % | above 50 km/s % | median error, km/s |
+|---|---|---|---|---|
+| statistic above 100 (kept by the fixed threshold) | 91,697 | 85.5 | 9.4 | 3.2 |
+| below 100 (removed by it) | 56,099 | 40.0 | 44.0 | 34.5 |
+| below 100 and at least 25 | 25,893 | 62.1 | 23.1 | 13.1 |
+| returned by the first two conditions | 8,413 | 73.2 | 6.5 | 11.8 |
+| returned by the rule adopted | 6,672 | 79.6 | 2.2 | 10.6 |
+
+A statistic between 25 and 100 is not worth the same on every table. The errors above
+50 km/s are 8 to 14 percent of such velocities where the first component has a median
+statistic below 1,000, and 43 percent where it is above 5,000: beside a strong first
+component a weak solution is often the second template fitted to the residuals of the
+first, and on a faint pair there is no such residual above the noise. The first two
+conditions are a statistic of at least 25, the value under which the table's summary
+counts a weak detection, and of at least a tenth of the statistic of the epoch as a
+whole: the rise in chi-square when every template is removed, or the first component's
+own statistic where that is larger. The whole does not fall where the lines of a bright
+pair blend, as both of the stars' statistics do, so a blended epoch keeps its threshold.
+
+**The antiphase of the two columns.** With templates far from the stars the two
+conditions are not enough. On the 122 pipeline-built tables they return 833 velocities,
+of which 24.7 percent are more than 50 km/s off: the second template takes up the lines
+that the first does not fit and follows the first star. The velocities of the two stars
+of a binary lie on a line of negative slope whatever the period, so the correlation
+coefficient of the two columns, over the usable epochs that meet the two conditions,
+separates the cases. The survey columns are the tables outside the 1,200, and every
+table has at least eight such epochs.
+
+| coefficient | survey: tables | velocities returned | within 20 km/s % | above 50 km/s % | pipeline-built: tables | velocities returned | within 20 km/s % | above 50 km/s % |
+|---|---|---|---|---|---|---|---|---|
+| below -0.95 | 366 | 5,907 | 82.2 | 1.2 | 30 | 392 | 80.1 | 1.5 |
+| -0.95 to -0.90 | 49 | 765 | 59.7 | 9.4 | 5 | 64 | 48.4 | 10.9 |
+| -0.90 to -0.80 | 16 | 246 | 45.1 | 20.7 | 2 | 23 | 39.1 | 8.7 |
+| -0.80 to -0.50 | 14 | 191 | 55.0 | 20.9 | 4 | 50 | 30.0 | 16.0 |
+| above -0.50 | 17 | 199 | 24.1 | 47.2 | 15 | 207 | 7.2 | 76.3 |
+
+The condition adopted is a coefficient below -0.9 over at least eight epochs. With it
+the rule returns 456 velocities on 35 of the pipeline-built tables, of which 2.9 percent
+are more than 50 km/s off, against 19.7 percent of the velocities above 100 of the same
+tables. The velocities returned are noisier than those the threshold keeps and less
+often grossly wrong. The cut was fixed at -0.7 after the first 50 of the pipeline-built
+systems had been read, and was moved to -0.9 after an independent review measured the
+rule on the other runs of the survey: over eight combinations of run and declaration
+the velocities returned are within 20 km/s for 77 to 84 percent below -0.9 and for 28 to
+62 percent between -0.9 and -0.8. The two cuts give the same counts of decisions on the
+samples of this section.
+
+**The period decided.** Rank 1 and rank 1 with both semi-amplitudes within 10 percent,
+with the tables gained and lost against the fixed threshold in brackets. The last row is
+the changed package. The row above it is the first two conditions alone, with the whole
+as the reference.
+
+| threshold | blind, 32 | survey, 150 | survey, 400 without selection | survey, 1,200 |
+|---|---|---|---|---|
+| fixed at 100 | 26, 18 | 136, 114 | 306, 169 | 1,072, 947 |
+| none | 23, 17 | 139 (5, 2), 135 (21, 0) | 299 (9, 16), 202 (41, 8) | not run |
+| fixed at 25 | 24, 17 | 140 (5, 1), 136 (22, 0) | 312 (8, 2), 202 (41, 8) | not run |
+| 25 and a tenth of the epoch | 26, 18 | 140 (5, 1), 126 (12, 0) | 310 (5, 1), 190 (21, 0) | 1,106 (36, 2), 1,018 (71, 0) |
+| the rule adopted | 26, 18 | 141 (5, 0), 126 (12, 0) | 311 (5, 0), 184 (15, 0) | 1,107 (36, 1), 1,013 (66, 0) |
+
+On the blind tables the rule adopted gates no velocity differently from the fixed
+threshold: the largest share of the epoch's statistic that a companion below 100 has on
+them is 0.066. Their ranking is the one recorded in the sections above, and
+`scripts/period_decision_bench.py` with the changed package prints the recorded row. The
+150 tables are among the 1,200, and on the other 1,050 the period is first on 966
+against 936 and both semi-amplitudes are within 10 percent on 887 against 833. On the
+927 of the 1,200 whose first component has a median statistic above 500 the rule changes
+no decision. On the 122 where that median is below 125 the period is first on 60 against
+31, and both semi-amplitudes are within 10 percent on 53 against 11.
+
+On the 122 pipeline-built tables, by what the bootstrap hands to the disentangling: the
+period with both semi-amplitudes within 15 percent, which become a Gaussian prior; the
+period with a semi-amplitude held or outside the declared range, which the disentangling
+then searches; the period with a semi-amplitude more than 30 percent off, which becomes a
+wrong prior; or another period. Two tables of every row lie between 15 and 30 percent.
+
+| threshold | period first | both K within 15 % | companion open | more than 30 % off | period wrong |
+|---|---|---|---|---|---|
+| fixed at 100 | 53 | 20 | 28 | 3 | 69 |
+| none | 68 | 43 | 16 | 7 | 54 |
+| 25 and a tenth of the epoch | 67 | 40 | 19 | 6 | 55 |
+| the rule adopted | 64 | 37 | 22 | 3 | 58 |
+
+Twelve tables go from a wrong period to both semi-amplitudes and one the other way, with
+the injected orbit then at rank 3 behind an alias. The number of wrong priors does not
+rise, and with the first two conditions alone it doubles. On the 72 tables read after
+the first form of the rule was fixed, 11 gain and none loses.
+
+**The pipeline end to end.** The blind tier was run by the pipeline with the package
+before the change and with the changed one, on the same simulated epochs: the search and
+the candidate fits, the comparison of the best four candidates by the disentangling's
+likelihood, the disentangling, the label fit, TODCOR against the fitted templates and the
+orbit fit. The systems are the 21 of the 122 pipeline-built tables on which the outcome
+of the candidate fits changes, and two systems of the recorded benchmark. They and the
+measures were fixed before a result was read. The disentangling's period is bounded to
+within 3 percent of the period the bootstrap hands on, so a run whose bootstrap handed on
+a period more than 10 percent from the injected one was stopped after 30 minutes and
+counted as not recovered: six runs before the change and none after it. No run failed.
+
+| the final result, of 21 | before the change | after it | gained | lost |
+|---|---|---|---|---|
+| period within 2 percent | 10 | 20 | 10 | 0 |
+| period, and both semi-amplitudes within 10 percent | 8 | 17 | 9 | 0 |
+| period, and both semi-amplitudes within 5 percent | 6 | 13 | 8 | 1 |
+
+The two benchmark systems give the same final period and semi-amplitudes to every digit
+before and after the change. The gain is that of the first four candidates of the
+ranking, which the disentangling compares, and not that of the first place: on the 21
+tables the injected period is first on 8 with the fixed threshold and on 19 with the
+rule, and within the first four on 11 and on 20. Over the 122 tables it is within the
+first four on 60 and on 69, with none lost. The runs took 9.5 hours before the change and
+5.8 after it. A bootstrap that hands on a wrong short period with a semi-amplitude left
+open sends the disentangling through the declared range on a velocity budget of about
+1,000 km/s or more, and the rule takes that path less often.
+
+**Scope of these numbers.** Apart from the 23 systems of the last table they are the
+bootstrap's decision, and all are of simulated tables with Gaussian noise at a lag-one
+coefficient of 0.27. The 33 systems of the benchmark were not run again, and a floor of
+25 has not been measured against cosmic rays or bad pixels. A weak
+companion beside a strong first component stays gated whether it is a detection or not:
+on the survey tables a threshold of 25 everywhere has both semi-amplitudes on 22 further
+tables of 150 where the rule has 12, and it loses two first places on the blind tables.
+Tables with fewer than eight epochs that meet the conditions, tables whose errors are
+more than about a quarter of the semi-amplitudes, and tables of three components keep
+the fixed threshold. The antiphase condition has one known failure: two identical
+templates narrower than the lines of a single star divide its line in either order. A
+simulated star at rest whose lines are three times as broad as the templates gives a
+coefficient of -0.86 at a S/N of 5 and -0.94 at a S/N of 9, where the statistics are
+above 100 and the fixed threshold returns an orbit of two components already.

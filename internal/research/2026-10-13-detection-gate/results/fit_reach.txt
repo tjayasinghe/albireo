@@ -1,0 +1,19 @@
+fits: 46879 fits on 150 tables; span, median 1866 d; true period, median 2.17 d; 2 % of the frequency is a median 16.5 / T
+how far a fit moves from its start, in 1/T: median 0.258, 90th percentile 0.96, 99th 1.25, largest 5.4
+
+starts within 2 % of the injected period, by the distance of the start in 1/T:
+| start within | starts | converged within 0.2/T of the injected period | median distance after the fit |
+|---|---|---|---|
+| 0 to 0.25 | 204 | 198 (97 %) | 0.00 |
+| 0.25 to 0.5 | 6 | 6 (100 %) | 0.00 |
+| 0.5 to 1 | 2 | 1 (50 %) | 0.51 |
+| 1 to 1.5 | 10 | 3 (30 %) | 0.92 |
+| 1.5 to 2 | 5 | 1 (20 %) | 1.38 |
+| 2 to 3 | 21 | 0 (0 %) | 2.24 |
+| 3 to 5 | 35 | 0 (0 %) | 3.52 |
+| 5 to 10 | 51 | 0 (0 %) | 7.17 |
+| 10 to 1e+09 | 102 | 0 (0 %) | 20.50 |
+
+per table, the start nearest the injected period among those within 2 %:
+  150 tables have a start within 2 %; nearest start within 0.5/T on 148, 0.5 to 1 on 0, 1 to 2 on 0, beyond 2 on 2
+  a fit reaches the injected period (0.2/T) on 144; of the tables whose nearest start is beyond 1/T, on 0 of 2

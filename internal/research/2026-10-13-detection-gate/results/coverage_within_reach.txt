@@ -1,0 +1,12 @@
+1200 tables
+span, median 1853 d; 2 % of the frequency in units of 1/T: median 15.7, 10th percentile 4.1
+
+| list | within 2 % | within 1/T | within 0.5/T | within 2 % and beyond 1/T | candidates, median |
+|---|---|---|---|---|---|
+| gate | 1122 | 1107 | 1104 | 15 | 75 |
+| deep | 1186 | 1122 | 1116 | 64 | 214 |
+| nogate | 1162 | 1151 | 1150 | 11 | 76 |
+deep against gate, within 0.5/T: gained 12, lost 0
+deep against gate, within 2 %: gained 64, lost 0
+nogate against gate, within 0.5/T: gained 48, lost 2
+nogate against gate, within 2 %: gained 43, lost 3

@@ -1,0 +1,54 @@
+Rules on the 32 blind tables of the benchmark, first set
+
+blind, exchange by rule: 32 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 27 | 27 | 26 | 18 | 26 | 5 | 78 | 0, 0 (1.000) | 0, 0 (1.000) |
+| search none | 28 | 27 | 26 | 18 | 26 | 5 | 80 | 0, 0 (1.000) | 0, 0 (1.000) |
+| none | 28 | 27 | 23 | 17 | 25 | 6 | 80 | 0, 3 (0.250) | 0, 1 (1.000) |
+| epoch r5 | 27 | 27 | 25 | 17 | 26 | 5 | 78 | 0, 1 (1.000) | 0, 1 (1.000) |
+| table r5 | 27 | 27 | 26 | 18 | 26 | 5 | 78 | 0, 0 (1.000) | 0, 0 (1.000) |
+| table r10 | 27 | 27 | 25 | 17 | 26 | 5 | 78 | 0, 1 (1.000) | 0, 1 (1.000) |
+| table r20 | 28 | 28 | 25 | 17 | 26 | 4 | 78 | 0, 1 (1.000) | 0, 1 (1.000) |
+| fixed 25 | 28 | 28 | 24 | 17 | 25 | 5 | 80 | 0, 2 (0.500) | 0, 1 (1.000) |
+
+exchange allowed on 24; seconds per table, median 43
+  fixed: gates other velocities than the fixed threshold on 0 tables; velocities returned to the fits 0
+  search none: gates other velocities than the fixed threshold on 0 tables; velocities returned to the fits 0
+  none: gates other velocities than the fixed threshold on 8 tables; velocities returned to the fits 118
+  epoch r5: gates other velocities than the fixed threshold on 2 tables; velocities returned to the fits 3
+  table r5: gates other velocities than the fixed threshold on 1 tables; velocities returned to the fits 1
+  table r10: gates other velocities than the fixed threshold on 3 tables; velocities returned to the fits 18
+  table r20: gates other velocities than the fixed threshold on 5 tables; velocities returned to the fits 37
+  fixed 25: gates other velocities than the fixed threshold on 8 tables; velocities returned to the fits 72
+
+tables on which a rule differs from the fixed threshold (rank, K error %, candidates, gated):
+  mixed-0004                 good  26 d1   24992 d2    151 x0 | fixed:   1  44.9 110  12 | search none:   1  44.9  72  12 | none:   1  46.8  72   0 | epoch r5:   1  44.9 110  12 | table r5:   1  44.9 110  12 | table r10:   1  44.9 110  12 | table r20:   1  44.9 110  12 | fixed 25:   1  45.5 108  10
+  mixed-0007                 good  24 d1     490 d2     30 x0 | fixed:   1 100.0  50  24 | search none:   1 100.0  84  24 | none:   1  15.8  84   0 | epoch r5:   1 100.0  50  24 | table r5:   1 100.0  50  24 | table r10:   1  18.9  50  22 | table r20:   1  13.7  95  11 | fixed 25:   1  13.7  95  11
+  mixed-0008                 good  34 d1    2755 d2     45 x0 | fixed:   1 100.0  50  34 | search none:   1 100.0  84  34 | none:   1  37.7  84   0 | epoch r5:   1 100.0  50  34 | table r5:   1 100.0  50  34 | table r10:   1 100.0  50  34 | table r20:   1 100.0  50  34 | fixed 25:   1  18.3  86   3
+  mixed-0010                 good  17 d1     495 d2     42 x0 | fixed:   1  82.9 103  11 | search none:   1  82.9  97  11 | none:   2  79.2  97   0 | epoch r5:   1  82.9 103  11 | table r5:   1  82.9 103  11 | table r10:   1  91.6 103  11 | table r20:   1  85.9 107   5 | fixed 25:   1  85.9 107   5
+  mixed-0015                 good  15 d1   17321 d2     18 x0 | fixed:   1 100.0  50  15 | search none:   1 100.0  96  15 | none:   0   nan  96   0 | epoch r5:   1 100.0  50  15 | table r5:   1 100.0  50  15 | table r10:   1 100.0  50  15 | table r20:   1 100.0  50  15 | fixed 25:   0   nan  50  13
+  mixed-0019                 good   8 d1     679 d2     75 x1 | fixed:   0   nan  75   4 | search none:   0   nan  92   4 | none:   0   nan  92   0 | epoch r5:   0   nan  75   4 | table r5:   0   nan  75   4 | table r10:   0   nan  75   4 | table r20:  43 110.1  90   3 | fixed 25:  43 110.1  90   3
+  gaia-40041022325608704     good  12 d1     637 d2    478 x1 | fixed:   1   2.0  81   2 | search none:   1   2.0  80   2 | none:   2   3.1  80   0 | epoch r5:   2   3.1  80   0 | table r5:   1   2.0  81   2 | table r10:   2   3.1  80   0 | table r20:   2   3.1  80   0 | fixed 25:   2   3.1  80   0
+
+Rules on the whole-epoch statistic
+
+blind, exchange by rule: 32 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 27 | 27 | 26 | 18 | 26 | 5 | 78 | 0, 0 (1.000) | 0, 0 (1.000) |
+| table r5 | 27 | 27 | 26 | 18 | 26 | 5 | 78 | 0, 0 (1.000) | 0, 0 (1.000) |
+| whole r5 | 27 | 27 | 26 | 18 | 26 | 5 | 78 | 0, 0 (1.000) | 0, 0 (1.000) |
+| whole r10 | 27 | 27 | 26 | 18 | 26 | 5 | 78 | 0, 0 (1.000) | 0, 0 (1.000) |
+| whole r20 | 27 | 27 | 26 | 18 | 26 | 5 | 78 | 0, 0 (1.000) | 0, 0 (1.000) |
+| whole r10 floor 16 | 27 | 27 | 26 | 18 | 26 | 5 | 78 | 0, 0 (1.000) | 0, 0 (1.000) |
+
+exchange allowed on 24; seconds per table, median 13
+  fixed: gates other velocities than the fixed threshold on 0 tables; velocities returned to the fits 0
+  table r5: gates other velocities than the fixed threshold on 1 tables; velocities returned to the fits 1
+  whole r5: gates other velocities than the fixed threshold on 0 tables; velocities returned to the fits 0
+  whole r10: gates other velocities than the fixed threshold on 0 tables; velocities returned to the fits 0
+  whole r20: gates other velocities than the fixed threshold on 1 tables; velocities returned to the fits 4
+  whole r10 floor 16: gates other velocities than the fixed threshold on 0 tables; velocities returned to the fits 0
+
+tables on which a rule differs from the fixed threshold (rank, K error %, candidates, gated):

@@ -1,0 +1,101 @@
+Rules on 400 survey tables drawn without regard to the orbit
+
+open, exchange by rule: 400 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 342 | 331 | 306 | 169 | 315 | 63 | 69 | 0, 0 (1.000) | 0, 0 (1.000) |
+| search none | 352 | 340 | 306 | 169 | 315 | 55 | 78 | 0, 0 (1.000) | 0, 0 (1.000) |
+| none | 352 | 340 | 299 | 202 | 315 | 57 | 78 | 9, 16 (0.230) | 41, 8 (0.000) |
+| table r5 | 348 | 339 | 313 | 189 | 324 | 58 | 73 | 8, 1 (0.039) | 21, 1 (0.000) |
+| whole r5 | 344 | 335 | 307 | 180 | 319 | 60 | 71 | 2, 1 (1.000) | 11, 0 (0.001) |
+| whole r10 | 345 | 337 | 310 | 190 | 323 | 60 | 72 | 5, 1 (0.219) | 21, 0 (0.000) |
+| whole r20 | 347 | 338 | 313 | 194 | 324 | 58 | 73 | 8, 1 (0.039) | 26, 1 (0.000) |
+| fixed 25 | 348 | 339 | 312 | 202 | 323 | 58 | 75 | 8, 2 (0.109) | 41, 8 (0.000) |
+
+exchange allowed on 217; seconds per table, median 15
+  fixed: gates other velocities than the fixed threshold on 0 tables; velocities returned to the fits 0
+  search none: gates other velocities than the fixed threshold on 0 tables; velocities returned to the fits 0
+  none: gates other velocities than the fixed threshold on 242 tables; velocities returned to the fits 4725
+  table r5: gates other velocities than the fixed threshold on 67 tables; velocities returned to the fits 705
+  whole r5: gates other velocities than the fixed threshold on 44 tables; velocities returned to the fits 340
+  whole r10: gates other velocities than the fixed threshold on 61 tables; velocities returned to the fits 574
+  whole r20: gates other velocities than the fixed threshold on 81 tables; velocities returned to the fits 796
+  fixed 25: gates other velocities than the fixed threshold on 174 tables; velocities returned to the fits 2001
+
+median statistic of the first component 0 to 125: 100 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 55 | 45 | 33 | 2 | 36 | 50 | 50 | 0, 0 (1.000) | 0, 0 (1.000) |
+| search none | 62 | 52 | 33 | 2 | 36 | 45 | 82 | 0, 0 (1.000) | 0, 0 (1.000) |
+| none | 62 | 52 | 31 | 15 | 39 | 44 | 82 | 6, 8 (0.791) | 14, 1 (0.001) |
+| table r5 | 58 | 51 | 36 | 15 | 42 | 47 | 50 | 4, 1 (0.375) | 14, 1 (0.001) |
+| whole r5 | 57 | 49 | 33 | 10 | 39 | 47 | 50 | 1, 1 (1.000) | 8, 0 (0.008) |
+| whole r10 | 58 | 51 | 35 | 15 | 42 | 47 | 50 | 3, 1 (0.625) | 13, 0 (0.000) |
+| whole r20 | 58 | 51 | 36 | 16 | 42 | 47 | 50 | 4, 1 (0.375) | 14, 0 (0.000) |
+| fixed 25 | 58 | 51 | 36 | 15 | 42 | 47 | 50 | 4, 1 (0.375) | 14, 1 (0.001) |
+
+median statistic of the first component 125 to 500: 43 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 35 | 35 | 29 | 11 | 32 | 8 | 50 | 0, 0 (1.000) | 0, 0 (1.000) |
+| search none | 38 | 37 | 29 | 11 | 32 | 5 | 78 | 0, 0 (1.000) | 0, 0 (1.000) |
+| none | 38 | 37 | 32 | 22 | 35 | 5 | 78 | 3, 0 (0.250) | 11, 0 (0.001) |
+| table r5 | 38 | 37 | 33 | 18 | 35 | 6 | 68 | 4, 0 (0.125) | 7, 0 (0.016) |
+| whole r5 | 35 | 35 | 30 | 14 | 33 | 8 | 50 | 1, 0 (1.000) | 3, 0 (0.250) |
+| whole r10 | 35 | 35 | 31 | 19 | 34 | 8 | 50 | 2, 0 (0.500) | 8, 0 (0.008) |
+| whole r20 | 37 | 36 | 33 | 22 | 35 | 6 | 72 | 4, 0 (0.125) | 11, 0 (0.001) |
+| fixed 25 | 38 | 37 | 33 | 21 | 35 | 6 | 72 | 4, 0 (0.125) | 10, 0 (0.002) |
+
+median statistic of the first component 500 to inf: 257 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 252 | 251 | 244 | 156 | 247 | 5 | 75 | 0, 0 (1.000) | 0, 0 (1.000) |
+| search none | 252 | 251 | 244 | 156 | 247 | 5 | 77 | 0, 0 (1.000) | 0, 0 (1.000) |
+| none | 252 | 251 | 236 | 165 | 241 | 8 | 77 | 0, 8 (0.008) | 16, 7 (0.093) |
+| table r5 | 252 | 251 | 244 | 156 | 247 | 5 | 75 | 0, 0 (1.000) | 0, 0 (1.000) |
+| whole r5 | 252 | 251 | 244 | 156 | 247 | 5 | 75 | 0, 0 (1.000) | 0, 0 (1.000) |
+| whole r10 | 252 | 251 | 244 | 156 | 247 | 5 | 75 | 0, 0 (1.000) | 0, 0 (1.000) |
+| whole r20 | 252 | 251 | 244 | 156 | 247 | 5 | 75 | 0, 0 (1.000) | 1, 1 (1.000) |
+| fixed 25 | 252 | 251 | 243 | 166 | 246 | 5 | 76 | 0, 1 (1.000) | 17, 7 (0.064) |
+
+With the condition on the antiphase, assembled from the results above
+open, exchange by rule: 400 tables; the rule returns a velocity on 61
+| rule | tables on which it acts | rank 1 | rank 1, both K within 10 % | first 4 | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|
+| fixed | 0 | 306 | 169 | 315 | | |
+| whole r10 | 61 | 310 | 190 | 323 | 5, 1 (0.219) | 21, 0 (0.000) |
+| antiphase below -0.3, 4 epochs | 36 | 311 | 186 | 323 | 5, 0 (0.062) | 17, 0 (0.000) |
+| antiphase below -0.5, 4 epochs | 35 | 311 | 186 | 323 | 5, 0 (0.062) | 17, 0 (0.000) |
+| antiphase below -0.7, 4 epochs | 34 | 311 | 186 | 323 | 5, 0 (0.062) | 17, 0 (0.000) |
+| antiphase below -0.5, 8 epochs | 26 | 311 | 184 | 322 | 5, 0 (0.062) | 15, 0 (0.000) |
+| antiphase below -0.7, 8 epochs | 26 | 311 | 184 | 322 | 5, 0 (0.062) | 15, 0 (0.000) |
+| antiphase below -0.9, 8 epochs | 25 | 311 | 184 | 322 | 5, 0 (0.062) | 15, 0 (0.000) |
+| antiphase below -0.5 and two standard errors | 34 | 311 | 186 | 323 | 5, 0 (0.062) | 17, 0 (0.000) |
+
+the rule adopted (antiphase below -0.7 over 8 epochs), by the median statistic of the first component:
+| median statistic | tables | acts on | rank 1: fixed, adopted | both K: fixed, adopted | candidates, median: fixed, adopted |
+|---|---|---|---|---|---|
+| 0 to 125 | 100 | 17 | 33, 36 | 2, 11 | 50, 50 |
+| 125 to 500 | 43 | 8 | 29, 31 | 11, 17 | 50, 50 |
+| 500 to inf | 257 | 1 | 244, 244 | 156, 156 | 75, 75 |
+candidates on the 26 tables the rule acts on: median 50 with the fixed threshold, 85 with the rule; over all tables 69 and 72
+listed within 2 %: fixed 342, adopted 345; within reach: fixed 331, adopted 337
+tables whose place changes under the rule adopted (key, median statistic of the first component, fixed rank and K error %, adopted rank and K error %):
+  236: d1 80; fixed rank 1, 100.0; adopted rank 1, 9.2
+  597: d1 70; fixed rank 1, 100.0; adopted rank 1, 1.7
+  778: d1 33; fixed rank 0, nan; adopted rank 1, 14.9
+  805: d1 170; fixed rank 9, 5.8; adopted rank 1, 3.9
+  851: d1 131; fixed rank 56, 30.8; adopted rank 1, 1.1
+  1932: d1 68; fixed rank 1, 100.0; adopted rank 1, 4.2
+  2021: d1 163; fixed rank 1, 100.0; adopted rank 1, 5.3
+  2022: d1 90; fixed rank 1, 100.0; adopted rank 1, 6.5
+  2202: d1 60; fixed rank 0, nan; adopted rank 1, 6.0
+  2322: d1 68; fixed rank 1, 100.0; adopted rank 1, 8.5
+  2441: d1 250; fixed rank 1, 100.0; adopted rank 1, 1.7
+  3206: d1 266; fixed rank 1, 100.0; adopted rank 1, 6.6
+  4211: d1 60; fixed rank 1, 100.0; adopted rank 1, 5.4
+  5037: d1 100; fixed rank 1, 100.0; adopted rank 1, 3.8
+  6970: d1 180; fixed rank 1, 100.0; adopted rank 1, 2.2
+  7165: d1 72; fixed rank 0, nan; adopted rank 1, 0.4
+
+set aside by the condition at -0.5: 26 tables; on them the rule alone gained rank 1 on 0, lost it on 1, gained both K on 4, lost on 0

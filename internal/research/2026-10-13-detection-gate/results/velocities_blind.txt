@@ -1,0 +1,66 @@
+blind tables with a companion velocity below 100 (statistics at those epochs):
+  mixed-0000                 P     5.02 K  67.6  69.4 usable  46 first within tolerance  46 exchange 1
+  mixed-0002                 P     3.57 K  93.9  99.3 usable  26 first within tolerance  26 exchange 1
+  mixed-0003                 P     1.32 K 135.2 138.1 usable  48 first within tolerance  39 exchange 1
+  mixed-0004                 P   116.89 K  22.7  42.3 usable  26 first within tolerance  26 exchange 0 | below 100:  12 (measured 11, exchanged 0, displaced 0, spurious 1); statistic 0 to 72; first's median 7375; ratio 257.3 to 243782; kept at r 5: 0 (0 not real), at r 20: 0 (0 not real)
+  mixed-0005                 P   844.31 K  19.4  20.9 usable  16 first within tolerance  15 exchange 1 | below 100:  16 (measured 8, exchanged 0, displaced 0, spurious 8); statistic 23 to 57; first's median 286; ratio 4.6 to 20; kept at r 5: 1 (0 not real), at r 20: 15 (7 not real)
+  mixed-0006                 P    19.16 K  47.8  48.4 usable  52 first within tolerance  51 exchange 1
+  mixed-0007                 P    45.39 K  26.9  40.7 usable  24 first within tolerance  24 exchange 0 | below 100:  24 (measured 24, exchanged 0, displaced 0, spurious 0); statistic 2 to 63; first's median 490; ratio 6.7 to 46; kept at r 5: 0 (0 not real), at r 20: 7 (0 not real)
+  mixed-0008                 P     2.09 K  27.5  44.5 usable  34 first within tolerance  34 exchange 0 | below 100:  34 (measured 31, exchanged 0, displaced 1, spurious 2); statistic 4 to 90; first's median 2755; ratio 35.7 to 1093; kept at r 5: 0 (0 not real), at r 20: 0 (0 not real)
+  mixed-0009                 P     6.48 K  65.9  68.6 usable  33 first within tolerance  33 exchange 1
+  mixed-0010                 P   310.06 K  20.7  22.0 usable  17 first within tolerance  16 exchange 0 | below 100:  11 (measured 5, exchanged 6, displaced 0, spurious 0); statistic 4 to 49; first's median 438; ratio 8.9 to 38; kept at r 5: 0 (0 not real), at r 20: 6 (0 not real)
+  mixed-0011                 P   133.23 K  30.1  33.3 usable  18 first within tolerance  18 exchange 1
+  mixed-0012                 P     7.37 K  59.3  60.2 usable 100 first within tolerance 100 exchange 1
+  mixed-0013                 P   221.96 K  29.1  30.4 usable  42 first within tolerance  32 exchange 1
+  mixed-0014                 P     3.95 K  64.0  65.1 usable  46 first within tolerance  46 exchange 1
+  mixed-0015                 P   552.55 K  12.0  21.9 usable  15 first within tolerance  15 exchange 0 | below 100:  15 (measured 0, exchanged 0, displaced 0, spurious 15); statistic 1 to 55; first's median 17321; ratio 302.3 to 12464; kept at r 5: 0 (0 not real), at r 20: 0 (0 not real)
+  mixed-0016                 P    23.66 K  58.0  62.3 usable  46 first within tolerance  46 exchange 1
+  mixed-0017                 P   308.69 K  22.2  28.7 usable  12 first within tolerance  12 exchange 0
+  mixed-0018                 P     3.99 K  51.1  53.0 usable  71 first within tolerance  71 exchange 1
+  mixed-0019                 P   330.23 K  21.6  23.7 usable   8 first within tolerance   8 exchange 1 | below 100:   4 (measured 0, exchanged 0, displaced 1, spurious 3); statistic 5 to 44; first's median 1546; ratio 16.6 to 369; kept at r 5: 0 (0 not real), at r 20: 1 (1 not real)
+  gaia-7289006178185856      P     0.54 K 128.3 132.2 usable   8 first within tolerance   4 exchange 1
+  gaia-17170287112790656     P     0.58 K 103.0 192.7 usable   8 first within tolerance   0 exchange 1
+  gaia-37608387208382848     P     6.10 K  68.5  68.7 usable  15 first within tolerance  15 exchange 1
+  gaia-40041022325608704     P     2.81 K 102.0 103.3 usable  12 first within tolerance  12 exchange 1 | below 100:   2 (measured 2, exchanged 0, displaced 0, spurious 0); statistic 85 to 92; first's median 196; ratio 2.0 to 2; kept at r 5: 2 (0 not real), at r 20: 2 (0 not real)
+  gaia-45354171749336960     P     3.83 K  74.1  75.8 usable  25 first within tolerance  25 exchange 1
+  gaia-45788547559850496     P     5.61 K  60.5  91.8 usable  14 first within tolerance  14 exchange 0
+  gaia-47620265212420096     P     7.68 K  26.0  26.6 usable  12 first within tolerance  12 exchange 1
+  gaia-50868531799454720     P     8.86 K  53.0  55.3 usable  16 first within tolerance  16 exchange 1
+  gaia-51884824140205824     P    17.75 K  51.1  52.3 usable  22 first within tolerance  22 exchange 1
+  gaia-53290511099783296     P    18.89 K  33.2  35.5 usable  16 first within tolerance  16 exchange 0
+  gaia-53680017390963072     P    29.60 K  97.3 101.9 usable  17 first within tolerance  17 exchange 1
+  gaia-56716765427964800     P     5.36 K  63.7  64.6 usable  12 first within tolerance  12 exchange 1
+  gaia-56861694804053120     P     6.81 K  69.3  74.5 usable  14 first within tolerance  14 exchange 1
+
+blind tables of the benchmark: 871 usable epochs
+| companion's statistic | epochs | measured % | exchanged % | displaced % | spurious % | first component's statistic, median |
+|---|---|---|---|---|---|---|
+| 0 to 9 | 21 | 71.4 | 0.0 | 0.0 | 28.6 | 1846 |
+| 9 to 25 | 25 | 44.0 | 0.0 | 0.0 | 56.0 | 7397 |
+| 25 to 50 | 46 | 69.6 | 13.0 | 4.3 | 13.0 | 670 |
+| 50 to 100 | 26 | 88.5 | 0.0 | 0.0 | 11.5 | 2722 |
+| 100 to 300 | 30 | 50.0 | 6.7 | 16.7 | 26.7 | 741 |
+| 300 to 1000 | 206 | 50.5 | 18.0 | 9.7 | 21.8 | 1123 |
+| 1000 to inf | 517 | 67.7 | 20.9 | 0.0 | 11.4 | 6062 |
+  companion's statistic 25 to 100, by the ratio of the first component's statistic to it:
+    | 0 to 2 | 1 | 100.0 | 0.0 | 0.0 | 0.0 | 184 |
+    | 2 to 5 | 2 | 100.0 | 0.0 | 0.0 | 0.0 | 235 |
+    | 5 to 10 | 18 | 55.6 | 11.1 | 0.0 | 33.3 | 316 |
+    | 10 to 20 | 10 | 40.0 | 40.0 | 10.0 | 10.0 | 509 |
+    | 20 to 50 | 17 | 100.0 | 0.0 | 0.0 | 0.0 | 2083 |
+    | 50 to 100 | 19 | 94.7 | 0.0 | 5.3 | 0.0 | 3170 |
+    | 100 to inf | 5 | 60.0 | 0.0 | 0.0 | 40.0 | 16678 |
+  companion's statistic 9 to 25, by the ratio of the first component's statistic to it:
+    | 5 to 10 | 1 | 100.0 | 0.0 | 0.0 | 0.0 | 81 |
+    | 10 to 20 | 4 | 100.0 | 0.0 | 0.0 | 0.0 | 178 |
+    | 20 to 50 | 3 | 66.7 | 0.0 | 0.0 | 33.3 | 518 |
+    | 50 to 100 | 1 | 100.0 | 0.0 | 0.0 | 0.0 | 1651 |
+    | 100 to inf | 16 | 18.8 | 0.0 | 0.0 | 81.2 | 16576 |
+  companion's statistic 100 to 1000, by the ratio of the first component's statistic to it:
+    | 0 to 2 | 121 | 62.0 | 20.7 | 8.3 | 9.1 | 661 |
+    | 2 to 5 | 64 | 40.6 | 21.9 | 14.1 | 23.4 | 1306 |
+    | 5 to 10 | 16 | 12.5 | 0.0 | 31.2 | 56.2 | 2399 |
+    | 10 to 20 | 7 | 0.0 | 0.0 | 0.0 | 100.0 | 6996 |
+    | 20 to 50 | 13 | 30.8 | 0.0 | 0.0 | 69.2 | 9459 |
+    | 50 to 100 | 1 | 0.0 | 0.0 | 100.0 | 0.0 | 10878 |
+    | 100 to inf | 14 | 85.7 | 0.0 | 0.0 | 14.3 | 73572 |

@@ -1,0 +1,174 @@
+The changed package (the rule adopted) against the fixed threshold, with the pipeline's own search and candidate fits.
+'staged' is the package's own gate.
+
+blind, exchange by rule: 32 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 27 | 27 | 26 | 18 | 26 | 5 | 78 | 0, 0 (1.000) | 0, 0 (1.000) |
+| staged | 27 | 27 | 26 | 18 | 26 | 5 | 78 | 0, 0 (1.000) | 0, 0 (1.000) |
+
+exchange allowed on 24; seconds per table, median 18
+  fixed: gates other velocities than the fixed threshold on 0 tables; velocities returned to the fits 0
+  staged: gates other velocities than the fixed threshold on 0 tables; velocities returned to the fits 0
+
+tables on which a rule differs from the fixed threshold (rank, K error %, candidates, gated):
+
+m2, exchange by rule: 150 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 142 | 141 | 136 | 114 | 138 | 10 | 74 | 0, 0 (1.000) | 0, 0 (1.000) |
+| staged | 145 | 144 | 141 | 126 | 143 | 6 | 75 | 5, 0 (0.062) | 12, 0 (0.000) |
+
+exchange allowed on 109; seconds per table, median 18
+  fixed: gates other velocities than the fixed threshold on 0 tables; velocities returned to the fits 0
+  staged: gates other velocities than the fixed threshold on 27 tables; velocities returned to the fits 470
+
+median statistic of the first component 0 to 125: 16 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 9 | 8 | 6 | 3 | 7 | 9 | 50 | 0, 0 (1.000) | 0, 0 (1.000) |
+| staged | 12 | 11 | 10 | 8 | 11 | 5 | 72 | 4, 0 (0.125) | 5, 0 (0.062) |
+
+median statistic of the first component 125 to 500: 24 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 24 | 24 | 23 | 14 | 23 | 0 | 74 | 0, 0 (1.000) | 0, 0 (1.000) |
+| staged | 24 | 24 | 24 | 21 | 24 | 0 | 78 | 1, 0 (1.000) | 7, 0 (0.016) |
+
+median statistic of the first component 500 to inf: 110 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 109 | 109 | 107 | 97 | 108 | 1 | 75 | 0, 0 (1.000) | 0, 0 (1.000) |
+| staged | 109 | 109 | 107 | 97 | 108 | 1 | 75 | 0, 0 (1.000) | 0, 0 (1.000) |
+
+open, exchange by rule: 400 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 342 | 331 | 306 | 169 | 315 | 63 | 69 | 0, 0 (1.000) | 0, 0 (1.000) |
+| staged | 345 | 337 | 311 | 184 | 322 | 59 | 72 | 5, 0 (0.062) | 15, 0 (0.000) |
+
+exchange allowed on 217; seconds per table, median 3
+  fixed: gates other velocities than the fixed threshold on 0 tables; velocities returned to the fits 0
+  staged: gates other velocities than the fixed threshold on 25 tables; velocities returned to the fits 441
+
+median statistic of the first component 0 to 125: 100 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 55 | 45 | 33 | 2 | 36 | 50 | 50 | 0, 0 (1.000) | 0, 0 (1.000) |
+| staged | 58 | 51 | 36 | 11 | 41 | 46 | 50 | 3, 0 (0.250) | 9, 0 (0.004) |
+
+median statistic of the first component 125 to 500: 43 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 35 | 35 | 29 | 11 | 32 | 8 | 50 | 0, 0 (1.000) | 0, 0 (1.000) |
+| staged | 35 | 35 | 31 | 17 | 34 | 8 | 50 | 2, 0 (0.500) | 6, 0 (0.031) |
+
+median statistic of the first component 500 to inf: 257 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 252 | 251 | 244 | 156 | 247 | 5 | 75 | 0, 0 (1.000) | 0, 0 (1.000) |
+| staged | 252 | 251 | 244 | 156 | 247 | 5 | 75 | 0, 0 (1.000) | 0, 0 (1.000) |
+
+test, exchange by rule: 1200 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 1122 | 1107 | 1072 | 947 | 1087 | 86 | 75 | 0, 0 (1.000) | 0, 0 (1.000) |
+| staged | 1147 | 1137 | 1107 | 1013 | 1123 | 61 | 75 | 36, 1 (0.000) | 66, 0 (0.000) |
+
+test without the tables of m2: 1050 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 980 | 966 | 936 | 833 | 949 | 76 | 75 | 0, 0 (1.000) | 0, 0 (1.000) |
+| staged | 1002 | 993 | 966 | 887 | 980 | 55 | 75 | 31, 1 (0.000) | 54, 0 (0.000) |
+
+exchange allowed on 850; seconds per table, median 16
+  fixed: gates other velocities than the fixed threshold on 0 tables; velocities returned to the fits 0
+  staged: gates other velocities than the fixed threshold on 160 tables; velocities returned to the fits 2702
+
+median statistic of the first component 0 to 125: 122 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 59 | 47 | 31 | 11 | 35 | 68 | 50 | 0, 0 (1.000) | 0, 0 (1.000) |
+| staged | 84 | 75 | 60 | 53 | 65 | 45 | 70 | 29, 0 (0.000) | 42, 0 (0.000) |
+
+median statistic of the first component 125 to 500: 151 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 143 | 140 | 129 | 89 | 135 | 10 | 74 | 0, 0 (1.000) | 0, 0 (1.000) |
+| staged | 143 | 142 | 135 | 113 | 141 | 8 | 77 | 7, 1 (0.070) | 24, 0 (0.000) |
+
+median statistic of the first component 500 to inf: 927 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 920 | 920 | 912 | 847 | 917 | 8 | 75 | 0, 0 (1.000) | 0, 0 (1.000) |
+| staged | 920 | 920 | 912 | 847 | 917 | 8 | 75 | 0, 0 (1.000) | 0, 0 (1.000) |
+
+Faint tables built by the pipeline, all systems
+150 systems; a bootstrap table and a decision for 122
+the rule returns a velocity on 35 tables; the package gates other velocities than the fixed threshold on 35
+
+| threshold | period first | both K within 15 % | both K within 10 % | companion open | 15 to 30 % | more than 30 % off | period wrong |
+|---|---|---|---|---|---|---|---|
+| fixed at 100 | 53 | 20 | 20 | 28 | 2 | 3 | 69 |
+| the changed package | 64 | 37 | 36 | 22 | 2 | 3 | 58 |
+changes: wrong to prior 12, open to prior 5, prior to wrong 1, near to prior 1, open to near 1
+period first: 12 gained, 1 lost (p 0.0034); both K within 15 %: 18 gained, 1 lost (p 0.0001)
+
+tables whose outcome changes (system, G_RVS, light ratio, period, epochs in the test, coefficient | fixed | package)
+  K-12-041   12.03 lr 0.66 P   8.78 test 16 r -0.98 returned  7 | prior rank  1 K error   8.3 % K [61. 66.] | wrong rank  3 K error   8.6 % K [100. 108.]
+  K-11-056   11.76 lr 0.76 P   3.14 test 31 r -0.99 returned  2 | wrong rank  2 K error   5.8 % K [157. 162.] | prior rank  1 K error   2.4 % K [86. 85.]
+  K-12-096   12.22 lr 0.95 P   0.42 test 14 r -0.94 returned 14 | wrong rank 35 K error 100.0 % K [176.   0.] | prior rank  1 K error  13.4 % K [153. 189.]
+  K-13-108   12.53 lr 0.50 P   1.88 test 21 r -0.95 returned 21 | wrong rank  0 K error   nan % K [116.   0.] | wrong rank 19 K error  28.4 % K [91. 91.]
+  K-13-114   12.56 lr 0.45 P   0.98 test  9 r -0.96 returned  9 | wrong rank  9 K error 100.0 % K [133.   0.] | prior rank  1 K error   6.3 % K [138. 120.]
+  K-11-117   11.87 lr 0.72 P   0.37 test 26 r -0.96 returned 21 | wrong rank 10 K error  31.0 % K [159. 228.] | prior rank  1 K error   2.8 % K [164. 150.]
+  G-11-032   11.59 lr 0.45 P   4.18 test 36 r -0.99 returned 36 | open  rank  1 K error 100.0 % K [75.  0.] | prior rank  1 K error   0.6 % K [74. 89.]
+  G-10-041   11.16 lr 0.34 P   3.42 test 19 r -0.97 returned  9 | near  rank  1 K error  15.0 % K [87. 89.] | prior rank  1 K error   3.0 % K [ 88. 101.]
+  G-10-058   11.32 lr 0.95 P   0.91 test 20 r -0.99 returned  4 | wrong rank  4 K error  14.8 % K [139. 130.] | prior rank  1 K error   1.6 % K [137. 136.]
+  G-11-083   11.60 lr 0.46 P   8.14 test 10 r -0.91 returned 10 | open  rank  1 K error 100.0 % K [75.  0.] | near  rank  1 K error  26.4 % K [75. 54.]
+  G-12-114   12.25 lr 0.77 P   2.52 test 31 r -0.98 returned 30 | wrong rank  0 K error   nan % K [113.   0.] | prior rank  1 K error   3.3 % K [98. 92.]
+  F-10-015   11.32 lr 0.98 P   4.40 test 34 r -0.99 returned 28 | wrong rank  0 K error   nan % K [171. 240.] | prior rank  1 K error   3.4 % K [104. 107.]
+  F-10-032   11.23 lr 0.44 P   9.53 test 15 r -0.93 returned 15 | open  rank  1 K error 100.0 % K [63.  0.] | prior rank  1 K error   2.1 % K [63. 76.]
+  F-11-042   11.81 lr 0.77 P   3.77 test 32 r -0.95 returned 32 | wrong rank  2 K error 100.0 % K [75.  0.] | prior rank  1 K error   8.3 % K [109. 108.]
+  F-11-059   11.65 lr 0.83 P   2.08 test  9 r -0.97 returned  9 | wrong rank 32 K error 100.0 % K [166.   0.] | prior rank  1 K error   5.5 % K [118. 122.]
+  F-11-060   11.77 lr 0.79 P   4.22 test 33 r -0.97 returned 32 | wrong rank  0 K error   nan % K [83.  0.] | prior rank  1 K error   3.8 % K [104. 101.]
+  F-11-063   11.69 lr 0.35 P   1.61 test  9 r -0.94 returned  9 | open  rank  1 K error 100.0 % K [101.   0.] | prior rank  1 K error   4.1 % K [102. 132.]
+  F-12-075   12.21 lr 0.49 P   2.41 test 21 r -0.99 returned 21 | open  rank  1 K error 100.0 % K [97.  0.] | prior rank  1 K error   1.6 % K [ 99. 117.]
+  F-11-087   11.74 lr 0.92 P   3.13 test 32 r -0.95 returned 29 | wrong rank  0 K error   nan % K [ 86. 150.] | prior rank  1 K error   2.2 % K [113. 118.]
+  F-11-100   11.75 lr 0.78 P   4.11 test 22 r -0.99 returned 21 | wrong rank  0 K error   nan % K [93.  0.] | prior rank  1 K error   1.2 % K [94. 99.]
+  F-11-117   11.51 lr 0.32 P   3.14 test 15 r -1.00 returned 15 | open  rank  1 K error 100.0 % K [81.  0.] | prior rank  1 K error   5.1 % K [81. 97.]
+
+Systems 51 to 150, read after the first form of the rule was fixed
+100 systems; a bootstrap table and a decision for 72
+the rule returns a velocity on 19 tables; the package gates other velocities than the fixed threshold on 19
+
+| threshold | period first | both K within 15 % | both K within 10 % | companion open | 15 to 30 % | more than 30 % off | period wrong |
+|---|---|---|---|---|---|---|---|
+| fixed at 100 | 32 | 10 | 10 | 21 | 0 | 1 | 40 |
+| the changed package | 39 | 21 | 21 | 17 | 0 | 1 | 33 |
+changes: wrong to prior 7, open to prior 4
+period first: 7 gained, 0 lost (p 0.0156); both K within 15 %: 11 gained, 0 lost (p 0.0010)
+
+scripts/period_decision_bench.py --only assign, with the changed package
+|---|---|---|---|---|---|---|
+| assign | 26 | 26 | 26 | 5 | 17 | 16 |
+33 systems, 32 with a table
+no table: gaia-51574864941234048
+
+The reviewer's simulated tables of a single broad-lined star, and of a faint pair, under the changed package
+pair5_s30_k8_snr9_identical            usable 26 statistics    89   112 test epochs 26 coefficient -0.574 lowered False below 100:  4, kept  0
+pair_s6_snr5_alike                     usable 30 statistics    77    51 test epochs 25 coefficient -0.993 lowered True  below 100: 30, kept 25
+pair_s6_snr9_alike                     usable 30 statistics   256   165 test epochs 24 coefficient -0.999 lowered True  below 100:  6, kept  0
+single_s18_k0_snr5_identical           usable 28 statistics    59    44 test epochs 28 coefficient -0.858 lowered False below 100: 30, kept  0
+single_s18_k0_snr9_identical           usable 29 statistics   142   177 test epochs 29 coefficient -0.942 lowered True  below 100:  0, kept  0
+single_s18_k20_snr5_identical          usable 29 statistics    42    61 test epochs 29 coefficient +0.048 lowered False below 100: 30, kept  0
+single_s18_k20_snr9_identical          usable 29 statistics   178   139 test epochs 29 coefficient +0.102 lowered False below 100:  1, kept  0
+single_s18_k8_snr5_identical           usable 29 statistics    59    40 test epochs 29 coefficient -0.536 lowered False below 100: 30, kept  0
+single_s18_k8_snr9_alike               usable 21 statistics   184   133 test epochs 21 coefficient -0.498 lowered False below 100:  0, kept  0
+single_s18_k8_snr9_identical           usable 30 statistics   140   176 test epochs 30 coefficient -0.619 lowered False below 100:  0, kept  0
+single_s30_k0_snr9_alike               usable 18 statistics   103   117 test epochs 18 coefficient -0.315 lowered False below 100:  5, kept  0
+single_s30_k0_snr9_identical           usable 26 statistics    94   117 test epochs 26 coefficient -0.676 lowered False below 100:  4, kept  0
+single_s30_k20_snr9_identical          usable 28 statistics    94   119 test epochs 28 coefficient -0.034 lowered False below 100:  3, kept  0
+single_s30_k8_snr9_alike               usable 25 statistics   106   114 test epochs 25 coefficient -0.018 lowered False below 100:  7, kept  0
+single_s30_k8_snr9_identical           usable 27 statistics   114    95 test epochs 27 coefficient -0.501 lowered False below 100: 18, kept  0
+single_s6_k8_snr5_identical            usable  1 statistics    70     3 test epochs  0 coefficient +nan lowered False below 100: 28, kept  0
+single_s6_k8_snr9_identical            usable  1 statistics     2   161 test epochs  0 coefficient +nan lowered False below 100: 12, kept  0

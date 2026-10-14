@@ -126,17 +126,17 @@ for an injected 0.60 and 0.40 and did not recover the period.
 
 **The detection gate.** In the bootstrap's period search and candidate fits, and only
 there, a companion velocity has no weight when its detection statistic is below
-`detection_min` under `[analysis]` (default 100; `0` turns the gate off). The statistic is
-the table's `delta_chi2`, the rise in chi-square when that component is removed. The
-velocity is set to `nan` in a copy of the table that only the search and the fits use, and
-the epoch's first component is kept. Only the components after the first (declared in order
-of decreasing mass) are gated. Beyond the search the gate has one effect: the chosen orbit
-is fitted to the gated copy and gives the disentangling its starting semi-amplitude,
-conjunction and eccentricity. The table written as `template_velocities.rv`, the light
-measured from that table, the template table of the known-period route, and the velocities
-measured after the disentangling are not gated and stay as measured. `result.json` counts
-the velocities removed per component under `bootstrap.detection_gate`, as does the stage's
-log line.
+`detection_min` under `[analysis]` (default 100; `0` turns the gate off), or below a lower
+threshold on a weakly detected pair (below). The statistic is the table's `delta_chi2`,
+the rise in chi-square when that component is removed. The velocity is set to `nan` in a
+copy of the table that only the search and the fits use, and the epoch's first component
+is kept. Only the components after the first (declared in order of decreasing mass) are
+gated. Beyond the search the gate has one effect: the chosen orbit is fitted to the gated
+copy and gives the disentangling its starting semi-amplitude, conjunction and
+eccentricity. The table written as `template_velocities.rv`, the light measured from that
+table, the template table of the known-period route, and the velocities measured after
+the disentangling are not gated and stay as measured. `result.json` counts the velocities
+removed per component under `bootstrap.detection_gate`, as does the stage's log line.
 
 The threshold was set by measurement on the 33 blind tables of the Gaia RVS benchmark's
 third run. At 100 the gate recovers the period of one field system whose 7% secondary the
@@ -145,6 +145,75 @@ summary's own threshold for a weak detection, it does not recover that period. G
 first component as well worsened the result for one system, so the first component is
 never gated. The measurement is in
 [Benchmarks](../benchmarks.md#after-the-third-run-d65-2026-09-17-offline-measurements-on-its-archive).
+
+**The gate on a weakly detected pair (D71).** The first component of those tables is
+strongly detected: its median statistic over the usable epochs is above 1,000 on 22 of the
+32 and no lower than 247. On a faint pair of comparable stars neither statistic reaches
+100 at any epoch, and the threshold removed the companion altogether. The correlation
+returns the epochs of such a pair in either order, so the first component's column that
+remained held the velocities of both stars, and no candidate fit could put them in order.
+Below `detection_min` a companion's velocity is therefore kept under three conditions.
+
+- Its statistic is at least 25, the value under which the table's summary counts a weak
+  detection.
+- Its statistic is at least a tenth of that of the epoch as a whole: the rise in
+  chi-square when every template is removed (`chi2_null - chi2` of the table), or the
+  first component's own statistic where that is larger. A tenth is the share of a
+  companion with a third of the first component's light, the ratio within which the two
+  components are treated as alike. A weak solution beside a strong first component has a
+  smaller share, and so has either star where the lines of a bright pair blend. An epoch
+  that the templates fit no better than no template keeps `detection_min`.
+- The two columns of the table move in antiphase over the usable epochs that meet the
+  first two conditions: their correlation coefficient is below $`-0.9`$ over at least
+  eight such epochs. The velocities of the two stars of a binary lie on a line of
+  negative slope whatever the period (Wilson 1941, ApJ, 93, 29), and an epoch in the
+  other order lies on the line of reciprocal slope, so the coefficient of two alike stars
+  is near $`-1`$ whatever the order of the epochs. A second template that takes up the
+  lines the first one does not fit follows the first star, and the coefficient is then
+  positive or near zero.
+
+The search and the candidate fits use the same gated copy, as before. A table of three
+components keeps the declared threshold, and a `detection_min` above 100 raises the
+threshold of a strongly detected pair only. `bootstrap.detection_gate` of `result.json`
+gains `kept_below`, the velocities kept under these conditions, and `antiphase`, the
+number of epochs and the coefficient of the test where it was made.
+
+No velocity of the 32 blind tables is gated differently, so the numbers above and those
+of the benchmark's runs stand. The measurement is in
+[Benchmarks](../benchmarks.md#gaia-rvs-the-detection-gate-on-faint-pairs-2026-10-13). On
+1,200 simulated tables of eclipsing binaries measured with classified templates, selected
+for an orbit that the table gives at the known period, the injected period is first in
+the ranking on 1,107 against 1,072 (36 tables gained and one lost), and first with both
+semi-amplitudes within 10 percent on 1,013 against 947 (66 gained and none lost). On 400
+tables drawn without that selection the numbers are 311 against 306 and 184 against 169,
+with none lost. Where the first component has a median statistic above 500 no decision
+changes. On 122 tables of faint pairs measured with the two unrotated templates of the
+benchmark's blind tier the period is first on 64 against 53, and the orbit handed to the
+disentangling has both semi-amplitudes within 15 percent on 37 against 20. The velocities
+the rule returns are noisier than those above the threshold and less often grossly wrong:
+a median error of 11 to 12 km/s against 3 to 11, and more than 50 km/s from the injected
+velocity for 2 to 3 percent against 9 to 20.
+
+The whole pipeline was run before and after the change on the 21 of those 122 tables on
+which the candidate fits decide differently. The final orbit has the injected period on
+20 after the change against 10 before it, and both semi-amplitudes within 10 percent as
+well on 17 against 8, with none lost. That is the gain of the first four candidates of
+the ranking, which the disentangling compares, and not that of the first place.
+
+The third condition is what templates far from the stars require. On those 122 tables a
+quarter of the velocities that the first two conditions return are more than 50 km/s off.
+It has one known failure: two identical templates narrower than the lines of a single
+star divide its line between them in either order, which is antiphase about the star's
+own velocity. A simulated star at rest whose lines are three times as broad as the
+templates gives a coefficient of $`-0.86`$ at a S/N of 5 and $`-0.94`$ at a S/N of 9,
+where the statistics are above 100 and the fixed threshold returns an orbit of two
+components already.
+
+Searching the table as measured while the candidate fits stay gated was measured first
+and not adopted. On the 1,200 tables it lists the injected period within reach of a fit
+on 47 more and on 3 fewer, and with the gated fits one table gains the first place and
+four lose it: a fit to the first component's column alone does not confirm a period that
+the two columns show together.
 
 **Leave-one-epoch-out candidates.** A periodogram does not tolerate one wrong epoch among
 ten to twenty-five; a Keplerian fit with re-assignment does. In the bootstrap, on a table

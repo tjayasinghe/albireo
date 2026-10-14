@@ -199,6 +199,16 @@ leaves the relative-velocity searches enough epochs, is a candidate for a change
 accepted on the end-to-end runs of the benchmark. The gate in the fits needs a criterion
 other than a fixed detection statistic before it is changed.
 
+**Follow-up (2026-10-13, D71).** Both were measured the next day
+(`../2026-10-13-detection-gate/`). The search without the gate lists more periods and
+does not change the period decided, because the gated fits cannot confirm them, and it
+was not made. The threshold was changed instead, for the search and the fits alike: a
+companion below it is kept on a weakly detected pair whose two columns move in antiphase.
+The gain of an ungated fit on the survey tables reported above is in part the selection
+of those tables, which were kept because their velocities, ungated, give the orbit: on
+400 tables drawn without that selection the ungated fits lose the first place on 16 and
+gain it on 9.
+
 ## The shortest period searched
 
 `albireo.rvorbit.find_period` searches, by default, from twice the smallest gap between
@@ -225,7 +235,8 @@ measured as limiting on the survey tables is in the pipeline: the gate in the se
 points of coverage at the same list length), the gate in the fits (the semi-amplitudes of
 13 percent of the tables), and the default shortest period (1.1 percent of the tables).
 Of the three, the gate in the search is the one that the blind tables of the benchmark
-also support changing.
+also support changing. The follow-up of 2026-10-13 measured it and found otherwise (the
+section on the detection gate, above).
 
 ## Files
 

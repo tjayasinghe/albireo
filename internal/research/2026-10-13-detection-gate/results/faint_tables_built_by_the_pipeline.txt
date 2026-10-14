@@ -1,0 +1,223 @@
+All systems
+150 systems; a bootstrap table and a decision for 122; none for 28
+   25  no table: the correlation against library templates at the starting labels gives no epoch with 
+    3  fewer than four usable epochs
+
+exchange allowed on 112; light ratio above a third on 65; G_RVS median 11.82; usable epochs, median 20; first component's statistic, median of medians 72
+companion velocities below 100: 1730, right 61.3 %; above: 999, right 69.9 %
+the rule returns 833 on 87 tables, right 64.7 %
+  light ratio above a third: 564 on 53 tables, right 83.7 %
+  light ratio below a third: 269 on 34 tables, right 24.9 %
+
+| correlation of the two columns | tables | velocities returned | right % |
+|---|---|---|---|
+| -1.0 to -0.9 | 47 | 509 | 89.6 |
+| -0.9 to -0.7 | 5 | 47 | 51.1 |
+| -0.7 to -0.5 | 4 | 35 | 48.6 |
+| -0.5 to -0.3 | 2 | 23 | 0.0 |
+| -0.3 to 0.0 | 3 | 59 | 13.6 |
+| 0.0 to 0.3 | 2 | 28 | 14.3 |
+| 0.3 to 1.0 | 11 | 111 | 14.4 |
+| not defined | 13 | 21 | 66.7 |
+
+correlation below -0.7 over at least 8 epochs: 38 tables, 497 velocities returned, right 85.9 %; set aside: 49 tables, 336 velocities, right 33.3 %
+of the tables that meet it, light ratio above a third on 37 of 38; of those set aside, on 16 of 49
+
+| rule | period first | handed on as a prior (both K within 15 %) | both K within 10 % | companion left open | 15 to 30 % | off by more than 30 % | period wrong |
+|---|---|---|---|---|---|---|---|
+| fixed | 53 | 20 | 20 | 28 | 2 | 3 | 69 |
+| whole r10 | 67 | 40 | 38 | 19 | 2 | 6 | 55 |
+| whole r10, antiphase below -0.5 | 63 | 39 | 37 | 18 | 1 | 5 | 59 |
+| whole r10, antiphase below -0.7 | 63 | 39 | 37 | 19 | 2 | 3 | 59 |
+| whole r10, antiphase below -0.5 and significant | 63 | 39 | 37 | 19 | 1 | 4 | 59 |
+| whole r10, antiphase below -0.5, 8 epochs | 64 | 37 | 36 | 21 | 1 | 5 | 58 |
+| whole r10, antiphase below -0.7, 8 epochs | 64 | 37 | 36 | 22 | 2 | 3 | 58 |
+| whole r10, antiphase below -0.9, 8 epochs | 64 | 37 | 36 | 22 | 2 | 3 | 58 |
+| none | 68 | 43 | 34 | 16 | 2 | 7 | 54 |
+  whole r10: wrong to prior 12, open to prior 8, wrong to open 5, open to off 2, open to wrong 2, open to near 2, prior to wrong 1, near to off 1, near to prior 1
+  whole r10, antiphase below -0.5: wrong to prior 12, open to prior 7, prior to wrong 1, near to off 1, open to off 1, near to prior 1, open to near 1, open to wrong 1
+  whole r10, antiphase below -0.7: wrong to prior 12, open to prior 7, prior to wrong 1, near to prior 1, open to near 1, open to wrong 1
+  whole r10, antiphase below -0.5 and significant: wrong to prior 12, open to prior 7, prior to wrong 1, near to off 1, near to prior 1, open to near 1, open to wrong 1
+  whole r10, antiphase below -0.5, 8 epochs: wrong to prior 12, open to prior 5, prior to wrong 1, near to off 1, open to off 1, near to prior 1, open to near 1
+  whole r10, antiphase below -0.7, 8 epochs: wrong to prior 12, open to prior 5, prior to wrong 1, near to prior 1, open to near 1
+  whole r10, antiphase below -0.9, 8 epochs: wrong to prior 12, open to prior 5, prior to wrong 1, near to prior 1, open to near 1
+  none: wrong to prior 13, open to prior 10, open to wrong 5, wrong to open 4, wrong to near 2, wrong to off 2, near to off 1, prior to wrong 1, open to off 1, near to prior 1
+
+system, G_RVS, light ratio, P, usable, d1, d2, whole, kept, returned (right), rho | fixed | whole r10 | none
+  K-11-011   11.88 lr 0.22 P   3.97 K   62   86 good  6 d1    11 d2  306 whole   445 kept  5 ret  1 ( 1) rho -1.00 | wrong r 0   nan K [19. 65.] | wrong r 0   nan K [ 0. 75.] | wrong r 0   nan K [125.  94.]
+  K-13-015   12.83 lr 0.97 P   1.44 K  107  107 good  7 d1    15 d2   21 whole   114 kept  3 ret  3 ( 3) rho -0.91 | wrong r 0   nan K [114.   0.] | wrong r 0   nan K [86. 72.] | wrong r 0   nan K [56. 59.]
+  K-12-018   12.17 lr 0.09 P   0.32 K   97  214 good 15 d1    41 d2   51 whole   203 kept 15 ret 15 ( 4) rho  0.55 | wrong r21 100.0 K [107.   0.] | wrong r 0   nan K [122.   0.] | wrong r 0   nan K [122.   0.]
+  K-13-018   12.76 lr 0.01 P   0.62 K   46  201 good 11 d1    11 d2   21 whole    85 kept  3 ret  3 ( 0) rho -0.88 | wrong r20 100.0 K [74.  0.] | wrong r27  59.1 K [ 4. 72.] | wrong r43  76.7 K [ 2. 74.]
+  K-12-041   12.03 lr 0.66 P   8.78 K   67   68 good 19 d1    51 d2   78 whole   266 kept 16 ret  7 ( 7) rho -0.98 | prior r 1   8.3 K [61. 66.] | wrong r 3   8.6 K [100. 108.] | prior r 1   8.3 K [61. 65.]
+  K-11-056   11.76 lr 0.76 P   3.14 K   83   88 good 33 d1    83 d2  133 whole   354 kept 31 ret  2 ( 2) rho -0.99 | wrong r 2   5.8 K [157. 162.] | prior r 1   2.4 K [86. 85.] | prior r 1   2.4 K [86. 85.]
+  K-10-060   11.34 lr 1.15 P   3.57 K   91   92 good 51 d1   218 d2  162 whole   519 kept 49 ret  5 ( 4) rho -0.98 | prior r 1   0.4 K [92. 91.] | prior r 1   0.1 K [92. 91.] | prior r 1   0.1 K [92. 91.]
+  K-11-073   11.56 lr 0.27 P   0.38 K  132  178 good 30 d1    63 d2  116 whole   315 kept 30 ret 11 ( 0) rho  0.34 | wrong r 0   nan K [121.  22.] | wrong r 9  70.0 K [  0. 146.] | wrong r 9  70.0 K [  0. 146.]
+  K-10-085   11.08 lr 0.38 P   0.44 K  144  173 good 35 d1   367 d2  110 whole   520 kept 35 ret 15 ( 4) rho -0.53 | off   r 1  97.4 K [171.   4.] | off   r 1  50.2 K [166.  72.] | off   r 1  50.2 K [166.  72.]
+  K-11-088   12.00 lr 0.25 P   0.85 K  104  140 good 28 d1    30 d2  160 whole   312 kept 28 ret  8 ( 4) rho -0.55 | near  r 1  23.8 K [ 81. 107.] | off   r 1  69.1 K [ 32. 109.] | off   r 1  69.1 K [ 32. 109.]
+  K-12-093   12.33 lr 0.41 P   1.04 K  106  129 good 14 d1    22 d2  109 whole   161 kept 14 ret  5 ( 5) rho -0.97 | prior r 1   4.3 K [123. 106.] | prior r 1   7.9 K [119. 108.] | wrong r 2   2.1 K [112. 121.]
+  K-13-093   12.97 lr 0.02 P   2.86 K   61  130 good  9 d1     7 d2   16 whole    76 kept  1 ret  1 ( 0) rho   nan | wrong r 0   nan K [82.  0.] | wrong r 0   nan K [82.  0.] | wrong r 0   nan K [ 0. 91.]
+  K-12-096   12.22 lr 0.95 P   0.42 K  165  166 good 20 d1    46 d2   32 whole   103 kept 14 ret 14 ( 9) rho -0.94 | wrong r35 100.0 K [176.   0.] | prior r 1  13.4 K [153. 189.] | prior r 1  12.6 K [165. 187.]
+  K-13-100   12.97 lr 0.38 P   0.40 K  137  171 good 14 d1    14 d2   18 whole    51 kept  3 ret  3 ( 3) rho -1.00 | wrong r36 100.0 K [139.   0.] | wrong r 0   nan K [185. 150.] | wrong r43  30.0 K [161.  99.]
+  K-13-106   12.72 lr 0.14 P   4.64 K   70   91 good  8 d1     5 d2   11 whole    90 kept  1 ret  1 ( 1) rho   nan | wrong r 0   nan K [106.   0.] | wrong r 0   nan K [106.   0.] | wrong r 0   nan K [ 0. 82.]
+  K-13-108   12.53 lr 0.50 P   1.88 K   93  107 good 29 d1    23 d2   48 whole   102 kept 21 ret 21 (20) rho -0.95 | wrong r 0   nan K [116.   0.] | wrong r19  28.4 K [91. 91.] | near  r 1  16.0 K [78. 96.]
+  K-11-114   11.96 lr 0.28 P   2.78 K   88  106 good 21 d1    37 d2   68 whole   265 kept 20 ret 17 ( 3) rho  0.06 | wrong r 0   nan K [ 85. 128.] | wrong r 0   nan K [134.   0.] | wrong r 0   nan K [121.   5.]
+  K-13-114   12.56 lr 0.45 P   0.98 K  113  133 good 11 d1    20 d2   43 whole    81 kept  9 ret  9 ( 9) rho -0.96 | wrong r 9 100.0 K [133.   0.] | prior r 1   6.3 K [138. 120.] | prior r 1   3.5 K [117. 129.]
+  K-11-117   11.87 lr 0.72 P   0.37 K  154  164 good 26 d1    98 d2   76 whole   198 kept 26 ret 21 (13) rho -0.96 | wrong r10  31.0 K [159. 228.] | prior r 1   2.8 K [164. 150.] | prior r 1   2.8 K [164. 150.]
+  K-11-129   11.71 lr 0.69 P   0.50 K  132  147 good 34 d1    66 d2  130 whole   319 kept 34 ret  4 ( 3) rho -0.96 | prior r 1   8.5 K [134. 127.] | prior r 1   8.8 K [134. 127.] | prior r 1   8.8 K [134. 127.]
+  G-12-008   12.45 lr 0.05 P   1.01 K   83  154 good 17 d1    24 d2   24 whole   130 kept  6 ret  6 ( 0) rho  0.71 | wrong r 2 100.0 K [86.  0.] | open  r 1 100.0 K [101.   0.] | open  r 1 100.0 K [110.   0.]
+  G-13-009   12.73 lr 0.14 P   1.55 K   95  126 good  4 d1    15 d2   15 whole    78 kept  1 ret  1 ( 0) rho   nan | wrong r 0   nan K [] | wrong r 0   nan K [] | wrong r 0   nan K [  0. 228.]
+  G-12-025   12.25 lr 0.15 P   1.10 K  105  138 good  9 d1    48 d2   19 whole   140 kept  1 ret  1 ( 0) rho   nan | wrong r31 100.0 K [121.   0.] | wrong r31 100.0 K [121.   0.] | wrong r 9  76.3 K [105.  30.]
+  G-10-027   11.11 lr 0.71 P   1.84 K  107  110 good 42 d1   304 d2  153 whole   727 kept 35 ret  1 ( 1) rho -0.99 | prior r 1   5.1 K [102. 105.] | prior r 1   4.6 K [102. 105.] | prior r 1   2.7 K [104. 107.]
+  G-11-031   11.87 lr 0.34 P   4.21 K   81   95 good 42 d1    53 d2   24 whole   308 kept  9 ret  9 ( 7) rho -0.64 | open  r 1 100.0 K [78.  0.] | off   r 1  31.8 K [80. 55.] | off   r 1  89.4 K [92.  9.]
+  G-11-032   11.59 lr 0.45 P   4.18 K   74   88 good 43 d1   227 d2   55 whole   381 kept 36 ret 36 (36) rho -0.99 | open  r 1 100.0 K [75.  0.] | prior r 1   0.6 K [74. 89.] | prior r 1   0.4 K [75. 88.]
+  G-10-038   11.25 lr 0.06 P   1.43 K   87  134 good 49 d1   172 d2  154 whole   876 kept 49 ret  2 ( 0) rho  0.68 | open  r 1 100.0 K [115.   0.] | open  r 1 100.0 K [  0. 115.] | open  r 1 100.0 K [  0. 115.]
+  G-11-039   11.81 lr 0.01 P   0.86 K   34  196 good 17 d1    56 d2   58 whole   409 kept 15 ret 15 ( 0) rho -0.47 | wrong r45 100.0 K [35.  0.] | wrong r 3  81.9 K [13. 36.] | wrong r32  73.6 K [ 44. 157.]
+  G-10-041   11.16 lr 0.34 P   3.42 K   88  104 good 30 d1   510 d2   88 whole   825 kept 19 ret  9 ( 9) rho -0.97 | near  r 1  15.0 K [87. 89.] | prior r 1   3.0 K [ 88. 101.] | prior r 1  12.4 K [88. 92.]
+  G-13-041   12.75 lr 0.41 P   7.45 K   67   74 good 27 d1    31 d2   12 whole   104 kept  3 ret  3 ( 3) rho -1.00 | wrong r 6 100.0 K [89.  0.] | wrong r 7  37.4 K [ 68. 124.] | near  r 1  26.4 K [68. 49.]
+  G-10-042   11.22 lr 0.64 P   0.60 K  142  156 good 23 d1   316 d2  140 whole   510 kept 23 ret  2 ( 0) rho -0.98 | prior r 1   6.9 K [146. 144.] | prior r 1   6.8 K [146. 142.] | prior r 1   6.8 K [146. 142.]
+  G-12-048   12.42 lr 0.01 P   0.48 K   61  219 good 15 d1    31 d2   29 whole   119 kept 10 ret 10 ( 1) rho -0.02 | wrong r31 100.0 K [187.   0.] | wrong r 0   nan K [  2. 250.] | wrong r58  74.6 K [95. 24.]
+  G-11-049   11.86 lr 0.35 P   0.61 K  129  157 good 13 d1    60 d2   85 whole   209 kept 13 ret  8 ( 0) rho -0.35 | wrong r26  54.5 K [190. 114.] | wrong r27  29.8 K [155.  74.] | wrong r20  36.9 K [157.  61.]
+  G-13-051   12.62 lr 0.83 P   1.10 K  121  123 good  9 d1    28 d2   34 whole    87 kept  5 ret  5 ( 5) rho -0.91 | wrong r 0   nan K [229.   0.] | wrong r 0   nan K [113. 123.] | wrong r70  19.2 K [129. 141.]
+  G-10-058   11.32 lr 0.95 P   0.91 K  138  139 good 23 d1   151 d2  130 whole   353 kept 20 ret  4 ( 3) rho -0.99 | wrong r 4  14.8 K [139. 130.] | prior r 1   1.6 K [137. 136.] | prior r 1   0.8 K [137. 138.]
+  G-10-068   11.42 lr 0.82 P   2.15 K  100  104 good 27 d1   180 d2  140 whole   409 kept 25 ret  1 ( 1) rho -1.00 | prior r 1   1.7 K [ 99. 106.] | prior r 1   1.1 K [ 99. 105.] | prior r 1   1.0 K [ 99. 105.]
+  G-10-069   11.15 lr 0.03 P   0.91 K   69  165 good 21 d1   165 d2  102 whole   936 kept 15 ret  4 ( 0) rho  0.70 | open  r 1 100.0 K [94.  0.] | wrong r15 100.0 K [86.  0.] | open  r 1 100.0 K [97.  0.]
+  G-11-083   11.60 lr 0.46 P   8.14 K   74   81 good 29 d1   260 d2   33 whole   406 kept 10 ret 10 ( 8) rho -0.91 | open  r 1 100.0 K [75.  0.] | near  r 1  26.4 K [75. 54.] | prior r 1   7.2 K [75. 73.]
+  G-13-084   12.59 lr 0.01 P   1.12 K   43  171 good 28 d1    13 d2   15 whole   153 kept  5 ret  5 ( 0) rho  0.72 | wrong r 8 100.0 K [64.  0.] | open  r 1 100.0 K [183.   0.] | open  r 1 100.0 K [59.  0.]
+  G-10-085   11.30 lr 0.57 P   1.01 K  129  138 good 14 d1   439 d2   82 whole   593 kept 10 ret  5 ( 5) rho -0.99 | prior r 1   7.2 K [131. 120.] | prior r 1   4.7 K [131. 130.] | prior r 1   5.3 K [131. 128.]
+  G-10-088   11.11 lr 0.45 P   3.47 K   94  110 good 12 d1   462 d2   71 whole   729 kept  4 ret  3 ( 3) rho -0.99 | open  r 1 100.0 K [91.  0.] | wrong r 3  12.5 K [ 99. 204.] | prior r 1   3.4 K [ 96. 107.]
+  G-11-096   11.97 lr 0.11 P   0.60 K  111  171 good 24 d1    73 d2   34 whole   208 kept 20 ret 20 ( 3) rho  0.57 | open  r 1 100.0 K [113.   0.] | open  r 1 100.0 K [142.   0.] | open  r 1 100.0 K [148.   0.]
+  G-10-102   11.13 lr 0.01 P   1.06 K   63  171 good 26 d1   260 d2  110 whole   953 kept 20 ret  3 ( 0) rho  0.49 | open  r 1 100.0 K [86.  0.] | open  r 1 100.0 K [85.  0.] | open  r 1 100.0 K [88.  0.]
+  G-12-103   12.06 lr 0.04 P   0.58 K   83  191 good 23 d1    38 d2   55 whole   220 kept 21 ret 21 ( 5) rho  0.43 | wrong r16 100.0 K [73.  0.] | open  r 1 100.0 K [  0. 248.] | wrong r33  67.3 K [ 0. 78.]
+  G-12-112   12.24 lr 0.45 P   3.80 K   88   96 good 20 d1    62 d2   15 whole   101 kept  5 ret  5 ( 5) rho -0.99 | open  r 1 100.0 K [88.  0.] | prior r 1   3.0 K [88. 99.] | prior r 1   2.0 K [87. 98.]
+  G-12-114   12.25 lr 0.77 P   2.52 K   95  101 good 35 d1    40 d2   47 whole   136 kept 31 ret 30 (30) rho -0.98 | wrong r 0   nan K [113.   0.] | prior r 1   3.3 K [98. 92.] | prior r 1   3.1 K [92. 99.]
+  G-10-115   11.22 lr 0.95 P   0.49 K  166  168 good 44 d1   166 d2  255 whole   460 kept 43 ret  1 ( 0) rho -0.99 | prior r 1   1.3 K [164. 168.] | prior r 1   1.3 K [164. 168.] | prior r 1   1.3 K [164. 168.]
+  G-11-119   11.67 lr 0.00 P   0.47 K   37  244 good 33 d1   105 d2   61 whole   309 kept 33 ret 33 ( 2) rho -0.30 | wrong r16 100.0 K [33.  0.] | wrong r 0   nan K [69. 32.] | wrong r30  77.4 K [69. 32.]
+  F-11-001   11.87 lr 0.14 P   1.97 K   81  125 good 29 d1    71 d2   15 whole   310 kept  2 ret  2 ( 2) rho   nan | open  r 1 100.0 K [78.  0.] | off   r 1  35.8 K [78. 80.] | open  r 1 100.0 K [94.  0.]
+  F-12-009   12.12 lr 0.01 P   1.54 K   67  152 good 30 d1    33 d2   32 whole   167 kept 21 ret 21 ( 4) rho  0.43 | open  r 1 100.0 K [70.  0.] | open  r 1 100.0 K [85.  0.] | open  r 1 100.0 K [104.   0.]
+  F-10-015   11.32 lr 0.98 P   4.40 K  103  103 good 45 d1    91 d2   65 whole   213 kept 34 ret 28 (25) rho -0.99 | wrong r 0   nan K [171. 240.] | prior r 1   3.4 K [104. 107.] | prior r 1   2.8 K [104. 106.]
+  F-13-018   12.58 lr 1.00 P   1.90 K  111  111 good 22 d1    20 d2   17 whole    63 kept  7 ret  7 ( 6) rho -0.95 | wrong r 0   nan K [108.   0.] | wrong r 0   nan K [121. 156.] | prior r 1  10.6 K [ 99. 107.]
+  F-11-030   11.94 lr 0.17 P   1.34 K  104  149 good  6 d1   103 d2   19 whole   168 kept  2 ret  2 ( 2) rho   nan | wrong r 0   nan K [] | wrong r 0   nan K [132. 141.] | wrong r 0   nan K [ 68. 151.]
+  F-12-031   12.37 lr 0.00 P   1.58 K   56  185 good 16 d1    36 d2   12 whole    82 kept  1 ret  1 ( 0) rho   nan | wrong r 0   nan K [90.  0.] | wrong r 0   nan K [90.  0.] | wrong r32  19.1 K [ 40. 212.]
+  F-10-032   11.23 lr 0.44 P   9.53 K   63   74 good 42 d1   317 d2   42 whole   475 kept 15 ret 15 (12) rho -0.93 | open  r 1 100.0 K [63.  0.] | prior r 1   2.1 K [63. 76.] | prior r 1  14.9 K [63. 86.]
+  F-11-033   11.92 lr 0.01 P   2.20 K   54  152 good  9 d1   101 d2   15 whole   234 kept  0 ret  0 ( 0) rho   nan | wrong r25 100.0 K [63.  0.] | wrong r25 100.0 K [63.  0.] | open  r 1 100.0 K [169.   0.]
+  F-11-037   11.74 lr 0.76 P   9.59 K   70   74 good 18 d1    98 d2   58 whole   251 kept 17 ret 16 (12) rho -0.92 | wrong r 0   nan K [63.  0.] | wrong r 0   nan K [85. 88.] | wrong r 0   nan K [56. 71.]
+  F-10-039   11.14 lr 0.64 P   1.52 K  113  121 good 15 d1   342 d2  149 whole   648 kept 12 ret  1 ( 1) rho -1.00 | prior r 1   3.0 K [114. 125.] | prior r 1   5.2 K [113. 127.] | prior r 1   6.1 K [113. 128.]
+  F-11-042   11.81 lr 0.77 P   3.77 K  100  104 good 41 d1    86 d2   44 whole   183 kept 32 ret 32 (29) rho -0.95 | wrong r 2 100.0 K [75.  0.] | prior r 1   8.3 K [109. 108.] | prior r 1  10.0 K [115. 110.]
+  F-11-058   11.97 lr 0.01 P   2.12 K   49  157 good 28 d1    59 d2   17 whole   226 kept  2 ret  2 ( 0) rho   nan | open  r 1 100.0 K [49.  0.] | open  r 1 100.0 K [49.  0.] | wrong r 2 100.0 K [  0. 203.]
+  F-11-059   11.65 lr 0.83 P   2.08 K  112  116 good 11 d1    99 d2   65 whole   260 kept  9 ret  9 ( 8) rho -0.97 | wrong r32 100.0 K [166.   0.] | prior r 1   5.5 K [118. 122.] | prior r 1  13.3 K [127. 131.]
+  F-11-060   11.77 lr 0.79 P   4.22 K   97  101 good 39 d1    76 d2   47 whole   171 kept 33 ret 32 (30) rho -0.97 | wrong r 0   nan K [83.  0.] | prior r 1   3.8 K [104. 101.] | prior r 1   3.4 K [105. 100.]
+  F-11-062   11.59 lr 0.22 P   2.49 K   93  119 good 10 d1   190 d2   24 whole   264 kept  3 ret  3 ( 2) rho -0.70 | wrong r 2 100.0 K [107.   0.] | wrong r 6  17.9 K [ 99. 177.] | off   r 1  34.0 K [97. 62.]
+  F-11-063   11.69 lr 0.35 P   1.61 K  106  131 good 23 d1   107 d2   24 whole   139 kept  9 ret  9 ( 7) rho -0.94 | open  r 1 100.0 K [101.   0.] | prior r 1   4.1 K [102. 132.] | prior r 1  13.0 K [105. 148.]
+  F-11-064   11.60 lr 0.13 P   3.20 K   84  127 good  7 d1   133 d2   37 whole   450 kept  3 ret  3 ( 0) rho  1.00 | wrong r 7 100.0 K [116.   0.] | wrong r 0   nan K [116.  18.] | wrong r 2 100.0 K [  0. 143.]
+  F-10-071   11.07 lr 0.63 P   2.29 K  103  112 good 23 d1   305 d2  115 whole   499 kept 21 ret  3 ( 3) rho -1.00 | prior r 1   3.3 K [103. 116.] | prior r 1   3.0 K [103. 116.] | prior r 1   2.3 K [102. 115.]
+  F-12-073   12.31 lr 0.36 P   1.83 K  107  133 good 24 d1    55 d2   16 whole   108 kept  7 ret  7 ( 7) rho -0.98 | open  r 1 100.0 K [104.   0.] | prior r 1  14.5 K [106. 114.] | prior r 1  10.3 K [119. 108.]
+  F-12-075   12.21 lr 0.49 P   2.41 K   98  115 good 37 d1   101 d2   26 whole   198 kept 21 ret 21 (21) rho -0.99 | open  r 1 100.0 K [97.  0.] | prior r 1   1.6 K [ 99. 117.] | prior r 1   2.3 K [ 98. 112.]
+  F-11-085   11.79 lr 0.02 P   1.83 K   67  159 good 20 d1    55 d2   28 whole   188 kept 11 ret 11 ( 1) rho  0.19 | wrong r 6 100.0 K [80.  0.] | open  r 1 100.0 K [81.  0.] | open  r 1 100.0 K [  0. 135.]
+  F-11-087   11.74 lr 0.92 P   3.13 K  114  115 good 34 d1    84 d2   54 whole   176 kept 32 ret 29 (22) rho -0.95 | wrong r 0   nan K [ 86. 150.] | prior r 1   2.2 K [113. 118.] | prior r 1   7.1 K [112. 123.]
+  F-12-088   12.07 lr 0.30 P   1.11 K  112  139 good 13 d1    79 d2   25 whole   148 kept  7 ret  7 ( 6) rho -0.97 | wrong r 2 100.0 K [132.   0.] | wrong r 2  11.3 K [132. 134.] | wrong r 2   6.2 K [123. 139.]
+  F-13-094   12.80 lr 0.29 P   1.25 K  110  140 good  7 d1    26 d2   19 whole    66 kept  2 ret  2 ( 1) rho   nan | wrong r 0   nan K [192.   0.] | wrong r 0   nan K [228.   0.] | wrong r 0   nan K [ 60. 117.]
+  F-10-100   11.11 lr 0.45 P   2.12 K  103  124 good 43 d1   246 d2   70 whole   346 kept 34 ret 28 (27) rho -0.99 | prior r 1   3.3 K [103. 128.] | prior r 1   5.6 K [103. 131.] | prior r 1   6.6 K [104. 132.]
+  F-11-100   11.75 lr 0.78 P   4.11 K   93   98 good 25 d1    83 d2   58 whole   185 kept 22 ret 21 (21) rho -0.99 | wrong r 0   nan K [93.  0.] | prior r 1   1.2 K [94. 99.] | prior r 1   2.7 K [95. 99.]
+  F-12-101   12.41 lr 0.79 P   5.43 K   79   83 good 16 d1    39 d2   24 whole   107 kept  6 ret  6 ( 6) rho -0.96 | wrong r 0   nan K [139.   0.] | wrong r 0   nan K [71. 86.] | wrong r 0   nan K [212. 188.]
+  F-10-110   11.07 lr 0.83 P   1.74 K  119  124 good 27 d1   191 d2  109 whole   351 kept 23 ret  7 ( 5) rho -0.98 | prior r 1   5.6 K [112. 131.] | prior r 1   2.0 K [119. 127.] | prior r 1   3.7 K [119. 129.]
+  F-11-112   11.83 lr 0.08 P   2.36 K   85  147 good 15 d1   114 d2   20 whole   159 kept  3 ret  3 ( 2) rho -0.85 | wrong r 2 100.0 K [90.  0.] | open  r 1 100.0 K [101.   0.] | off   r 1  61.2 K [236.  50.]
+  F-11-115   11.65 lr 0.25 P   1.04 K  116  151 good 24 d1   118 d2   30 whole   202 kept 16 ret 16 ( 5) rho -0.14 | open  r 1 100.0 K [111.   0.] | open  r 1  99.3 K [137.   1.] | wrong r 3  55.9 K [130. 106.]
+  F-11-117   11.51 lr 0.32 P   3.14 K   79  103 good 26 d1   383 d2   56 whole   551 kept 15 ret 15 (15) rho -1.00 | open  r 1 100.0 K [81.  0.] | prior r 1   5.1 K [81. 97.] | prior r 1  13.4 K [81. 89.]
+  F-12-117   12.27 lr 0.79 P   4.47 K   98  101 good 21 d1    39 d2   21 whole    78 kept  8 ret  8 ( 6) rho -0.86 | wrong r 0   nan K [101.   0.] | wrong r 0   nan K [116. 222.] | wrong r 0   nan K [105.  95.]
+  F-12-118   12.04 lr 0.36 P   2.94 K   94  118 good 14 d1    91 d2   16 whole   132 kept  2 ret  2 ( 2) rho   nan | open  r 1 100.0 K [94.  0.] | prior r 1   7.2 K [ 94. 126.] | wrong r11  15.1 K [137.  45.]
+  F-10-120   11.23 lr 0.18 P   1.55 K   97  134 good 14 d1   401 d2   31 whole   596 kept  0 ret  0 ( 0) rho   nan | open  r 1 100.0 K [94.  0.] | open  r 1 100.0 K [94.  0.] | prior r 1   6.0 K [ 95. 126.]
+  A-12-003   12.25 lr 0.10 P   5.74 K   69  112 good 13 d1    61 d2   10 whole    81 kept  0 ret  0 ( 0) rho   nan | open  r 1 100.0 K [73.  0.] | open  r 1 100.0 K [73.  0.] | wrong r 0   nan K [ 64. 167.]
+  A-12-014   12.45 lr 0.82 P  11.93 K   97  101 good  6 d1     4 d2    6 whole     1 kept  2 ret  2 ( 2) rho   nan | wrong r 0   nan K [172.   0.] | wrong r 0   nan K [178.  94.] | wrong r 0   nan K [209. 194.]
+  A-10-018   11.49 lr 0.25 P  13.98 K   54   74 good 20 d1   231 d2   17 whole   266 kept  3 ret  3 ( 3) rho -1.00 | open  r 1 100.0 K [53.  0.] | near  r 1  16.5 K [52. 86.] | wrong r 3  23.6 K [ 53. 130.]
+  A-10-038   11.39 lr 0.74 P   6.30 K   79   86 good 19 d1    61 d2   45 whole    93 kept 15 ret 15 ( 5) rho -0.87 | wrong r 0   nan K [83.  0.] | wrong r 6   9.1 K [ 91. 104.] | wrong r 0   nan K [ 79. 136.]
+  A-13-061   12.95 lr 0.93 P   1.36 K  142  146 good 15 d1    13 d2   13 whole    40 kept  2 ret  2 ( 2) rho   nan | wrong r 7 100.0 K [191.   0.] | wrong r 7  40.1 K [191. 218.] | wrong r 5  29.9 K [133. 134.]
+  A-12-093   12.01 lr 0.53 P   8.08 K   72   84 good 23 d1    57 d2   34 whole   125 kept 18 ret 18 (11) rho -0.79 | wrong r 0   nan K [104.   0.] | wrong r 0   nan K [ 94. 122.] | wrong r 0   nan K [107.  75.]
+  A-10-125   11.13 lr 0.94 P   2.72 K  112  114 good 76 d1   202 d2  136 whole   428 kept 61 ret  3 ( 2) rho -0.99 | prior r 1   1.3 K [111. 115.] | prior r 1   0.8 K [111. 114.] | prior r 1   0.5 K [113. 114.]
+  A-11-127   11.90 lr 0.50 P   9.31 K   67   79 good 12 d1    34 d2   17 whole    40 kept  2 ret  2 ( 2) rho   nan | wrong r 0   nan K [128.   0.] | wrong r 0   nan K [128. 224.] | wrong r 0   nan K [220. 117.]
+
+Systems 51 to 150, read after the condition on the antiphase was fixed
+100 systems; a bootstrap table and a decision for 72; none for 28
+   25  no table: the correlation against library templates at the starting labels gives no epoch with 
+    3  fewer than four usable epochs
+
+exchange allowed on 66; light ratio above a third on 39; G_RVS median 11.82; usable epochs, median 20; first component's statistic, median of medians 88
+companion velocities below 100: 1157, right 63.3 %; above: 439, right 78.1 %
+the rule returns 535 on 48 tables, right 69.2 %
+  light ratio above a third: 367 on 30 tables, right 86.4 %
+  light ratio below a third: 168 on 18 tables, right 31.5 %
+
+| correlation of the two columns | tables | velocities returned | right % |
+|---|---|---|---|
+| -1.0 to -0.9 | 26 | 343 | 90.7 |
+| -0.9 to -0.7 | 4 | 44 | 54.5 |
+| -0.7 to -0.5 | 1 | 3 | 66.7 |
+| -0.3 to 0.0 | 2 | 49 | 14.3 |
+| 0.0 to 0.3 | 1 | 11 | 9.1 |
+| 0.3 to 1.0 | 5 | 68 | 17.6 |
+| not defined | 9 | 17 | 76.5 |
+
+correlation below -0.7 over at least 8 epochs: 22 tables, 346 velocities returned, right 85.8 %; set aside: 26 tables, 189 velocities, right 38.6 %
+of the tables that meet it, light ratio above a third on 21 of 22; of those set aside, on 9 of 26
+
+| rule | period first | handed on as a prior (both K within 15 %) | both K within 10 % | companion left open | 15 to 30 % | off by more than 30 % | period wrong |
+|---|---|---|---|---|---|---|---|
+| fixed | 32 | 10 | 10 | 21 | 0 | 1 | 40 |
+| whole r10 | 41 | 24 | 23 | 14 | 1 | 2 | 31 |
+| whole r10, antiphase below -0.5 | 38 | 23 | 22 | 14 | 0 | 1 | 34 |
+| whole r10, antiphase below -0.7 | 38 | 23 | 22 | 14 | 0 | 1 | 34 |
+| whole r10, antiphase below -0.5 and significant | 38 | 23 | 22 | 14 | 0 | 1 | 34 |
+| whole r10, antiphase below -0.5, 8 epochs | 39 | 21 | 21 | 17 | 0 | 1 | 33 |
+| whole r10, antiphase below -0.7, 8 epochs | 39 | 21 | 21 | 17 | 0 | 1 | 33 |
+| whole r10, antiphase below -0.9, 8 epochs | 39 | 21 | 21 | 17 | 0 | 1 | 33 |
+| none | 39 | 26 | 19 | 10 | 0 | 3 | 33 |
+  whole r10: open to prior 7, wrong to prior 7, wrong to open 3, open to wrong 1, open to off 1, open to near 1
+  whole r10, antiphase below -0.5: wrong to prior 7, open to prior 6, open to wrong 1
+  whole r10, antiphase below -0.7: wrong to prior 7, open to prior 6, open to wrong 1
+  whole r10, antiphase below -0.5 and significant: wrong to prior 7, open to prior 6, open to wrong 1
+  whole r10, antiphase below -0.5, 8 epochs: wrong to prior 7, open to prior 4
+  whole r10, antiphase below -0.7, 8 epochs: wrong to prior 7, open to prior 4
+  whole r10, antiphase below -0.9, 8 epochs: wrong to prior 7, open to prior 4
+  none: open to prior 8, wrong to prior 8, open to wrong 5, wrong to open 2, wrong to off 2
+
+Systems 1 to 50
+50 systems; a bootstrap table and a decision for 50; none for 0
+
+exchange allowed on 46; light ratio above a third on 26; G_RVS median 11.83; usable epochs, median 21; first component's statistic, median of medians 53
+companion velocities below 100: 573, right 57.2 %; above: 560, right 63.4 %
+the rule returns 298 on 39 tables, right 56.7 %
+  light ratio above a third: 197 on 23 tables, right 78.7 %
+  light ratio below a third: 101 on 16 tables, right 13.9 %
+
+| correlation of the two columns | tables | velocities returned | right % |
+|---|---|---|---|
+| -1.0 to -0.9 | 21 | 166 | 87.3 |
+| -0.9 to -0.7 | 1 | 3 | 0.0 |
+| -0.7 to -0.5 | 3 | 32 | 46.9 |
+| -0.5 to -0.3 | 2 | 23 | 0.0 |
+| -0.3 to 0.0 | 1 | 10 | 10.0 |
+| 0.0 to 0.3 | 1 | 17 | 17.6 |
+| 0.3 to 1.0 | 6 | 43 | 9.3 |
+| not defined | 4 | 4 | 25.0 |
+
+correlation below -0.7 over at least 8 epochs: 16 tables, 151 velocities returned, right 86.1 %; set aside: 23 tables, 147 velocities, right 26.5 %
+of the tables that meet it, light ratio above a third on 16 of 16; of those set aside, on 7 of 23
+
+| rule | period first | handed on as a prior (both K within 15 %) | both K within 10 % | companion left open | 15 to 30 % | off by more than 30 % | period wrong |
+|---|---|---|---|---|---|---|---|
+| fixed | 21 | 10 | 10 | 7 | 2 | 2 | 29 |
+| whole r10 | 26 | 16 | 15 | 5 | 1 | 4 | 24 |
+| whole r10, antiphase below -0.5 | 25 | 16 | 15 | 4 | 1 | 4 | 25 |
+| whole r10, antiphase below -0.7 | 25 | 16 | 15 | 5 | 2 | 2 | 25 |
+| whole r10, antiphase below -0.5 and significant | 25 | 16 | 15 | 5 | 1 | 3 | 25 |
+| whole r10, antiphase below -0.5, 8 epochs | 25 | 16 | 15 | 4 | 1 | 4 | 25 |
+| whole r10, antiphase below -0.7, 8 epochs | 25 | 16 | 15 | 5 | 2 | 2 | 25 |
+| whole r10, antiphase below -0.9, 8 epochs | 25 | 16 | 15 | 5 | 2 | 2 | 25 |
+| none | 29 | 17 | 15 | 6 | 2 | 4 | 21 |
+  whole r10: wrong to prior 5, wrong to open 2, prior to wrong 1, near to off 1, open to off 1, open to prior 1, near to prior 1, open to wrong 1, open to near 1
+  whole r10, antiphase below -0.5: wrong to prior 5, prior to wrong 1, near to off 1, open to off 1, open to prior 1, near to prior 1, open to near 1
+  whole r10, antiphase below -0.7: wrong to prior 5, prior to wrong 1, open to prior 1, near to prior 1, open to near 1
+  whole r10, antiphase below -0.5 and significant: wrong to prior 5, prior to wrong 1, near to off 1, open to prior 1, near to prior 1, open to near 1
+  whole r10, antiphase below -0.5, 8 epochs: wrong to prior 5, prior to wrong 1, near to off 1, open to off 1, open to prior 1, near to prior 1, open to near 1
+  whole r10, antiphase below -0.7, 8 epochs: wrong to prior 5, prior to wrong 1, open to prior 1, near to prior 1, open to near 1
+  whole r10, antiphase below -0.9, 8 epochs: wrong to prior 5, prior to wrong 1, open to prior 1, near to prior 1, open to near 1
+  none: wrong to prior 5, wrong to near 2, wrong to open 2, open to prior 2, near to off 1, prior to wrong 1, open to off 1, near to prior 1

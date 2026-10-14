@@ -1,0 +1,229 @@
+Rules on the 1,200 held-out survey tables, the pair exchanged where the pipeline's rule on the light fractions allows it
+
+test, exchange by rule: 1200 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 1122 | 1107 | 1072 | 947 | 1087 | 86 | 75 | 0, 0 (1.000) | 0, 0 (1.000) |
+| search none | 1162 | 1151 | 1069 | 947 | 1084 | 62 | 76 | 1, 4 (0.375) | 1, 1 (1.000) |
+| whole r10 | 1148 | 1137 | 1106 | 1018 | 1122 | 61 | 75 | 36, 2 (0.000) | 71, 0 (0.000) |
+| whole r5 | 1143 | 1130 | 1096 | 998 | 1112 | 64 | 75 | 25, 1 (0.000) | 51, 0 (0.000) |
+| whole r20 | 1151 | 1141 | 1109 | 1048 | 1125 | 57 | 76 | 39, 2 (0.000) | 101, 0 (0.000) |
+
+test without the tables of m2: 1050 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 980 | 966 | 936 | 833 | 949 | 76 | 75 | 0, 0 (1.000) | 0, 0 (1.000) |
+| search none | 1015 | 1006 | 934 | 833 | 946 | 54 | 76 | 1, 3 (0.625) | 1, 1 (1.000) |
+| whole r10 | 1003 | 993 | 966 | 892 | 980 | 56 | 75 | 31, 1 (0.000) | 59, 0 (0.000) |
+| whole r5 | 999 | 987 | 958 | 874 | 972 | 58 | 75 | 22, 0 (0.000) | 41, 0 (0.000) |
+| whole r20 | 1006 | 997 | 969 | 920 | 983 | 52 | 76 | 34, 1 (0.000) | 87, 0 (0.000) |
+
+exchange allowed on 850; seconds per table, median 15
+  fixed: gates other velocities than the fixed threshold on 0 tables; velocities returned to the fits 0
+  search none: gates other velocities than the fixed threshold on 0 tables; velocities returned to the fits 0
+  whole r10: gates other velocities than the fixed threshold on 212 tables; velocities returned to the fits 2910
+  whole r5: gates other velocities than the fixed threshold on 156 tables; velocities returned to the fits 1813
+  whole r20: gates other velocities than the fixed threshold on 266 tables; velocities returned to the fits 3898
+
+median statistic of the first component 0 to 125: 122 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 59 | 47 | 31 | 11 | 35 | 68 | 50 | 0, 0 (1.000) | 0, 0 (1.000) |
+| search none | 98 | 90 | 30 | 11 | 33 | 45 | 73 | 0, 1 (1.000) | 0, 0 (1.000) |
+| whole r10 | 85 | 75 | 59 | 54 | 64 | 45 | 75 | 29, 1 (0.000) | 43, 0 (0.000) |
+| whole r5 | 80 | 69 | 51 | 47 | 56 | 47 | 74 | 21, 1 (0.000) | 36, 0 (0.000) |
+| whole r20 | 86 | 77 | 60 | 56 | 65 | 43 | 75 | 30, 1 (0.000) | 45, 0 (0.000) |
+
+median statistic of the first component 125 to 500: 151 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 143 | 140 | 129 | 89 | 135 | 10 | 74 | 0, 0 (1.000) | 0, 0 (1.000) |
+| search none | 145 | 143 | 129 | 89 | 135 | 9 | 77 | 1, 1 (1.000) | 1, 1 (1.000) |
+| whole r10 | 143 | 142 | 135 | 116 | 141 | 8 | 77 | 7, 1 (0.070) | 27, 0 (0.000) |
+| whole r5 | 143 | 141 | 133 | 104 | 139 | 9 | 76 | 4, 0 (0.125) | 15, 0 (0.000) |
+| whole r20 | 145 | 144 | 137 | 127 | 143 | 6 | 77 | 9, 1 (0.021) | 38, 0 (0.000) |
+
+median statistic of the first component 500 to inf: 927 tables
+| rule | listed within 2 % | within reach | rank 1 | rank 1, both K within 10 % | first 4 | absent | candidates, median | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|---|---|---|
+| fixed | 920 | 920 | 912 | 847 | 917 | 8 | 75 | 0, 0 (1.000) | 0, 0 (1.000) |
+| search none | 919 | 918 | 910 | 847 | 916 | 8 | 76 | 0, 2 (0.500) | 0, 0 (1.000) |
+| whole r10 | 920 | 920 | 912 | 848 | 917 | 8 | 75 | 0, 0 (1.000) | 1, 0 (1.000) |
+| whole r5 | 920 | 920 | 912 | 847 | 917 | 8 | 75 | 0, 0 (1.000) | 0, 0 (1.000) |
+| whole r20 | 920 | 920 | 912 | 865 | 917 | 8 | 75 | 0, 0 (1.000) | 18, 0 (0.000) |
+
+With the condition on the antiphase, assembled from the results above
+test, exchange by rule: 1200 tables; the rule returns a velocity on 212
+| rule | tables on which it acts | rank 1 | rank 1, both K within 10 % | first 4 | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|
+| fixed | 0 | 1072 | 947 | 1087 | | |
+| whole r10 | 212 | 1106 | 1018 | 1122 | 36, 2 (0.000) | 71, 0 (0.000) |
+| antiphase below -0.3, 4 epochs | 184 | 1106 | 1016 | 1122 | 36, 2 (0.000) | 69, 0 (0.000) |
+| antiphase below -0.5, 4 epochs | 184 | 1106 | 1016 | 1122 | 36, 2 (0.000) | 69, 0 (0.000) |
+| antiphase below -0.7, 4 epochs | 184 | 1106 | 1016 | 1122 | 36, 2 (0.000) | 69, 0 (0.000) |
+| antiphase below -0.5, 8 epochs | 164 | 1107 | 1013 | 1123 | 36, 1 (0.000) | 66, 0 (0.000) |
+| antiphase below -0.7, 8 epochs | 164 | 1107 | 1013 | 1123 | 36, 1 (0.000) | 66, 0 (0.000) |
+| antiphase below -0.9, 8 epochs | 160 | 1107 | 1013 | 1123 | 36, 1 (0.000) | 66, 0 (0.000) |
+| antiphase below -0.5 and two standard errors | 182 | 1106 | 1016 | 1122 | 36, 2 (0.000) | 69, 0 (0.000) |
+
+the rule adopted (antiphase below -0.7 over 8 epochs), by the median statistic of the first component:
+| median statistic | tables | acts on | rank 1: fixed, adopted | both K: fixed, adopted | candidates, median: fixed, adopted |
+|---|---|---|---|---|---|
+| 0 to 125 | 122 | 85 | 31, 60 | 11, 53 | 50, 71 |
+| 125 to 500 | 151 | 71 | 129, 135 | 89, 113 | 74, 77 |
+| 500 to inf | 927 | 8 | 912, 912 | 847, 847 | 75, 75 |
+candidates on the 164 tables the rule acts on: median 61 with the fixed threshold, 80 with the rule; over all tables 75 and 75
+listed within 2 %: fixed 1122, adopted 1147; within reach: fixed 1107, adopted 1137
+tables whose place changes under the rule adopted (key, median statistic of the first component, fixed rank and K error %, adopted rank and K error %):
+  11: d1 195; fixed rank 1, 100.0; adopted rank 1, 5.9
+  86: d1 177; fixed rank 1, 100.0; adopted rank 1, 6.5
+  117: d1 86; fixed rank 0, nan; adopted rank 1, 5.4
+  220: d1 256; fixed rank 1, 11.5; adopted rank 3, 4.0
+  281: d1 104; fixed rank 6, 20.6; adopted rank 1, 3.7
+  372: d1 71; fixed rank 1, 100.0; adopted rank 1, 2.1
+  656: d1 206; fixed rank 1, 100.0; adopted rank 1, 1.6
+  761: d1 110; fixed rank 1, 100.0; adopted rank 1, 2.8
+  820: d1 164; fixed rank 14, 10.9; adopted rank 1, 1.8
+  986: d1 63; fixed rank 2, 100.0; adopted rank 1, 3.5
+  1017: d1 53; fixed rank 0, nan; adopted rank 1, 2.0
+  1046: d1 173; fixed rank 2, 1.9; adopted rank 1, 1.4
+  1077: d1 69; fixed rank 1, 100.0; adopted rank 1, 6.1
+  1092: d1 62; fixed rank 0, nan; adopted rank 1, 3.2
+  1241: d1 72; fixed rank 1, 22.9; adopted rank 1, 2.4
+  1287: d1 71; fixed rank 0, nan; adopted rank 1, 4.4
+  1421: d1 66; fixed rank 15, 37.7; adopted rank 1, 3.7
+  1437: d1 108; fixed rank 1, 100.0; adopted rank 1, 1.4
+  1526: d1 70; fixed rank 15, 100.0; adopted rank 1, 2.2
+  1542: d1 95; fixed rank 1, 100.0; adopted rank 1, 3.0
+  1796: d1 345; fixed rank 1, 100.0; adopted rank 1, 2.4
+  1857: d1 99; fixed rank 1, 100.0; adopted rank 1, 4.9
+  1887: d1 141; fixed rank 1, 100.0; adopted rank 1, 3.6
+  1901: d1 105; fixed rank 0, nan; adopted rank 1, 2.4
+  1946: d1 140; fixed rank 0, nan; adopted rank 1, 1.7
+  2037: d1 80; fixed rank 1, 100.0; adopted rank 1, 4.7
+  2156: d1 119; fixed rank 1, 100.0; adopted rank 1, 4.3
+  2186: d1 85; fixed rank 0, nan; adopted rank 1, 2.3
+  2547: d1 43; fixed rank 0, nan; adopted rank 1, 13.8
+  2606: d1 117; fixed rank 3, 22.7; adopted rank 1, 2.0
+  2668: d1 29; fixed rank 8, 100.0; adopted rank 1, 6.9
+  2756: d1 173; fixed rank 1, 100.0; adopted rank 1, 1.8
+  2786: d1 155; fixed rank 1, 100.0; adopted rank 1, 4.9
+  3071: d1 121; fixed rank 2, 19.2; adopted rank 1, 1.9
+  3087: d1 72; fixed rank 2, 100.0; adopted rank 1, 6.4
+  3207: d1 65; fixed rank 1, 100.0; adopted rank 1, 1.7
+  3806: d1 57; fixed rank 0, nan; adopted rank 1, 2.2
+  3897: d1 49; fixed rank 0, nan; adopted rank 1, 5.2
+  4106: d1 75; fixed rank 51, 250.8; adopted rank 1, 4.7
+  4181: d1 138; fixed rank 1, 100.0; adopted rank 1, 3.1
+  4285: d1 302; fixed rank 1, 11.8; adopted rank 1, 4.5
+  4301: d1 296; fixed rank 1, 100.0; adopted rank 1, 0.7
+  4480: d1 36; fixed rank 0, nan; adopted rank 1, 4.3
+  4541: d1 84; fixed rank 1, 100.0; adopted rank 1, 2.5
+  4645: d1 158; fixed rank 1, 100.0; adopted rank 1, 6.3
+  4690: d1 120; fixed rank 1, 10.9; adopted rank 1, 2.7
+  4811: d1 79; fixed rank 0, nan; adopted rank 1, 1.8
+  4961: d1 184; fixed rank 1, 100.0; adopted rank 1, 2.3
+  5275: d1 316; fixed rank 1, 10.8; adopted rank 1, 8.4
+  5320: d1 331; fixed rank 1, 100.0; adopted rank 1, 5.7
+  5545: d1 80; fixed rank 0, nan; adopted rank 1, 4.4
+  5560: d1 160; fixed rank 18, 2.5; adopted rank 1, 2.4
+  5576: d1 105; fixed rank 1, 100.0; adopted rank 1, 8.7
+  5605: d1 227; fixed rank 1, 100.0; adopted rank 1, 0.0
+  5607: d1 68; fixed rank 1, 100.0; adopted rank 1, 1.0
+  5725: d1 127; fixed rank 1, 100.0; adopted rank 1, 3.5
+  5756: d1 65; fixed rank 48, 17.7; adopted rank 1, 2.6
+  6385: d1 58; fixed rank 0, nan; adopted rank 1, 2.3
+  6475: d1 66; fixed rank 0, nan; adopted rank 1, 1.5
+  6625: d1 108; fixed rank 0, nan; adopted rank 1, 2.0
+  6729: d1 170; fixed rank 5, 10.7; adopted rank 1, 2.2
+  7045: d1 50; fixed rank 0, nan; adopted rank 1, 3.2
+  7150: d1 171; fixed rank 1, 53.2; adopted rank 1, 1.9
+  7238: d1 135; fixed rank 7, 8.3; adopted rank 1, 3.4
+  7555: d1 51; fixed rank 73, 54.1; adopted rank 1, 7.5
+  7660: d1 129; fixed rank 0, nan; adopted rank 1, 3.8
+  7705: d1 100; fixed rank 0, nan; adopted rank 1, 1.8
+  7765: d1 67; fixed rank 41, 100.0; adopted rank 1, 3.1
+
+set aside by the condition at -0.5: 28 tables; on them the rule alone gained rank 1 on 0, lost it on 0, gained both K on 2, lost on 0
+
+The same on the 1,050 tables outside the 150 of m2
+test, exchange by rule: 1050 tables; the rule returns a velocity on 179
+| rule | tables on which it acts | rank 1 | rank 1, both K within 10 % | first 4 | rank 1: gained, lost (p) | both K: gained, lost (p) |
+|---|---|---|---|---|---|---|
+| fixed | 0 | 936 | 833 | 949 | | |
+| whole r10 | 179 | 966 | 892 | 980 | 31, 1 (0.000) | 59, 0 (0.000) |
+| antiphase below -0.3, 4 epochs | 155 | 966 | 890 | 980 | 31, 1 (0.000) | 57, 0 (0.000) |
+| antiphase below -0.5, 4 epochs | 155 | 966 | 890 | 980 | 31, 1 (0.000) | 57, 0 (0.000) |
+| antiphase below -0.7, 4 epochs | 155 | 966 | 890 | 980 | 31, 1 (0.000) | 57, 0 (0.000) |
+| antiphase below -0.5, 8 epochs | 137 | 966 | 887 | 980 | 31, 1 (0.000) | 54, 0 (0.000) |
+| antiphase below -0.7, 8 epochs | 137 | 966 | 887 | 980 | 31, 1 (0.000) | 54, 0 (0.000) |
+| antiphase below -0.9, 8 epochs | 133 | 966 | 887 | 980 | 31, 1 (0.000) | 54, 0 (0.000) |
+| antiphase below -0.5 and two standard errors | 154 | 966 | 890 | 980 | 31, 1 (0.000) | 57, 0 (0.000) |
+
+the rule adopted (antiphase below -0.7 over 8 epochs), by the median statistic of the first component:
+| median statistic | tables | acts on | rank 1: fixed, adopted | both K: fixed, adopted | candidates, median: fixed, adopted |
+|---|---|---|---|---|---|
+| 0 to 125 | 106 | 75 | 25, 50 | 8, 45 | 50, 71 |
+| 125 to 500 | 127 | 55 | 106, 111 | 75, 92 | 74, 76 |
+| 500 to inf | 817 | 7 | 805, 805 | 750, 750 | 75, 75 |
+candidates on the 137 tables the rule acts on: median 50 with the fixed threshold, 78 with the rule; over all tables 75 and 75
+listed within 2 %: fixed 980, adopted 1002; within reach: fixed 966, adopted 993
+tables whose place changes under the rule adopted (key, median statistic of the first component, fixed rank and K error %, adopted rank and K error %):
+  11: d1 195; fixed rank 1, 100.0; adopted rank 1, 5.9
+  117: d1 86; fixed rank 0, nan; adopted rank 1, 5.4
+  220: d1 256; fixed rank 1, 11.5; adopted rank 3, 4.0
+  281: d1 104; fixed rank 6, 20.6; adopted rank 1, 3.7
+  761: d1 110; fixed rank 1, 100.0; adopted rank 1, 2.8
+  820: d1 164; fixed rank 14, 10.9; adopted rank 1, 1.8
+  986: d1 63; fixed rank 2, 100.0; adopted rank 1, 3.5
+  1017: d1 53; fixed rank 0, nan; adopted rank 1, 2.0
+  1046: d1 173; fixed rank 2, 1.9; adopted rank 1, 1.4
+  1077: d1 69; fixed rank 1, 100.0; adopted rank 1, 6.1
+  1241: d1 72; fixed rank 1, 22.9; adopted rank 1, 2.4
+  1287: d1 71; fixed rank 0, nan; adopted rank 1, 4.4
+  1421: d1 66; fixed rank 15, 37.7; adopted rank 1, 3.7
+  1437: d1 108; fixed rank 1, 100.0; adopted rank 1, 1.4
+  1526: d1 70; fixed rank 15, 100.0; adopted rank 1, 2.2
+  1542: d1 95; fixed rank 1, 100.0; adopted rank 1, 3.0
+  1796: d1 345; fixed rank 1, 100.0; adopted rank 1, 2.4
+  1857: d1 99; fixed rank 1, 100.0; adopted rank 1, 4.9
+  1901: d1 105; fixed rank 0, nan; adopted rank 1, 2.4
+  1946: d1 140; fixed rank 0, nan; adopted rank 1, 1.7
+  2037: d1 80; fixed rank 1, 100.0; adopted rank 1, 4.7
+  2156: d1 119; fixed rank 1, 100.0; adopted rank 1, 4.3
+  2186: d1 85; fixed rank 0, nan; adopted rank 1, 2.3
+  2547: d1 43; fixed rank 0, nan; adopted rank 1, 13.8
+  2606: d1 117; fixed rank 3, 22.7; adopted rank 1, 2.0
+  2668: d1 29; fixed rank 8, 100.0; adopted rank 1, 6.9
+  2786: d1 155; fixed rank 1, 100.0; adopted rank 1, 4.9
+  3071: d1 121; fixed rank 2, 19.2; adopted rank 1, 1.9
+  3207: d1 65; fixed rank 1, 100.0; adopted rank 1, 1.7
+  3806: d1 57; fixed rank 0, nan; adopted rank 1, 2.2
+  3897: d1 49; fixed rank 0, nan; adopted rank 1, 5.2
+  4106: d1 75; fixed rank 51, 250.8; adopted rank 1, 4.7
+  4285: d1 302; fixed rank 1, 11.8; adopted rank 1, 4.5
+  4301: d1 296; fixed rank 1, 100.0; adopted rank 1, 0.7
+  4480: d1 36; fixed rank 0, nan; adopted rank 1, 4.3
+  4541: d1 84; fixed rank 1, 100.0; adopted rank 1, 2.5
+  4645: d1 158; fixed rank 1, 100.0; adopted rank 1, 6.3
+  4690: d1 120; fixed rank 1, 10.9; adopted rank 1, 2.7
+  4811: d1 79; fixed rank 0, nan; adopted rank 1, 1.8
+  4961: d1 184; fixed rank 1, 100.0; adopted rank 1, 2.3
+  5275: d1 316; fixed rank 1, 10.8; adopted rank 1, 8.4
+  5320: d1 331; fixed rank 1, 100.0; adopted rank 1, 5.7
+  5560: d1 160; fixed rank 18, 2.5; adopted rank 1, 2.4
+  5576: d1 105; fixed rank 1, 100.0; adopted rank 1, 8.7
+  5605: d1 227; fixed rank 1, 100.0; adopted rank 1, 0.0
+  5607: d1 68; fixed rank 1, 100.0; adopted rank 1, 1.0
+  5725: d1 127; fixed rank 1, 100.0; adopted rank 1, 3.5
+  5756: d1 65; fixed rank 48, 17.7; adopted rank 1, 2.6
+  6385: d1 58; fixed rank 0, nan; adopted rank 1, 2.3
+  6475: d1 66; fixed rank 0, nan; adopted rank 1, 1.5
+  6625: d1 108; fixed rank 0, nan; adopted rank 1, 2.0
+  6729: d1 170; fixed rank 5, 10.7; adopted rank 1, 2.2
+  7045: d1 50; fixed rank 0, nan; adopted rank 1, 3.2
+  7555: d1 51; fixed rank 73, 54.1; adopted rank 1, 7.5
+  7660: d1 129; fixed rank 0, nan; adopted rank 1, 3.8
+  7765: d1 67; fixed rank 41, 100.0; adopted rank 1, 3.1
+
+set aside by the condition at -0.5: 24 tables; on them the rule alone gained rank 1 on 0, lost it on 0, gained both K on 2, lost on 0

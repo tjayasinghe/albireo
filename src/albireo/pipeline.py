@@ -310,12 +310,31 @@ class Analysis:
         that table, the template table of the known-period route (``_table_orbit``), or
         the velocities measured after the disentangling.
 
+        On a weakly detected pair the threshold is lower (:func:`_detection_thresholds`,
+        D71). Below ``detection_min`` a companion's velocity is kept where its statistic
+        is at least 25, the value under which the table's summary counts a weak
+        detection, and at least a tenth of the statistic of the epoch as a whole
+        (``chi2_null - chi2``, the rise in chi-square when every template is removed, or
+        the first component's own statistic where that is larger), on a two-component
+        table whose columns move in antiphase over at least eight such epochs (a
+        correlation coefficient below -0.9). A tenth is the share of a companion with a
+        third of the first component's light. The antiphase is that of the two stars of
+        a binary. A second template that takes up the lines the first one does not fit
+        follows the first star and does not show it, with one exception: two identical
+        templates narrower than the lines of a single star divide its line in either
+        order. A ``detection_min`` below 25 is the threshold at every epoch, and a larger
+        one raises the threshold of a strongly detected pair only.
+
         A hundred was set by measurement (D65). Over the 33 blind tables of the Gaia RVS
         benchmark's third run it recovered one period whose faint companion the library
         templates never detected, and no system lost its rank 1. The table summary's own
         threshold of 25 fails on that system. The first component is not gated because
         gating it as well worsened the result for one system. The measurements are in
-        ``docs/benchmarks.md`` (Gaia RVS, after the third run).
+        ``docs/benchmarks.md`` (Gaia RVS, after the third run). The first component of
+        those tables is strongly detected. On a faint pair of comparable stars neither
+        statistic reaches a hundred, and the threshold removed the companion at every
+        epoch (``docs/benchmarks.md``, the detection gate on faint pairs). The lower
+        threshold gates no velocity of the blind tables differently.
     vsini_max, v_zero_range
         Default ceiling of the ``vsini`` prior, and the half-range of the per-component
         frame offset the label fit may measure, both in km/s. The disentangled frame is
@@ -832,7 +851,9 @@ z_rms_max = 10.0                # stop a star whose disentangling diverged: the 
 #                               # on the search route; 0 leaves the decision to the table
 # detection_min = 100.0         # on the search route, a companion's velocity whose detection
 #                               # statistic is below this carries no weight in the period
-#                               # search and the candidate fits; 0 turns the gate off
+#                               # search and the candidate fits (the threshold is lower on
+#                               # a weakly detected pair whose velocities are in
+#                               # antiphase); 0 turns the gate off
 # sample = true                 # NUTS after the MAP: posterior widths, slow
 
 # Template identification: fit Teff, log g, [M/H] and v sin i to the disentangled
@@ -2585,10 +2606,13 @@ def _bootstrap(ctx: _Context, dataset: Dataset, lsf, library):
     Three rules of D65 act on the search and not on the table. A companion's velocity whose
     detection statistic is below ``detection_min`` has no weight in the period search or
     the candidate fits (:func:`_detection_gate`), and the report counts those velocities per
-    component under ``detection_gate``. The candidate fits exchange the two components only
-    where the light fractions of the table's amplitudes allow it, by the rule the velocities
-    measured after the disentangling follow (:func:`_exchange_allowed`). A table whose
-    usable epochs fall on fewer than ``_FEW_NIGHTS`` nights is flagged
+    component under ``detection_gate``. On a table whose columns move in antiphase the
+    threshold is lower at an epoch where the pair as a whole is weakly detected
+    (:func:`_detection_thresholds`, D71), and the report counts the velocities below
+    ``detection_min`` that are kept there. The candidate fits exchange the two components
+    only where the light fractions of the table's amplitudes allow it, by the rule the
+    velocities measured after the disentangling follow (:func:`_exchange_allowed`). A
+    table whose usable epochs fall on fewer than ``_FEW_NIGHTS`` nights is flagged
     (:func:`_usable_nights`), since its velocities cannot be expected to decide the period.
     """
     star, settings, log = ctx.star, ctx.settings, ctx.log
@@ -2596,6 +2620,24 @@ def _bootstrap(ctx: _Context, dataset: Dataset, lsf, library):
     unexchanged = table  # the table the period search runs on, before any re-assignment
     detection_min = float(settings.detection_min)
     gated = _detection_mask(table, detection_min)
+    # The velocities below the declared threshold that the lower one of a weakly detected
+    # pair keeps, and what the antiphase test found where it was made.
+    kept_below = _below_detection_min(table, detection_min) & ~gated
+    kept_text = (
+        f"; {int(kept_below.sum())} below it kept, on a pair in antiphase at epochs where "
+        "it is weakly detected as a whole"
+        if kept_below.any()
+        else ""
+    )
+    antiphase = None
+    if table.n_components == 2:
+        lowered = _lowered_thresholds(table, detection_min)
+        if np.any(lowered < detection_min):
+            n_tested, coefficient = _antiphase(table, lowered)
+            antiphase = {
+                "epochs": n_tested,
+                "correlation": float(coefficient) if np.isfinite(coefficient) else None,
+            }
     if detection_min > 0.0:
         log(
             f"detection gate at {detection_min:g}: "
@@ -2604,6 +2646,7 @@ def _bootstrap(ctx: _Context, dataset: Dataset, lsf, library):
                 for name, n, v in zip(table.names, gated.sum(axis=1), table.velocity, strict=True)
             )
             + " carry no weight in the period search and the candidate fits"
+            + kept_text
         )
     n_usable = int(np.sum(table.good))
     nights = _usable_nights(table)
@@ -2730,6 +2773,7 @@ def _bootstrap(ctx: _Context, dataset: Dataset, lsf, library):
                 for name, n in zip(unexchanged.names, gated.sum(axis=1), strict=True)
             )
             + " velocities without weight in the search"
+            + kept_text
             if detection_min > 0.0
             else ""
         )
@@ -2757,6 +2801,11 @@ def _bootstrap(ctx: _Context, dataset: Dataset, lsf, library):
                     name: int(n)
                     for name, n in zip(unexchanged.names, gated.sum(axis=1), strict=True)
                 },
+                "kept_below": {
+                    name: int(n)
+                    for name, n in zip(unexchanged.names, kept_below.sum(axis=1), strict=True)
+                },
+                "antiphase": antiphase,
             },
             "n_nights": nights,
             "exchange_allowed": bool(exchange),
@@ -2831,15 +2880,165 @@ def _usable_nights(table) -> int:
     return int(np.unique(np.floor(bjd)).size)
 
 
-def _detection_mask(table, detection_min: float) -> np.ndarray:
-    """``(n_comp, n_epochs)``: the gated velocities, measured and below ``detection_min``.
+# The detection gate on a weakly detected pair (D71). `Analysis.detection_min` was measured on
+# tables whose first component is strongly detected (D65): its median statistic over the
+# usable epochs is above 1,000 on 22 of the 32 blind tables and no lower than 247. On a faint
+# pair of comparable stars neither statistic reaches 100 at any epoch, so the threshold
+# removed the companion altogether. The correlation returns each epoch of such a pair in
+# either order, and the first component's column that remained held the velocities of both
+# stars, which no candidate fit could put in order.
+#
+# Below `detection_min`, a companion's velocity is therefore kept under three conditions.
+#
+# Its statistic is at least `_DETECTION_FLOOR`, the value under which
+# `VelocityTable.summary` counts a weak detection.
+#
+# Its statistic is at least `_DETECTION_SHARE` of that of the epoch as a whole, the rise in
+# chi-square when every template is removed. The share is that of a companion with a third
+# of the first component's light where the lines are separated, since the statistic goes as
+# the square of the light: 1 / (1 + 3^2). A third is the ratio within which the two
+# components are treated as alike (`_EXCHANGE_LIGHT_RATIO`). A weak solution beside a strong
+# first component, which is often the second template fitted to the residuals of the first
+# and not a detection, has a smaller share. Where the lines of two bright stars blend, both
+# of their statistics fall and that of the whole does not, so the share falls and the epoch
+# stays gated. The table's chi-square is that of the templates at the held light fractions,
+# and the statistics of the components are those of free amplitudes, so the whole can be
+# below the first component's own statistic where the held fractions fit an epoch badly
+# (lines filled in by emission, templates far from the stars). The reference is the larger
+# of the two, and an epoch that the held templates fit no better than no template keeps
+# `detection_min`.
+#
+# The two columns of the table move in antiphase over the usable epochs that meet the first
+# two conditions: their correlation coefficient is below `_ANTIPHASE_CORRELATION` over at
+# least `_ANTIPHASE_EPOCHS` such epochs. The velocities of the two stars of a binary lie on
+# a line of negative slope whatever the period (Wilson 1941). An epoch in the other order
+# lies on the line of reciprocal slope, so for two alike stars the coefficient is near -1
+# whatever the order of the epochs, and it is nearer zero for larger errors and for
+# exchanged epochs of unequal semi-amplitudes (-2q/(1 + q^2) for a ratio q with half of
+# them exchanged). A second template that takes up the lines the first one does not fit
+# follows the first star, and the coefficient is then positive or near zero. This condition
+# is what templates far from the stars require: on 122 tables of faint pairs measured with
+# unrotated templates of fixed temperature, a quarter of the velocities that the first two
+# conditions return are more than 50 km/s from the injected ones, and 3 percent of those on
+# the tables that meet the third. Unrelated columns pass it over eight epochs about once in
+# a thousand tables.
+#
+# The condition has one known failure. Two identical templates that are narrower than the
+# lines of a single star divide its line between them in either order, which is antiphase
+# about the star's own velocity. A simulated star at rest whose lines are three times as
+# broad as the templates gives a coefficient of -0.86 at a S/N of 5, which the cut refuses,
+# and -0.94 at a S/N of 9. There the companion's statistic is above `detection_min`, and
+# the fixed threshold returns an orbit of two components already. Between the two the
+# condition can be met.
+#
+# Measured with the pipeline's own search and candidate fits (`docs/benchmarks.md`, the
+# detection gate on faint pairs). No velocity of the 32 blind tables of the benchmark is
+# gated differently. On 400 simulated tables of eclipsing binaries measured with classified
+# templates the injected period is first in the ranking on 311 against 306, and first with
+# both semi-amplitudes within 10 percent on 184 against 169, with none lost. On the 122
+# tables above it is first on 64 against 53 (12 gained, 1 lost), and the orbit handed to
+# the disentangling has both semi-amplitudes within 15 percent on 37 against 20. The cut
+# was -0.7 before an independent review, which found the velocities returned between -0.9
+# and -0.8 within 20 km/s for 28 to 62 percent on the survey's other runs, against 77 to
+# 84 percent below -0.9. The two cuts give the same counts on the tables above.
+_DETECTION_FLOOR = 25.0
+_DETECTION_SHARE = 0.1
+_ANTIPHASE_CORRELATION = -0.9
+_ANTIPHASE_EPOCHS = 8
 
-    Only the components after the first, which are declared in order of decreasing mass,
-    can be gated (see ``Analysis.detection_min``).
+
+def _lowered_thresholds(table, detection_min: float) -> np.ndarray:
+    """Per epoch: the threshold a weakly detected pair in antiphase would have.
+
+    The larger of ``_DETECTION_FLOOR`` and ``_DETECTION_SHARE`` of the statistic of the
+    epoch as a whole, and no more than ``detection_min``. The statistic of the whole is
+    ``table.chi2_null - table.chi2``, or the first component's own statistic where that is
+    larger. An epoch at which it is not finite and positive keeps ``detection_min``.
+    """
+    whole = np.asarray(table.chi2_null, dtype=float) - np.asarray(table.chi2, dtype=float)
+    first = np.asarray(table.delta_chi2, dtype=float)[0]
+    with np.errstate(invalid="ignore"):
+        detected = np.isfinite(whole) & (whole > 0.0)
+        reference = np.where(detected, np.fmax(whole, first), np.inf)
+    lowered = np.maximum(_DETECTION_FLOOR, _DETECTION_SHARE * reference)
+    return np.minimum(float(detection_min), lowered)
+
+
+def _detection_thresholds(table, detection_min: float) -> np.ndarray:
+    """Per epoch: the detection statistic below which a companion's velocity is gated.
+
+    The threshold is ``detection_min``, except on a two-component table whose columns move
+    in antiphase (:func:`_in_antiphase`), where it is that of :func:`_lowered_thresholds`.
+    A ``detection_min`` below ``_DETECTION_FLOOR`` is the threshold at every epoch, and a
+    larger one raises the threshold of a strongly detected pair only.
+    """
+    declared = np.full(np.shape(table.chi2), float(detection_min))
+    if table.n_components != 2:
+        return declared
+    lowered = _lowered_thresholds(table, detection_min)
+    if not np.any(lowered < declared) or not _in_antiphase(table, lowered):
+        return declared
+    return lowered
+
+
+def _antiphase(table, thresholds) -> tuple[int, float]:
+    """The epochs at which the companion is detected, and the correlation of the columns.
+
+    The epochs are the usable ones at which the companion's detection statistic is at
+    least ``thresholds``. The coefficient is that of the two velocities over those epochs,
+    at equal weight, and ``nan`` with fewer than three of them or a constant column.
+    Weighted by the quoted errors it gave the same answer on every table it was measured
+    on, and one epoch of small errors could then carry it. A few epochs of large amplitude
+    can carry it at any weighting.
+    """
+    velocity = np.asarray(table.velocity, dtype=float)
+    statistic = np.nan_to_num(np.asarray(table.delta_chi2, dtype=float)[1], nan=-np.inf)
+    use = (
+        np.asarray(table.good, dtype=bool)
+        & np.all(np.isfinite(velocity), axis=0)
+        & (statistic >= thresholds)
+    )
+    epochs = int(use.sum())
+    if epochs < 3:
+        return epochs, float("nan")
+    first = velocity[0, use] - np.mean(velocity[0, use])
+    second = velocity[1, use] - np.mean(velocity[1, use])
+    scale = np.sum(first**2) * np.sum(second**2)
+    if not scale > 0.0:
+        return epochs, float("nan")
+    return epochs, float(np.sum(first * second) / np.sqrt(scale))
+
+
+def _in_antiphase(table, thresholds) -> bool:
+    """Whether the two columns of a table move in antiphase where the companion is detected.
+
+    The coefficient of :func:`_antiphase` is below ``_ANTIPHASE_CORRELATION`` over at
+    least ``_ANTIPHASE_EPOCHS`` epochs.
+    """
+    epochs, coefficient = _antiphase(table, thresholds)
+    return epochs >= _ANTIPHASE_EPOCHS and coefficient < _ANTIPHASE_CORRELATION
+
+
+def _below_detection_min(table, detection_min: float) -> np.ndarray:
+    """``(n_comp, n_epochs)``: the measured companion velocities below ``detection_min``."""
+    statistic = np.asarray(table.delta_chi2, dtype=float)
+    velocity = np.asarray(table.velocity, dtype=float)
+    below = np.isfinite(velocity) & (np.nan_to_num(statistic, nan=np.inf) < float(detection_min))
+    below[:1] = False
+    return below
+
+
+def _detection_mask(table, detection_min: float) -> np.ndarray:
+    """``(n_comp, n_epochs)``: the gated velocities, measured and below the threshold.
+
+    The threshold of an epoch is that of :func:`_detection_thresholds`. Only the components
+    after the first, which are declared in order of decreasing mass, can be gated (see
+    ``Analysis.detection_min``).
     """
     statistic = np.asarray(table.delta_chi2, dtype=float)
     velocity = np.asarray(table.velocity, dtype=float)
-    gated = np.isfinite(velocity) & (np.nan_to_num(statistic, nan=np.inf) < float(detection_min))
+    threshold = _detection_thresholds(table, detection_min)
+    gated = np.isfinite(velocity) & (np.nan_to_num(statistic, nan=np.inf) < threshold)
     gated[:1] = False
     return gated
 
@@ -2849,11 +3048,13 @@ def _detection_gate(table, detection_min: float):
 
     A velocity of a component after the first is removed (its velocity and errors set to
     ``nan``) where that component's detection statistic, ``table.delta_chi2``, is below
-    ``detection_min``. The first component's velocities are never removed. The other
-    components of the epoch are unchanged, and the search and the fits keep them
-    (:func:`albireo.rvorbit.find_period` and :func:`albireo.rvorbit.fit_rv_orbit` take each
-    velocity where its own component was measured). Returns the table itself, and an
-    all-false mask, when nothing falls below the threshold or the threshold is zero.
+    the threshold of its epoch: ``detection_min``, or less where the pair as a whole is
+    weakly detected (:func:`_detection_thresholds`). The first component's velocities are
+    never removed. The other components of the epoch are unchanged, and the search and the
+    fits keep them (:func:`albireo.rvorbit.find_period` and
+    :func:`albireo.rvorbit.fit_rv_orbit` take each velocity where its own component was
+    measured). Returns the table itself, and an all-false mask, when nothing falls below
+    the threshold or the threshold is zero.
     """
     gated = _detection_mask(table, detection_min)
     if not gated.any():
@@ -2933,6 +3134,16 @@ def _period_candidates(
     detection statistic is below the threshold is not a measurement. The first component
     is never gated, so its source keeps every epoch at which it was measured. For a
     companion detected nowhere it is the only source left.
+
+    The searches and the candidate fits use the same copy. Searching the table as measured
+    while the fits stay gated was measured and not adopted (D71). On 1,200 simulated tables
+    of eclipsing binaries it listed the injected period within reach of a fit on 47 more
+    tables and on 3 fewer, and with the gated fits one table gained the first place and
+    four lost it. The periods added were those of faint pairs of alike stars, whose epochs
+    come in either order. With the companion gated, the first component's column holds the
+    velocities of both stars, and a fit to that column alone does not confirm them. Those
+    pairs are served by the lower threshold of :func:`_detection_thresholds`, which the
+    searches and the fits share.
 
     With ``leave_one_out`` (passed only by the bootstrap) and a table of at most
     ``_LEAVE_ONE_OUT_MAX_EPOCHS`` usable epochs as measured (``table.good`` before any gate),
