@@ -203,16 +203,20 @@ header, because the recovered line depths are interpretable only together with t
 `Disentangler` assembles the low-level model and returns it on request:
 
 ```python
-model, priors, init = dis.expert()
+model, priors, init, fixed = dis.expert()
+numpyro_model = model.model(priors, fixed=fixed)
 ```
 
-That triple is what [`MarginalOrbitModel`](api/inference.md) and `ab.run_map` take, so
-features the declarative interface does not expose (per-epoch jitter, a per-epoch response
-polynomial, inferred light fractions, inferred LSF widths) are added at that level. Correlated
-(AR(1)) noise is declared directly, with `Disentangler(noise_correlation=...)`. The sites the
-declaration holds constant are in `dis.fixed` and are passed as
-`model.model(priors, fixed=dis.fixed)`. The declarative interface is marked experimental
-because its names may still change. The low-level interface is the supported one.
+These are what [`MarginalOrbitModel`](api/inference.md) and `ab.run_map` take, so features
+the declarative interface does not expose (per-epoch jitter, a per-epoch response
+polynomial, inferred light fractions, inferred LSF widths) are added at that level.
+Correlated (AR(1)) noise is declared directly, with `Disentangler(noise_correlation=...)`.
+`fixed` holds the sites the declaration holds constant, such as `secosw` and `sesinw` of a
+circular orbit, and is empty when every site is sampled. `init` is the declared start,
+before the scans that `dis.fit()` runs to locate the conjunction phase and the
+semi-amplitudes, so an optimization started from it can converge in the wrong phase. The
+declarative interface is marked experimental because its names may still change. The
+low-level interface is the supported one.
 
 ## Next steps
 

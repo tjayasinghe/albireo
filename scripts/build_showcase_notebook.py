@@ -101,8 +101,8 @@ The `Disentangler` interface takes a declaration of the system (components, orbi
 instrument LSF) and derives the quantities the expert path requires as explicit arguments:
 the velocity budget from the support of the priors, the grid margin, the conjunction phase
 (scanned before any optimization), and the smoothness hyperparameters by ML-II.
-`explain()` prints every derivation and `expert()` returns the corresponding
-`(model, priors, init)` triple.""",
+`explain()` prints every derivation and `expert()` returns the corresponding model with
+its `priors`, `init` and `fixed` dictionaries.""",
     ),
     (
         PY,

@@ -165,10 +165,24 @@ def test_per_component_smoothness_reaches_the_prior(dataset):
     assert np.allclose(np.asarray(dis.smoothness_prior.tau), [1.0e3, 1.0e8])
 
 
-def test_expert_hands_back_the_low_level_triple(dataset):
-    model, priors, init = _dis(dataset).expert()
+def test_expert_hands_back_the_low_level_path(dataset):
+    model, priors, init, fixed = _dis(dataset).expert()
     assert isinstance(model, ab.MarginalOrbitModel)
     assert set(priors) == set(init)
+    assert fixed == {}
+
+
+def test_expert_hands_back_the_sites_held_constant(dataset):
+    """A circular orbit fixes secosw and sesinw, and a model rebuilt without them is incomplete."""
+    dis = _dis(dataset, orbit=_orbit(ecc=ab.Fixed(0.0)))
+    model, priors, init, fixed = dis.expert()
+    assert set(fixed) == {"secosw", "sesinw"}
+    assert not set(fixed) & (set(priors) | set(init))
+    with pytest.raises(ValueError, match="missing orbital sites"):
+        model.model(priors)
+    assert callable(model.model(priors, fixed=fixed))
+    fixed.clear()
+    assert set(dis.fixed) == {"secosw", "sesinw"}, "expert() must return copies"
 
 
 def test_explain_names_every_derivation_and_every_assumption(dataset):

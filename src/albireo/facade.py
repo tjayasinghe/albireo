@@ -11,7 +11,7 @@ instrument, and the dataset. From that declaration the module derives what the l
 interface otherwise requires: the velocity budget, the model grid and its margins, the
 conjunction-phase scan, the matched ``priors``/``init`` pair, the empirical-Bayes (ML-II)
 smoothness step, and the Laplace mass matrix. :meth:`Disentangler.explain` prints every
-derivation, and :meth:`Disentangler.expert` returns the ``(model, priors, init)`` triple
+derivation, and :meth:`Disentangler.expert` returns the ``(model, priors, init, fixed)``
 that the declaration compiles to. ``docs/method.md`` describes the method in the terms of
 a regularized least-squares fit and defines the statistical terms used in the printed
 reports.
@@ -56,6 +56,7 @@ from albireo.inference import (
 )
 from albireo.likelihood import spectra_std
 from albireo.priors import SmoothnessPrior, nebular_windows, window_profile
+from albireo.specs import Between, Fixed, Known, Sampled, Scanned, Spec
 
 __all__ = [
     "LSF",
@@ -70,6 +71,7 @@ __all__ = [
     "Sampled",
     "Scanned",
     "Smoothness",
+    "Spec",
     "Star",
     "Telluric",
 ]
@@ -107,191 +109,9 @@ _SITE_MEANINGS = {
 
 # -- parameter specifications -------------------------------------------------
 #
-# Each specification is a (distribution, starting value) pair, so that the prior and the
-# initial value are declared together. This makes `set(priors) == set(init)` hold by
-# construction.
-
-
-class Spec:
-    """Base class for a declared parameter. Not instantiated directly."""
-
-    def distribution(self) -> dist.Distribution | None:
-        """The numpyro prior, or ``None`` when this parameter is not sampled."""
-        raise NotImplementedError
-
-    def start(self):
-        """The constrained starting value passed to :func:`albireo.run_map`."""
-        raise NotImplementedError
-
-    def upper(self) -> float:
-        """The largest magnitude this parameter can plausibly take, used for sizing."""
-        raise NotImplementedError
-
-
-@dataclass(frozen=True)
-class Fixed(Spec):
-    """A value held constant: no sample site, no gradient, and no posterior width.
-
-    Parameters
-    ----------
-    value
-        The constant, in the units of the site it is declared for.
-    """
-
-    value: Any
-
-    def distribution(self):
-        return None
-
-    def start(self):
-        return _as_array(self.value)
-
-    def upper(self) -> float:
-        return float(np.max(np.abs(np.atleast_1d(np.asarray(self.value, dtype=float)))))
-
-
-@dataclass(frozen=True)
-class Known(Spec):
-    """A measurement with an uncertainty: ``Normal(value, sigma)``, started at ``value``.
-
-    It suits a literature period or a semi-amplitude from a cross-correlation study. In
-    :meth:`Disentangler.scan` a ``Known`` primary semi-amplitude is marginalized over
-    rather than held fixed, which prevents a 10% error in K₁ from inflating the detection
-    statistic.
-
-    Parameters
-    ----------
-    value
-        Central value, in the units of the site it is declared for.
-    sigma
-        Standard deviation of the Gaussian prior, in the same units.
-    """
-
-    value: Any
-    sigma: Any
-
-    def distribution(self):
-        return dist.Normal(_as_array(self.value), _as_array(self.sigma))
-
-    def start(self):
-        return _as_array(self.value)
-
-    def upper(self) -> float:
-        value = np.atleast_1d(np.asarray(self.value, dtype=float))
-        sigma = np.atleast_1d(np.asarray(self.sigma, dtype=float))
-        return float(np.max(np.abs(value) + 5.0 * sigma))
-
-
-@dataclass(frozen=True)
-class Between(Spec):
-    """A bounded uniform prior, ``Uniform(lo, hi)``.
-
-    Parameters
-    ----------
-    lo, hi
-        Bounds of the support, in the units of the site.
-    start_at
-        Starting value. Defaults to the midpoint of ``lo`` and ``hi``.
-    """
-
-    lo: Any
-    hi: Any
-    start_at: Any = None
-
-    def distribution(self):
-        return dist.Uniform(_as_array(self.lo), _as_array(self.hi))
-
-    def start(self):
-        if self.start_at is not None:
-            start = _as_array(self.start_at)
-            lo, hi = _as_array(self.lo), _as_array(self.hi)
-            if not bool(np.all((start > lo) & (start < hi))):
-                raise ValueError(
-                    f"start_at must lie strictly inside (lo, hi); got {self.start_at} for "
-                    f"bounds ({self.lo}, {self.hi}). A start on a bound has no valid initial "
-                    "parameters, and numpyro says only that."
-                )
-            return start
-        return 0.5 * (_as_array(self.lo) + _as_array(self.hi))
-
-    def upper(self) -> float:
-        bounds = np.abs(np.atleast_1d(np.asarray(self.hi, dtype=float)))
-        return float(np.max(bounds))
-
-
-@dataclass(frozen=True)
-class Scanned(Spec):
-    """A grid of trial values, not a prior. Meaningful only for the companion's ``k``.
-
-    The grid is the axis of the faint-companion search run by
-    :meth:`Disentangler.scan` and :meth:`Disentangler.detection_limit`. There is no
-    posterior over it.
-
-    Parameters
-    ----------
-    values
-        Trial semi-amplitudes in km/s.
-    """
-
-    values: Any
-
-    def distribution(self):
-        return None
-
-    def start(self):
-        values = np.asarray(self.values, dtype=float)
-        return float(values[len(values) // 2])
-
-    def upper(self) -> float:
-        return float(np.max(np.abs(np.asarray(self.values, dtype=float))))
-
-
-@dataclass(frozen=True)
-class Sampled(Spec):
-    """Any numpyro distribution, with a starting value and a declared upper bound.
-
-    This is the only specification that cannot derive its own bound: a distribution object
-    need not have finite support, and the starting value is not a bound. The velocity
-    budget is derived from the upper bounds of the semi-amplitude priors, so ``upper_bound``
-    is required wherever the specification is used for a quantity that must be bounded.
-    Without it, the solver would be sized from the starting value of a ``Sampled`` ``k``.
-
-    Parameters
-    ----------
-    distribution_
-        The numpyro distribution used as the prior.
-    start_at
-        Starting value, in the units of the site.
-    upper_bound
-        Largest magnitude the prior can realistically reach, in the units of the site.
-        Required for a semi-amplitude; :meth:`upper` raises without it.
-    """
-
-    distribution_: dist.Distribution
-    start_at: Any
-    upper_bound: float | None = None
-
-    def distribution(self):
-        return self.distribution_
-
-    def start(self):
-        return _as_array(self.start_at)
-
-    def upper(self) -> float:
-        if self.upper_bound is None:
-            raise ValueError(
-                "Sampled(...) needs upper_bound= when it is used for a quantity the "
-                "velocity budget is derived from (a semi-amplitude). Give the largest value "
-                "the prior can realistically reach; the starting value is not that, and "
-                "sizing the solver from it silently truncates the prior against a guard."
-            )
-        return float(np.max(np.abs(np.atleast_1d(np.asarray(self.upper_bound, dtype=float)))))
-
-
-def _as_array(value):
-    """A float or a jnp array, preserving scalars as scalars."""
-    array = jnp.asarray(value, dtype=jnp.float64)
-    return array
+# The specifications (Spec, Fixed, Known, Between, Scanned, Sampled) are defined in
+# albireo.specs, which albireo.match imports without importing this module. They are
+# re-exported here, and this module adds the coercion of a bare number.
 
 
 def _coerce_spec(value, what: str) -> Spec:
@@ -908,7 +728,7 @@ class Disentangler:
     including the model grid and its margins, the solver's velocity budget, and the matched
     ``priors`` and ``init`` dictionaries. Quantities that are scientific claims are not
     derived. :meth:`explain` prints every derivation and :meth:`expert` returns the
-    ``(model, priors, init)`` triple for direct use. The method that :meth:`fit` and
+    ``(model, priors, init, fixed)`` for direct use. The method that :meth:`fit` and
     :meth:`Fit.sample` run is described in ``docs/method.md``.
 
     Parameters
@@ -1057,7 +877,8 @@ class Disentangler:
                 "hierarchical triples are not in the façade's v1 vocabulary. The model "
                 "supports them (the period_out/t_conj_out/k_out sites), so build one "
                 "through albireo.MarginalOrbitModel directly: Disentangler.expert() on a "
-                "two-star declaration gives you the triple to start from."
+                "two-star declaration gives you the model, priors, init and fixed sites to "
+                "start from."
             )
         if sum(isinstance(c, Telluric) for c in self.components) > 1:
             raise ValueError("at most one Telluric component")
@@ -1421,7 +1242,7 @@ class Disentangler:
     # -- inspection -----------------------------------------------------------
 
     def expert(self):
-        """The low-level ``(model, priors, init)`` triple this declaration compiles to.
+        """The low-level ``(model, priors, init, fixed)`` this declaration compiles to.
 
         Features the declarative interface does not expose (per-epoch jitter, a per-epoch
         response polynomial, inferred light fractions, inferred LSF widths) are reached by
@@ -1429,18 +1250,23 @@ class Disentangler:
         :class:`~albireo.inference.MarginalOrbitModel` directly. Correlated (AR(1)) noise
         is exposed, through ``noise_correlation``.
 
-        The sites the declaration holds constant are not part of the triple. They are in
-        :attr:`fixed`, and a fit rebuilt from the triple must pass them as
-        ``model.model(priors, fixed=dis.fixed)``, as :meth:`fit` does.
+        ``fixed`` holds the sites the declaration holds constant, such as ``secosw`` and
+        ``sesinw`` of a circular orbit, and is empty when every site is sampled. A model
+        rebuilt from the four takes it as :meth:`fit` does,
+        ``model.model(priors, fixed=fixed)``. A site moved from ``fixed`` into ``priors``
+        also needs a starting value in ``init``. ``init`` is the declared start, before the
+        scans that :meth:`fit` runs to locate the conjunction phase and the
+        semi-amplitudes, so an optimization started from it can converge in the wrong
+        phase.
 
         Returns
         -------
         tuple
-            ``(model, priors, init)``: the
-            :class:`~albireo.inference.MarginalOrbitModel`, a copy of :attr:`priors`, and
-            a copy of :attr:`init`.
+            ``(model, priors, init, fixed)``: the
+            :class:`~albireo.inference.MarginalOrbitModel`, and copies of :attr:`priors`,
+            :attr:`init` and :attr:`fixed`.
         """
-        return self.model, dict(self.priors), dict(self.init)
+        return self.model, dict(self.priors), dict(self.init), dict(self.fixed)
 
     def explain(self) -> str:
         """Report every derived quantity: budget, grid, operators, and sampled sites.

@@ -27,13 +27,13 @@ from __future__ import annotations
 import dataclasses
 import functools
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
 from albireo.data import Dataset, EpochData
+from albireo.forward import Problem, apply_model, chebyshev_response, with_data
 from albireo.grids import LogGrid, _in_epoch_blocks
 from albireo.kepler import radial_velocity
 from albireo.operators import (
@@ -44,9 +44,6 @@ from albireo.operators import (
     rebin_operator,
     shift_spectrum,
 )
-
-if TYPE_CHECKING:  # albireo.forward imports chebyshev_response from here, so the
-    from albireo.forward import Problem  # runtime import in resimulate must be local
 
 __all__ = [
     "InstrumentSpec",
@@ -306,16 +303,6 @@ def synthetic_nebular_spectrum(
             f"({wave[0]:.2f}-{wave[-1]:.2f} A) with a {margin:.0%} edge margin"
         )
     return d
-
-
-def chebyshev_response(wave: np.ndarray, coeffs: np.ndarray) -> np.ndarray:
-    """Multiplicative response ``r = 1 + sum_m c_m T_m(x)``, ``x`` scaled to [-1, 1]."""
-    wave = np.asarray(wave, dtype=np.float64)
-    coeffs = np.atleast_1d(np.asarray(coeffs, dtype=np.float64))
-    if coeffs.size == 0:
-        return np.ones_like(wave)
-    x = 2.0 * (wave - wave[0]) / (wave[-1] - wave[0]) - 1.0
-    return 1.0 + np.polynomial.chebyshev.chebval(x, coeffs)
 
 
 def _light_fraction_matrix(light_fractions, n_comp: int, n_ep: int) -> np.ndarray:
@@ -678,11 +665,8 @@ def _model_applier():
     :func:`resimulate` is called once per bootstrap trial with the same problem structure,
     so the forward model is one compiled graph rather than a few hundred eagerly
     dispatched operations per call. The cache is at module level because a fresh
-    ``jax.jit`` wrapper per call would recompile on every trial. The import is local; see
-    the ``TYPE_CHECKING`` note at the top of this module.
+    ``jax.jit`` wrapper per call would recompile on every trial.
     """
-    from albireo.forward import apply_model
-
     return jax.jit(apply_model)
 
 
@@ -754,8 +738,6 @@ def resimulate(problem: Problem, d_stack, *, seed: int = 0) -> Problem:
     >>> base = model.problem_at({**orbit, "k": k_true})  # doctest: +SKIP
     >>> trial = resimulate(base, d_true, seed=7)  # doctest: +SKIP
     """
-    from albireo.forward import with_data  # local: see TYPE_CHECKING above
-
     rng = np.random.default_rng(seed)
     d_stack = jnp.asarray(d_stack)
     if d_stack.shape != (problem.n_components, problem.grid.n):

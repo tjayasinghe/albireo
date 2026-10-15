@@ -77,6 +77,7 @@ from albireo.operators import (
     rotational_radius_for,
     shift_spectrum,
 )
+from albireo.specs import Between, Fixed
 
 __all__ = [
     "EpochStatistics",
@@ -201,11 +202,12 @@ def _grid_compensation_notes(floored: dict, narrow: dict, dv_kms: float) -> list
 class StarLabels:
     """The declaration for one component: what is fitted, and what is assumed.
 
-    Each label accepts the declaration vocabulary of :mod:`albireo.facade`
-    (:class:`~albireo.facade.Fixed`, :class:`~albireo.facade.Known`,
-    :class:`~albireo.facade.Between`, :class:`~albireo.facade.Sampled`) or a bare float,
-    which is treated as fixed. The specs are duck-typed, so this module does not depend on
-    :mod:`albireo.facade` and can be used with another code's output.
+    Each label accepts a parameter specification of :mod:`albireo.specs`, the vocabulary
+    of the ``Disentangler`` interface (:class:`~albireo.specs.Fixed`,
+    :class:`~albireo.specs.Known`, :class:`~albireo.specs.Between`,
+    :class:`~albireo.specs.Sampled`), or a bare float, which is treated as fixed. The specs
+    are duck-typed, and this module does not import :mod:`albireo.facade`, so it can be
+    used with another code's output.
 
     ``logg`` requires a decision before the fit. Teff and log g correlate at about 0.98 when
     both are free (Tamajo et al. 2011). For an eclipsing binary the light curve and the orbit
@@ -286,7 +288,7 @@ class FixedDilution:
 
 
 # ---------------------------------------------------------------------------
-# Spec handling (duck-typed against the albireo.facade vocabulary)
+# Spec handling (duck-typed against the albireo.specs vocabulary)
 # ---------------------------------------------------------------------------
 
 
@@ -1310,8 +1312,6 @@ def match_labels(
         raise ValueError("exclude_angstrom removed every pixel")
 
     # -- specs -------------------------------------------------------------
-    from albireo.facade import Between, Fixed  # local: albireo.facade imports this module lazily
-
     specs: dict[str, Any] = {}
     shared_mh = not isinstance(mh, dict)
     mh_bounds = [library.bounds["mh"] for library in projected if "mh" in library.label_names]

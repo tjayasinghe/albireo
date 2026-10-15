@@ -171,8 +171,8 @@ For a GPU build, install the `jax[cuda]` wheel for the platform, following the
 
 `Disentangler` is a declarative front end. From the declaration it derives the solver's
 velocity budget, the model grid margins, the conjunction phase and the smoothness
-hyperparameters, and `dis.expert()` returns the `(model, priors, init)` triple it built.
-The underlying classes and functions are the supported interface:
+hyperparameters, and `dis.expert()` returns the model it built with its `priors`, `init`
+and `fixed` dictionaries. The underlying classes and functions are the supported interface:
 
 ```python
 import albireo as ab

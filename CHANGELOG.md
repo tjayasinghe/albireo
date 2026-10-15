@@ -13,11 +13,11 @@ The three tiers below state where changes are expected.
   `simulate`, `examples`, `io`, `results` and `plotting`. A change here is recorded below
   with the action it requires.
 - **Experimental.** These modules are marked as such in their docstrings: `facade` (the
-  `Disentangler` declaration), `pipeline` together with the `albireo` command line and the
-  TOML schema it reads, `todcor`, `rvorbit`, `library`, `match`, `templatefit`, `forecast`,
-  `archive` and `handoff`. Their names and interfaces are not settled and may change in any release
-  below 1.0. Each is a convenience over the model layer, where the same computation is
-  available directly.
+  `Disentangler` declaration) and `specs` (its parameter specifications), `pipeline`
+  together with the `albireo` command line and the TOML schema it reads, `todcor`,
+  `rvorbit`, `library`, `match`, `templatefit`, `forecast`, `archive` and `handoff`. Their
+  names and interfaces are not settled and may change in any release below 1.0. Each is a
+  convenience over the model layer, where the same computation is available directly.
 - **Internal.** `assembly` and `solver` have no stability guarantee.
 
 Every name above is re-exported at the top level, so the marker is on the module, not on
@@ -494,6 +494,22 @@ This file records what changed. The reasons are recorded elsewhere:
 
 ### Changed
 
+- **`Disentangler.expert()` returns the sites the declaration holds constant.** It
+  returned `(model, priors, init)`, and a model rebuilt from those three lacked the sites
+  in `dis.fixed`: for a circular orbit `model.model(priors)` raises for the missing
+  `secosw` and `sesinw`. It now returns `(model, priors, init, fixed)`, and
+  `model.model(priors, fixed=fixed)` passes them as `fit()` does. Code that unpacks three
+  values must unpack four, `model, priors, init, fixed = dis.expert()`. The `Disentangler`
+  interface is experimental, so the change is made without a deprecation period.
+- **The forward model does not import the simulator, and the label fit does not import
+  `albireo.facade`.** `chebyshev_response`, the response polynomial of `build_problem`, is
+  defined in `albireo.forward` and re-exported by `albireo.simulate`. The parameter
+  specifications `Spec`, `Fixed`, `Known`, `Between`, `Scanned` and `Sampled` are defined
+  in a new module, `albireo.specs`, which `albireo.facade` and the top level re-export, so
+  `ab.Between` and `albireo.facade.Between` are the same class as before. With the two
+  moves the modules of the package import one another without a cycle, counting the
+  imports made inside functions, and `tests/test_import_graph.py` checks that this
+  remains so. Every existing import path still works, and no numerical result changes.
 - **`Posterior.star()["k_hdi"]` is a highest-density interval.** It was the equal-tailed
   2.5 to 97.5 percentile interval under that name. The two differ for a skewed posterior;
   the pipeline's `result.json` (`hdi95`) changes with it.

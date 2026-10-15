@@ -47,7 +47,6 @@ from albireo.operators import (
     shift_spectrum,
 )
 from albireo.operators import shift_spectrum_adjoint as shift_adjoint
-from albireo.simulate import chebyshev_response
 
 __all__ = [
     "PER_EPOCH",
@@ -58,6 +57,7 @@ __all__ = [
     "apply_noise_precision",
     "ar1_band_weights",
     "build_problem",
+    "chebyshev_response",
     "data_residual_zscores",
     "declared_lsf_widths",
     "normal_matvec",
@@ -1296,6 +1296,22 @@ def with_ar1(problem: Problem, phi) -> Problem:
     return replace(problem, groups=tuple(groups), correlated=True)
 
 
+def chebyshev_response(wave: np.ndarray, coeffs: np.ndarray) -> np.ndarray:
+    """Multiplicative response ``r = 1 + sum_m c_m T_m(x)``, ``x`` scaled to [-1, 1].
+
+    This is the response :func:`build_problem` applies to each epoch, with ``x`` the
+    epoch's native wavelength grid scaled to [-1, 1]. :func:`with_response` evaluates the
+    same polynomial with traced coefficients, and :mod:`albireo.simulate` applies it to the
+    epochs it generates.
+    """
+    wave = np.asarray(wave, dtype=np.float64)
+    coeffs = np.atleast_1d(np.asarray(coeffs, dtype=np.float64))
+    if coeffs.size == 0:
+        return np.ones_like(wave)
+    x = 2.0 * (wave - wave[0]) / (wave[-1] - wave[0]) - 1.0
+    return 1.0 + np.polynomial.chebyshev.chebval(x, coeffs)
+
+
 def _chebval_traced(x, c):
     """Clenshaw evaluation of ``sum_m c_m T_m(x)`` with traced coefficients.
 
@@ -1330,10 +1346,10 @@ def with_response(problem: Problem, response_coeffs) -> Problem:
     response rather than compounding it. The ``sum log w`` term is unchanged because the
     noise is defined on the data, not on the response-divided data.
 
-    The convention matches :func:`albireo.simulate.chebyshev_response` and
-    :func:`build_problem`: ``r = 1 + sum_m c_m T_m(x)`` with ``x`` the epoch's native
-    wavelength grid scaled to [-1, 1] (per group, so mixed instruments each use their
-    own abscissa). An all-zero coefficient vector is exactly the unit response.
+    The convention is that of :func:`chebyshev_response` and :func:`build_problem`:
+    ``r = 1 + sum_m c_m T_m(x)`` with ``x`` the epoch's native wavelength grid scaled to
+    [-1, 1] (per group, so mixed instruments each use their own abscissa). An all-zero
+    coefficient vector is exactly the unit response.
 
     A low-order response trades against the components' broad spectral features
     (``docs/math.md`` §5.4, response row), so the epoch-shared part of a free response

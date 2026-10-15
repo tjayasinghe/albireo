@@ -47,8 +47,9 @@ boxes that cover 3200 to 10,000 K. The second measures such a population by corr
 alone, a few seconds per system, and writes one table per system and one per epoch.
 
 [`albireo.simulate`](simulate.md) provides the test data of the path: every closed-loop test is
-written against the injected values it generates. It is not a stage, although
-`albireo.forward` takes its response-polynomial convention (`chebyshev_response`) from it.
+written against the injected values it generates. It is not a stage. The response polynomial
+it shares with the forward model, `chebyshev_response`, is defined in `albireo.forward`, so
+the forward model does not import the simulator.
 
 Three modules are lower-level than the rest and are documented for their numerics rather
 than as entry points: [`albireo.operators`](operators.md) (shifts, convolutions and

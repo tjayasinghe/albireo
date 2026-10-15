@@ -181,8 +181,8 @@ def main(argv: list[str] | None = None) -> int:
     print("both paths agree with each other and with the injected truth.")
     print(
         "\nThe façade derived the velocity budget, the grid margin, the conjunction phase\n"
-        "and the ML-II hyperparameters; dis.expert() returns the (model, priors, init)\n"
-        "triple the first half of this script builds by hand."
+        "and the ML-II hyperparameters; dis.expert() returns the model, priors and init\n"
+        "the first half of this script builds by hand, and the sites held fixed (none here)."
     )
     return 0
 
