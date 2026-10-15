@@ -1,7 +1,8 @@
 # API reference
 
 These pages are generated from the docstrings in the source and are the reference for the
-package. The [scientific background](../science.md) and the
+package. The [method overview](../method.md) describes what a fit computes and maps each step
+to its module, the [scientific background](../science.md) and the
 [mathematical foundations](../math.md) explain the choices behind the code, and the
 [tutorials](../tutorials/sb2-end-to-end.md) are worked examples.
 
@@ -45,8 +46,9 @@ magnitude-limited catalogue lists them, with evolved stars, eclipse geometry and
 boxes that cover 3200 to 10,000 K. The second measures such a population by correlation
 alone, a few seconds per system, and writes one table per system and one per epoch.
 
-[`albireo.simulate`](simulate.md) is outside that path and provides its test data. Every
-closed-loop test is written against the injected values it generates.
+[`albireo.simulate`](simulate.md) provides the test data of the path: every closed-loop test is
+written against the injected values it generates. It is not a stage, although
+`albireo.forward` takes its response-polynomial convention (`chebyshev_response`) from it.
 
 Three modules are lower-level than the rest and are documented for their numerics rather
 than as entry points: [`albireo.operators`](operators.md) (shifts, convolutions and

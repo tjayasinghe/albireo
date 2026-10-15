@@ -1,5 +1,9 @@
 window.MathJax = {
+  // \boldsymbol (used throughout math.md and method.md) is loaded explicitly: left to
+  // MathJax's on-demand loading, it stayed undefined after the page's re-typeset below.
+  loader: { load: ["[tex]/boldsymbol"] },
   tex: {
+    packages: { "[+]": ["boldsymbol"] },
     inlineMath: [["\\(", "\\)"], ["$", "$"]],
     displayMath: [["\\[", "\\]"], ["$$", "$$"]],
     processEscapes: true,

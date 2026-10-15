@@ -12,7 +12,9 @@ interface otherwise requires: the velocity budget, the model grid and its margin
 conjunction-phase scan, the matched ``priors``/``init`` pair, the empirical-Bayes (ML-II)
 smoothness step, and the Laplace mass matrix. :meth:`Disentangler.explain` prints every
 derivation, and :meth:`Disentangler.expert` returns the ``(model, priors, init)`` triple
-that the declaration compiles to.
+that the declaration compiles to. ``docs/method.md`` describes the method in the terms of
+a regularized least-squares fit and defines the statistical terms used in the printed
+reports.
 
 Quantities that are scientific claims have no defaults. Light fractions are required:
 with constant light fractions the likelihood depends only on the products ``l_i * d_i``
@@ -35,6 +37,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import numpyro.distributions as dist
+from numpyro.diagnostics import effective_sample_size, hpdi, split_gelman_rubin
 
 from albireo.data import Dataset
 from albireo.forward import PER_EPOCH, data_residual_zscores, declared_lsf_widths
@@ -85,6 +88,21 @@ _BUDGET_SLACK = 1.05
 # not a measurement: the declared velocities are a starting point, and the fit must be able
 # to move without reaching the bandwidth guard. It is reported as its own budget term.
 _FREE_VELOCITY_HEADROOM = 2.0
+
+# The meaning of each numpyro site, printed under the site list of `Disentangler.explain`.
+# The site names are those of `albireo.inference` (docs/method.md has the glossary).
+_SITE_MEANINGS = {
+    "period": "orbital period [d]",
+    "t_conj": "time of conjunction of the first star [d]",
+    "secosw": "sqrt(e) cos(omega), eccentricity e and argument of periastron omega",
+    "sesinw": "sqrt(e) sin(omega)",
+    "k": "radial-velocity semi-amplitude of each star [km/s]",
+    "velocity": "free radial velocity of each star at each epoch [km/s]",
+    "ar1_phi": "lag-one correlation of the noise along each epoch's pixels",
+    "log_nebular_amp": "ln of the nebular line strength at each epoch",
+    "log_tau": "ln of each component's curvature weight (regularization strength)",
+    "log_eta": "ln of each component's continuum weight (regularization strength)",
+}
 
 
 # -- parameter specifications -------------------------------------------------
@@ -890,7 +908,8 @@ class Disentangler:
     including the model grid and its margins, the solver's velocity budget, and the matched
     ``priors`` and ``init`` dictionaries. Quantities that are scientific claims are not
     derived. :meth:`explain` prints every derivation and :meth:`expert` returns the
-    ``(model, priors, init)`` triple for direct use.
+    ``(model, priors, init)`` triple for direct use. The method that :meth:`fit` and
+    :meth:`Fit.sample` run is described in ``docs/method.md``.
 
     Parameters
     ----------
@@ -1404,9 +1423,15 @@ class Disentangler:
     def expert(self):
         """The low-level ``(model, priors, init)`` triple this declaration compiles to.
 
-        Features the declarative interface does not expose (jitter, AR(1) noise, inferred
-        light fractions, inferred LSF widths) are reached by modifying the returned
-        dictionaries and calling :class:`~albireo.inference.MarginalOrbitModel` directly.
+        Features the declarative interface does not expose (per-epoch jitter, a per-epoch
+        response polynomial, inferred light fractions, inferred LSF widths) are reached by
+        modifying the returned dictionaries and calling
+        :class:`~albireo.inference.MarginalOrbitModel` directly. Correlated (AR(1)) noise
+        is exposed, through ``noise_correlation``.
+
+        The sites the declaration holds constant are not part of the triple. They are in
+        :attr:`fixed`, and a fit rebuilt from the triple must pass them as
+        ``model.model(priors, fixed=dis.fixed)``, as :meth:`fit` does.
 
         Returns
         -------
@@ -1461,6 +1486,13 @@ class Disentangler:
         lines = ["sampled sites: " + ", ".join(sorted(priors))]
         if fixed:
             lines.append("fixed sites:   " + ", ".join(sorted(fixed)))
+        named = sorted(set(priors) | set(fixed))
+        width = max(len(name) for name in named)
+        lines += [
+            f"  {name:<{width}s}  {_SITE_MEANINGS[name]}"
+            for name in named
+            if name in _SITE_MEANINGS
+        ]
         return lines
 
     def _refuse_anchored_lsf(self, what: str) -> None:
@@ -1529,7 +1561,9 @@ class Disentangler:
         )
         rows.append(
             f"  smoothness starts  {starts}\n"
-            "      ML-II fits these, but which basin it finds depends on where tau starts."
+            "      the starting curvature weight tau of each component's regularization. "
+            "ML-II fits the\n      weights, but which optimum it finds depends on where "
+            "tau starts."
         )
         return "\n".join(rows)
 
@@ -2413,11 +2447,13 @@ def _default_v_range(fitted: np.ndarray, templates, margin: float = 40.0):
 
 @dataclass(frozen=True)
 class Fit:
-    """A MAP fit, its ML-II hyperparameters, and the quantities derived from them.
+    """The best fit (MAP), its ML-II regularization weights, and the quantities derived.
 
-    Every downstream call requires the fitted smoothness hyperparameters with the
-    parameters, so :meth:`spectra`, :meth:`std`, :meth:`composite` and :meth:`sample`
-    supply them automatically.
+    The orbit is the maximum of the posterior with the component spectra marginalized, and
+    the regularization weights ``tau`` and ``eta`` of each component are those that
+    maximize the marginal likelihood (ML-II). Every downstream call requires the fitted
+    weights with the parameters, so :meth:`spectra`, :meth:`std`, :meth:`composite` and
+    :meth:`sample` supply them automatically. ``docs/method.md`` describes both steps.
 
     Attributes
     ----------
@@ -2625,6 +2661,11 @@ class Fit:
     def summary(self) -> str:
         """Report the fit: convergence, orbit or velocities, ML-II, residuals, assumptions.
 
+        The first line reports the optimizer: the negative log posterior it minimized, in
+        numpyro's unconstrained coordinates and up to a constant, and the norm of its
+        gradient. Differences of log likelihood are in nats (natural-log units; a
+        difference of 1 nat is a chi-square difference of 2).
+
         Returns
         -------
         str
@@ -2634,10 +2675,12 @@ class Fit:
         # with the number of good pixels, so on real data it is routinely False at a good
         # optimum. The outcome is reported without a pass/fail label.
         stopped = "converged" if self.result.converged else "stopped at the step cap"
+        what = "orbit" if self.mode == "keplerian" else "free velocity table"
         lines = [
-            f"{'MAP' if self.mode == 'keplerian' else 'free-velocity'} fit: potential "
-            f"{self.result.potential:.6g}, |grad| {self.result.grad_norm:.3g}, "
-            f"{self.result.num_steps} steps ({stopped})"
+            f"Best fit (maximum a posteriori) of the {what}, {self.result.num_steps} steps "
+            f"({stopped})",
+            f"  -ln posterior {self.result.potential:.6g} (unconstrained coordinates, up to a "
+            f"constant), |gradient| {self.result.grad_norm:.3g}",
         ]
         if self.phase_scan is not None:
             lines.append(
@@ -2693,7 +2736,12 @@ class Fit:
 
     def _hyper_report(self) -> str:
         """The ML-II table, flagging any hyperparameter left at its start."""
-        rows = ["ML-II smoothness (empirical Bayes: fitted here, then frozen for sampling)"]
+        rows = [
+            "Regularization weights of the component spectra, fitted by maximizing the marginal",
+            "likelihood (ML-II) and held fixed for sampling: curvature weight tau and "
+            "continuum weight",
+            "eta, start -> fitted, with the move in ln tau in hyperprior standard deviations",
+        ]
         stale = []
         for name, component in zip(
             self.dis.component_names, self.dis.ordered_components, strict=True
@@ -2741,7 +2789,9 @@ class Fit:
         Fixing the hyperparameters is a plug-in approximation: the orbital credible
         intervals do not include smoothness uncertainty. Marginalizing over them instead
         means leaving them in the priors dictionary of :meth:`Disentangler.expert`, at a
-        higher sampling cost.
+        higher sampling cost. ``docs/method.md`` describes the stages (best fit, Laplace
+        approximation, NUTS) and the convergence diagnostics that
+        :meth:`Posterior.summary` reports.
 
         Parameters
         ----------
@@ -3360,6 +3410,10 @@ class Fit:
 class Posterior:
     """A NUTS posterior over the orbit, with the fit it was started from.
 
+    The draws are of the orbital parameters only. The component spectra were marginalized
+    at every draw, and :meth:`spectra` recovers them, one conditional draw per posterior
+    draw (``docs/method.md``).
+
     Attributes
     ----------
     dis
@@ -3392,7 +3446,8 @@ class Posterior:
         -------
         dict
             ``name``, ``light``, the posterior mean ``k`` and standard deviation ``k_std``
-            in km/s, and the 95% interval ``k_hdi``.
+            in km/s, and ``k_hdi``, the 95% highest-density interval: the narrowest
+            interval that contains 95% of the draws.
 
         Raises
         ------
@@ -3403,12 +3458,13 @@ class Posterior:
         if name not in names:
             raise KeyError(f"no star called {name!r}; this fit has {names}")
         k = np.asarray(self.samples["k"])[:, names.index(name)]
+        low, high = hpdi(k, prob=0.95)
         return {
             "name": name,
             "light": self.dis.stars[names.index(name)].light,
             "k": float(np.mean(k)),
             "k_std": float(np.std(k)),
-            "k_hdi": (float(np.percentile(k, 2.5)), float(np.percentile(k, 97.5))),
+            "k_hdi": (float(low), float(high)),
         }
 
     def spectra(self, *, num_draws: int = 32, seed: int = 0) -> np.ndarray:
@@ -3443,33 +3499,77 @@ class Posterior:
     def summary(self) -> str:
         """Report the posterior intervals, sampler diagnostics, and the assumptions.
 
+        Each row gives the posterior mean, the standard deviation and the 95%
+        highest-density interval of one quantity, and two convergence diagnostics: the
+        split Gelman-Rubin statistic R-hat, which is close to 1 when the chains and the
+        halves of each chain agree, and the effective sample size (ESS), the number of
+        independent draws that the correlated chains are equivalent to. Both are the
+        classic estimators of :mod:`numpyro.diagnostics`, not the rank-normalized ones.
+        ``ecc`` and ``omega`` are derived from the sampled ``secosw`` and ``sesinw``.
+        Sampled sites without a row of their own (a noise correlation, nebular amplitudes)
+        are summarized by their largest R-hat and smallest ESS.
+
         Returns
         -------
         str
             A multi-line report ending with :meth:`Disentangler.assumptions`.
         """
-        samples = self.samples
+        grouped = {
+            name: np.asarray(values)
+            for name, values in self.mcmc.get_samples(group_by_chain=True).items()
+        }
+        n_chains, n_draws = next(iter(grouped.values())).shape[:2]
+        sampled = [name for name in grouped if name not in _DERIVED_SITES]
+        n_parameters = sum(int(np.prod(grouped[name].shape[2:])) for name in sampled)
         lines = [
-            f"NUTS posterior: {len(next(iter(samples.values())))} draws over {len(samples)} sites"
+            f"NUTS posterior: {n_chains} chain(s) x {n_draws} draws of {n_parameters} "
+            f"parameters ({', '.join(sampled)})"
         ]
         extra = getattr(self.mcmc, "get_extra_fields", lambda: {})()
         if "diverging" in extra:
             lines.append(f"  divergences: {int(np.sum(np.asarray(extra['diverging'])))}")
-        lines.append("")
-        for site in ("period", "t_conj"):
-            if site in samples:
-                values = np.asarray(samples[site]).ravel()
-                lines.append(f"  {site:<9s} {np.mean(values):.6f} +/- {np.std(values):.6f}")
-        for star in self.dis.stars:
-            row = self.star(star.name)
-            lines.append(
-                f"  K({star.name})  {row['k']:8.3f} +/- {row['k_std']:.3f} km/s   "
-                f"95% [{row['k_hdi'][0]:.3f}, {row['k_hdi'][1]:.3f}]"
-            )
         lines += [
             "",
-            "  Smoothness was fixed at its ML-II values, so these intervals do not include",
-            "  smoothness uncertainty (a plug-in approximation, not a marginalization).",
+            f"  {'':<24s}{'mean':>13s}{'sd':>11s}   {'95% HDI':<27s}{'R-hat':>6s}{'ESS':>7s}",
+        ]
+        rows = [
+            (label, grouped[site], digits)
+            for site, label, digits in (("period", "period [d]", 6), ("t_conj", "t_conj [d]", 5))
+            if site in grouped
+        ]
+        if "secosw" in grouped and "sesinw" in grouped:
+            secosw, sesinw = grouped["secosw"], grouped["sesinw"]
+            omega = grouped.get("omega", np.arctan2(sesinw, secosw))
+            rows.append(("ecc", grouped.get("ecc", secosw**2 + sesinw**2), 4))
+            rows.append(("omega [rad]", _about_circular_mean(omega), 4))
+        if "k" in grouped:
+            rows += [
+                (f"K({star.name}) [km/s]", grouped["k"][..., i], 3)
+                for i, star in enumerate(self.dis.stars)
+            ]
+        lines += [_posterior_row(label, values, digits) for label, values, digits in rows]
+        for site in ("ecc", "omega"):
+            if site in grouped and "secosw" not in grouped:
+                lines.append(f"  {site:<24s}held at {float(grouped[site].flat[0]):g}")
+        others = [name for name in sampled if name not in _ROW_SITES]
+        if others:
+            pairs = [
+                _chain_diagnostics(column)
+                for name in others
+                for column in grouped[name].reshape(n_chains, n_draws, -1).transpose(2, 0, 1)
+            ]
+            rhats = [r for r, _ in pairs if np.isfinite(r)]
+            sizes = [e for _, e in pairs if np.isfinite(e)]
+            worst = (
+                f"largest R-hat {max(rhats):.3f}, smallest ESS {min(sizes):.0f}"
+                if rhats and sizes
+                else "no defined diagnostic"
+            )
+            lines.append(f"  other sampled sites ({', '.join(others)}): {worst}")
+        lines += [
+            "",
+            "  The regularization weights were held at their ML-II values, so these intervals",
+            "  do not include their uncertainty (a plug-in approximation, not a marginalization).",
             "",
             self.dis.assumptions(),
         ]
@@ -3519,6 +3619,48 @@ class Posterior:
 
 
 # -- helpers ------------------------------------------------------------------
+
+# Deterministic sites of `MarginalOrbitModel.model`: recorded with the draws, not sampled.
+_DERIVED_SITES = frozenset({"ecc", "omega", "ecc_out", "omega_out", "velocity_rel", "nebular_amp"})
+# Sampled sites that `Posterior.summary` reports as rows of their own.
+_ROW_SITES = frozenset({"period", "t_conj", "secosw", "sesinw", "k"})
+
+
+def _chain_diagnostics(values: np.ndarray) -> tuple[float, float]:
+    """Split R-hat and effective sample size of one scalar quantity, NaN where undefined.
+
+    ``values`` has shape ``(n_chains, n_draws)``. Split R-hat requires at least four
+    draws per chain, and neither statistic is defined for a constant quantity.
+    """
+    if values.shape[1] < 4 or not np.std(values) > 0.0:
+        return math.nan, math.nan
+    with np.errstate(divide="ignore", invalid="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        return float(split_gelman_rubin(values)), float(effective_sample_size(values))
+
+
+def _posterior_row(label: str, values: np.ndarray, digits: int) -> str:
+    """One row of :meth:`Posterior.summary`: mean, sd, 95% HDI, split R-hat and ESS."""
+    flat = values.reshape(-1)
+    low, high = hpdi(flat, prob=0.95)
+    rhat, ess = _chain_diagnostics(values)
+    interval = f"[{float(low):.{digits}f}, {float(high):.{digits}f}]"
+    rhat_text = f"{rhat:.3f}" if np.isfinite(rhat) else "n/a"
+    ess_text = f"{ess:.0f}" if np.isfinite(ess) else "n/a"
+    return (
+        f"  {label:<24s}{np.mean(flat):13.{digits}f}{np.std(flat):11.{digits}f}   "
+        f"{interval:<27s}{rhat_text:>6s}{ess_text:>7s}"
+    )
+
+
+def _about_circular_mean(angle: np.ndarray) -> np.ndarray:
+    """Angles in radians, wrapped into ``(-pi, pi]`` about their circular mean.
+
+    The mean, standard deviation and interval of an angle are then those of a draw set
+    that does not straddle the branch cut of ``arctan2``.
+    """
+    centre = math.atan2(float(np.mean(np.sin(angle))), float(np.mean(np.cos(angle))))
+    return centre + np.angle(np.exp(1j * (angle - centre)))
 
 
 def _smoothness_of(component: Component) -> Smoothness:

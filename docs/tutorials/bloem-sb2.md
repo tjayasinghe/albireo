@@ -298,8 +298,9 @@ with them:
 kep.write_spectra("bloem-1-037_spectra.fits")   # mean + band + the assumptions, as FITS
 ```
 
-Interpret the mean only together with its band. Between the lines, and wherever the epochs
-provide little constraint, the recovered spectrum is set by the smoothness prior rather than
+Interpret the mean only together with its band. Wherever the epochs provide little
+constraint (beyond the edges of the data, in masked pixels, and for features broader than the
+stars' velocity separation), the recovered spectrum is set by the smoothness prior rather than
 by the data, and the band shows where.
 `ab.plot_spectra(dis.grid, kep.spectra(), std=kep.std())` draws it.
 

@@ -9,7 +9,9 @@ form (Rasmussen & Williams 2006):
 
 where ``Lt = Lp + A^T W A`` is the posterior precision of the stacked deviation spectra,
 ``Lp`` the prior precision, ``z`` the data with the offset term removed
-(``docs/math.md`` §3.1), and ``b = A^T W z``. Both determinants come from
+(``docs/math.md`` §3.1), and ``b = A^T W z``. The bracket equals the chi-square of the
+regularized least-squares solution plus its roughness penalty, and the two determinants
+are the Occam term that ``docs/method.md`` describes. Both determinants come from
 block-tridiagonal Cholesky factorizations (``docs/math.md`` §4.2). The band of ``Lt`` is
 assembled per epoch from its analytic structure by default (``docs/math.md`` §4.5).
 Exact comb probing of the matrix-free operators is retained as the reference path. The
@@ -339,6 +341,8 @@ def marginal_loglikelihood(
     d_hat = _unpack(d_pad[:n], n_comp, n_pix)
 
     zwz, logw, n_good = weighted_data_terms(problem)
+    # The regularized misfit at d_hat: the data chi-square plus the roughness penalty
+    # d_hat^T Lp d_hat (docs/math.md §3.1), not the data chi-square alone.
     chi2 = zwz - quad
     logp = (
         -0.5 * chi2 - 0.5 * ld + 0.5 * ld_prior + 0.5 * logw - 0.5 * n_good * jnp.log(2.0 * jnp.pi)

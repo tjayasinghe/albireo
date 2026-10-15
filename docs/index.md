@@ -1,13 +1,27 @@
 # albireo
 
-**albireo** performs spectral disentangling of double- and multiple-lined spectroscopic
-binaries. Given a time series of composite spectra, it infers the orbital elements and the
-individual component spectra jointly. The component spectra are marginalized analytically,
-so only the low-dimensional orbital and instrumental parameters are sampled, using the
-No-U-Turn Sampler. The package is written in JAX (float64), is differentiable end to end,
-and runs on CPU or GPU. It uses numpyro for sampling and optax for optimization.
+**albireo** separates the spectra of the stars in a double- or multiple-lined spectroscopic
+binary from a time series of composite spectra, and determines the orbit at the same time.
+It works like the wavelength-space disentangling codes: for a trial orbit the component
+spectra follow from a linear least-squares fit, here with a smoothing penalty, and the orbit
+is adjusted around that fit. Compared with the established codes (KOREL, fd3, Spectangular
+and shift-and-add), three things differ:
 
-The name refers to Albireo, the double star in Cygnus.
+- Every disentangled spectrum has an uncertainty band. The smoothing penalty is treated as a
+  Gaussian prior, so the regularized solution is the posterior mean of the spectra, and the
+  matrix solved for it gives their covariance.
+- The strength of the smoothing is fitted to the data, by maximizing the marginal
+  likelihood, rather than set by hand or by the number of iterations.
+- The orbit is sampled by Markov chain Monte Carlo (the No-U-Turn Sampler), not only
+  optimized. The spectra are integrated out at every step, so the sampler explores only the
+  orbital parameters, however many pixels there are.
+
+PSOAP (Czekala et al. 2017) introduced a probabilistic treatment of this kind for spectral
+segments of about 10 Å; albireo applies it to whole spectra, at a cost linear in their length.
+
+The package is written in JAX (float64), is differentiable end to end, and runs on CPU or
+GPU. It uses numpyro for sampling and optax for optimization. The name refers to Albireo,
+the double star in Cygnus.
 
 !!! warning "Status: pre-alpha"
 
@@ -18,6 +32,10 @@ The name refers to Albireo, the double star in Cygnus.
 
 - [Quickstart](quickstart.md): load the example dataset that ships with the package, fit
   it, and plot the result. No other data and no network access are needed.
+- [Method overview](method.md): what a fit computes, step by step, in the terms of a
+  regularized least-squares fit, with figures and a glossary of the statistical terms.
+- [Comparison with other codes](comparison.md): what albireo shares with KOREL, fd3,
+  Spectangular, shift-and-add, PSOAP and Seeburger et al. (2024), and where it differs.
 - [Scientific background](science.md): the disentangling problem, the methods in the
   literature, the degeneracies, and the references for every part of the package.
 - Tutorials: [disentangle an SB2 end to end](tutorials/sb2-end-to-end.md) and

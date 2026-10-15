@@ -21,6 +21,7 @@ only on `l_i * d_i`, so the value is an assumption the data cannot contradict.
 """
 
 import importlib
+import warnings
 from types import SimpleNamespace
 
 import numpy as np
@@ -666,6 +667,117 @@ def test_sampling_freezes_the_hyperparameters_and_says_so(dataset, truth):
     assert np.isclose(post.star("secondary")["k"], truth["k"][1], atol=0.5)
     assert "plug-in approximation" in post.summary()
     assert "Assumed, not measured" in post.summary()
+
+
+# -- the posterior report -----------------------------------------------------
+#
+# The report is tested on stand-in draws, so that its intervals and diagnostics are
+# checked against known distributions without a sampling run.
+
+
+class _Draws:
+    """A stand-in for numpyro's ``MCMC``: grouped draws and the divergence flags."""
+
+    def __init__(self, grouped, diverging=None):
+        self.grouped = {name: np.asarray(values) for name, values in grouped.items()}
+        self.diverging = diverging
+
+    def get_samples(self, group_by_chain=False):
+        if group_by_chain:
+            return self.grouped
+        return {name: v.reshape(-1, *v.shape[2:]) for name, v in self.grouped.items()}
+
+    def get_extra_fields(self):
+        return {} if self.diverging is None else {"diverging": self.diverging}
+
+
+def _orbit_draws(rng, *, n_chains=2, n_draws=200, omega=0.7, ecc_sampled=True):
+    """Independent draws around the sb2_sim orbit, with the deterministic sites recorded."""
+    shape = (n_chains, n_draws)
+    draws = {
+        "period": 6.0 + 1e-4 * rng.normal(size=shape),
+        "t_conj": 0.73 + 1e-3 * rng.normal(size=shape),
+        "k": np.stack(
+            [42.0 + 0.05 * rng.normal(size=shape), 63.0 + 0.08 * rng.normal(size=shape)],
+            axis=-1,
+        ),
+    }
+    if ecc_sampled:
+        root_e = np.sqrt(0.15) + 0.002 * rng.normal(size=shape)
+        angle = omega + 0.01 * rng.normal(size=shape)
+        draws["secosw"], draws["sesinw"] = root_e * np.cos(angle), root_e * np.sin(angle)
+        draws["ecc"] = draws["secosw"] ** 2 + draws["sesinw"] ** 2
+        draws["omega"] = np.arctan2(draws["sesinw"], draws["secosw"])
+    else:
+        draws["ecc"], draws["omega"] = np.zeros(shape), np.zeros(shape)
+    return draws
+
+
+def _row(text, label):
+    """The numbers of one row of the posterior report, after its label."""
+    line = next(line for line in text.splitlines() if line.strip().startswith(label))
+    return line.strip()[len(label) :].split()
+
+
+def test_k_hdi_is_the_narrowest_interval_holding_95_percent_of_the_draws(dataset):
+    """On skewed draws the highest-density interval is narrower than the percentile one."""
+    rng = np.random.default_rng(0)
+    shape = (2, 2000)
+    k = np.stack([40.0 + rng.lognormal(sigma=0.8, size=shape), 60.0 + rng.normal(size=shape)], -1)
+    post = ab.Posterior(dis=_dis(dataset), mcmc=_Draws({"k": k}), map=None)
+    low, high = post.star("primary")["k_hdi"]
+    assert isinstance(low, float) and isinstance(high, float)
+    draws = k[..., 0].ravel()
+    assert np.mean((draws >= low) & (draws <= high)) >= 0.949
+    p_low, p_high = np.percentile(draws, [2.5, 97.5])
+    assert high - low < 0.9 * (p_high - p_low)
+
+
+def test_the_posterior_report_gives_intervals_and_convergence_diagnostics(dataset):
+    rng = np.random.default_rng(1)
+    draws = {**_orbit_draws(rng), "ar1_phi": 0.3 + 0.01 * rng.normal(size=(2, 200))}
+    diverging = np.zeros((2, 200), dtype=bool)
+    text = ab.Posterior(dis=_dis(dataset), mcmc=_Draws(draws, diverging), map=None).summary()
+    # ecc and omega are derived, not sampled: 1 + 1 + 2 + 2 + 1 parameters.
+    assert "2 chain(s) x 200 draws of 7 parameters" in text
+    assert "divergences: 0" in text
+    for label in ("95% HDI", "R-hat", "ESS", "period [d]", "t_conj [d]", "omega [rad]"):
+        assert label in text
+    for label, centre in (("K(primary) [km/s]", 42.0), ("K(secondary) [km/s]", 63.0)):
+        mean, _sd, low, high, rhat, ess = _row(text, label)
+        assert abs(float(mean) - centre) < 0.05
+        assert float(low.strip("[,")) < centre < float(high.strip("]"))
+        assert abs(float(rhat) - 1.0) < 0.05 and float(ess) > 100.0
+    assert abs(float(_row(text, "ecc")[0]) - 0.15) < 0.01
+    assert "other sampled sites (ar1_phi): largest R-hat" in text
+    assert "nan" not in text
+    assert "plug-in approximation" in text and "Assumed, not measured" in text
+
+
+def test_omega_is_summarized_about_its_circular_mean(dataset):
+    """Draws of omega that straddle +-pi are one cluster, not two a full turn apart."""
+    draws = _orbit_draws(np.random.default_rng(2), omega=np.pi)
+    text = ab.Posterior(dis=_dis(dataset), mcmc=_Draws(draws), map=None).summary()
+    mean, sd, *_ = _row(text, "omega [rad]")
+    assert abs(abs(float(mean)) - np.pi) < 0.01
+    assert float(sd) < 0.05
+
+
+def test_a_held_eccentricity_is_reported_as_held_without_warnings(dataset):
+    draws = _orbit_draws(np.random.default_rng(3), ecc_sampled=False)
+    post = ab.Posterior(dis=_dis(dataset), mcmc=_Draws(draws), map=None)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        text = post.summary()
+    assert "draws of 4 parameters (period, t_conj, k)" in text
+    assert "held at 0" in text and "nan" not in text
+
+
+def test_too_few_draws_for_the_diagnostics_are_reported_as_undefined(dataset):
+    """Split R-hat needs four draws per chain; fewer must not raise."""
+    draws = _orbit_draws(np.random.default_rng(4), n_chains=1, n_draws=3)
+    text = ab.Posterior(dis=_dis(dataset), mcmc=_Draws(draws), map=None).summary()
+    assert _row(text, "K(primary) [km/s]")[-2:] == ["n/a", "n/a"]
 
 
 # -- declaring measured velocities instead of an orbit ------------------------

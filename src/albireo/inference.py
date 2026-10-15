@@ -2,7 +2,9 @@
 
 Implements ``docs/math.md`` §7. The nonlinear parameter vector ``theta`` is a dict of
 JAX arrays. Conditional on ``theta`` the component spectra are marginalized analytically
-(:mod:`albireo.likelihood`), so inference runs over ``theta`` alone. The sites of a
+(:mod:`albireo.likelihood`), so inference runs over ``theta`` alone: a best fit by
+:func:`run_map`, a Laplace approximation by :func:`laplace_inverse_mass`, and NUTS by
+:func:`run_nuts` (``docs/method.md`` describes the three stages). The sites of a
 Keplerian model are
 
 - ``period``: orbital period [d].

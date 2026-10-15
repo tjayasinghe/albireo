@@ -31,6 +31,22 @@ This file records what changed. The reasons are recorded elsewhere:
 
 ### Added
 
+- **A method overview and a comparison with other codes in the documentation.**
+  `docs/method.md` describes a fit step by step in the terms of a regularized least-squares
+  fit, in the order Seeburger et al. (2024) use: the linear step, the curvature penalty and
+  its reading as a prior, the marginal likelihood as the penalized chi-square plus an Occam
+  term, the regularization weights fitted by ML-II, the stages of the orbital inference, the
+  quantities the data do not determine, a map from each step to its module, and a glossary
+  of the statistical terms. Its figures are made from the packaged example by
+  `scripts/build_method_figures.py`. `docs/comparison.md` sets albireo beside KOREL,
+  FDBinary and fd3, CRES, Spectangular, shift-and-add, PSOAP and Seeburger et al. (2024),
+  with a source for every entry. Mermaid diagrams render on the site through
+  `scripts/mkdocs_mermaid_hook.py`.
+- **Convergence diagnostics in `Posterior.summary()`.** Each orbital parameter is reported
+  with its unit, mean, standard deviation, 95% highest-density interval, split R-hat and
+  effective sample size. The eccentricity and the argument of periastron are reported when
+  they were sampled, the latter about its circular mean. Other sampled sites are summarized
+  by their largest R-hat and smallest effective sample size.
 - **`albireo.templatefit` (experimental): library templates fitted to the epochs.**
   `fit_templates` fits the effective temperature, the surface gravity and the rotation of
   every star, a metallicity and the light fractions to a multi-epoch dataset, together with
@@ -478,6 +494,19 @@ This file records what changed. The reasons are recorded elsewhere:
 
 ### Changed
 
+- **`Posterior.star()["k_hdi"]` is a highest-density interval.** It was the equal-tailed
+  2.5 to 97.5 percentile interval under that name. The two differ for a skewed posterior;
+  the pipeline's `result.json` (`hdi95`) changes with it.
+- **The wording of `Fit.summary()` and `Disentangler.explain()`.** The first line of the
+  fit summary reads "Best fit (maximum a posteriori)", with the negative log posterior in
+  place of "potential", and the ML-II block is headed as the regularization weights of the
+  component spectra, with the curvature and continuum weights named. `explain()` states the
+  meaning of every sampled site. No reported value changes.
+- **`docs/math.md` describes only what is implemented.** Strategies B and C (§4.3, §4.4),
+  the batching over wavelength chunks and systems (§4.2) and the cubic shift kernel (§7.2)
+  are marked as considered and not implemented, the response polynomial is off unless
+  declared (§1.3, §5), and §3.4 describes the custom VJP that computes the gradient. A
+  reader's guide replaces the status line.
 - **The detection gate of the period search is lower on a weakly detected pair in
   antiphase (D71).** On the search route (`period = "search"`) a companion's velocity
   below `detection_min` (100) had no weight in the period search and the candidate fits.
@@ -744,6 +773,23 @@ This file records what changed. The reasons are recorded elsewhere:
 
 ### Fixed
 
+- **Bold symbols in the mathematics of the documentation site.** `\boldsymbol` was left
+  unrendered on the site (64 expressions of `docs/math.md`, among them every
+  $`\boldsymbol\Lambda`$), because MathJax's on-demand loading of the extension did not
+  survive the page's re-typeset. `docs/javascripts/mathjax.js` now loads it explicitly. GitHub's
+  rendering of the same pages was not affected.
+- **Statements about other disentangling codes, checked against their sources.**
+  `docs/science.md` credited González & Levato (2006) with the $`\chi^2`$ grid over the
+  semi-amplitudes (it is due to Shenar et al. 2020 and 2022; the iteration is due to
+  Marchenko, Moffat & Eenens 1998), described Spectangular as weighted and without orbital
+  errors (it is unweighted and gives curvature-matrix errors), called fd3 an open program (no
+  licence is stated), attributed the Fourier undulations to Ilijić, Hensberge & Pavlovski
+  (2001), stated that the interpretation of LB-1 and HR 6819 depended on the light ratio (in
+  LB-1 it changed the abundances, not the semi-amplitudes), and gave PSOAP's limit as a
+  cubic scaling (the authors state 10 Å segments). `docs/benchmarks.md` gave Shenar et al.
+  2020 as A&A 639, A6 (it is L6), misquoted González & Levato, and attributed the LB-1 and
+  HR 6819 analyses to a code that those papers do not name. The same entries are corrected in
+  `internal/design.md` and `paper/paper.md`.
 - **`todcor` on two identical templates with free amplitudes.** Where two templates are the
   same spectrum and their shifts nearly coincide, the normal equations are singular to
   rounding, the minimum chi-square can come out negative and a variance of the error

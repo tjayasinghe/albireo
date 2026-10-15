@@ -56,40 +56,49 @@ linear system. The resulting code, KOREL, solves for the component spectra and t
 elements simultaneously and was later extended to variable line strengths (Hadrava 1997)
 and provided as a Virtual Observatory service (Škoda & Hadrava 2010; Hadrava 2004 is the
 user guide). FDBinary and its successor fd3 (Ilijić et al. 2004) implement the same
-Fourier approach as an open command-line program. The Fourier methods are fast and
-template-free but require the data to be resampled onto a common equidistant
-log-wavelength grid, and the lowest Fourier modes are poorly determined by the data, which
-produces the low-frequency undulations analysed by Ilijić, Hensberge & Pavlovski (2001)
+Fourier approach as a command-line program whose source is available without a stated
+licence. The Fourier methods are fast and template-free but require the data to be
+resampled onto a common equidistant log-wavelength grid. The lowest Fourier modes are poorly
+determined by the data, and small errors of the continuum normalisation are amplified in
+them into the low-frequency undulations described by Hadrava (2004), Ilijić et al. (2004)
 and Hensberge, Ilijić & Torres (2008).
 
 ### 2.4 Iterative shift-and-add
 
-González & Levato (2006) proposed an iterative scheme: subtract the current estimate of
-one component, shift the residuals to the rest frame of the other, average, and repeat,
-with the semi-amplitudes chosen by a $`\chi^2`$ grid over $`(K_1, K_2)`$. Shenar et al. (2020)
-applied it to LB-1, and the same approach identified the companion of HR 6819
-(Bodensteiner et al. 2020). It is simple and robust at low signal-to-noise, and it is the
-most widely used method in the massive-star and compact-companion literature. Its
-limitations are a grid search whose size grows exponentially with the number of parameters,
-an implicit regularisation set by the iteration at which the scheme is stopped, light
-ratios that must be fixed manually, and no estimate of uncertainty on the recovered
-spectra. Quintero, Eenens & Rauw
-(2020) analyse the artefacts of the algorithm and propose corrections.
+Marchenko, Moffat & Eenens (1998) introduced an iterative scheme: subtract the current
+estimate of one component, shift the residuals to the rest frame of the other, average, and
+repeat. González & Levato (2006) added the measurement of the velocities at every epoch from
+the separated spectra, with the orbit fitted afterwards. In its current use the
+semi-amplitudes are chosen by a $`\chi^2`$ grid, over $`K_2`$ for LB-1 (Shenar et al. 2020)
+and HR 6819 (Bodensteiner et al. 2020) and over $`(K_1, K_2)`$ in later work (Shenar et al.
+2022), with the other orbital elements held at the values of the primary's orbit. The method
+is simple and widely used in the massive-star and compact-companion literature. Its
+limitations are a grid restricted to the semi-amplitudes, since every further parameter
+multiplies its size; the absence of a stopping rule, with spurious line wings and wrong line
+strengths when the iteration stops early (Quintero, Eenens & Rauw 2020) and the lowest
+frequencies left at their initial values (González & Levato 2006); light ratios that must be
+fixed manually, which rescale the output without changing the separation; and no estimate of
+uncertainty on the recovered spectra. Quintero, Eenens & Rauw (2020) analyse the artefacts of
+the algorithm and propose corrections.
 
 ### 2.5 Singular value decomposition with global optimisation
 
-Spectangular (Sablowski & Weber 2017, 2019) returns to the wavelength-space formulation
-with a global optimiser over the orbital elements or the per-epoch velocities and a
-graphical interface. It supports weights and masks and variable line strengths but returns
-point estimates only.
+Spectangular (Sablowski & Weber 2017; Sablowski, Järvinen & Weber 2019) returns to the
+wavelength-space formulation, with a graphical interface: the component spectra are found by
+singular value decomposition inside a downhill-simplex optimisation, with automatic restarts,
+of the orbital elements or of the per-epoch velocities. The spectra are resampled onto a
+common logarithmic grid and the misfit is unweighted. A static component with a line depth
+per spectrum absorbs telluric or nebular lines, and the 2019 version also fits a flux ratio
+per spectrum when the orbit is held. The uncertainties of the orbital elements follow from
+the curvature of the misfit at the optimum; the spectra have none.
 
 ### 2.6 Probabilistic and survey-scale approaches
 
 Czekala et al. (2017) formulated disentangling as a joint Bayesian inference in wavelength
-space with Gaussian-process priors on the component spectra, and marginalised the spectra
-analytically. That work (PSOAP) is the closest methodological predecessor of albireo. Its
-dense covariance matrices over epochs and pixels scale cubically in time and quadratically
-in memory, which restricted it to narrow spectral chunks. Seeburger et al. (2024) target
+space with Gaussian-process priors on the component spectra, marginalised the spectra
+analytically, and sampled the orbital elements together with the hyperparameters of the
+priors. That work (PSOAP) is the closest methodological predecessor of albireo. Its dense
+covariance matrices over epochs and pixels limited it to spectral chunks of about 10 Å. Seeburger et al. (2024) target
 survey-scale data with a second-derivative Tikhonov penalty and sparse iterative solves,
 without a posterior. Sairam et al. (2024) model an SB2 as a sum of two Doppler-shifted
 Gaussian processes with the aim of precise radial velocities for circumbinary-planet
@@ -98,19 +107,20 @@ ratio, subtract the primary and cross-correlate the residuals against templates.
 
 ### 2.7 The approach taken by albireo
 
-albireo combines the wavelength-space linear model of Simon & Sturm (1994) with the
-analytic marginalisation of Czekala et al. (2017), and replaces dense covariances with
-banded precision matrices so that the cost is linear in the number of pixels. The
-component spectra are given Gaussian smoothness priors whose precision is a scaled
-second-difference operator plus a weak ridge; the deterministic limit of that prior is the
-Tikhonov penalty of Seeburger et al. (2024). Conditional on the orbit and the other
-nonlinear parameters the model is linear-Gaussian in the spectra, so the spectra are
-integrated out in closed form and only the low-dimensional nonlinear parameters are
-sampled, by Hamiltonian Monte Carlo. The spectra and their full covariance are recovered
-afterwards as a conditional Gaussian at each posterior draw. The model is evaluated on
-each epoch's native wavelength grid, so the data are never resampled and masks, chip gaps,
-per-pixel weights and mixed instruments are handled without special cases. The equations
-are in [Mathematical foundations](math.md), Sections 1 to 4.
+albireo follows the wavelength-space formulation of Simon & Sturm (1994) and regularises the
+component spectra with the second-difference (Tikhonov) penalty of Seeburger et al. (2024),
+plus a weak pull towards the continuum. The penalty is read as a Gaussian prior on the
+spectra, as in the probabilistic treatment of Czekala et al. (2017). For a given orbit the
+model is linear in the spectra, so they are integrated out in closed form: at each trial orbit
+they are solved for exactly, and only the orbital and instrumental parameters are sampled, by
+Hamiltonian Monte Carlo. The weights of the penalty are fitted to the data (empirical Bayes),
+and the spectra are recovered with their covariance. Banded matrices replace the dense
+covariances of Czekala et al. (2017), so that the cost is linear in the number of pixels, and
+each epoch is modelled on its native wavelength grid, so that the data are never resampled
+and masks, chip gaps, per-pixel weights and mixed instruments need no special treatment. The
+[method overview](method.md) describes these steps in the terms of a regularised least-squares
+fit, the [comparison](comparison.md) sets them beside the other codes, and
+[Mathematical foundations](math.md), Sections 1 to 4, give the equations.
 
 ## 3. Degeneracies intrinsic to the problem
 
@@ -123,8 +133,9 @@ posterior, and requires a user decision where only external information can reso
 spatial frequency, but the difference between them only through the epoch-to-epoch
 variation of the relative Doppler shift. Features broader than the root-mean-square
 differential shift cannot be attributed to one star or the other, and the constant term is
-exactly unconstrained. This is the origin of the undulations in Fourier-disentangled spectra
-(Ilijić et al. 2001; Hensberge et al. 2008). In albireo the smoothness prior sets the scale
+exactly unconstrained. Small normalisation errors amplified along these directions are the
+origin of the undulations in Fourier-disentangled spectra (Ilijić et al. 2004; Hensberge et
+al. 2008). In albireo the smoothness prior sets the scale
 of these modes explicitly, the posterior covariance reports their inflation, and the
 uncertainty band widens where the data do not constrain the spectra.
 
@@ -135,9 +146,8 @@ continuum light ratio is not measurable from the spectra alone (Pavlovski & Hens
 during eclipses, by external photometry, or by assumption. Because an assumed light ratio
 propagates into every line depth and every atmospheric parameter derived from it, albireo
 has no default light fraction: the treatment must be declared, and per-epoch light
-fractions can be inferred where eclipses exist. The interpretation of LB-1 and HR 6819
-depended on this choice (Shenar et al. 2020; Bodensteiner et al. 2020; El-Badry &
-Quataert 2021).
+fractions can be inferred where eclipses exist. In the analysis of LB-1 the assumed ratio
+changed the derived abundances but not the semi-amplitudes (Shenar et al. 2020).
 
 **Systemic velocity.** Translating every component spectrum by the same amount and
 shifting the systemic velocity by the opposite amount leaves the composite unchanged, so
@@ -158,6 +168,10 @@ one `INSTRUME`, and modelling the second kind at the first width was measured to
 semi-amplitudes (see the benchmarks page).
 
 ## 4. The albireo model
+
+This section gives the literature behind each part of the model. The
+[method overview](method.md) describes the same model step by step, with figures and a
+glossary of the statistical terms.
 
 ### 4.1 Forward model
 
@@ -419,7 +433,7 @@ Each entry links to its record in the NASA Astrophysics Data System where one ex
 - Frost, A. J., Bodensteiner, J., Rivinius, Th., et al. 2022, A&A, 659, L3. [ADS](https://ui.adsabs.harvard.edu/abs/2022A%26A...659L...3F)
 - Gebruers, S., Tkachenko, A., Bowman, D. M., et al. 2022, A&A, 665, A36. [ADS](https://ui.adsabs.harvard.edu/abs/2022A%26A...665A..36G)
 - González, J. F. & Levato, H. 2006, A&A, 448, 283. [ADS](https://ui.adsabs.harvard.edu/abs/2006A%26A...448..283G)
-- González, J. F., Martínez, M. J. & Alejo, A. D. 2024, A&A, 690, A124. [ADS](https://ui.adsabs.harvard.edu/abs/2024A%26A...690A.124G)
+- González, J. F., Martínez, C. I. & Alejo, A. D. 2024, A&A, 690, A124. [ADS](https://ui.adsabs.harvard.edu/abs/2024A%26A...690A.124G)
 - Gray, D. F. 2005, The Observation and Analysis of Stellar Photospheres, 3rd ed. (Cambridge: Cambridge University Press). [ADS](https://ui.adsabs.harvard.edu/abs/2005oasp.book.....G)
 - Hadrava, P. 1995, A&AS, 114, 393. [ADS](https://ui.adsabs.harvard.edu/abs/1995A%26AS..114..393H)
 - Hadrava, P. 1997, A&AS, 122, 581. [ADS](https://ui.adsabs.harvard.edu/abs/1997A%26AS..122..581H)
@@ -430,7 +444,6 @@ Each entry links to its record in the NASA Astrophysics Data System where one ex
 - Hoffman, M. D. & Gelman, A. 2014, Journal of Machine Learning Research, 15, 1593. [ADS](https://ui.adsabs.harvard.edu/abs/2011arXiv1111.4246H)
 - Hunter, J. D. 2007, Computing in Science & Engineering, 9, 90. [ADS](https://ui.adsabs.harvard.edu/abs/2007CSE.....9...90H)
 - Husser, T.-O., Wende-von Berg, S., Dreizler, S., et al. 2013, A&A, 553, A6. [ADS](https://ui.adsabs.harvard.edu/abs/2013A%26A...553A...6H)
-- Ilijić, S., Hensberge, H. & Pavlovski, K. 2001, in Lecture Notes in Physics, 573, Astrotomography, 269. [ADS](https://ui.adsabs.harvard.edu/abs/2001LNP...573..269I)
 - Ilijić, S., Hensberge, H., Pavlovski, K. & Freyhammer, L. M. 2004, in ASP Conf. Ser. 318, Spectroscopically and Spatially Resolving the Components of the Close Binary Stars, 111. [ADS](https://ui.adsabs.harvard.edu/abs/2004ASPC..318..111I)
 - Kıran, E., Bakış, V., Hensberge, H. & Harmanec, P. 2016, A&A, 587, A127. [ADS](https://ui.adsabs.harvard.edu/abs/2016A%26A...587A.127K)
 - Kirkby-Kent, J. A., Maxted, P. F. L., Serenelli, A. M., et al. 2016, A&A, 591, A124. [ADS](https://ui.adsabs.harvard.edu/abs/2016A%26A...591A.124K)
@@ -442,6 +455,7 @@ Each entry links to its record in the NASA Astrophysics Data System where one ex
 - Lomb, N. R. 1976, Ap&SS, 39, 447. [ADS](https://ui.adsabs.harvard.edu/abs/1976Ap%26SS..39..447L)
 - MacKay, D. J. C. 1992, Neural Computation, 4, 415. [DOI](https://doi.org/10.1162/neco.1992.4.3.415)
 - Mahy, L., Sana, H., Abdul-Masih, M., et al. 2020, A&A, 634, A118. [ADS](https://ui.adsabs.harvard.edu/abs/2020A%26A...634A.118M)
+- Marchenko, S. V., Moffat, A. F. J. & Eenens, P. R. J. 1998, PASP, 110, 1416. [ADS](https://ui.adsabs.harvard.edu/abs/1998PASP..110.1416M)
 - Maxted, P. F. L., Gaulme, P., Graczyk, D., et al. 2020, MNRAS, 498, 332. [ADS](https://ui.adsabs.harvard.edu/abs/2020MNRAS.498..332M)
 - Mészáros, Sz. & Allende Prieto, C. 2013, MNRAS, 430, 3285. [ADS](https://ui.adsabs.harvard.edu/abs/2013MNRAS.430.3285M)
 - Mészáros, Sz., Bohlin, R., Allende Prieto, C., et al. 2024, A&A, 688, A197. [ADS](https://ui.adsabs.harvard.edu/abs/2024A%26A...688A.171M)
@@ -461,12 +475,13 @@ Each entry links to its record in the NASA Astrophysics Data System where one ex
 - Rivinius, Th., Baade, D., Hadrava, P., Heida, M. & Klement, R. 2020, A&A, 637, L3. [ADS](https://ui.adsabs.harvard.edu/abs/2020A%26A...637L...3R)
 - Rucinski, S. M. 2002, AJ, 124, 1746. [ADS](https://ui.adsabs.harvard.edu/abs/2002AJ....124.1746R)
 - Sablowski, D. P. & Weber, M. 2017, A&A, 597, A125. [ADS](https://ui.adsabs.harvard.edu/abs/2017A%26A...597A.125S)
-- Sablowski, D. P. & Weber, M. 2019, A&A, 623, A31. [ADS](https://ui.adsabs.harvard.edu/abs/2019A%26A...623A..31S)
+- Sablowski, D. P., Järvinen, S. & Weber, M. 2019, A&A, 623, A31. [ADS](https://ui.adsabs.harvard.edu/abs/2019A%26A...623A..31S)
 - Sairam, L., Triaud, A. H. M. J., Baycroft, T. A., et al. 2024, MNRAS, 534, 3999. [ADS](https://ui.adsabs.harvard.edu/abs/2024MNRAS.534.3999S)
 - Sana, H., de Mink, S. E., de Koter, A., et al. 2012, Science, 337, 444. [ADS](https://ui.adsabs.harvard.edu/abs/2012Sci...337..444S)
 - Scargle, J. D. 1982, ApJ, 263, 835. [ADS](https://ui.adsabs.harvard.edu/abs/1982ApJ...263..835S)
 - Seeburger, R., Rix, H.-W., El-Badry, K., Xiang, M. & Fouesneau, M. 2024, MNRAS, 530, 1935. [ADS](https://ui.adsabs.harvard.edu/abs/2024MNRAS.530.1935S)
 - Shenar, T., Bodensteiner, J., Abdul-Masih, M., et al. 2020, A&A, 639, L6. [ADS](https://ui.adsabs.harvard.edu/abs/2020A%26A...639L...6S)
+- Shenar, T., Sana, H., Mahy, L., et al. 2022, A&A, 665, A148. [ADS](https://ui.adsabs.harvard.edu/abs/2022A%26A...665A.148S)
 - Shenar, T., Bodensteiner, J., Sana, H., et al. 2024, A&A, 690, A289. [ADS](https://ui.adsabs.harvard.edu/abs/2024A%26A...690A.289S)
 - Simon, K. P. & Sturm, E. 1994, A&A, 281, 286. [ADS](https://ui.adsabs.harvard.edu/abs/1994A%26A...281..286S)
 - Škoda, P. & Hadrava, P. 2010, in ASP Conf. Ser. 435, Binaries - Key to Comprehension of the Universe, 71. [ADS](https://ui.adsabs.harvard.edu/abs/2010ASPC..435...71S)

@@ -8,7 +8,10 @@ where ``D2`` is the second-difference operator. The curvature penalty ``tau_i`` 
 smoothness prior whose affine nullspace (constant plus slope per component) coincides
 with the low-frequency separation degeneracy of ``docs/math.md`` §5.1. The weak ridge
 ``eta_i`` makes those directions proper by anchoring the spectrum to the continuum.
-Precisions are banded (half-bandwidth 2); dense covariance kernels are not used.
+Precisions are banded (half-bandwidth 2); dense covariance kernels are not used. Read as
+a penalty, ``d_i^T Lambda_i d_i`` is the curvature (Tikhonov) regularization of a
+least-squares disentangling fit, plus a ridge; ``docs/method.md`` describes the
+correspondence.
 
 Either strength may have a static per-pixel profile,
 

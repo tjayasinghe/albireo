@@ -54,17 +54,17 @@ jit-compiled end to end, and runs on a GPU without code changes.
 
 # Statement of need
 
-Existing disentangling codes fall into three families, none of which reports uncertainties on the
-recovered spectra. Wavelength-space linear solvers [@simon1994] cast disentangling as a large
+Existing disentangling codes fall into three families. Apart from formal errors at fixed
+velocities, none of their established codes reports uncertainties on the recovered spectra.
+Wavelength-space linear solvers [@simon1994] cast disentangling as a large
 sparse least-squares problem. `albireo` adopts this formulation, which as published provides no
 regularization of the ill-conditioned low-frequency null space. Fourier-space codes, principally
 KOREL [@hadrava1995] and `fd3`/FDBinary [@ilijic2004], are the established tools. They are fast
 and widely used, but they require resampling onto a common equidistant log-wavelength grid, have a
-known low-frequency bias, and return point estimates only. Iterative shift-and-add disentangling
-[@gonzalez2006; @shenar2020] is the standard method in the massive-star and compact-companion
-community. It is robust at low signal-to-noise ratio but scales poorly with the number of
-parameters, uses the stopping point of the iteration as an uncontrolled implicit regularizer, and
-produces no posterior.
+known low-frequency bias, and report no uncertainty on the recovered spectra. Iterative
+shift-and-add disentangling [@gonzalez2006; @shenar2020] is widely used in the massive-star and
+compact-companion community. Its grid over the semi-amplitudes scales poorly with the number of
+parameters, the iteration has no stopping rule, and it produces no posterior.
 
 Two efforts are closer to the present work. PSOAP [@czekala2017] is the direct methodological
 predecessor: a joint Bayesian model in wavelength space with the component spectra marginalized
@@ -82,8 +82,8 @@ low-dimensional one without approximation.
 
 A second aim is to make the degeneracies explicit. With constant light fractions the likelihood
 depends only on the products of light fraction and line depth, so the continuum light ratio is not
-measurable from the spectra alone. The interpretation of published compact-companion candidates
-has depended on this quantity [@shenar2020], and shift-and-add implementations fix the light
+measurable from the spectra alone. An assumed light ratio sets the recovered line depths and the
+abundances derived from them [@shenar2020], and shift-and-add implementations fix the light
 ratios manually. `albireo` supplies no default: the light-ratio treatment must be declared, and
 where per-epoch light variation from eclipses exists it is inferred, so that the degeneracy is
 broken by the data. The same policy applies to the systemic velocity and to absolute

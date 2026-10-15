@@ -47,15 +47,19 @@ print(fit.summary())
 ```
 
 ```
-MAP fit: potential -28052.6, |grad| 9.11, 300 steps (stopped at the step cap)
-  conjunction scan: t_conj = 0.73171, 1.15e+05 nats between the best and worst phase
+Best fit (maximum a posteriori) of the orbit, 300 steps (stopped at the step cap)
+  -ln posterior -28052.6 (unconstrained coordinates, up to a constant), |gradient| 383
+  conjunction scan: t_conj = 0.71429, 1.31e+05 nats between the best and worst phase
+  semi-amplitude scan: best of 176 trials at primary 41.5, secondary 62.3 km/s; started from it, +1.57e+04 nats over the declared start (50.0, 50.0)
 
   period    6.000167 d
   ecc       0.1512    omega 0.6963 rad
   K(primary)    41.978 km/s   (light 0.62)
   K(secondary)    62.979 km/s   (light 0.38)
 
-ML-II smoothness (empirical Bayes: fitted here, then frozen for sampling)
+Regularization weights of the component spectra, fitted by maximizing the marginal
+likelihood (ML-II) and held fixed for sampling: curvature weight tau and continuum weight
+eta, start -> fitted, with the move in ln tau in hyperprior standard deviations
   primary        tau       300 ->       638 (+0.25 sigma)   eta        5 ->     10.2
   secondary      tau       300 ->  1.15e+03 (+0.45 sigma)   eta        5 ->     3.25
 
@@ -64,12 +68,20 @@ ML-II smoothness (empirical Bayes: fitted here, then frozen for sampling)
 Assumed, not measured:
   light fractions    primary=0.62  secondary=0.38
       only l_i * d_i is observable, so every recovered depth scales as 1/l_i.
+  smoothness starts  primary=300  secondary=300
+      the starting curvature weight tau of each component's regularization. ML-II fits the
+      weights, but which optimum it finds depends on where tau starts.
 ```
 
 The injected values are *P* = 6.0 d, *K* = 42.0 and 63.0 km/s, *e* = 0.15, ω = 0.7. The
-fit takes about a minute, most of it JAX compilation on the first call. No per-epoch
-radial velocity is measured at any stage: the orbit is inferred from the spectra directly,
-with the component spectra integrated out in closed form.
+fit takes one to three minutes on one CPU, much of it JAX compilation on the first call.
+"Stopped at the step cap" means that the optimizer's threshold, an absolute norm of the
+gradient, was not reached in 300 steps. It is not a failure here: the best-fit orbit agrees
+with the posterior means below to within about a tenth of their standard deviations.
+Differences of log likelihood are in nats; a difference of 1 nat corresponds to a
+chi-square difference of 2. No per-epoch radial velocity is measured at any stage: the orbit
+is inferred from the spectra directly, with the component spectra integrated out in closed
+form.
 
 Four quantities in that fit were derived from the declaration. The low-level interface
 requires the user to set each of them. `dis.explain()` prints them:
@@ -86,22 +98,51 @@ print(dis.explain())
 - **The conjunction phase**, located by a 42-point scan before optimization. The marginal
   likelihood is strongly multimodal in phase (about 10⁵ nats between the best and worst
   phase here), and an optimizer started in the wrong mode converges to the wrong solution.
-- **The smoothness hyperparameters**, fitted by empirical Bayes and then held fixed. The
-  report flags any hyperparameter that did not move from its starting value, which
-  indicates that the hyperprior, not the data, sets that component's smoothness.
+- **The smoothness hyperparameters**, the weights of the curvature and continuum penalties
+  on each component spectrum. They are fitted to the data by maximizing the marginal
+  likelihood (ML-II, or empirical Bayes; see the
+  [method overview](method.md#7-the-regularization-strength)) and then held fixed. The
+  report flags any weight that did not move from its starting value, which indicates that
+  the hyperprior, not the data, sets that component's smoothness.
 
 ## Sample the posterior
 
 ```python
 post = fit.sample(seed=0)
 print(post.summary())
-print(post.star("secondary"))   # {'k': 62.99, 'k_std': 0.08, 'k_hdi': (62.84, 63.11), ...}
+print(post.star("secondary"))   # {'k': 62.979, 'k_std': 0.088, 'k_hdi': (62.811, 63.141), ...}
 ```
 
-This runs NUTS over the orbital parameters with the component spectra marginalized and
-the smoothness hyperparameters held at their empirical-Bayes values. This plug-in
-approximation is stated in the summary: the orbital credible intervals do not include the
-uncertainty in the smoothness hyperparameters.
+```
+NUTS posterior: 2 chain(s) x 500 draws of 6 parameters (k, period, secosw, sesinw, t_conj)
+  divergences: 0
+
+                                   mean         sd   95% HDI                     R-hat    ESS
+  period [d]                   6.000104   0.001110   [5.997982, 6.002377]        0.999   1655
+  t_conj [d]                    0.62530    0.00225   [0.62078, 0.62976]          0.999   1982
+  ecc                            0.1513     0.0009   [0.1496, 0.1533]            0.999   2339
+  omega [rad]                    0.6957     0.0056   [0.6854, 0.7075]            0.999   1881
+  K(primary) [km/s]              41.977      0.053   [41.869, 42.076]            0.998   1884
+  K(secondary) [km/s]            62.979      0.088   [62.811, 63.141]            1.000   1583
+
+  The regularization weights were held at their ML-II values, so these intervals
+  do not include their uncertainty (a plug-in approximation, not a marginalization).
+
+Assumed, not measured:
+  light fractions    primary=0.62  secondary=0.38
+      only l_i * d_i is observable, so every recovered depth scales as 1/l_i.
+  smoothness starts  primary=300  secondary=300
+      the starting curvature weight tau of each component's regularization. ML-II fits the
+      weights, but which optimum it finds depends on where tau starts.
+```
+
+This runs NUTS, a Markov chain Monte Carlo sampler, over the orbital parameters. At every
+step the component spectra are solved for exactly and integrated out, so they never enter
+the sampler, and the smoothness weights are held at their fitted values. The summary states
+this plug-in approximation: the orbital intervals do not include the uncertainty of the
+smoothness weights. It also reports two convergence diagnostics per parameter, R-hat and
+the effective sample size; the [method overview](method.md#8-uncertainties-on-the-orbit)
+describes the stages and the [glossary](method.md#14-glossary) defines the terms.
 
 ## Inspect the component spectra
 
@@ -125,9 +166,10 @@ truth_on_model = np.stack(
 fig, axes = ab.plot_spectra(dis.grid, d_hat, std=std, truth=truth_on_model)
 ```
 
-Between the lines, and wherever the epochs constrain it weakly, the recovered spectrum is
-set by the smoothness prior rather than by the data. The uncertainty band identifies
-those regions. In particular the constant (*k* = 0) mode of each component
+Wherever the epochs constrain it weakly (beyond the edges of the data, in masked pixels, and
+for features broader than the stars' velocity separation), the recovered spectrum is set by
+the smoothness prior rather than by the data, and the uncertainty band widens there. In
+particular the constant (*k* = 0) mode of each component
 spectrum is exactly unconstrained by the data (see the
 [degeneracy section](math.md#5-degeneracies-and-identifiability)), so the data determine
 the light-weighted sum, `fit.composite()`, rather than each component's continuum level.
@@ -165,10 +207,12 @@ model, priors, init = dis.expert()
 ```
 
 That triple is what [`MarginalOrbitModel`](api/inference.md) and `ab.run_map` take, so
-features the declarative interface does not expose (per-epoch jitter, AR(1) correlated
-noise, inferred light fractions, inferred LSF widths) are added at that level. The
-declarative interface is marked experimental because its names may still change. The
-low-level interface is the supported one.
+features the declarative interface does not expose (per-epoch jitter, a per-epoch response
+polynomial, inferred light fractions, inferred LSF widths) are added at that level. Correlated
+(AR(1)) noise is declared directly, with `Disentangler(noise_correlation=...)`. The sites the
+declaration holds constant are in `dis.fixed` and are passed as
+`model.model(priors, fixed=dis.fixed)`. The declarative interface is marked experimental
+because its names may still change. The low-level interface is the supported one.
 
 ## Next steps
 

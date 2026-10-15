@@ -403,8 +403,9 @@ applied internally (identical to albireo's ω+π convention), and fd3's internal
 resampling for either code), writes fd3 separation- and fit-mode inputs, runs the albireo
 side, and compares component spectra (raw and mean-aligned, since both codes have a k≈0
 freedom) and wall time. The fd3 side needs the binary (~1.9 MB source tarball, GSL,
-builds on Linux/WSL). No license is stated on the fd3 page (v2 was GPL and v3's GPL
-statement was removed), so the author should be contacted before any redistribution.
+builds on Linux/WSL). No license is stated on the fd3 page or in its source (FDBinary V.2
+was GPL; the 2012 page announced the GPL for fd3 once finished, and v3.1 carries no grant), so
+the author should be contacted before any redistribution.
 
 ### Comparison with fd3 (2026-08-14)
 
@@ -457,11 +458,11 @@ log *g*.
 
 ### Clean-room shift-and-add implementation (2026-08-15)
 
-The third code is the most widely used in the field. `scripts/shift_and_add.py` is a
-clean-room implementation written from González & Levato (2006) §2.1 Eqs. (1)–(2) and §2.3,
-whose recurrence is restated identically and independently by Quintero et al. (2020). No
-source code was consulted. The widely used existing implementation, the one behind the
-LB-1 and HR 6819 companion identifications, has no license file and was never opened.
+The third method, iterative shift-and-add, is widely used in the massive-star literature.
+`scripts/shift_and_add.py` is a clean-room implementation written from González & Levato
+(2006) §2.1 Eqs. (1)–(2) and §2.3, whose recurrence is restated identically and independently
+by Quintero et al. (2020). No source code was consulted. The widely used public
+implementation has no license file and was never opened.
 
 Two details of the published method are easily implemented incorrectly. The iteration is
 Gauss–Seidel: the *B* update uses the *A* produced in the same sweep. The Jacobi variant
@@ -532,7 +533,7 @@ No adjustment to the comparison changes the last column, the presence of an unce
 
 A comparison on an SB2 with a nebular line, between a method that masks the contaminated
 pixels and methods that cannot, would be unfair to shift-and-add. González & Levato
-explicitly permit "any combination algorithm... weights or some rejection algorithm", so
+explicitly allow "the inclusion of weights or of some rejection algorithm", so
 masking is part of the published method. `tests/test_shift_and_add.py` exercises it:
 setting an epoch's weight to zero removes an unusable epoch. The method cannot produce an
 uncertainty.
@@ -2255,7 +2256,7 @@ from one of them.
 
 The clean-room `scripts/shift_and_add.py` implements only the recurrence of González &
 Levato, so the three-way table compares methods, not codebases. This section compares
-the repository most widely used in the field,
+the public repository of the method,
 [`TomerShenar/Disentangling_Shift_And_Add`](https://github.com/TomerShenar/Disentangling_Shift_And_Add),
 as software: what it provides, how it is distributed, and where it differs from albireo in
 kind rather than in degree.
@@ -2276,8 +2277,8 @@ constraint against spurious emission features. It also has multi-instrument inpu
 or FITS, mock-data generators for SB2s and SB3s, and plotting utilities. V2.0 is dated
 September 2023 and the last commit 2024-03-07. At the check date it had 10 stars, 2 forks
 and 1 open issue. It cites González & Levato (2006) for the algorithm and asks users to
-cite Shenar et al. 2020 (A&A 639, A6) and 2022 (A&A 665, A148), both already in
-`paper/paper.bib`. It is the code behind the LB-1 and HR 6819 companion identifications.
+cite Shenar et al. 2020 (A&A 639, L6) and 2022 (A&A 665, A148), both already in
+`paper/paper.bib`.
 
 The numbers above cover the shared core only. The three-way table measured the published
 recurrence under the paper's own stopping rule with the orbit fixed at the injected values,
@@ -2292,7 +2293,7 @@ deriving from it is not) and has not been made.
 | orbit | χ² grid over (K₁, K₂[, K₃]); P, T0, e, ω supplied | joint inference of every orbital site, gradient-based, with NUTS |
 | uncertainty on K | χ² map over the grid | posterior draws |
 | uncertainty on spectra | none | pointwise band, and draws from the joint posterior |
-| the *k* = 0 null space | suppressed by the negativity constraint | fixed by the smoothness prior; reported as the leading mode by the forecast |
+| the *k* = 0 null space | left at its initial value by the recurrence (a fixed point at zero frequency); the negativity constraint is described as a remedy for spurious wings | fixed by the smoothness prior; reported as the leading mode by the forecast |
 | contaminated pixels | masking/weights (in the published method) | the same masking, plus telluric and nebular components when masking would discard the pixels the science needs |
 | triples | yes, K₃ in the grid | yes at the expert level (hierarchical outer orbit); the `Disentangler` interface rejects it in v1 |
 | validation | mock-data generators | closed-loop acceptance tests in CI against packaged injected values, plus calibrated detection |

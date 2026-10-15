@@ -5,13 +5,30 @@
 [![License: BSD-3-Clause](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 
-albireo performs Bayesian spectral disentangling of double- and multiple-lined
-spectroscopic binaries. Given a time series of composite spectra, it infers the orbital
-elements and the individual component spectra jointly, with posterior uncertainties on
-both. The component spectra are marginalized analytically, so only the low-dimensional
-orbital and instrumental parameters are sampled. The package is written in JAX (float64),
-is differentiable end to end, and runs on CPU or GPU. It is named after Albireo, the
-double star in Cygnus.
+albireo separates the spectra of the stars in a double- or multiple-lined spectroscopic
+binary from a time series of composite spectra, and determines the orbit at the same time.
+It works like the wavelength-space disentangling codes: for a trial orbit the component
+spectra follow from a linear least-squares fit, here with a smoothing penalty, and the orbit
+is adjusted around that fit. Compared with the established codes (KOREL, fd3, Spectangular
+and shift-and-add), three things differ:
+
+- Every disentangled spectrum has an uncertainty band. The smoothing penalty is treated as a
+  Gaussian prior, so the regularized solution is the posterior mean of the spectra, and the
+  matrix solved for it gives their covariance.
+- The strength of the smoothing is fitted to the data, by maximizing the marginal
+  likelihood, rather than set by hand or by the number of iterations.
+- The orbit is sampled by Markov chain Monte Carlo (the No-U-Turn Sampler), not only
+  optimized. The spectra are integrated out at every step, so the sampler explores only the
+  orbital parameters, however many pixels there are.
+
+PSOAP (Czekala et al. 2017) introduced a probabilistic treatment of this kind for spectral
+segments of about 10 Å; albireo applies it to whole spectra, at a cost linear in their length.
+
+The [method overview](docs/method.md) explains each step with figures and defines the
+statistical terms, and the [comparison](docs/comparison.md) sets albireo beside KOREL, fd3,
+Spectangular, shift-and-add and PSOAP. The package is written in JAX (float64), is
+differentiable end to end, and runs on CPU or GPU. It is named after Albireo, the double star
+in Cygnus.
 
 > [!WARNING]
 > **Status: pre-alpha.** The API is unstable and may change without notice.
@@ -32,8 +49,8 @@ dis = ab.Disentangler(
     orbit=ab.Orbit(period=ab.Between(5.5, 6.5), k=ab.Between([10.0, 10.0], [90.0, 90.0])),
     lsf={"DEMO": 6.5},                     # Gaussian LSF sigma in km/s
 )
-fit = dis.fit()                            # phase scan, MAP, empirical-Bayes hyperparameters
-post = fit.sample(seed=0)                  # NUTS over the orbit; spectra marginalized
+fit = dis.fit()                            # best fit of the orbit and the smoothing weights
+post = fit.sample(seed=0)                  # NUTS over the orbit; spectra solved at each step
 print(post.summary())
 
 ab.plot_spectra(dis.grid, fit.spectra(), std=fit.std())
@@ -46,11 +63,13 @@ equivalent is [`examples/00_quickstart.py`](examples/00_quickstart.py).
 
 ## Capabilities
 
-- **Joint inference of orbit and spectra.** Conditional on the orbit, light fractions,
-  line-spread function and prior hyperparameters, the model is linear-Gaussian in the
-  component spectra, which are integrated out in closed form. The No-U-Turn Sampler then
-  samples 10 to 200 nonlinear parameters, a number that does not depend on the number of
-  pixels, and the spectra with their covariance are recovered at each posterior draw.
+### The disentangling
+
+- **Joint inference of orbit and spectra.** For a trial orbit the component spectra follow
+  from a regularized linear least-squares fit, and they are integrated out in closed form.
+  The No-U-Turn Sampler therefore explores only the orbital and instrumental parameters, 10
+  to 200 of them whatever the number of pixels, and the spectra with their covariance are
+  recovered at each posterior draw.
 - **Wavelength-space model on native pixel grids.** Data are never resampled: each
   spectrum is modelled on its own pixel grid with its per-pixel weights. Masks, chip gaps
   and cosmic-ray hits are pixels of zero weight, and non-uniform sampling and
@@ -73,6 +92,9 @@ equivalent is [`examples/00_quickstart.py`](examples/00_quickstart.py).
   depend on the observed fluxes, so the uncertainty band, the worst-determined spectral
   modes and the expected information gain of a planned set of epochs can be computed
   before the data are taken.
+
+### Tools around it
+
 - **Stellar labels for template selection.** Effective temperature, surface gravity,
   metallicity and projected rotation are fitted to the disentangled components against
   published synthetic grids (BOSZ, POLLUX). The dilution of both components is fitted
@@ -206,6 +228,9 @@ complete analysis of archival FEROS spectra.
 ## Documentation
 
 - [`docs/quickstart.md`](docs/quickstart.md): the first fit, on packaged data.
+- [`docs/method.md`](docs/method.md): what a fit computes, step by step, in the terms of a
+  regularized least-squares fit, with figures and a glossary of the statistical terms.
+- [`docs/comparison.md`](docs/comparison.md): albireo beside the other disentangling codes.
 - [`docs/science.md`](docs/science.md): scientific background and references.
 - [`examples/`](examples/): executable tutorials, each ending in assertions against the
   injected values. The same material is written out in [`docs/tutorials/`](docs/tutorials/).

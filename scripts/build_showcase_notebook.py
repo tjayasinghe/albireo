@@ -131,9 +131,10 @@ print(dis.explain())""",
 ## Fit: MAP and ML-II in one call
 
 The summary reports the optimizer's diagnostics, the conjunction scan contrast, the orbit,
-the ML-II smoothness table (flagging any hyperparameter that remained at its starting
-value), the residual z-score RMS (near 1 when the noise model describes the data) and the
-assumptions block.""",
+the regularization weights of the component spectra fitted by ML-II (flagging any weight
+that remained at its starting value), the residual z-score RMS (near 1 when the noise model
+describes the data) and the assumptions block. The [method overview](../method.md) explains
+each of these terms.""",
     ),
     (
         PY,
@@ -197,10 +198,11 @@ fig.set_layout_engine("constrained")""",
 ## The posterior over the orbit
 
 The component spectra are marginalized analytically, so NUTS samples only the orbital
-sites. `fit.sample()` freezes the smoothness hyperparameters at their ML-II values, a
-plug-in approximation that the summary records. It uses the Laplace covariance at the MAP
-as the mass matrix, so warmup only tunes the step size. Two chains run sequentially on a
-CPU.""",
+sites. `fit.sample()` freezes the regularization weights at their ML-II values, a plug-in
+approximation that the summary records. It uses the Laplace covariance at the MAP as the
+mass matrix, so warmup only tunes the step size. Two chains run sequentially on a CPU. The
+summary gives each parameter's mean, standard deviation and 95% highest-density interval,
+with the split R-hat and the effective sample size as convergence diagnostics.""",
     ),
     (
         PY,

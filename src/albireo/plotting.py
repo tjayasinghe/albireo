@@ -209,8 +209,9 @@ def plot_spectra(grid, spectra, *, std=None, truth=None, labels=None, axes=None,
 
     One panel per component: the posterior mean deviation spectrum against wavelength,
     inside a band of plus and minus two pointwise posterior standard deviations, with the
-    injected truth overplotted when one is given. Between the lines, and wherever the
-    epochs constrain it weakly, the recovered spectrum is set by the smoothness prior
+    injected truth overplotted when one is given. Wherever the epochs constrain it weakly
+    (beyond the edges of the data, in masked pixels, and for features broader than the
+    stars' velocity separation), the recovered spectrum is set by the smoothness prior
     rather than by the data, and the band widens accordingly (``docs/math.md`` §5.1).
 
     Parameters

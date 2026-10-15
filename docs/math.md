@@ -5,7 +5,15 @@ likelihood, analyzes its computational structure, and works out the degeneracy t
 the API design. Every method implemented in the code traces back to an equation here, and
 every equation here is intended to be covered by a test.
 
-**Status:** v1. Frozen only after review.
+**Reading this page.** This is the reference derivation behind the code. The
+[method overview](method.md) describes the same method in the terms of a regularized
+least-squares fit, with figures and a glossary of the statistical terms, and is the place to
+start. The sections that define the method are §1.1 to §1.4a (the forward model and the
+noise), §2 (the prior on the spectra), §3.1 to §3.3 (the marginal likelihood and the
+conditional spectra), §5 (what the data do not determine), §6 (the companion scan), §7.2 to
+§7.6 (inference over the orbit), §9 (stellar labels) and §10 (epoch velocities). §3.4, §4,
+§7.1 and §8 record how the computation is organized and tested and are marked as
+implementation notes.
 
 ---
 
@@ -248,9 +256,11 @@ $`-1`$% because 70% of the light constrains it. With the component the fit retur
 $`K_2 - 0.29`$%, $`\Delta P = -1.4\times10^{-4}`$ d, $`e = 0.0022`$. Nebular contamination
 therefore propagates into the dynamical results (the masses) as well as the atmospheric ones.
 
-**Response.** Per-epoch multiplicative Chebyshev polynomial on the native grid,
-$`r_j(\lambda) = \sum_{m=0}^{M} c_{jm}\,\phi_m(\lambda)`$ (default $`M=2`$), absorbing
-continuum-normalization errors. The coefficients are part of $`\theta`$.
+**Response.** An optional per-epoch multiplicative Chebyshev polynomial on the native grid,
+$`r_j(\lambda) = 1 + \sum_{m=0}^{M} c_{jm}\,T_m(x)`$ with $`x`$ the native wavelength scaled to
+$`[-1, 1]`$, absorbs continuum-normalization errors. There is no response unless coefficients
+are declared ($`r_j = 1`$). The order is set by the length of the declared coefficient vector,
+and the coefficients are then part of $`\theta`$ (§7.5).
 
 ### 1.4 The stacked linear model
 
@@ -489,10 +499,11 @@ the profile objective. The marginal differs from the profile likelihood only by
 $`\tfrac12(\log\det\boldsymbol\Lambda - \log\det\tilde{\boldsymbol\Lambda})`$, the Laplace
 correction, which is exact here because the model is linear-Gaussian in $`d`$. This
 identifies the three computational strategies of §4 as the same estimator with different
-$`\log\det`$ treatments: exact (A), stochastic (B), or frozen/dropped (C). Dropping the
-$`\theta`$-dependence of the $`\log\det`$ biases the parameters that
-change the information geometry (light ratios, LSF widths, prior hyperparameters), so
-strategy C is used for quick looks only.
+$`\log\det`$ treatments: exact (A, the one implemented), stochastic (B), or frozen or
+dropped (C). Dropping the $`\theta`$-dependence of the $`\log\det`$ biases the parameters
+that change the information geometry (light ratios, LSF widths, prior hyperparameters), so
+strategy C would suit quick looks only; §4.3 and §4.4 record why B and C were not
+implemented.
 
 ### 3.2a The estimator obtained by profiling the jitter
 
@@ -560,19 +571,25 @@ output.
 
 ### 3.4 Gradients
 
-NUTS requires $`\nabla_\theta \log p(y|\theta)`$. All terms are compositions of JAX primitives, so
-reverse-mode AD applies end-to-end, including through the Cholesky factorization (the
-$`\log\det`$ gradient $`\tfrac12\,\mathrm{tr}(\tilde{\boldsymbol\Lambda}^{-1}\partial\tilde{\boldsymbol\Lambda})`$
-is obtained automatically). Two engineering notes:
+*Implementation note. This subsection records how the gradient is computed; the model is
+that of §3.1 to §3.3.*
 
-- The banded/block factorization is a `lax.scan`; reverse-mode memory is controlled with
-  checkpointing (`jax.checkpoint` per scan block).
-- If AD through the factorization dominates the cost, a custom VJP using the Jacobi formula
-  with the Takahashi selected inverse computes the same gradient with one extra banded sweep.
+NUTS requires $`\nabla_\theta \log p(y|\theta)`$. All terms are compositions of JAX
+primitives, so reverse-mode AD applies end to end. The factorization and the solves are an
+exception: their reverse pass is a custom VJP that uses the closed forms
+$`\partial\log\det\tilde{\boldsymbol\Lambda}/\partial\tilde{\boldsymbol\Lambda} = \tilde{\boldsymbol\Lambda}^{-1}`$
+and $`\partial(b^\top\tilde{\boldsymbol\Lambda}^{-1}b)/\partial\tilde{\boldsymbol\Lambda} = -\hat d\hat d^\top`$,
+with only the band of $`\tilde{\boldsymbol\Lambda}^{-1}`$ formed by the Takahashi selected
+inverse (`albireo.likelihood`, §4.5). This costs about one extra Cholesky factorization and
+stores no backward pass of the scans. The band assembly is a `lax.scan` whose reverse-mode
+memory is controlled with `jax.checkpoint`.
 
 ---
 
 ## 4. Computational structure and strategy
+
+*Implementation note. This section records how the marginal likelihood of §3 is computed at a
+cost linear in the number of pixels; it does not change the model.*
 
 ### 4.1 The structure of $`\tilde{\boldsymbol\Lambda}`$
 
@@ -627,15 +644,16 @@ solves and $`\log\det`$ from the same sweep. Cost $`\approx K \cdot \mathcal{O}(
 and much less for typical SB2s (at $`K_1+K_2 \lesssim 150\ \mathrm{km\,s^{-1}}`$ or
 $`\delta v = 2\ \mathrm{km\,s^{-1}}`$, cost drops by $`\sim 10\times`$). Assembling the band of
 $`\mathbf{A}^\top\mathbf{W}\mathbf{A}`$ is $`\mathcal{O}(J N_c^2 P (m + \text{taps}))`$ via
-shifted-product accumulation, which is subdominant. Two independent forms of batching apply:
-`vmap` over independent wavelength chunks (echelle orders and natural mask gaps make chunks
-exactly independent; otherwise chunking is an explicit, benchmarked approximation) and
-`vmap` over systems (survey mode). NUTS with $`\sim 10^3`$–$`10^4`$ gradient evaluations then
-meets the design requirement of minutes on one GPU.
+shifted-product accumulation, which is subdominant. Two further forms of batching were
+considered and are not implemented: `vmap` over independent wavelength chunks (echelle orders
+and natural mask gaps make chunks exactly independent) and `vmap` over systems. The pipeline
+and the survey runner process systems in separate worker processes instead
+(`albireo.pipeline`, `albireo.survey`). NUTS with $`\sim 10^3`$–$`10^4`$ gradient evaluations
+then meets the design requirement of minutes on one GPU.
 
 ### 4.3 Strategy B: matrix-free CG + stochastic log-det
 
-Apply $`\tilde{\boldsymbol\Lambda}`$ as operators (shift–conv–rebin chains,
+*Considered and not implemented.* Apply $`\tilde{\boldsymbol\Lambda}`$ as operators (shift–conv–rebin chains,
 $`\mathcal{O}(J N_c P)`$ per matvec), solve $`\tilde{\boldsymbol\Lambda}\hat d = b`$ by
 preconditioned CG (circulant/Toeplitz preconditioner from the epoch-averaged stationary
 operator, applied by FFT), and estimate $`\log\det`$ by stochastic Lanczos quadrature.
@@ -643,20 +661,20 @@ Assessment: the matvec is cheap, but hundreds of CG iterations times the number 
 generally cost more than Strategy A at the bandwidths of interest, and SLQ log-det estimates
 are biased and stochastic. They are usable inside MAP optimization, but they violate the
 exactness NUTS requires (a noisy log-density is not a valid target; pseudo-marginal MCMC needs
-unbiased estimates of the likelihood, not of the log-likelihood). Role: fallback for
-pathological bandwidths (extreme $`K_1+K_2`$, very fine grids), and cross-validation of
-Strategy A.
+unbiased estimates of the likelihood, not of the log-likelihood). It was considered as a
+fallback for pathological bandwidths (extreme $`K_1+K_2`$, very fine grids) and as a
+cross-check of Strategy A.
 
 ### 4.4 Strategy C: profile likelihood with frozen log-det
 
-Compute the profile term only (CG solve, no factorization), freezing
-$`\log\det\tilde{\boldsymbol\Lambda}`$ at a reference $`\theta_0`$ (or dropping it). By §3.2 this
-biases light ratios, LSF and hyperparameter inference. Role: fast MAP quick-look and
-initialization only, never final inference.
+*Considered and not implemented.* Compute the profile term only (CG solve, no
+factorization), freezing $`\log\det\tilde{\boldsymbol\Lambda}`$ at a reference $`\theta_0`$ (or
+dropping it). By §3.2 this biases light ratios, LSF and hyperparameter inference, so it
+would serve only as a quick look or an initialization, never for final inference.
 
-**Decision:** implement A as the default engine and B behind the same interface for benchmarks;
-C is used by `fit_map(quick=True)`. The A-vs-B crossover is measured on the design-target
-benchmark and recorded in `docs/benchmarks.md`.
+**Decision:** A is the only engine. Exact comb probing of the matrix-free operators (§4.5),
+available as `marginal_loglikelihood(..., validate=True)`, is the reference implementation
+that checks it, in the role B was considered for.
 
 ### 4.5 Direct band assembly and the closed-form gradient
 
@@ -861,8 +879,9 @@ diverging as $`k\to0`$, with $`k=0`$ exactly singular. Spectral features narrowe
 RMS differential orbital shift separate cleanly; features broader than it cannot be
 attributed to either star from the data alone. This is the low-frequency "undulation"
 artifact familiar from the output of KOREL (Hadrava 1995) and fd3. It is the nullspace of
-the problem, excited by noise, and not a numerical artifact of those codes. Consequences for
-the design:
+the problem, excited by noise and by errors of the continuum normalization (Hadrava 2004;
+Ilijić et al. 2004; Hensberge, Ilijić & Torres 2008), and not a numerical artifact of those
+codes. Consequences for the design:
 
 1. The prior (§2) makes these directions proper and sets their scale explicitly ($`\eta_i`$).
 2. The posterior covariance of §3.3 reports the inflation.
@@ -871,9 +890,9 @@ the design:
    which phase sampling improves separation quality. §5.5 also records where
    $`\mathrm{Var}_j(\Delta)`$ alone ranks designs incorrectly, which is why the exact
    covariance is computed alongside it.
-4. Per-epoch response polynomials absorb the per-epoch near-constant modes;
-   their order is kept low (default 2) so that they cannot absorb real broad features, and the
-   response–low-$`k`$ covariance is visible in the posterior.
+4. Per-epoch response polynomials, where declared, absorb the per-epoch near-constant modes.
+   Their order should be kept low (two or less) so that they cannot absorb real broad
+   features, and the response–low-$`k`$ covariance is visible in the posterior.
 
 ### 5.2 Light ratio ↔ line depth
 
@@ -923,7 +942,7 @@ prior. $`K_i`$, $`e`$, $`\omega`$, $`P_{\rm orb}`$, $`T_{\rm p}`$ are unaffected
 | low-$`k`$ mode exchange between components | exact at $`k=0`$, $`\propto 1/k`$ | phase coverage ($`\mathrm{Var}\,\Delta`$), priors | proper priors; covariance reported; forecast tool (§5.5) returns it as the leading eigenvector, at ~1× the prior for every design |
 | $`\ell_i`$ vs. line depth | exact (constant $`\ell`$) | eclipses, photometry, saturation floor, assumption | `Star(light=)` required per star, fractions summing to 1; per-epoch `light` and Dirichlet priors on the low-level path; the saturation floor is not imposed |
 | $`\gamma`$ vs. common shift | exact up to edges | external rest-frame info | $`\gamma \equiv 0`$ default, post-hoc measurement |
-| per-epoch constants vs. response | approx | low poly order | order $`\le 2`$ default, covariance reported |
+| per-epoch constants vs. response | approx | low poly order | no response unless declared; a declared order of 2 or less; covariance reported |
 | telluric constant vs. common stellar constant | exact up to edges | ridge anchors ($`\eta`$) on both | measured in the telluric closed loop: the two offsets cancel in the sum to $`\lesssim 10^{-3}`$; report both |
 | LSF width vs. intrinsic line widths | near-exact per instrument | cross-instrument spectrum sharing | absolute widths need a reference instrument anchor (tight prior); only relative widths are data-identified (benchmarks.md) |
 | nebular amplitude scale vs. nebular spectrum | exact ($`a_j \to c\,a_j`$, $`d \to d/c`$) | nothing; it is a convention | geometric mean fixed to 1 by centering `log_nebular_amp` (§1.3) |
@@ -1126,6 +1145,9 @@ not a reliable absolute depth scale, unless eclipses or photometry constrain the
 
 ### 7.1 The marginal posterior and its static computation graph
 
+*Implementation note. The bandwidth budget and its guard keep the compiled computation
+valid; they do not change the posterior inside the budget.*
+
 With the spectra marginalized (§3), inference over the nonlinear parameters is ordinary
 low-dimensional Bayes: $`p(\theta \mid y) \propto p(y \mid \theta)\, p(\theta)`$, where every
 $`\theta`$-evaluation rebuilds only the shifts $`\delta_{ij}(\theta)`$ (Kepler velocities → §1.2
@@ -1163,8 +1185,8 @@ piecewise-linear in each shift, so $`\log p(y\mid\theta)`$ is piecewise-$`C^1`$ 
 velocities with derivative kinks where a shift crosses an integer pixel. On an oversampled
 model grid the kink amplitudes are set by sub-pixel spectral curvature and are far below
 the posterior scale. NUTS (Hoffman & Gelman 2014) treats them as it treats any
-leapfrog-scale roughness. The 4-tap cubic kernel (opt-in, flagged) is the smoother
-alternative if a dataset is sensitive to them.
+leapfrog-scale roughness. A 4-tap cubic kernel would be the smoother alternative for a dataset
+sensitive to them; it is not implemented (§1.1).
 
 ### 7.3 Hyperparameters: ML-II by default
 
@@ -1321,6 +1343,8 @@ indicate a wrong period, an unseen third body, or line-profile variability.
 
 ## 8. Traceability: claims and their tests
 
+*Implementation note. The test that checks each claim of the sections above.*
+
 | Claim | Test |
 |---|---|
 | $`\mathbf{T}, \mathbf{R}`$ are exact adjoint pairs | inner-product identity vs. `jax.linear_transpose`, float64, rtol $`10^{-12}`$ |
@@ -1353,7 +1377,9 @@ indicate a wrong period, an unseen third body, or line-profile variability.
 | zero points and flags (§10.4, §10.5) | a template offset composes relativistically to $`10^{-9}`$; an unknown offset is reported as differential; twin stars at one velocity are flagged blended and at 120 km/s are not; a minimum at the range edge is flagged; a continuum offset is absorbed by the nuisance and biases the light without it |
 | orbit from the table (§10.6) | injected $`P, e, \omega, K_1, K_2, \gamma`$ recovered from a noisy table within $`3\sigma`$; `predict` $`\equiv`$ `orbit_velocities(to_theta())` $`+ \gamma`$; per-component $`\gamma`$ recovers offset zero points while a forced shared one corrupts $`K`$; the periodogram finds $`P`$ to 1% |
 
-Every section above is implemented and covered by the tests in this table.
+Each claim in the table is covered by the test named beside it. Strategies B and C (§4.3,
+§4.4), the batching over chunks and systems of §4.2, and the cubic shift kernel of §1.1 and
+§7.2 were considered and are not implemented.
 
 ## 9. Stellar labels from disentangled components
 
@@ -2378,7 +2404,11 @@ first term of the covariance alone, and the second is reported per velocity
 - Gray, D. F. 2005, The Observation and Analysis of Stellar Photospheres, 3rd ed. (Cambridge
   University Press)
 - Hadrava, P. 1995, A&AS, 114, 393
+- Hadrava, P. 2004, Publications of the Astronomical Institute of the Czechoslovak Academy of
+  Sciences, 92, 15
+- Hensberge, H., Ilijić, S. & Torres, K. B. V. 2008, A&A, 482, 1031
 - Hoffman, M. D. & Gelman, A. 2014, Journal of Machine Learning Research, 15, 1593
+- Ilijić, S., Hensberge, H., Pavlovski, K. & Freyhammer, L. M. 2004, in ASP Conf. Ser. 318, 111
 - Mészáros, Sz. & Allende Prieto, C. 2013, MNRAS, 430, 3285
 - Nachmani, G., Faigler, S. & Mazeh, T. 2026, arXiv:2602.05610
 - Posbic, H. et al. 2012, A&A, 544, A154

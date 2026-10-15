@@ -32,6 +32,8 @@ theme:
 nav:
   - Home: index.md
   - Quickstart: quickstart.md
+  - Method overview: method.md
+  - Comparison with other codes: comparison.md
   - Scientific background: science.md
   - Tutorials:
       - Tour the outputs in one notebook: tutorials/showcase.ipynb
@@ -122,6 +124,9 @@ hooks:
   # check-yaml pre-commit hook cannot load. The hook is kept outside docs/ so that mkdocs
   # does not publish it.
   - scripts/mkdocs_math_hook.py
+  # A ```mermaid fence, which GitHub draws as a diagram, becomes the <pre class="mermaid">
+  # element that Material draws; listed after the math hook, which leaves fences alone.
+  - scripts/mkdocs_mermaid_hook.py
   # mkdocs-jupyter renders a notebook outside the MkDocs Markdown pipeline, so a relative
   # link such as ../science.md is published as written and is not validated. The hook
   # rewrites these links to the built page URLs and warns on a missing target. The
