@@ -1,9 +1,11 @@
 % References for paper.md.
 %
-% Provenance note: entries below follow ADS conventions. Fields marked TODO were not
-% verifiable offline and must be checked against ADS/Crossref before submission. DOIs are
-% given only where they are known; missing DOI fields are deliberate, not oversights
-% (pre-1996 A&A/A&AS volumes and ASP conference proceedings generally have none).
+% Provenance note: entries follow ADS conventions, with full journal names as JOSS requires.
+% On 2026-10-15 the DOI, title, author list, volume and pages of every entry with a DOI were
+% checked against Crossref, the arXiv entries against the arXiv API, the CRES reference
+% against its distribution page, the JMLR entry against the journal's page, and the Gaia
+% entries against the ESA pages. Entries without a DOI (pre-1996 A&A and A&AS volumes, ASP
+% conference proceedings) were not re-checked in that pass. Fields marked TODO remain open.
 
 % ADS: 1994A&A...281..286S
 @article{simon1994,
@@ -25,6 +27,18 @@
   pages   = {393},
 }
 
+% arXiv:0909.0172 (the updated KOREL user guide)
+@article{hadrava2009,
+  author        = {{Hadrava}, P.},
+  title         = {Disentangling of spectra - theory and practice},
+  journal       = {arXiv e-prints},
+  year          = {2009},
+  eprint        = {0909.0172},
+  archivePrefix = {arXiv},
+  primaryClass  = {astro-ph.SR},
+  doi           = {10.48550/arXiv.0909.0172},
+}
+
 % ADS: 2004ASPC..318..111I
 @inproceedings{ilijic2004,
   author    = {{Iliji{\'c}}, S. and {Hensberge}, H. and {Pavlovski}, K. and
@@ -40,6 +54,67 @@
   year      = {2004},
 }
 
+% ADS: 2004ASPC..318..107I. The reference that the CRES distribution page asks users to cite.
+@inproceedings{ilijic2004cres,
+  author    = {{Iliji{\'c}}, S.},
+  title     = {Thoughts about disentangling in wavelength and in {F}ourier space},
+  booktitle = {Spectroscopically and Spatially Resolving the Components of the Close Binary
+               Stars},
+  editor    = {{Hilditch}, R.~W. and {Hensberge}, H. and {Pavlovski}, K.},
+  series    = {Astronomical Society of the Pacific Conference Series},
+  volume    = {318},
+  pages     = {107--110},
+  publisher = {Astronomical Society of the Pacific},
+  year      = {2004},
+}
+
+% ADS: 2008A&A...482.1031H
+@article{hensberge2008,
+  author  = {{Hensberge}, H. and {Iliji{\'c}}, S. and {Torres}, K.~B.~V.},
+  title   = {On the separation of component spectra in binary and higher-multiplicity stellar
+             systems: bias progression and spurious patterns},
+  journal = {Astronomy \& Astrophysics},
+  year    = {2008},
+  volume  = {482},
+  number  = {3},
+  pages   = {1031--1051},
+  doi     = {10.1051/0004-6361:20079038},
+}
+
+% ADS: 2017A&A...597A.125S
+@article{sablowski2017,
+  author  = {{Sablowski}, D.~P. and {Weber}, M.},
+  title   = {Spectral disentangling with {Spectangular}},
+  journal = {Astronomy \& Astrophysics},
+  year    = {2017},
+  volume  = {597},
+  pages   = {A125},
+  doi     = {10.1051/0004-6361/201628716},
+}
+
+% ADS: 2019A&A...623A..31S
+@article{sablowski2019,
+  author  = {{Sablowski}, D.~P. and {J{\"a}rvinen}, S. and {Weber}, M.},
+  title   = {{Spectangular}: disentangling variable spectra},
+  journal = {Astronomy \& Astrophysics},
+  year    = {2019},
+  volume  = {623},
+  pages   = {A31},
+  doi     = {10.1051/0004-6361/201834836},
+}
+
+% ADS: 1998PASP..110.1416M
+@article{marchenko1998,
+  author  = {{Marchenko}, S.~V. and {Moffat}, A.~F.~J. and {Eenens}, P.~R.~J.},
+  title   = {The {W}olf-{R}ayet binary {WR} 141 ({WN5o} + {O5} {V--III}) revisited},
+  journal = {Publications of the Astronomical Society of the Pacific},
+  year    = {1998},
+  volume  = {110},
+  number  = {754},
+  pages   = {1416--1422},
+  doi     = {10.1086/316280},
+}
+
 % ADS: 2006A&A...448..283G
 @article{gonzalez2006,
   author  = {{Gonz{\'a}lez}, J.~F. and {Levato}, H.},
@@ -51,7 +126,19 @@
   number  = {1},
   pages   = {283--292},
   doi     = {10.1051/0004-6361:20053177},
-  % TODO: verify DOI string against Crossref.
+}
+
+% ADS: 2020AN....341..628Q
+@article{quintero2020,
+  author  = {{Quintero}, E.~A. and {Eenens}, P. and {Rauw}, G.},
+  title   = {The massive binary system 9 {Sgr} revisited: new insights into disentangling
+             methods},
+  journal = {Astronomische Nachrichten},
+  year    = {2020},
+  volume  = {341},
+  number  = {6-7},
+  pages   = {628--637},
+  doi     = {10.1002/asna.202013696},
 }
 
 % ADS: 2017ApJ...840...49C
@@ -72,28 +159,189 @@
 % ADS: 2020A&A...639L...6S
 @article{shenar2020,
   author  = {{Shenar}, T. and {Bodensteiner}, J. and {Abdul-Masih}, M. and {Fabry}, M. and
-             {Marchant}, P. and {Banyard}, G. and {Bowman}, D.~M. and {Dsilva}, K. and
-             {Hawcroft}, C. and {Reggiani}, M. and {Sana}, H.},
+             {Mahy}, L. and {Marchant}, P. and {Banyard}, G. and {Bowman}, D.~M. and
+             {Dsilva}, K. and {Hawcroft}, C. and {Reggiani}, M. and {Sana}, H.},
   title   = {The ``hidden'' companion in {LB-1} unveiled by spectral disentangling},
   journal = {Astronomy \& Astrophysics},
   year    = {2020},
   volume  = {639},
   pages   = {L6},
   doi     = {10.1051/0004-6361/202038275},
-  % TODO: verify DOI string and the full author list against ADS.
+}
+
+% ADS: 2020A&A...641A..43B
+@article{bodensteiner2020,
+  author  = {{Bodensteiner}, J. and {Shenar}, T. and {Mahy}, L. and {Fabry}, M. and
+             {Marchant}, P. and {Abdul-Masih}, M. and {Banyard}, G. and {Bowman}, D.~M. and
+             {Dsilva}, K. and {Frost}, A.~J. and {Hawcroft}, C. and {Reggiani}, M. and
+             {Sana}, H.},
+  title   = {Is {HR} 6819 a triple system containing a black hole? {A}n alternative
+             explanation},
+  journal = {Astronomy \& Astrophysics},
+  year    = {2020},
+  volume  = {641},
+  pages   = {A43},
+  doi     = {10.1051/0004-6361/202038682},
+}
+
+% ADS: 2022A&A...665A.148S
+@article{shenar2022,
+  author  = {{Shenar}, T. and {Sana}, H. and {Mahy}, L. and {Ma{\'i}z Apell{\'a}niz}, J. and
+             {Crowther}, P.~A. and {Gromadzki}, M. and {Herrero}, A. and {Langer}, N. and
+             {Marchant}, P. and {Schneider}, F.~R.~N. and {Sen}, K. and
+             {Soszy{\'n}ski}, I. and {Toonen}, S.},
+  title   = {The {T}arantula {M}assive {B}inary {M}onitoring. {VI}. {C}haracterisation of
+             hidden companions in 51 single-lined {O}-type binaries: a flat mass-ratio
+             distribution and black-hole binary candidates},
+  journal = {Astronomy \& Astrophysics},
+  year    = {2022},
+  volume  = {665},
+  pages   = {A148},
+  doi     = {10.1051/0004-6361/202244245},
 }
 
 % ADS: 2024MNRAS.530.1935S
 @article{seeburger2024,
   author  = {{Seeburger}, Rhys and {Rix}, Hans-Walter and {El-Badry}, Kareem and
              {Xiang}, Maosheng and {Fouesneau}, Morgan},
-  title   = {Autonomous spectral disentangling for large spectroscopic surveys},
+  title   = {Autonomous disentangling for spectroscopic surveys},
   journal = {Monthly Notices of the Royal Astronomical Society},
   year    = {2024},
   volume  = {530},
   number  = {2},
-  pages   = {1935},
+  pages   = {1935--1955},
   doi     = {10.1093/mnras/stae982},
+}
+
+% ADS: 2025A&A...694A.208K
+@article{klement2025,
+  author  = {{Klement}, R. and {Rivinius}, Th. and {Baade}, D. and {M{\'e}rand}, A. and
+             {Bodensteiner}, J. and {Frost}, A.~J. and {Sana}, H. and {Shenar}, T. and
+             {Gies}, D.~R. and {Hadrava}, P.},
+  title   = {{VLTI/GRAVITY} enables the determination of the first dynamical masses of a
+             classical {Be} + stripped and bloated pre-subdwarf binary},
+  journal = {Astronomy \& Astrophysics},
+  year    = {2025},
+  volume  = {694},
+  pages   = {A208},
+  doi     = {10.1051/0004-6361/202453248},
+}
+
+% The public shift-and-add implementation. Its README (V2.0, 11 September 2023) names Tomer
+% Shenar as author, with contributions from M. Fabry and J. Bodensteiner; no licence file.
+@software{shenar2023code,
+  author  = {Shenar, Tomer},
+  title   = {Disentangling\_Shift\_And\_Add},
+  version = {2.0},
+  year    = {2023},
+  url     = {https://github.com/TomerShenar/Disentangling_Shift_And_Add},
+}
+
+% ADS: 2020MNRAS.498..332M
+@article{maxted2020,
+  author  = {{Maxted}, P.~F.~L. and {Gaulme}, P. and {Graczyk}, D. and
+             {He{\l}miniak}, K.~G. and {Johnston}, C. and {Orosz}, J.~A. and
+             {Pr{\v{s}}a}, A. and {Southworth}, J. and {Torres}, G. and {Davies}, G.~R. and
+             {Ball}, W. and {Chaplin}, W.~J.},
+  title   = {The {TESS} light curve of {AI} {P}hoenicis},
+  journal = {Monthly Notices of the Royal Astronomical Society},
+  year    = {2020},
+  volume  = {498},
+  number  = {1},
+  pages   = {332--343},
+  doi     = {10.1093/mnras/staa1662},
+}
+
+% ADS: 2024A&A...690A.289S
+@article{shenar2024,
+  author  = {{Shenar}, T. and {Bodensteiner}, J. and {Sana}, H. and {Crowther}, P.~A. and
+             {Lennon}, D.~J. and {Abdul-Masih}, M. and {Almeida}, L.~A. and {Backs}, F. and
+             {Berlanas}, S.~R. and {Bernini-Peron}, M. and {Bestenlehner}, J.~M. and
+             {Bowman}, D.~M. and others},
+  title   = {Binarity at {LO}w {M}etallicity ({BLOeM}): a spectroscopic {VLT} monitoring
+             survey of massive stars in the {SMC}},
+  journal = {Astronomy \& Astrophysics},
+  year    = {2024},
+  volume  = {690},
+  pages   = {A289},
+  doi     = {10.1051/0004-6361/202451586},
+}
+
+% ADS: 2025A&A...698A..41V
+@article{villasenor2025,
+  author  = {{Villase{\~n}or}, J.~I. and {Sana}, H. and {Mahy}, L. and {Shenar}, T. and
+             {Bodensteiner}, J. and {Britavskiy}, N. and {Lennon}, D.~J. and {Moe}, M. and
+             {Patrick}, L.~R. and {Pawlak}, M. and {Bowman}, D.~M. and {Crowther}, P.~A. and
+             others},
+  title   = {Binarity at {LO}w {M}etallicity ({BLOeM}): enhanced multiplicity of early
+             {B}-type dwarfs and giants at $Z = 0.2\,Z_\odot$},
+  journal = {Astronomy \& Astrophysics},
+  year    = {2025},
+  volume  = {698},
+  pages   = {A41},
+  doi     = {10.1051/0004-6361/202453166},
+}
+
+@misc{gaiarelease,
+  author  = {{European Space Agency}},
+  title   = {Gaia data release scenario},
+  year    = {2026},
+  url     = {https://www.cosmos.esa.int/web/gaia/release},
+  urldate = {2026-10-15},
+}
+
+@misc{gaiadr4,
+  author  = {{European Space Agency}},
+  title   = {Gaia {DR4} content},
+  year    = {2026},
+  url     = {https://www.cosmos.esa.int/web/gaia/dr4},
+  urldate = {2026-10-15},
+}
+
+@article{mackay1992,
+  author  = {MacKay, David J. C.},
+  title   = {Bayesian interpolation},
+  journal = {Neural Computation},
+  year    = {1992},
+  volume  = {4},
+  number  = {3},
+  pages   = {415--447},
+  doi     = {10.1162/neco.1992.4.3.415},
+}
+
+@article{erisman1975,
+  author  = {{Erisman}, A.~M. and {Tinney}, W.~F.},
+  title   = {On computing certain elements of the inverse of a sparse matrix},
+  journal = {Communications of the ACM},
+  year    = {1975},
+  volume  = {18},
+  number  = {3},
+  pages   = {177--179},
+  doi     = {10.1145/360680.360704},
+}
+
+@article{hoffman2014,
+  author  = {Hoffman, Matthew D. and Gelman, Andrew},
+  title   = {The {No-U-Turn} Sampler: adaptively setting path lengths in {H}amiltonian
+             {M}onte {C}arlo},
+  journal = {Journal of Machine Learning Research},
+  year    = {2014},
+  volume  = {15},
+  number  = {47},
+  pages   = {1593--1623},
+  url     = {https://jmlr.org/papers/v15/hoffman14a.html},
+}
+
+% ADS: 1994ApJ...420..806Z
+@article{zucker1994,
+  author  = {{Zucker}, S. and {Mazeh}, T.},
+  title   = {Study of spectroscopic binaries with {TODCOR}. {I}. {A} new two-dimensional
+             correlation algorithm to derive the radial velocities of the two components},
+  journal = {The Astrophysical Journal},
+  year    = {1994},
+  volume  = {420},
+  pages   = {806},
+  doi     = {10.1086/173605},
 }
 
 @software{jax2018,
@@ -138,4 +386,34 @@
   url    = {http://github.com/google-deepmind},
   % Optax's own citation guidance points at this entry; TODO: re-check upstream README in
   % case optax gains a standalone reference before submission.
+}
+
+% ADS: 2020Natur.585..357H
+@article{harris2020,
+  author  = {Harris, Charles R. and Millman, K. Jarrod and van der Walt, St{\'e}fan J. and
+             Gommers, Ralf and Virtanen, Pauli and Cournapeau, David and Wieser, Eric and
+             Taylor, Julian and Berg, Sebastian and Smith, Nathaniel J. and Kern, Robert and
+             Picus, Matti and Hoyer, Stephan and van Kerkwijk, Marten H. and others},
+  title   = {Array programming with {NumPy}},
+  journal = {Nature},
+  year    = {2020},
+  volume  = {585},
+  number  = {7825},
+  pages   = {357--362},
+  doi     = {10.1038/s41586-020-2649-2},
+}
+
+% ADS: 2020NatMe..17..261V
+@article{virtanen2020,
+  author  = {Virtanen, Pauli and Gommers, Ralf and Oliphant, Travis E. and Haberland, Matt and
+             Reddy, Tyler and Cournapeau, David and Burovski, Evgeni and Peterson, Pearu and
+             Weckesser, Warren and Bright, Jonathan and van der Walt, St{\'e}fan J. and
+             Brett, Matthew and others},
+  title   = {{SciPy} 1.0: fundamental algorithms for scientific computing in {P}ython},
+  journal = {Nature Methods},
+  year    = {2020},
+  volume  = {17},
+  number  = {3},
+  pages   = {261--272},
+  doi     = {10.1038/s41592-019-0686-2},
 }
