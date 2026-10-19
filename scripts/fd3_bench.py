@@ -7,6 +7,20 @@ writes fd3 v3.1 input files (format verified against the official examples; see
 solve. When an fd3 binary is available, it runs fd3 in separation mode on identical
 data and compares recovered component spectra and wall time.
 
+The spectra are scored at the instrumental resolution. The simulated epochs are convolved
+with a 6 km/s Gaussian LSF; fd3 and shift-and-add take no LSF and return the component
+spectra at that resolution, B d, while albireo is given the LSF and returns them
+deconvolved, d. Every code is therefore scored against B d, the injected spectra convolved
+with the simulator's own kernel, and albireo's spectra are convolved with the same kernel
+before scoring. The scores against the injected spectra before the LSF, the convention of
+the tables recorded before 2026-10-15, are printed as well: they charge the LSF's own
+broadening (0.0190 / 0.0206 mean-aligned) to fd3 and shift-and-add only, and are not a
+comparison of the codes (docs/benchmarks.md, "The three-code comparison at a common
+resolution"). The three codes share the shift operator: fd3 multiplies each Fourier mode
+by the transform of a linear interpolation (fd3sep.c), the interpolation that albireo, the
+simulator and scripts/shift_and_add.py apply in pixel space, so on noiseless data fd3
+returns B d to 1e-5 apart from the constant offset.
+
 Without an fd3 binary the export and the albireo side still run and write
 everything needed. Pass the built binary with --fd3 (source:
 http://sail.zpf.fer.hr/fdbinary/fd3.tar.gz, ~1.9 MB, needs GSL; no license stated
@@ -45,6 +59,7 @@ import albireo as ab
 from albireo.forward import build_problem
 from albireo.kepler import t_peri_from_t_conj
 from albireo.likelihood import marginal_loglikelihood
+from albireo.operators import convolve_spectrum, gaussian_kernel
 from albireo.priors import SmoothnessPrior
 
 # --- benchmark configuration (deterministic) --------------------------------
@@ -56,7 +71,8 @@ N_EP, SNR, LSF_V = 20, 100.0, 6.0
 TAU, ETA = 300.0, 5.0
 
 
-def simulate():
+def simulate(noise_seed: int = 7):
+    """The benchmark SB2; ``noise_seed`` draws the noise only (7 is the recorded benchmark)."""
     rng = np.random.default_rng(42)
     bjd = np.sort(rng.uniform(0.0, 2.7 * P, N_EP))
     comps = [
@@ -80,9 +96,20 @@ def simulate():
         orbit=orbit,
         v_bary=np.zeros(N_EP),
         frame="barycentric",
-        seed=7,
+        seed=noise_seed,
     )
     return ds, truth, tperi
+
+
+def lsf_convolve(spectrum) -> np.ndarray:
+    """B: the simulator's LSF on the model grid (the same kernel and zero-padded convolution).
+
+    Applied to an injected component it gives the spectrum at the instrumental resolution,
+    which fd3 and shift-and-add estimate; applied to albireo's deconvolved spectrum it gives
+    albireo's estimate of the same quantity.
+    """
+    kernel = gaussian_kernel(LSF_V / GRID.dv_kms)
+    return np.asarray(convolve_spectrum(jnp.asarray(spectrum), kernel))
 
 
 def write_fd3_inputs(outdir: Path, ds, tperi: float, fit: bool) -> tuple[Path, Path]:
@@ -188,21 +215,30 @@ def _time_in_fresh_process(obs: np.ndarray, shifts_pix: np.ndarray, n_iter: int)
     return float(out.stdout.strip().splitlines()[-1])
 
 
-def run_shift_and_add(ds, truth, truth_d, n_iter: int = 7):
-    """The third code: the clean-room shift-and-add of ``scripts/shift_and_add.py``.
+def shift_and_add_inputs(ds, truth) -> tuple[np.ndarray, np.ndarray]:
+    """The deviations ``flux - 1`` and the per-epoch shifts in pixels, ``(2, n_epochs)``.
 
-    Run on the same data, with the same velocities and the same linear shift operator that
-    albireo uses, so that the comparison is of the algorithms.
+    The observations are on the model grid's interior, so a velocity is a pure pixel shift:
+    xi(v) / dx on a uniform ln-lambda grid.
     """
-    from shift_and_add import disentangle  # local module, not part of the package
-
-    # The observations are on the model grid's interior, so a velocity is a pure pixel
-    # shift: xi(v) / dx on a uniform ln-lambda grid.
     shifts_pix = np.asarray(
         [[float(ab.log_doppler_shift(v) / GRID.dx) for v in truth.velocities[i]] for i in range(2)]
     )
     obs = np.stack([np.asarray(ep.flux) - 1.0 for ep in ds])
+    return obs, shifts_pix
 
+
+def run_shift_and_add(ds, truth, truth_b, truth_d, n_iter: int = 7):
+    """The third code: the clean-room shift-and-add of ``scripts/shift_and_add.py``.
+
+    Run on the same data, with the same velocities and the same linear shift operator that
+    albireo uses, so that the comparison is of the algorithms. Scored against ``truth_b``
+    (the injected spectra at the instrumental resolution) and, for the record, against
+    ``truth_d`` (before the LSF).
+    """
+    from shift_and_add import disentangle  # local module, not part of the package
+
+    obs, shifts_pix = shift_and_add_inputs(ds, truth)
     rec = disentangle(obs, shifts_pix, n_iter=n_iter)  # the spectra, for the metrics
     wall = _time_in_fresh_process(obs, shifts_pix, n_iter)
 
@@ -211,19 +247,33 @@ def run_shift_and_add(ds, truth, truth_d, n_iter: int = 7):
         # The iteration's fixed point is the light-weighted l_i * d_i, because that is what
         # the composite contains. Undilute before comparing with the injected spectra.
         comp = rec[i] / ELL[i]
-        spectrum_metrics(comp, truth_d[i], f"shift-and-add comp {i + 1}")
+        spectrum_metrics(comp, truth_b[i], f"shift-and-add comp {i + 1}, against B d")
+        spectrum_metrics(comp, truth_d[i], f"shift-and-add comp {i + 1}, against d (record)")
     print(f"  shift-and-add wall (fresh process, min of 5): {wall:.3f} s")
     return rec, wall
 
 
-def spectrum_metrics(recovered: np.ndarray, truth_d: np.ndarray, label: str):
-    """RMS in line cores, raw and mean-aligned (both codes have a k~0 freedom)."""
-    core = truth_d < -0.15
+def core_mask(reference: np.ndarray) -> np.ndarray:
+    """The line cores: ``reference`` below -0.15, with 80 px at either end left out."""
+    core = reference < -0.15
     core[:80] = core[-80:] = False
-    err = recovered[core] - truth_d[core]
+    return core
+
+
+def core_rms(recovered: np.ndarray, reference: np.ndarray) -> tuple[float, float]:
+    """RMS in the line cores, raw and mean-aligned (every code has a k~0 freedom)."""
+    core = core_mask(reference)
+    err = recovered[core] - reference[core]
     raw = float(np.sqrt(np.mean(err**2)))
     aligned = float(np.sqrt(np.mean((err - err.mean()) ** 2)))
-    print(f"  {label}: core RMS {raw:.4f} (mean-aligned {aligned:.4f}, {core.sum()} px)")
+    return raw, aligned
+
+
+def spectrum_metrics(recovered: np.ndarray, reference: np.ndarray, label: str):
+    """Print and return :func:`core_rms`."""
+    raw, aligned = core_rms(recovered, reference)
+    n_core = int(core_mask(reference).sum())
+    print(f"  {label}: core RMS {raw:.4f} (mean-aligned {aligned:.4f}, {n_core} px)")
     return raw, aligned
 
 
@@ -238,6 +288,9 @@ def main():
 
     ds, truth, tperi = simulate()
     truth_d = np.stack([np.asarray(c) for c in truth.components])[:, 60:-60]
+    # The injected spectra at the instrumental resolution, which every code is scored
+    # against (fd3 and shift-and-add take no LSF and estimate these).
+    truth_b = np.stack([lsf_convolve(c) for c in truth.components])[:, 60:-60]
 
     control_fixed, root_fixed = write_fd3_inputs(outdir, ds, tperi, fit=False)
     if args.fit:
@@ -254,7 +307,9 @@ def main():
     print("albireo fixed-orbit solve (same data, native masks/weights unused: parity):")
     d_hat, wall = run_albireo(ds, truth)
     for i in range(2):
-        spectrum_metrics(d_hat[i][60:-60], truth_d[i], f"albireo comp {i + 1}")
+        b_hat = lsf_convolve(d_hat[i])[60:-60]
+        spectrum_metrics(b_hat, truth_b[i], f"albireo comp {i + 1}, B d_hat against B d")
+        spectrum_metrics(d_hat[i][60:-60], truth_d[i], f"albireo comp {i + 1}, d_hat against d")
     print(f"  albireo wall (un-jitted single solve): {wall:.2f} s")
 
     fd3_bin = args.fd3 or shutil.which("fd3")
@@ -272,7 +327,7 @@ def main():
     with open(control_fixed) as fin, open(f"{root_fixed}.out", "w") as fout:
         subprocess.run([fd3_bin], stdin=fin, stdout=fout, cwd=outdir, check=True)
     wall_fd3 = time.time() - t0
-    run_shift_and_add(ds, truth, truth_d)
+    run_shift_and_add(ds, truth, truth_b, truth_d)
     mod = read_fd3_matrix(Path(f"{root_fixed}.mod"))
     # fd3 components are normalized flux; albireo's are deviations. Interpolate fd3's
     # output (its ln-lambda column) onto the interior pixel grid for comparison.
@@ -280,7 +335,8 @@ def main():
     lnlam = GRID.x0 + GRID.dx * (i0 + np.arange(truth_d.shape[1]))
     for i in range(2):
         comp = np.interp(lnlam, mod[:, 0], mod[:, i + 1]) - 1.0
-        spectrum_metrics(comp, truth_d[i], f"fd3 comp {i + 1}")
+        spectrum_metrics(comp, truth_b[i], f"fd3 comp {i + 1}, against B d")
+        spectrum_metrics(comp, truth_d[i], f"fd3 comp {i + 1}, against d (record)")
     print(f"  fd3 wall (separation): {wall_fd3:.2f} s")
 
 

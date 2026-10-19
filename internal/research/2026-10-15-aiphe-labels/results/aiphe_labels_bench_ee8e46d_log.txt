@@ -1,0 +1,87 @@
+albireo 0.1.0.dev0 - AI Phoenicis (HD 6980) label validation
+window 5150-5250 A, library 'bosz2024-fgk-r20000'
+
+published, and derived from the published:
+  log g primary   4.0011 from the elements, 4.0028 from M and R
+  log g secondary 3.5979 from the elements, 3.5991 from M and R
+  Teff       6310 K and 5010 K
+  R2/R1      1.6237
+C:\Users\thari\DOCUME~1\temp\claude\C--Users-thari-Documents-GitHub-albireo\963051fe-6cc6-43af-a034-4c782e54baa5\scratchpad\old_ee8e46d\scripts\aiphe_bench.py:96: RuntimeWarning: data\aiphe\ADP.2014-09-25T15-33-00.737.fits: the ERR column holds no finite positive value, so the file carries no usable uncertainties and albireo will estimate them from the scatter instead (to_epoch's ivar_scaling). This is normal for FEROS and HARPS, whose pipelines produce no error spectrum, but it means the weights are albireo's assumption rather than the archive's.
+(the same for 35 more of the 36 files.)
+  ds = ab.read_dataset(
+
+Dataset: 36 epochs, frame='barycentric'
+  BJD_TDB 2455721.83348 to 2458098.56024 (span 2376.72676 d)
+  instruments (1):
+    HARPS  36 epochs, 5150.00-5250.00 A, 360036 px
+  good pixels: 358265 / 360036 (99.5%)
+
+disentangled on 7578 px in 13.2 s
+  light fractions assumed (blackbody at 5200 A): 0.5441 / 0.4559
+  library: 454 nodes x 974 px (air)
+
+--- log g fixed at the eclipse solution (32 s) ---
+  primary    Teff  6383.3 +/-  15.5 K ( +73.3 K, +1.16%)   log g 4.001 (+0.000)   [M/H] +0.026   vsini  2.48
+  secondary  Teff  5214.1 +/-   8.4 K (+204.1 K, +4.07%)   log g 3.598 (+0.000)   [M/H] +0.026   vsini  1.58
+  light fractions fitted: 0.5109 / 0.4891
+  chi2 428241.8 / 15156 px   nulls: nearest node 6.022e+05, no template 1.984e+06
+  strong correlations: mh-teff_secondary +0.99
+
+--- log g free (24 s) ---
+  primary    Teff  6311.0 +/-  23.4 K (  +1.0 K, +0.02%)   log g 3.954 (-0.047)   [M/H] -0.042   vsini  2.52
+  secondary  Teff  5263.9 +/-  17.0 K (+253.9 K, +5.07%)   log g 3.472 (-0.126)   [M/H] -0.042   vsini  2.41
+  light fractions fitted: 0.5036 / 0.4964
+  chi2 423960.5 / 15156 px   nulls: nearest node 5.957e+05, no template 1.984e+06
+  strong correlations: logg_primary-mh +0.97
+
+--- log g fixed, dilution frozen at the blackbody estimate ---
+  primary    Teff  6446.6 +/-  14.6 K (+136.6 K, +2.17%)   log g 4.001 (+0.000)   [M/H] -0.014   vsini  2.39
+  secondary  Teff  5264.3 +/-   1.4 K (+254.3 K, +5.07%)   log g 3.598 (+0.000)   [M/H] -0.014   vsini  2.07
+  light fractions fitted: 0.5441 / 0.4559
+  chi2 435714.3 / 15156 px   nulls: nearest node 6.022e+05, no template 1.984e+06
+
+--- the radius ratio, which nothing in the fit was told ---
+  fitted jointly   l1/l2 = 0.5109/0.4891   R2/R1 = 1.5673 (-3.5%)   published 1.6237
+  log g free       l1/l2 = 0.5036/0.4964   R2/R1 = 1.5141 (-6.8%)   published 1.6237
+
+LabelMatch: 2 component(s), 15156 pixels, chi2 = 428241.8
+  null (no template)   chi2 = 1983865.4
+  null (nearest node)  chi2 = 602243.5
+
+  primary:
+    teff     6383.263 K +- 15.524 formal
+    logg        4.001 dex   (fixed)
+    mh          0.026 dex +- 0.008 formal
+    vsini       2.482 km/s +- 0.143 formal
+    v_kms      -3.546 km/s +- 0.057 formal
+    light fraction 0.5109 (median over the band)
+  secondary:
+    teff     5214.125 K +- 8.357 formal
+    logg        3.598 dex   (fixed)
+    mh          0.026 dex +- 0.008 formal
+    vsini       1.576 km/s +- 0.182 formal
+    v_kms      -3.410 km/s +- 0.049 formal
+    light fraction 0.4891 (median over the band)
+
+  Formal errors only. On disentangled spectra these run 5-10x optimistic,
+  because the residuals are correlated rather than white (Gebruers+ 2022:
+  70 K formal against 425 K realistic). Refit the spectral posterior draws
+  with refit_draws(match, draws) before quoting these anywhere.
+
+  Degenerate pairs:
+    mh / teff_secondary: +0.990
+
+  L-BFGS used all 400 steps it was given (final gradient norm 584). That is normal: the
+  tolerance is absolute and unreachable at this scale, but if the fitted
+  chi-square is not well below the nearest-node null, re-run with more.
+
+  Assumed, not measured:
+    light_fractions: [0.5441119717092525, 0.4558880282907475]
+    lsf_sigma_kms: 1.1070540764100707
+    medium: air
+    compare: native
+    macro_kms: {'primary': 0.0, 'secondary': 0.0}
+    offset_order: 2
+    dilution: radius_ratio
+    vmicro: {'primary': 2, 'secondary': 2}
+    grids: {'primary': 'bosz2024-fgk-r20000', 'secondary': 'bosz2024-fgk-r20000'}

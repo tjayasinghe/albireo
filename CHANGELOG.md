@@ -806,6 +806,21 @@ This file records what changed. The reasons are recorded elsewhere:
   2020 as A&A 639, A6 (it is L6), misquoted González & Levato, and attributed the LB-1 and
   HR 6819 analyses to a code that those papers do not name. The same entries are corrected in
   `internal/design.md` and `paper/paper.md`.
+- **The accuracy comparison of albireo, fd3 and shift-and-add, scored at a common
+  resolution.** `scripts/fd3_bench.py` scored every code against the injected spectra before
+  the line-spread function. albireo is given the LSF and deconvolves, while fd3 and
+  shift-and-add return the spectra at the instrumental resolution, so the LSF's own
+  broadening was counted as their error, and the documents stated that albireo had about
+  half the error of the other two. The harness now scores every code against the injected
+  spectra convolved with the LSF, with albireo's spectra convolved with the same LSF. On the
+  recorded benchmark the aligned errors are 0.0033 / 0.0052 (albireo), 0.0055 / 0.0090 (fd3)
+  and 0.0145 / 0.0226 (shift-and-add, seven sweeps): albireo's are 0.6 times fd3's over twenty
+  noise realizations, from noise above the LSF cutoff that it removes because it is given the
+  LSF. Seven sweeps of shift-and-add are far from converged, and its limit, after about
+  20,000 sweeps, is 0.0041 / 0.0064. `scripts/fd3_bench_checks.py` adds the noise
+  realizations, albireo without the LSF and with ML-II weights, the error by frequency band,
+  the bias and the dependence on the number of sweeps. `docs/benchmarks.md` ("The three-code
+  comparison at a common resolution") and `docs/comparison.md` §4 are corrected.
 - **`todcor` on two identical templates with free amplitudes.** Where two templates are the
   same spectrum and their shifts nearly coincide, the normal equations are singular to
   rounding, the minimum chi-square can come out negative and a variance of the error

@@ -1,0 +1,27 @@
+C:\Users\thari\Documents\GitHub\albireo\scripts\aiphe_offset_tests.py:81: RuntimeWarning: data\aiphe\ADP.2014-09-25T15-33-00.737.fits: the ERR column holds no finite positive value, so the file carries no usable uncertainties and albireo will estimate them from the scatter instead (to_epoch's ivar_scaling). This is normal for FEROS and HARPS, whose pipelines produce no error spectrum, but it means the weights are albireo's assumption rather than the archive's.
+(the same for 35 more of the 36 files.)
+  return read_raw_spectra(str(data_dir / "*.fits"))
+albireo 0.1.0.dev0: 36 spectra, 6 EGGS-mode at R = 80,000
+window (5150.0, 5250.0), sigma_HAM 1.107 km/s, sigma_EGGS 1.591 km/s
+
+--- baseline: the aiphe_bench.py configuration (36 epochs, one HARPS key) ---
+    [baseline] step   50  U=-231815.4  |g|=1.92e+04  K1=50.459 K2=49.488
+    [baseline] step  100  U=-232330.2  |g|=7.54e+01  K1=50.452 K2=49.495
+    [baseline] step  150  U=-232334.1  |g|=5.04e+02  K1=50.452 K2=49.495
+    [baseline] step  200  U=-232334.1  |g|=9.20e+01  K1=50.452 K2=49.495
+    [baseline] step  250  U=-232334.2  |g|=1.88e+02  K1=50.452 K2=49.495
+    [baseline] step  300  U=-232339.0  |g|=4.88e+03  K1=50.452 K2=49.495
+    [baseline] step  350  U=-232339.7  |g|=7.52e+02  K1=50.451 K2=49.495
+    [baseline] step  400  U=-232343.0  |g|=4.84e+03  K1=50.454 K2=49.495
+  baseline       K1 50.454 (-1.39%)  K2 49.495 (+0.79%)  q 1.0194 (-2.16%)  common -0.550  anti -0.160  e 0.1880  omega 111.01  P 24.590255  z-RMS 2.342  |g| 4.8e+03 CAP 400 steps 1616 s
+
+--- test 1: the six EGGS epochs keyed at R = 80,000, then dropped ---
+  instruments ('HARPS', 'HARPS_EGGS'); widths {'HARPS': 1.1070540764100707, 'HARPS_EGGS': 1.5913902348394766}
+    [eggs_keyed] step   50  U=-229357.9  |g|=1.46e+04  K1=50.464 K2=49.494
+    [eggs_keyed] step  100  U=-229852.4  |g|=2.05e+02  K1=50.450 K2=49.490
+    [eggs_keyed] step  150  U=-229856.0  |g|=7.15e+01  K1=50.451 K2=49.490
+    [eggs_keyed] step  200  U=-229867.8  |g|=3.53e+03  K1=50.451 K2=49.490
+    [eggs_keyed] step  250  U=-229871.0  |g|=1.63e+03  K1=50.451 K2=49.490
+    [eggs_keyed] step  300  U=-229873.8  |g|=6.25e-02  K1=50.451 K2=49.490
+  eggs_keyed     K1 50.451 (-1.39%)  K2 49.490 (+0.78%)  q 1.0194 (-2.16%)  common -0.549  anti -0.165  e 0.1879  omega 111.03  P 24.590253  z-RMS 2.345  |g| 6.1e-03 conv 313 steps 1633 s
+    [eggs_dropped] step   50  U=-107426.2  |g|=1.32e+04  K1=50.511 K2=49.420

@@ -164,8 +164,12 @@ share the same component spectra identify the differences between their widths; 
 absolute scale must come from one instrument whose profile is known. The width is declared
 per exposure, not per instrument name, because one spectrograph observes in more than one
 mode: the HARPS archive of AI Phoenicis mixes R = 115,000 and R = 80,000 exposures under
-one `INSTRUME`, and modelling the second kind at the first width was measured to shift the
-semi-amplitudes (see the benchmarks page).
+one `INSTRUME`. On that system, modelling the six R = 80,000 exposures at their own width
+rather than at the R = 115,000 width changes the semi-amplitudes by 0.003 and 0.005 km/s,
+against an offset of about 1 per cent from the published values
+([benchmarks](benchmarks.md#two-resolving-powers-under-one-instrument-name-d59-2026-09-03)),
+and the temperatures fitted with log g declared by less than 2 K
+([benchmarks](benchmarks.md#effect-of-the-width-the-period-and-the-library-build-2026-10-15)).
 
 ## 4. The albireo model
 
@@ -379,13 +383,15 @@ resolve a BLOeM identifier to its archival spectra ([tutorial](tutorials/bloem-s
 scan, which is validated on simulated data with injected companions.
 
 **Synthetic Gaia RVS binaries** are the test of the survey case. Gaia DR4 (December 2026)
-publishes an epoch RVS spectrum per transit for the double-lined sources its own pipeline
-rejects (Katz et al. 2023; the ESA DR4 content page), and `albireo.gaia` reproduces the
-observation chain, following Rowan's reference implementation, with the constants of
-Cropper et al. (2018) and Sartoretti et al. (2023): photon noise per detector pixel at the
-signal-to-noise that follows from G_RVS, delivery onto the archive grid with the noise
-correlation that resampling introduces, the resolving powers measured per CCD, and the
-transit cadence of the scanning law in distribution. Populations of systems drawn from the
+publishes one RVS spectrum per field-of-view transit, in the solar barycentric frame:
+6,910,785,949 epoch spectra, with transit-level radial velocities for 787,312 double-lined
+transits ([ESA DR4 content page](https://www.cosmos.esa.int/web/gaia/dr4), last updated
+14 September 2026). `albireo.gaia` reproduces the observation chain, following Rowan's
+reference implementation, with the constants of Cropper et al. (2018) and Sartoretti et al.
+(2023): photon noise per detector pixel at the signal-to-noise that follows from G_RVS,
+delivery onto the archive grid with the noise correlation that resampling introduces, the
+resolving powers measured per CCD, and the transit cadence of the scanning law in
+distribution. Populations of systems drawn from the
 field's distributions (Moe & Di Stefano 2017) or from real catalogues (Southworth 2015;
 Gaia Collaboration, Arenou et al. 2023) are run through the pipeline at several levels of
 prior knowledge, from a known orbit to a blind period search, and the recovery of orbits,

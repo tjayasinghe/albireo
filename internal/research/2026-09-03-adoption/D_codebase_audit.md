@@ -786,7 +786,10 @@ reproductions` (`:2245`), walls `### The walls, one protocol` (`:2254`).
 
 Accuracy reproduced exactly: albireo 0.0118/0.0093 and 0.0165/0.0116; fd3 0.1767/0.0198 and
 0.2597/0.0223; shift-and-add 0.0317/0.0248 and 0.0849/0.0302 (`:2248-2250`) — **albireo ~2×
-more accurate, and the only one returning a posterior.** Both original anomalies were
+more accurate, and the only one returning a posterior.** (Superseded on 2026-10-15: these
+values scored every code against the injected spectra before the LSF. At the instrumental
+resolution albireo's error is 0.6 times fd3's; benchmarks.md, "The three-code comparison at a
+common resolution", and design.md D72.) Both original anomalies were
 measurement artifacts: the harness heated the heap (`:2275`) and fd3's BLAS spun 32 threads
 ("1938% CPU … 1.95 s of user time inside a 0.10 s wall", `:2305`).
 

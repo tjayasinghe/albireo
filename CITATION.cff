@@ -7,9 +7,8 @@ authors:
   - family-names: Jayasinghe
     given-names: Tharindu
     email: tharindujay96@gmail.com
-    # TODO(release): add `orcid: "https://orcid.org/0000-0000-0000-0000"` and
-    # `affiliation:`. Both are also TODO in paper/paper.md; JOSS expects an ORCID for
-    # the corresponding author, and the astropy/pyOpenSci review asks for an affiliation.
+    affiliation: "Independent researcher"
+    orcid: "https://orcid.org/0000-0002-6244-477X"
 repository-code: "https://github.com/tjayasinghe/albireo"
 url: "https://github.com/tjayasinghe/albireo"
 license: BSD-3-Clause

@@ -75,23 +75,39 @@ their ML-II values when it samples the orbit, so their uncertainty is not propag
 
 ## 4. Accuracy and speed on identical data
 
-The [benchmark record](benchmarks.md#three-way-comparison-on-identical-data) compares albireo
-with fd3 and with a reimplementation of shift-and-add written for the benchmark from the
-published algorithm, on one simulated SB2 (20 epochs, signal-to-noise ratio 100, a common
-$`\ln\lambda`$ grid so that no code resamples) with the orbit held at its injected values for
-every code.
+The [benchmark record](benchmarks.md#the-three-code-comparison-at-a-common-resolution-2026-10-15)
+compares albireo with fd3 and with a reimplementation of shift-and-add written for the
+benchmark from the published algorithm, on one simulated SB2 (20 epochs, signal-to-noise
+ratio 100, a Gaussian line-spread function of 6 km/s, a common $`\ln\lambda`$ grid so that no
+code resamples) with the orbit held at its injected values for every code. fd3 and
+shift-and-add take no line-spread function and return the spectra at the instrumental
+resolution, while albireo is given the function and returns the spectra deconvolved. All
+three are therefore scored at the instrumental resolution, against the injected spectra
+convolved with the line-spread function, and albireo's spectra are convolved with the same
+function before scoring.
 
 | | RMS error, primary | RMS error, secondary | Wall-clock time | Uncertainty on the spectra |
 |---|---|---|---|---|
-| albireo | 0.0093 | 0.0116 | 0.059 s | yes |
-| fd3 | 0.0198 | 0.0223 | 0.064 s | no |
-| shift-and-add | 0.0248 | 0.0302 | 0.026 s | no |
+| albireo | 0.0033 | 0.0052 | 0.059 s | yes |
+| fd3 | 0.0055 | 0.0090 | 0.064 s | no |
+| shift-and-add, 7 iterations | 0.0145 | 0.0226 | 0.026 s | no |
+| shift-and-add, 20,000 iterations | 0.0041 | 0.0064 | 103 s | no |
 
-The errors are measured after the constant offset that no method can determine is removed
-from each spectrum; before that removal fd3's errors are 15 times albireo's. The times are
-those of the [re-run on one machine](benchmarks.md#re-run-of-the-three-code-comparison-on-one-machine-2026-08-16),
-with fd3's linear algebra restricted to one thread. Shift-and-add is the fastest of the three,
-and albireo's errors are about half those of the other two.
+The errors are measured in the line cores after a constant offset is removed from each
+spectrum. The data do not determine that offset: albireo's smoothness prior sets it, and the
+other two codes leave it to the user. Before the removal fd3's errors are 21 times albireo's.
+Over twenty noise realizations albireo's errors are 0.6 times fd3's. The two codes have the
+same error at low frequencies and in the lines, and differ above the cutoff of the
+line-spread function, where albireo, which is given that function, removes the noise. Given
+no line-spread function, as the other codes are, albireo's errors are within 10% of fd3's at
+the fixed regularization weights of the benchmark and 0.66 times fd3's with the weights
+fitted. The errors of shift-and-add depend on the number of iterations. At the seven
+iterations of the published method they are 4.4 times albireo's, and almost all of the
+error lies at low frequencies, where the iteration converges slowly; the iteration reaches
+its limit after about 20,000 iterations. The times are those of the [re-run on one
+machine](benchmarks.md#re-run-of-the-three-code-comparison-on-one-machine-2026-08-16), with
+fd3's linear algebra restricted to one thread, and the 20,000 iterations were timed in the
+same way. Shift-and-add is the fastest of the three at seven iterations.
 
 ## 5. Disentangling and template fitting
 
@@ -105,8 +121,8 @@ the disentangling and are described in the tutorials on [labels](tutorials/label
 
 ## 6. Limitations of albireo
 
-- **Speed.** Shift-and-add is faster on every machine measured (Section 4), and the NUTS stage
-  takes minutes per system on a CPU.
+- **Speed.** At the seven iterations of the published method, shift-and-add is faster on
+  every machine measured (Section 4), and the NUTS stage takes minutes per system on a CPU.
 - **The light ratio.** As for every disentangling code, the continuum light ratio is not
   measurable from the spectra when the light fractions are constant. albireo requires it to be
   declared and does not infer it.

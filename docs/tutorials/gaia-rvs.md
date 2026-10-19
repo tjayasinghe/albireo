@@ -6,12 +6,15 @@ a function of brightness, transit count, separation and light ratio.
 
 See the [science overview](../science.md) for background and references.
 
-Gaia DR4 (2 December 2026) publishes an epoch RVS spectrum for every transit, in the
-barycentric frame, for the double-lined transits the Gaia pipeline itself rejects. The
-instrument model follows the reference implementation of Rowan's `synthetic_rvs_spectra`
-notebook. The component spectra come from the BOSZ 2024 grid in the RVS band rather than
-from a synthesis code, which is the one deliberate difference and is stated in the
-[API page](../api/gaia.md).
+Gaia DR4 (2 December 2026) publishes one RVS spectrum per field-of-view transit, in the
+solar barycentric frame: 6,910,785,949 epoch spectra in `rvs_epoch_spectrum`, and
+transit-level radial velocities for 787,312 double-lined transits in
+`rvs_epoch_parameters_double`
+([ESA DR4 content page](https://www.cosmos.esa.int/web/gaia/dr4), last updated
+14 September 2026). The instrument model follows the reference implementation of Rowan's
+`synthetic_rvs_spectra` notebook. The component spectra come from the BOSZ 2024 grid in the
+RVS band rather than from a synthesis code, which is the one deliberate difference and is
+stated in the [API page](../api/gaia.md).
 
 ```bash
 pip install -e ".[io,plots]"

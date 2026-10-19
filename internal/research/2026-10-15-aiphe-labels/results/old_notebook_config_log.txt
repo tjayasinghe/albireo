@@ -1,0 +1,5 @@
+albireo from C:\Users\thari\DOCUME~1\temp\claude\C--Users-thari-Documents-GitHub-albireo\963051fe-6cc6-43af-a034-4c782e54baa5\scratchpad\old_ee8e46d\src\albireo\__init__.py
+7578 px; library 454 nodes x 974 px
+fixed  Teff 6342.503 / 5226.975  (+32.5, +217.0)  logg 4.001 / 3.598  vsini 2.232 / 2.212  R2/R1 1.5416  chi2 425869.2
+free   Teff 6019.720 / 4900.324  (-290.3, -109.7)  logg 3.600 / 3.000  vsini 2.379 / 2.319  R2/R1 1.6028  chi2 412881.5
+rigid  Teff 6444.430 / 5264.300  (+134.4, +254.3)  logg 4.001 / 3.598  vsini 2.375 / 2.021  R2/R1 nan  chi2 435714.2

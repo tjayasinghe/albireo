@@ -1,0 +1,125 @@
+##### v2/per_epoch/unrounded 15:38:17
+albireo 0.1.0.dev0 from C:\Users\thari\Documents\GitHub\albireo\src\albireo\__init__.py
+C:\Users\thari\Documents\GitHub\albireo\src\albireo\io.py:1491: RuntimeWarning: data\aiphe\ADP.2014-09-25T15-33-00.737.fits: the ERR column holds no finite positive value, so the file carries no usable uncertainties and albireo will estimate them from the scatter instead (to_epoch's ivar_scaling). This is normal for FEROS and HARPS, whose pipelines produce no error spectrum, but it means the weights are albireo's assumption rather than the archive's.
+(the same for 35 more of the 36 files.)
+  raws = read_raw_spectra(paths, instrument=instrument, frame=frame, read_kwargs=read_kwargs)
+Dataset: 36 epochs, frame='barycentric'
+  BJD_TDB 2455721.83348 to 2458098.56024 (span 2376.72676 d)
+  instruments (1):
+    HARPS  36 epochs, 5150.00-5250.00 A, 360036 px, LSF sigma 1.107 km/s x30, 1.591 km/s x6
+  good pixels: 358265 / 360036 (99.5%)
+
+=== v2/per_epoch/unrounded: P = 24.592483 (label bench 24.592483), LSF {'HARPS': 'per-epoch'}, grid margin 1.5914 km/s -> 7582 px, disentangled in 19.5 s; log g 4.001115 / 3.597926
+  library v2: 455 nodes x 975 px, complete box True, R 20000.0
+  fixed  Teff  6313.90 /  5224.87  logg 4.001 / 3.598  [M/H] -0.050  vsini 2.22 / 2.20  R2/R1 1.5297  chi2 419615.1  (78 s, 400 steps)
+  free   Teff  5966.01 /  4875.94  logg 3.465 / 3.023  [M/H] -0.283  vsini 2.30 / 2.25  R2/R1 1.5844  chi2 407931.5  (65 s, 400 steps)
+  rigid  Teff  6385.26 /  5148.10  logg 4.001 / 3.598  [M/H] -0.067  vsini 2.36 / 2.06  R2/R1 nan  chi2 427533.4  (48 s, 400 steps)
+  matched with the declared library: rejected: star 'primary': the library is broadened to R = 20000 (sigma 6.366 km/s), which is at or below the instrument's own width (1.107 km/s). A template cannot be sharpened by a convolution; use a library at a higher resolving power than the data.
+  matched Teff  6293.32 /  5242.60  vsini 0.59 / 0.54  chi2 1785909.7  (54 s)
+
+done
+##### v2/per_epoch/unrounded exit 0 15:42:52
+##### v2/pooled/rounded 15:42:52
+albireo 0.1.0.dev0 from C:\Users\thari\Documents\GitHub\albireo\src\albireo\__init__.py
+C:\Users\thari\Documents\GitHub\albireo\src\albireo\io.py:1491: RuntimeWarning: data\aiphe\ADP.2014-09-25T15-33-00.737.fits: the ERR column holds no finite positive value, so the file carries no usable uncertainties and albireo will estimate them from the scatter instead (to_epoch's ivar_scaling). This is normal for FEROS and HARPS, whose pipelines produce no error spectrum, but it means the weights are albireo's assumption rather than the archive's.
+(the same for 35 more of the 36 files.)
+  raws = read_raw_spectra(paths, instrument=instrument, frame=frame, read_kwargs=read_kwargs)
+Dataset: 36 epochs, frame='barycentric'
+  BJD_TDB 2455721.83348 to 2458098.56024 (span 2376.72676 d)
+  instruments (1):
+    HARPS  36 epochs, 5150.00-5250.00 A, 360036 px, LSF sigma 1.107 km/s x30, 1.591 km/s x6
+  good pixels: 358265 / 360036 (99.5%)
+C:\Users\thari\Documents\GitHub\albireo\scripts\aiphe_labels_bench.py:112: RuntimeWarning: instrument 'HARPS': its epochs declare 2 different LSF widths (1.107 km/s for epochs [0, 1, 2, 3, 4, 5, 6, 7, '...']; 1.591 km/s for epochs [23, 24, 32, 33, 34, 35]), and all of them are modelled with the supplied [1.107] km/s. A resolving power is a property of the exposure, not of the instrument name (HARPS HAM and EGGS modes both say INSTRUME = 'HARPS'). Pass lsf_sigma_v={'HARPS': PER_EPOCH} to model each epoch at its declared width, or give the modes distinct instrument keys.
+  problem = build_problem(
+
+=== v2/pooled/rounded: P = 24.5924 (label bench 24.5924), LSF {'HARPS': 1.1070540764100707}, grid margin 1.1071 km/s -> 7578 px, disentangled in 13.4 s; log g 4.001116 / 3.597927
+  library v2: 455 nodes x 974 px, complete box True, R 20000.0
+  fixed  Teff  6314.66 /  5225.38  logg 4.001 / 3.598  [M/H] -0.050  vsini 2.22 / 2.19  R2/R1 1.5302  chi2 425202.6  (67 s, 400 steps)
+  free   Teff  5990.01 /  4882.70  logg 3.503 / 3.024  [M/H] -0.272  vsini 2.36 / 2.20  R2/R1 1.5899  chi2 413448.3  (60 s, 400 steps)
+  rigid  Teff  6386.21 /  5148.14  logg 4.001 / 3.598  [M/H] -0.068  vsini 2.36 / 2.04  R2/R1 nan  chi2 433321.0  (46 s, 400 steps)
+
+done
+##### v2/pooled/rounded exit 0 15:46:08
+##### v2/pooled/unrounded 15:46:08
+albireo 0.1.0.dev0 from C:\Users\thari\Documents\GitHub\albireo\src\albireo\__init__.py
+C:\Users\thari\Documents\GitHub\albireo\src\albireo\io.py:1491: RuntimeWarning: data\aiphe\ADP.2014-09-25T15-33-00.737.fits: the ERR column holds no finite positive value, so the file carries no usable uncertainties and albireo will estimate them from the scatter instead (to_epoch's ivar_scaling). This is normal for FEROS and HARPS, whose pipelines produce no error spectrum, but it means the weights are albireo's assumption rather than the archive's.
+(the same for 35 more of the 36 files.)
+  raws = read_raw_spectra(paths, instrument=instrument, frame=frame, read_kwargs=read_kwargs)
+Dataset: 36 epochs, frame='barycentric'
+  BJD_TDB 2455721.83348 to 2458098.56024 (span 2376.72676 d)
+  instruments (1):
+    HARPS  36 epochs, 5150.00-5250.00 A, 360036 px, LSF sigma 1.107 km/s x30, 1.591 km/s x6
+  good pixels: 358265 / 360036 (99.5%)
+C:\Users\thari\Documents\GitHub\albireo\scripts\aiphe_labels_bench.py:112: RuntimeWarning: instrument 'HARPS': its epochs declare 2 different LSF widths (1.107 km/s for epochs [0, 1, 2, 3, 4, 5, 6, 7, '...']; 1.591 km/s for epochs [23, 24, 32, 33, 34, 35]), and all of them are modelled with the supplied [1.107] km/s. A resolving power is a property of the exposure, not of the instrument name (HARPS HAM and EGGS modes both say INSTRUME = 'HARPS'). Pass lsf_sigma_v={'HARPS': PER_EPOCH} to model each epoch at its declared width, or give the modes distinct instrument keys.
+  problem = build_problem(
+
+=== v2/pooled/unrounded: P = 24.592483 (label bench 24.592483), LSF {'HARPS': 1.1070540764100707}, grid margin 1.1071 km/s -> 7578 px, disentangled in 13.8 s; log g 4.001115 / 3.597926
+  library v2: 455 nodes x 974 px, complete box True, R 20000.0
+  fixed  Teff  6315.50 /  5224.26  logg 4.001 / 3.598  [M/H] -0.051  vsini 2.25 / 2.21  R2/R1 1.5304  chi2 422402.0  (70 s, 400 steps)
+  free   Teff  5985.29 /  4873.67  logg 3.514 / 3.014  [M/H] -0.278  vsini 2.28 / 2.20  R2/R1 1.5938  chi2 410517.5  (57 s, 400 steps)
+  rigid  Teff  6385.21 /  5148.27  logg 4.001 / 3.598  [M/H] -0.068  vsini 2.37 / 2.06  R2/R1 nan  chi2 430393.8  (46 s, 400 steps)
+
+done
+##### v2/pooled/unrounded exit 0 15:49:24
+##### v2/per_epoch/rounded 15:49:24
+albireo 0.1.0.dev0 from C:\Users\thari\Documents\GitHub\albireo\src\albireo\__init__.py
+C:\Users\thari\Documents\GitHub\albireo\src\albireo\io.py:1491: RuntimeWarning: data\aiphe\ADP.2014-09-25T15-33-00.737.fits: the ERR column holds no finite positive value, so the file carries no usable uncertainties and albireo will estimate them from the scatter instead (to_epoch's ivar_scaling). This is normal for FEROS and HARPS, whose pipelines produce no error spectrum, but it means the weights are albireo's assumption rather than the archive's.
+(the same for 35 more of the 36 files.)
+  raws = read_raw_spectra(paths, instrument=instrument, frame=frame, read_kwargs=read_kwargs)
+Dataset: 36 epochs, frame='barycentric'
+  BJD_TDB 2455721.83348 to 2458098.56024 (span 2376.72676 d)
+  instruments (1):
+    HARPS  36 epochs, 5150.00-5250.00 A, 360036 px, LSF sigma 1.107 km/s x30, 1.591 km/s x6
+  good pixels: 358265 / 360036 (99.5%)
+
+=== v2/per_epoch/rounded: P = 24.5924 (label bench 24.5924), LSF {'HARPS': 'per-epoch'}, grid margin 1.5914 km/s -> 7582 px, disentangled in 15.3 s; log g 4.001116 / 3.597927
+  library v2: 455 nodes x 975 px, complete box True, R 20000.0
+  fixed  Teff  6316.12 /  5224.11  logg 4.001 / 3.598  [M/H] -0.049  vsini 2.21 / 2.19  R2/R1 1.5314  chi2 422439.3  (66 s, 400 steps)
+  free   Teff  5987.71 /  4892.34  logg 3.497 / 3.008  [M/H] -0.266  vsini 2.15 / 2.06  R2/R1 1.5829  chi2 410635.0  (57 s, 400 steps)
+  rigid  Teff  6385.12 /  5147.49  logg 4.001 / 3.598  [M/H] -0.068  vsini 2.36 / 2.04  R2/R1 nan  chi2 430455.7  (46 s, 400 steps)
+
+done
+##### v2/per_epoch/rounded exit 0 15:52:38
+##### v1/pooled/rounded 15:52:38
+albireo 0.1.0.dev0 from C:\Users\thari\Documents\GitHub\albireo\src\albireo\__init__.py
+C:\Users\thari\Documents\GitHub\albireo\src\albireo\io.py:1491: RuntimeWarning: data\aiphe\ADP.2014-09-25T15-33-00.737.fits: the ERR column holds no finite positive value, so the file carries no usable uncertainties and albireo will estimate them from the scatter instead (to_epoch's ivar_scaling). This is normal for FEROS and HARPS, whose pipelines produce no error spectrum, but it means the weights are albireo's assumption rather than the archive's.
+(the same for 35 more of the 36 files.)
+  raws = read_raw_spectra(paths, instrument=instrument, frame=frame, read_kwargs=read_kwargs)
+Dataset: 36 epochs, frame='barycentric'
+  BJD_TDB 2455721.83348 to 2458098.56024 (span 2376.72676 d)
+  instruments (1):
+    HARPS  36 epochs, 5150.00-5250.00 A, 360036 px, LSF sigma 1.107 km/s x30, 1.591 km/s x6
+  good pixels: 358265 / 360036 (99.5%)
+C:\Users\thari\Documents\GitHub\albireo\scripts\aiphe_labels_bench.py:112: RuntimeWarning: instrument 'HARPS': its epochs declare 2 different LSF widths (1.107 km/s for epochs [0, 1, 2, 3, 4, 5, 6, 7, '...']; 1.591 km/s for epochs [23, 24, 32, 33, 34, 35]), and all of them are modelled with the supplied [1.107] km/s. A resolving power is a property of the exposure, not of the instrument name (HARPS HAM and EGGS modes both say INSTRUME = 'HARPS'). Pass lsf_sigma_v={'HARPS': PER_EPOCH} to model each epoch at its declared width, or give the modes distinct instrument keys.
+  problem = build_problem(
+
+=== v1/pooled/rounded: P = 24.5924 (label bench 24.5924), LSF {'HARPS': 1.1070540764100707}, grid margin 1.1071 km/s -> 7578 px, disentangled in 13.7 s; log g 4.001116 / 3.597927
+  library v1: 454 nodes x 974 px, complete box False, R 20000.0
+  fixed  Teff  6331.00 /  5269.46  logg 4.001 / 3.598  [M/H] -0.019  vsini 2.29 / 2.30  R2/R1 1.5155  chi2 425695.7  (33 s, 400 steps)
+  free   Teff  6165.90 /  5265.91  logg 3.683 / 3.434  [M/H] -0.065  vsini 2.24 / 2.31  R2/R1 1.4593  chi2 422396.9  (25 s, 400 steps)
+  rigid  Teff  6386.96 /  5114.90  logg 4.001 / 3.598  [M/H] -0.081  vsini 2.38 / 2.05  R2/R1 nan  chi2 435659.4  (21 s, 400 steps)
+  matched with the declared library: rejected: star 'primary': the library is broadened to R = 20000 (sigma 6.366 km/s), which is at or below the instrument's own width (1.107 km/s). A template cannot be sharpened by a convolution; use a library at a higher resolving power than the data.
+  matched Teff  6315.93 /  5278.89  vsini 0.63 / 0.55  chi2 1814069.1  (21 s)
+
+done
+##### v1/pooled/rounded exit 0 15:54:42
+##### v1/per_epoch/unrounded 15:54:42
+albireo 0.1.0.dev0 from C:\Users\thari\Documents\GitHub\albireo\src\albireo\__init__.py
+C:\Users\thari\Documents\GitHub\albireo\src\albireo\io.py:1491: RuntimeWarning: data\aiphe\ADP.2014-09-25T15-33-00.737.fits: the ERR column holds no finite positive value, so the file carries no usable uncertainties and albireo will estimate them from the scatter instead (to_epoch's ivar_scaling). This is normal for FEROS and HARPS, whose pipelines produce no error spectrum, but it means the weights are albireo's assumption rather than the archive's.
+(the same for 35 more of the 36 files.)
+  raws = read_raw_spectra(paths, instrument=instrument, frame=frame, read_kwargs=read_kwargs)
+Dataset: 36 epochs, frame='barycentric'
+  BJD_TDB 2455721.83348 to 2458098.56024 (span 2376.72676 d)
+  instruments (1):
+    HARPS  36 epochs, 5150.00-5250.00 A, 360036 px, LSF sigma 1.107 km/s x30, 1.591 km/s x6
+  good pixels: 358265 / 360036 (99.5%)
+
+=== v1/per_epoch/unrounded: P = 24.592483 (label bench 24.592483), LSF {'HARPS': 'per-epoch'}, grid margin 1.5914 km/s -> 7582 px, disentangled in 15.1 s; log g 4.001115 / 3.597926
+  library v1: 454 nodes x 975 px, complete box False, R 20000.0
+  fixed  Teff  6334.77 /  5268.33  logg 4.001 / 3.598  [M/H] -0.018  vsini 2.19 / 2.20  R2/R1 1.5171  chi2 420079.8  (33 s, 400 steps)
+  free   Teff  6310.47 /  5264.01  logg 3.953 / 3.472  [M/H] -0.042  vsini 1.94 / 2.26  R2/R1 1.5146  chi2 418282.6  (24 s, 400 steps)
+  rigid  Teff  6438.33 /  5175.04  logg 4.001 / 3.598  [M/H] -0.022  vsini 2.42 / 2.06  R2/R1 nan  chi2 428182.0  (20 s, 400 steps)
+
+done
+##### v1/per_epoch/unrounded exit 0 15:56:24
+ALL DONE

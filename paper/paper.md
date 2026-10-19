@@ -14,7 +14,7 @@ authors:
     corresponding: true
     affiliation: 1
 affiliations:
-  - name: Independent Researcher
+  - name: Independent researcher
     index: 1
 date: 15 October 2026
 bibliography: paper.bib

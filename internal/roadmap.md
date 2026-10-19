@@ -526,11 +526,24 @@ Results of the three codes on identical data (aligned RMS and wall-clock time):
 | fd3 | 0.0198 | 0.0223 | 0.111 s | no |
 | shift-and-add | 0.0248 | 0.0302 | **0.018 s** | no |
 
-albireo is ~2× more accurate and, on the machine on which this table was recorded, the slowest of
-the three. Shift-and-add is 10× faster than albireo and 6× faster than fd3. For a 1200-pixel
-separation that is the expected result, since the method consists of a few array shifts and means.
-The accuracy margin is not an artifact of the stopping point: at 50 sweeps instead of the
-published 7, shift-and-add improves by 11% and is still 2.4× less accurate.
+On these values albireo was ~2× more accurate and, on the machine on which this table was
+recorded, the slowest of the three. Shift-and-add is 10× faster than albireo and 6× faster than
+fd3. For a 1200-pixel separation that is the expected result, since the method consists of a few
+array shifts and means. The accuracy margin appeared not to be an artifact of the stopping point:
+at 50 sweeps instead of the published 7, shift-and-add improved by 11% and was still 2.4× less
+accurate.
+
+> **Accuracy re-score of 2026-10-15.** The accuracy columns above scored every code against the
+> injected spectra before the 6 km/s LSF. albireo is given the LSF and deconvolves; fd3 and
+> shift-and-add take none and return the spectra at the instrumental resolution, so the LSF's own
+> broadening (0.0190 / 0.0206 mean-aligned) was charged to them. At the instrumental resolution
+> the aligned errors are albireo 0.0033 / 0.0052, fd3 0.0055 / 0.0090 and shift-and-add
+> 0.0145 / 0.0226 at 7 sweeps. Over twenty noise realizations albireo's are 0.6 times fd3's. The
+> difference lies above the LSF cutoff, where albireo removes the noise because it is given the
+> LSF, and not in the low-*k* modes, where the two codes have the same error. Seven sweeps are far
+> from converged: 0.0086 / 0.0113 at 50, and 0.0041 / 0.0064 at the limit after about 20,000
+> sweeps. The ~2× statements and the stopping-point argument in this section are superseded. The
+> record is in benchmarks.md, "The three-code comparison at a common resolution (2026-10-15)".
 
 > **Speed re-run of 2026-08-16.** All three codes were re-run on one machine (a 16-core
 > desktop) under one protocol. Every RMS above reproduces exactly; the wall-clock times do
@@ -540,15 +553,16 @@ published 7, shift-and-add improves by 11% and is still 2.4× less accurate.
 > on a heap that XLA leaves serving ~35 KB allocations through microsecond free-list
 > walks. That convention affected both recorded numbers and has since been replaced by
 > timing in a fresh process. Shift-and-add therefore remains fastest everywhere, "slowest
-> of the three" applied to single-thread hardware, and albireo remains ~2× more accurate
-> and the only code returning a posterior. The full record is in benchmarks.md,
-> "Re-run of the three-code comparison on one machine" (D50).
+> of the three" applied to single-thread hardware, and albireo remains the only code
+> returning a posterior (its accuracy margin is corrected in the note above). The full
+> record is in benchmarks.md, "Re-run of the three-code comparison on one machine" (D50).
 
-The three methods are independent and fail in the same way. fd3's raw error is nine tenths a
+The three methods are independent and fail in the same way. fd3's raw error is almost all a
 constant, and shift-and-add's grows on the fainter component because `B = 0` leaves its continuum to
 the initialization. Both are the *k* = 0 null space, and the shift-and-add theory gives this
-exactly: the per-mode convergence factor has modulus 1 at zero frequency, a fixed point that no
-number of sweeps changes.
+exactly: in its periodic analysis the per-mode convergence factor has modulus 1 at zero frequency,
+a fixed point of the iteration. (On a window padded with continuum the factor is slightly below 1,
+and over some 10⁴ sweeps the padding determines the level; benchmarks.md, 2026-10-15.)
 
 The prebuilt binary in the fd3 tarball is 32-bit i386 and does not run on a modern host, so the code
 was rebuilt from source. Before it was used for anything it was validated against the author's own
@@ -562,8 +576,9 @@ and not an order of magnitude slower; the harness's own un-jitted figure would h
 difference by 20×. fd3's raw RMS is ~15× larger, but nine tenths of that is a constant, which
 mean-alignment removes. The *k* = 0 offset is the null space that neither code can determine from
 constant-light data: fd3 leaves it to the user's manual renormalization, and albireo's prior fixes
-it. With that offset removed, albireo is about 2× more accurate in shape. fd3 returns no
-uncertainty, which is the missing capability that this page addresses.
+it. With that offset removed, and both codes scored at the instrumental resolution, albireo's
+errors are 0.6 times fd3's (the re-score note above). fd3 returns no uncertainty, which is the
+missing capability that this page addresses.
 
 Three rules keep the comparison fair. The comparison system should be AI Phoenicis rather than
 HR 6819: it eclipses, so the light ratio is known externally and the one free choice in

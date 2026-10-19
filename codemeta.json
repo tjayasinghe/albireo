@@ -13,17 +13,27 @@
   "author": [
     {
       "@type": "Person",
+      "@id": "https://orcid.org/0000-0002-6244-477X",
       "givenName": "Tharindu",
       "familyName": "Jayasinghe",
-      "email": "tharindujay96@gmail.com"
+      "email": "tharindujay96@gmail.com",
+      "affiliation": {
+        "@type": "Organization",
+        "name": "Independent researcher"
+      }
     }
   ],
   "maintainer": [
     {
       "@type": "Person",
+      "@id": "https://orcid.org/0000-0002-6244-477X",
       "givenName": "Tharindu",
       "familyName": "Jayasinghe",
-      "email": "tharindujay96@gmail.com"
+      "email": "tharindujay96@gmail.com",
+      "affiliation": {
+        "@type": "Organization",
+        "name": "Independent researcher"
+      }
     }
   ],
   "keywords": [

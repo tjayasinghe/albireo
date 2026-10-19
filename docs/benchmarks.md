@@ -424,16 +424,26 @@ and GSL:
 | `art_triple` | 3.58 s | 1.0 × 10⁻⁹ |
 | **`V453_Cyg`** (1344 px, a real published system) | 62.6 s | **0** (exact) |
 
-The comparison uses the harness's seeded SB2 (20 epochs, SNR 100, a common ln-λ grid so
-that neither code resamples, no gaps and no masks so that neither is at a disadvantage,
-and the orbit fixed at the injected values for both):
+The comparison uses the harness's seeded SB2 (20 epochs, SNR 100, a 6 km/s Gaussian LSF, a
+common ln-λ grid so that neither code resamples, no gaps and no masks so that neither is at
+a disadvantage, and the orbit fixed at the injected values for both). fd3 takes no LSF and
+returns the spectra at the instrumental resolution, and albireo is given the LSF and returns
+them deconvolved. Both are scored at the instrumental resolution: against the injected
+spectra convolved with the LSF, with albireo's spectra convolved with the same LSF before
+scoring ([the comparison at a common
+resolution](#the-three-code-comparison-at-a-common-resolution-2026-10-15)):
 
 | | comp 1 RMS | comp 2 RMS | steady-state wall time |
 |---|---|---|---|
-| **albireo** | 0.0118 | 0.0165 | 0.182 s |
-| **fd3** | 0.1767 | 0.2597 | **0.111 s** |
-| albireo, mean-aligned | **0.0093** | **0.0116** | |
-| fd3, mean-aligned | 0.0198 | 0.0223 | |
+| **albireo** | 0.0078 | 0.0131 | 0.182 s |
+| **fd3** | 0.1653 | 0.2698 | **0.111 s** |
+| albireo, mean-aligned | **0.0033** | **0.0052** | |
+| fd3, mean-aligned | 0.0055 | 0.0090 | |
+
+The table as first recorded scored both codes against the injected spectra before the LSF
+(albireo 0.0118 / 0.0165 raw and 0.0093 / 0.0116 mean-aligned, fd3 0.1767 / 0.2597 and
+0.0198 / 0.0223). That charged the broadening of the LSF itself, 0.0190 / 0.0206
+mean-aligned, to fd3 and not to albireo, and is not a comparison of the two codes.
 
 fd3 was faster: 1.64× in steady state and 5.7× from a cold start (0.630 s including JAX
 compilation). It is a small C program that starts, solves and exits, and a 1200-pixel
@@ -442,15 +452,20 @@ be faster. albireo is in the same class, not an order of magnitude slower. (The 
 earlier 3.93 s figure was its un-jitted single-solve path and overstated the difference
 by 20×.) Timings are the minimum of five repeats, both codes on CPU.
 
-fd3's raw error is ~15× larger, and about nine tenths of it is a constant: mean-aligning
-reduces comp 1 from 0.1767 to 0.0198. The constant is the *k* = 0 freedom that both codes
-have and neither can determine from constant-light data. It is the null space of
+fd3's raw error is about 21× larger, and almost all of it is a constant: mean-aligning
+reduces comp 1 from 0.1653 to 0.0055. The constant is the *k* = 0 freedom that both codes
+have, and constant-light data do not determine it. It is the null space of
 [§5.1](math.md#51-the-low-frequency-degeneracy-the-undulations-theorem), and the reason
 the literature's workflow includes a manual renormalization against an external light
-ratio. albireo's smoothness prior determines the offset. fd3 leaves it to the user.
+ratio. albireo's smoothness prior sets the offset. fd3 leaves it to the user.
 
-With that offset removed, albireo is about 2× more accurate in shape (0.0093 / 0.0116
-against 0.0198 / 0.0223), because the prior constrains the low-*k* modes.
+With that offset removed, albireo's errors are 0.6 times fd3's (0.0033 / 0.0052 against
+0.0055 / 0.0090; 0.61 and 0.63 on average over twenty noise realizations). The two codes
+have the same error at low frequencies and in the band of the lines. albireo's is lower
+above the cutoff of the LSF, where the instrumental spectrum has no power and the error is
+noise, which albireo removes because it is given the LSF. The explanation first recorded
+here, that the prior constrains the low-*k* modes, does not hold (see [the comparison at a
+common resolution](#the-three-code-comparison-at-a-common-resolution-2026-10-15)).
 
 fd3 returns a point estimate with no uncertainty on the component spectra. [The handoff
 tutorial](tutorials/downstream.md) converts albireo's uncertainty into an error bar on
@@ -476,31 +491,55 @@ is not removed but diffused: each sweep convolves it with
 reproduces that relation (`tests/test_shift_and_add.py`), evidence that the coded
 recurrence is the paper's.
 
-The paper gives the number of sweeps as "rarely more than 5–7". This is the case on the
-benchmark's data, and the comparison does not depend on the choice:
+The method has no stopping rule. The paper gives the number of sweeps as "rarely more than
+5–7". On the benchmark's data, scored at the instrumental resolution (against the injected
+spectra convolved with the LSF, which shift-and-add does not take), seven sweeps are far
+from converged:
 
 | sweeps | comp 1 aligned | comp 2 aligned | wall time |
 |---|---|---|---|
-| 1 | 0.0431 | 0.0458 | 0.003 s |
-| **7** (published figure) | **0.0248** | **0.0302** | **0.018 s** |
-| 50 | 0.0221 | 0.0239 | 0.128 s |
+| 1 | 0.0385 | 0.0362 | 0.0039 s |
+| **7** (published figure) | **0.0145** | **0.0226** | **0.0269 s** |
+| 50 | 0.0086 | 0.0113 | 0.194 s |
+| 20,000 (the limit of the iteration) | 0.0041 | 0.0064 | 103 s |
 
-Seven sweeps is close to converged. Fifty sweeps improve the result by 11% for seven times
-the cost and are still worse than albireo by a factor of 2.4, so stopping early does not
-put the method at a disadvantage.
+Fifty sweeps reduce the error by 41% and 50% for seven times the cost, and are 2.6 and 2.2
+times albireo's (0.0033 / 0.0052). The iteration reaches its limit after about 20,000 sweeps,
+with errors 1.2 times albireo's and below fd3's (0.0055 / 0.0090). Stopping at the
+published count therefore costs accuracy, and almost all of the excess error lies at the
+lowest frequencies, where the iteration converges slowly ([the comparison at a common
+resolution](#the-three-code-comparison-at-a-common-resolution-2026-10-15)). The times are
+for a fresh interpreter, the convention of the 2026-08-16 re-run.
+
+The table as first recorded scored against the injected spectra before the LSF (aligned
+0.0431 / 0.0458, 0.0248 / 0.0302 and 0.0221 / 0.0239 at 1, 7 and 50 sweeps) and timed
+in-process after the XLA solve (0.003, 0.018 and 0.128 s). The LSF's own broadening,
+0.0190 / 0.0206, dominated those errors and hid the convergence, and the conclusion drawn
+from them, that seven sweeps are close to converged and that stopping early does not put
+the method at a disadvantage, does not hold.
 
 ### Three-way comparison on identical data
 
 The data are the same seeded SB2: 20 epochs, SNR 100, a common ln-λ grid so that no code
 resamples, no gaps or masks, and the orbit fixed at its injected values for every code.
 Shift-and-add uses albireo's linear shift operator, so the comparison is between
-algorithms rather than between two interpolators.
+algorithms rather than between two interpolators. fd3 applies the same linear interpolation
+in Fourier space. The errors are scored at the instrumental resolution, against the
+injected spectra convolved with the LSF, with albireo's deconvolved spectra convolved with
+the same LSF ([the comparison at a common
+resolution](#the-three-code-comparison-at-a-common-resolution-2026-10-15)):
 
 | | comp 1 raw | comp 1 aligned | comp 2 raw | comp 2 aligned | wall time | uncertainty |
 |---|---|---|---|---|---|---|
-| **albireo** | **0.0118** | **0.0093** | **0.0165** | **0.0116** | 0.182 s | **yes, a posterior** |
-| fd3 | 0.1767 | 0.0198 | 0.2597 | 0.0223 | 0.111 s | no |
-| shift-and-add | 0.0317 | 0.0248 | 0.0849 | 0.0302 | **0.018 s** | no |
+| **albireo** | **0.0078** | **0.0033** | **0.0131** | **0.0052** | 0.182 s | **yes, a posterior** |
+| fd3 | 0.1653 | 0.0055 | 0.2698 | 0.0090 | 0.111 s | no |
+| shift-and-add, 7 sweeps | 0.0335 | 0.0145 | 0.0725 | 0.0226 | **0.018 s** | no |
+
+The table as first recorded scored every code against the injected spectra before the LSF:
+albireo 0.0118 / 0.0093 and 0.0165 / 0.0116, fd3 0.1767 / 0.0198 and 0.2597 / 0.0223,
+shift-and-add 0.0317 / 0.0248 and 0.0849 / 0.0302 (raw / aligned, comp 1 and comp 2). It
+charged the LSF's broadening to fd3 and shift-and-add, and its accuracy columns are not a
+comparison of the codes.
 
 albireo was the slowest of the three. Shift-and-add was 10× faster than albireo's steady
 state and 6× faster than fd3. It is a small number of array shifts and means, and this is
@@ -513,21 +552,26 @@ contaminated by the harness's in-process timing (in both recorded measurements) 
 fd3 time inflated by its BLAS running 32 threads. The uncontaminated ranking is
 shift-and-add 0.026 s, albireo 0.059 s, fd3 0.064 s with thread pinning.
 
-albireo is about 2× more accurate, and the margin is not an artifact of the stopping
-point (see the sweep table). The aligned ordering is albireo 0.0093 / 0.0116, fd3
-0.0198 / 0.0223, shift-and-add 0.0248 / 0.0302.
+The aligned ordering is albireo 0.0033 / 0.0052, fd3 0.0055 / 0.0090, shift-and-add
+0.0145 / 0.0226. albireo's errors are 0.6 times fd3's, from the noise above the LSF cutoff
+that albireo removes because it is given the LSF. Shift-and-add's are 4.4 times albireo's
+at seven sweeps and depend on the number of sweeps (see the sweep table): the iteration
+converges after about 20,000 sweeps, to 0.0041 / 0.0064.
 
 The two established codes have different raw errors, both from the same degeneracy.
-fd3's raw RMS is 15× albireo's, and nine tenths of it is a constant. Shift-and-add's raw
-error is much smaller than fd3's but larger on the fainter component (0.0849 raw against
-0.0302 aligned), because `B = 0` leaves the secondary's continuum level set by the
-initialization rather than by the data. Both lie in the *k* = 0 null space: the per-mode
-convergence factor of the shift-and-add recursion has modulus exactly 1 at zero frequency,
-so that mode is a fixed point that no number of sweeps changes. All three independent
-methods are subject to the degeneracy of
-[§5.1](math.md#51-the-low-frequency-degeneracy-the-undulations-theorem). albireo's
-smoothness prior determines that mode. The other two codes leave it to the user, which is
-the purpose of the literature's manual renormalization against an external light ratio.
+fd3's raw RMS is 21× albireo's, and almost all of it is a constant. Shift-and-add's raw
+error is much smaller than fd3's but larger on the fainter component (0.0725 raw against
+0.0226 aligned), because `B = 0` leaves the secondary's continuum level set by the
+initialization rather than by the data. Both lie in the *k* = 0 null space: in the
+periodic analysis of the shift-and-add recursion the per-mode convergence factor has
+modulus exactly 1 at zero frequency, so that mode is a fixed point of the iteration. On a
+finite window padded with continuum the factor is slightly below 1, and over some 10⁴
+sweeps the padding determines the level. All three independent methods are subject to the
+degeneracy of
+[§5.1](math.md#51-the-low-frequency-degeneracy-the-undulations-theorem): the data do not
+determine that mode. albireo's smoothness prior sets it. The other two codes leave it to the
+user, which is the purpose of the literature's manual renormalization against an external
+light ratio.
 
 No adjustment to the comparison changes the last column, the presence of an uncertainty.
 
@@ -540,10 +584,13 @@ uncertainty.
 
 ### AI Phoenicis: observed spectra and a published orbit as the reference (2026-08-15)
 
-AI Phe has 36 archival HARPS spectra (ESO, *R* = 115,000, 3782–6913 Å, SNR 41–129, all ten
-phase bins filled, fetched with `albireo.archive`). No true spectrum is known, but the
-orbit is published to a precision no disentangling code approaches (Maxted et al. 2020,
-MNRAS 498, 332):
+AI Phe has 36 archival HARPS spectra (ESO, 3782–6913 Å, SNR 41–129, all ten phase bins
+filled, fetched with `albireo.archive`): thirty high-accuracy-mode (HAM) exposures at
+*R* = 115,000 and six high-efficiency (EGGS) exposures at *R* = 80,000. The runs in this
+section modelled all 36 at the HAM width
+([D59, below](#two-resolving-powers-under-one-instrument-name-d59-2026-09-03)). No true
+spectrum is known, but the orbit is published to a precision no disentangling code
+approaches (Maxted et al. 2020, MNRAS 498, 332):
 
 > K₁ = 51.164 ± 0.007 km/s,  K₂ = 49.106 ± 0.010 km/s,  P = 24.5924 d,
 > e = 0.1878 ± 0.0006,  ω = 110.30 ± 0.06°,  T₀ = BJD_TDB 2458362.82847
@@ -580,13 +627,16 @@ affects this table: `period` and `t_conj` are free in the K fit, and the removed
 have no flux. Both changes affect the runs below that hold the velocities fixed.
 
 The two windows agree with each other to 0.02% in K₁ and 0.01% in the mass ratio, and both
-differ from the published values by the same amount. Three explanations are excluded:
+differ from the published values by the same amount. Four explanations are excluded:
 
 * **The optimizer.** The fit converged, with `|grad| = 9e-03`, and the result is the same
   for a 250-step run that reached its step limit and a 444-step run that did not.
 * **Line selection or the window.** Two disjoint windows agree to 0.02%.
 * **The light ratio.** Sweeping the assumed ℓ₂ from 0.38 to 0.53 changes the likelihood
   difference between albireo's K and the published K by 9 nats out of 53,306.
+* **The line-spread width.** Six exposures were modelled at the wrong width. At their
+  declared width the mass ratio changes by 0.004%
+  ([D59, below](#two-resolving-powers-under-one-instrument-name-d59-2026-09-03)).
 
 This leaves a ~1% systematic error in the disentangling of this system, biasing the mass
 ratio 2.2% toward unity, the direction expected when the line signals of two similar
@@ -623,6 +673,43 @@ local scatter for a running median to detect. The rule applies to runs:
 zero can be a saturated core or a clipped cosmic ray, whereas eight in a row cannot. It
 parallels the reader's rule that a zero error is not infinite precision: the reader may
 leave an ambiguous value unclassified, but does not infer its meaning.
+
+### Two resolving powers under one instrument name (D59, 2026-09-03)
+
+The 36 spectra were taken in two instrument modes: thirty in the high-accuracy mode (HAM) at
+*R* = 115,000 and six in the high-efficiency mode (EGGS) at *R* = 80,000. Every file has
+`INSTRUME = 'HARPS'`, and the reader stores each file's `SPEC_RES`. The line-spread width was
+keyed by instrument name, so the AI Phe runs of 2026-08-15 and 2026-08-27 modelled the six
+EGGS exposures at the HAM width, a Gaussian σ of 1.107 km/s against the declared
+1.591 km/s, and no warning was raised. Five of the six lie near one orbital phase, the
+maximum of the primary's velocity.
+
+The width is now a property of the exposure (`EpochData.lsf_sigma_kms`).
+`lsf_sigma_v={"HARPS": PER_EPOCH}` models each epoch at its declared width, and a single
+width given for a key whose epochs declare several produces a warning that names them
+([One instrument name, two resolving powers](api/facade.md#one-instrument-name-two-resolving-powers)).
+`aiphe_bench.py` and `aiphe_labels_bench.py` use the per-epoch widths. Their effect on the
+temperatures fitted with log g declared is below 2 K
+([label fit, 2026-10-15](#effect-of-the-width-the-period-and-the-library-build-2026-10-15)).
+
+The effect on the semi-amplitudes was measured with `scripts/aiphe_offset_tests.py` on the
+5150–5250 Å window. Both rows are MAP fits of the orbit with the same priors and light
+fractions. The second gives the six EGGS exposures their own instrument key and width:
+
+| line-spread width | K₁ [km/s] | K₂ [km/s] | *q* = K₁/K₂ | optimizer steps |
+|---|---|---|---|---|
+| the HAM width for all 36 (as on 2026-08-15) | 50.454 (−1.39%) | 49.495 (+0.79%) | 1.0194 | 400, the step limit |
+| the declared width of each mode | 50.451 (−1.39%) | 49.490 (+0.78%) | 1.0194 | 313, converged |
+
+The first row reproduces the 5150–5250 Å values recorded on 2026-08-15 to 0.002 km/s. It stopped
+at the step limit without meeting the gradient tolerance, with K₁ between 50.451 and
+50.454 km/s and K₂ at 49.495 km/s from step 100 on. The declared widths change K₁ by
+−0.003 km/s, K₂ by −0.005 km/s and the mass ratio by 0.004%, against offsets of −0.71 and
++0.39 km/s from the published values. The pooled width does not explain the offset. No
+result is recorded for the other configurations of the script (the six exposures removed, a
+stationary third light, refits at several light fractions, the period held at the
+photometric value, rescaled weights, a jitter site). The results and the log of the two fits
+are in `internal/research/2026-09-03-adoption/aiphe_offset/`.
 
 ### AI Phe: the eclipse and the spectroscopic light ratio
 
@@ -2071,7 +2158,9 @@ The three-way table above was not updated from this partial recheck. The shift-a
 figure did not reproduce (0.049 s against 0.018 s recorded, while every other figure was
 faster or unchanged), and a fair comparison needs all three codes re-run end to end under
 one protocol. Accuracy is unaffected: the recovered spectra reproduce the recorded RMS
-exactly (0.0093 / 0.0116 mean-aligned).
+exactly (0.0093 / 0.0116 mean-aligned, against the injected spectra before the LSF; at the
+instrumental resolution the values are 0.0033 / 0.0052, see [the comparison at a common
+resolution](#the-three-code-comparison-at-a-common-resolution-2026-10-15)).
 
 The re-run at the end of this file did that. It reproduced all twelve accuracy values
 exactly and attributed the 0.049 s to the harness's in-process convention, which timed
@@ -2178,7 +2267,10 @@ printed precision (albireo 0.0118 / 0.0093 and 0.0165 / 0.0116, fd3 0.1767 / 0.0
 0.2597 / 0.0223, shift-and-add 0.0317 / 0.0248 and 0.0849 / 0.0302). The exported fd3
 inputs are checksum-identical to those of the earlier session, and fd3's deterministic
 output `.mod` is byte-identical. The computed spectra are unchanged. Only the timing
-protocol differs.
+protocol differs. These values score every code against the injected spectra before the
+LSF, which charges the LSF's broadening to fd3 and shift-and-add; the comparison at the
+instrumental resolution is in [the comparison at a common
+resolution](#the-three-code-comparison-at-a-common-resolution-2026-10-15).
 
 ### Wall-clock times under one protocol
 
@@ -2248,9 +2340,14 @@ as an algorithm. The as-found row stays in the table because fd3 is normally run
 ### Status of the earlier tables
 
 The earlier tables remain a record of this same desktop, with the software stack and the
-timing contamination unrecorded. The accuracy result is confirmed a second time by exact
-replication: ~2× on shape, the same *k* = 0 null space in all three codes, and a posterior
-from one of them.
+timing contamination unrecorded. Exact replication confirmed the computation a second
+time: the same accuracy values, the same *k* = 0 null space in all three codes, and a
+posterior from one of them. It did not test the comparison. The accuracy values scored
+every code against the injected spectra before the LSF, so most of the recorded error of
+fd3 and shift-and-add was the LSF's own broadening, charged to the two codes that take no
+LSF. At the instrumental resolution albireo's errors are 0.6 times fd3's and 0.23 times
+shift-and-add's at seven sweeps ([the comparison at a common
+resolution](#the-three-code-comparison-at-a-common-resolution-2026-10-15)).
 
 ## Feature comparison with the established shift-and-add repository (2026-08-27)
 
@@ -2280,28 +2377,31 @@ and 1 open issue. It cites González & Levato (2006) for the algorithm and asks 
 cite Shenar et al. 2020 (A&A 639, L6) and 2022 (A&A 665, A148), both already in
 `paper/paper.bib`.
 
-The numbers above cover the shared core only. The three-way table measured the published
-recurrence under the paper's own stopping rule with the orbit fixed at the injected values,
-so its RMS and wall-clock values apply to the repository's algorithm, not to its code. The
-negativity constraint and the χ² grid are built on that core, were never run here, and
-under the provenance rule cannot be reimplemented from the source. A direct comparison with
-the repository as distributed would be legitimate (running unlicensed code is permitted;
-deriving from it is not) and has not been made.
+The numbers above cover the shared core only. The method has no stopping rule, and the
+three-way table ran the published recurrence for seven sweeps, the upper end of the "rarely
+more than 5–7" that González & Levato report, with the orbit fixed at the injected values.
+Its RMS and wall-clock values therefore apply to the repository's algorithm, not to its
+code. The negativity constraint and the χ² grid are built on that core, were never run
+here, and under the provenance rule cannot be reimplemented from the source. A direct
+comparison with the repository as distributed would be legitimate (running unlicensed code
+is permitted; deriving from it is not) and has not been made.
 
 | | `Disentangling_Shift_And_Add` | albireo |
 |---|---|---|
 | orbit | χ² grid over (K₁, K₂[, K₃]); P, T0, e, ω supplied | joint inference of every orbital site, gradient-based, with NUTS |
 | uncertainty on K | χ² map over the grid | posterior draws |
 | uncertainty on spectra | none | pointwise band, and draws from the joint posterior |
-| the *k* = 0 null space | left at its initial value by the recurrence (a fixed point at zero frequency); the negativity constraint is described as a remedy for spurious wings | fixed by the smoothness prior; reported as the leading mode by the forecast |
+| the *k* = 0 null space | left at its initial value by the recurrence (a fixed point at zero frequency); the negativity constraint is described as a remedy for spurious wings | not determined by the data; set by the smoothness prior and reported as the leading mode by the forecast |
 | contaminated pixels | masking/weights (in the published method) | the same masking, plus telluric and nebular components when masking would discard the pixels the science needs |
 | triples | yes, K₃ in the grid | yes at the expert level (hierarchical outer orbit); the `Disentangler` interface rejects it in v1 |
 | validation | mock-data generators | closed-loop acceptance tests in CI against packaged injected values, plus calibrated detection |
 | distribution | scripts + a config file; no license, no package, no tests | BSD-3-Clause package on PyPI, CI, docs, tutorials |
 
-The differences in degree are those measured above: about 2× on aligned shape, and the
-shortest wall-clock time in the comparison, which belongs to the repository's algorithm, as
-expected of a small number of shifts and means. The difference in kind is the column of the
+The differences in degree are those measured above. At seven sweeps the algorithm has the
+shortest wall-clock time in the comparison, as expected of a small number of shifts and
+means, and aligned errors 4.4 times albireo's at the instrumental resolution. With more
+sweeps the errors fall to 1.2 times albireo's at the limit of the iteration, after about
+20,000 sweeps and 103 s. The difference in kind is the column of the
 three-way table that no choice of test conditions equalizes: an uncertainty on the
 disentangled spectra, which no code in
 [the survey of methods](science.md#2-methods-of-spectral-disentangling) produces. The
@@ -2434,15 +2534,22 @@ test on real data is AI Phe against Maxted et al. (2020), not run here.
 
 ## AI Phoenicis: the label fit on observed spectra (2026-08-27)
 
-Machine: the same desktop. Harness: `scripts/aiphe_labels_bench.py` on 36 archival HARPS
-spectra (R = 115,000, `scripts/download_aiphe.py`), disentangled on 5150-5250 A with the
+Machine: the same desktop. Harness: `scripts/aiphe_labels_bench.py` on the 36 archival
+HARPS spectra (`scripts/download_aiphe.py`), disentangled on 5150-5250 A with the
 velocities held at the published orbit, so that the run tests the label fit and not the
-orbit. Library: `bosz2024-fgk-r20000`, 454 nodes. The notebook of the same run is
-`docs/tutorials/aiphe-labels.ipynb`.
+orbit. Library: `bosz2024-fgk-r20000`, 454 nodes (cache version 1). The fixed-log-g figures
+are the output of the notebook `docs/tutorials/aiphe-labels.ipynb` of that date, which was
+regenerated on 2026-10-15 with the configuration of the re-run below.
 
-The velocities were held at the rounded period, 24.5924 d. `aiphe_bench.py` now uses
-24.592483 d, which changes the fixed velocities by up to 0.107 km/s at the steepest phases.
-The figures in this section predate that change and should be re-run.
+The velocities were held at the rounded period, 24.5924 d, and the six EGGS exposures at
+*R* = 80,000 were modelled at the HAM width of *R* = 115,000
+([D59](#two-resolving-powers-under-one-instrument-name-d59-2026-09-03)).
+`aiphe_labels_bench.py` now takes 24.592483 d from `aiphe_bench.py`, which changes the fixed
+velocities by up to 0.107 km/s at the steepest phases, and models each exposure at its
+declared width. The figures in this section predate both changes. In the re-run of
+2026-10-15 ([below](#re-run-at-the-declared-widths-and-the-unrounded-period-2026-10-15))
+neither change moves a temperature fitted with log g declared by more than 2 K, and the
+difference from these figures comes from the library build.
 
 Every quantity the mode produces has an independent published value for AI Phe: Teff
 6310 K and 5010 K, log g 4.001 and 3.598, R2/R1 = 1.6237 (Maxted et al. 2020, run C). The
@@ -2469,6 +2576,108 @@ while chi-square improves. The correlation report is empty, because a parameter 
 does not vary and the curvature at the optimum then does not show the degeneracy that
 produced the result. A flagged correlation is evidence of a degeneracy, but an empty report
 is not evidence of its absence.
+
+### Re-run at the declared widths and the unrounded period (2026-10-15)
+
+Harness: `scripts/aiphe_labels_bench.py` at 5bc9658, unchanged. Wall-clock times are not
+compared. Each exposure is modelled at its declared width (`lsf_sigma_v={"HARPS": PER_EPOCH}`:
+a Gaussian σ of 1.107 km/s for the 30 HAM and 1.591 km/s for the 6 EGGS exposures), and the
+velocities are held at the published orbit with P = 24.592483 d. At the 36 epochs these
+velocities differ from those at 24.5924 d by at most 0.082 km/s (RMS 0.050 km/s), a tenth
+of a model pixel. The model grid has 7,582 pixels, against 7,578 when the HAM width set its
+margin, and the label fit uses 15,164 component pixels against 15,156.
+
+The library build differs as well. Since D62 the registry builds `bosz2024-fgk-r20000` as
+cache version 2. BOSZ publishes no model at 5750 K, log g 3.0, [M/H] -0.75, and version 2
+fills that node by linear interpolation along [M/H], so that the 455 nodes form a complete
+box and the label fit interpolates with the Catmull-Rom cubic
+([D62, item 4](#the-second-run-d62-2026-09-10-the-epoch-velocities-as-a-product-the-noise-model-the-scan-the-library)).
+The run of 2026-08-27 read version 1, 454 nodes, which the fit interpolated piecewise
+linearly over a triangulation.
+
+| configuration | primary Teff | secondary Teff | R2/R1 | chi2 |
+|---|---|---|---|---|
+| log g declared, dilution fitted | **6313.9 K (+0.06%)** | **5224.9 K (+4.29%)** | 1.5297 (-5.8%) | 419,615 |
+| log g free | 5966.0 K (-5.45%) | 4875.9 K (-2.68%) | 1.5844 (-2.4%) | 407,932 |
+| log g declared, dilution frozen | 6385.3 K (+1.19%) | 5148.1 K (+2.76%) | n/a | 427,533 |
+
+The primary is recovered to 0.06 per cent (+3.9 K) and the secondary is 4.29 per cent
+(+214.9 K) too hot, against +0.52 and +4.33 per cent on 2026-08-27. The secondary remains
+outside the 2-3 per cent of math.md 9.6, and the radius ratio is 5.8 per cent low (5.1 per
+cent before). The fitted light fractions are 0.5086 and 0.4914 against the assumed 0.5441
+and 0.4559, [M/H] is -0.050, v sin i is 2.22 and 2.20 km/s, and the formal Teff errors are
+16.3 and 12.7 K. The notebook, regenerated with this configuration and its own v sin i
+prior (0.1 to 30 km/s, against 0.5 to 25 km/s in the script), gives 6314.5 K, 5224.7 K and
+R2/R1 = 1.5300.
+
+With log g free both gravities fall, to 3.465 and 3.023 (3.488 and 3.000 in the notebook),
+the temperatures fall by 5.45 and 2.68 per cent, and chi-square decreases by 11,684. The
+correlation report is again empty. At the optimum the largest correlation between two
+labels is 0.75 (the primary's Teff and log g), below the reporting threshold of 0.95. With
+the dilution frozen at the blackbody estimate the primary is 75 K and the secondary 138 K
+too hot, against +4 and +215 K with the dilution fitted.
+
+The current code rejects `compare="matched"` for this library: BOSZ is broadened to
+R = 20,000 (σ = 6.37 km/s), more than the HARPS profile, and a template cannot be sharpened
+by a convolution. With the library's resolving power left undeclared, which reproduces the
+computation of 2026-08-27, matched gives 6293.3 and 5242.6 K, v sin i of 0.59 and 0.54 km/s
+against the prior's lower bound of 0.5 km/s, and a chi-square of 1,785,910. That is 4.26
+times the native value, as on 2026-08-27, against the 4.91 the kernel predicts.
+
+### Effect of the width, the period and the library build (2026-10-15)
+
+The changes were applied one at a time with the functions and configurations of
+`aiphe_labels_bench.py`, its module constants switched. The harness, the results and the
+logs are in `internal/research/2026-10-15-aiphe-labels/`. Log g declared, dilution fitted:
+
+| library build | line-spread width | period [d] | primary Teff [K] | secondary Teff [K] | R2/R1 | chi2 |
+|---|---|---|---|---|---|---|
+| version 1 | HAM width for all 36 | 24.5924 | 6331.0 | 5269.5 | 1.5155 | 425,696 |
+| version 2 | HAM width for all 36 | 24.5924 | 6314.7 | 5225.4 | 1.5302 | 425,203 |
+| version 2 | HAM width for all 36 | 24.592483 | 6315.5 | 5224.3 | 1.5304 | 422,402 |
+| version 2 | declared per exposure | 24.5924 | 6316.1 | 5224.1 | 1.5314 | 422,439 |
+| version 2 | declared per exposure | 24.592483 | 6313.9 | 5224.9 | 1.5297 | 419,615 |
+| version 1 | declared per exposure | 24.592483 | 6334.8 | 5268.3 | 1.5171 | 420,080 |
+
+On version 2 the declared widths alone move the two temperatures by +1.5 and -1.3 K, the
+unrounded period alone by +0.9 and -1.1 K, and the two together by -0.8 and -0.5 K, so the
+effects do not add. Each fit stops at its limit of 400 L-BFGS steps, with final gradient
+norms of 3 to 33, and differences of one or two kelvin are within the variation of that end
+point. With the dilution frozen the four fits agree to 1.1 K. With log g free, where the fit
+follows the degeneracy and stops with gradient norms of up to 400, they spread over 24 and
+19 K. Together the two changes alter the disentangled spectra by an RMS of 0.0025 and 0.0030
+in normalized flux, about a sixth of their median posterior standard deviation. Neither the
+width nor the period has a measurable effect on the labels. Chi-square decreases from
+425,203 to 419,615 across the four rows, but each row fits a different disentangling, with
+its own `d_hat`, standard deviations and pixel count, so the values do not rank the
+configurations.
+
+The difference from the figures of 2026-08-27 comes from the library build. On version 1
+the end point of the fit depends on settings that change neither the data nor the model, as
+D62 found on simulated spectra. The version-1 runs below differ in the code (5bc9658, or
+ee8e46d of 2026-08-27), the v sin i prior (the script's or the notebook's), the width and the
+period; the version-2 runs in the prior, the width and the period. Their end points span:
+
+| configuration | version 1 (4 runs) | version 2 (5 runs) |
+|---|---|---|
+| log g declared, dilution fitted: Teff [K] | 6331.0 to 6383.3; 5214.1 to 5269.5 | 6313.9 to 6316.1; 5224.1 to 5225.4 |
+| log g declared, dilution frozen: Teff [K] | 6387.0 to 6446.6; 5114.9 to 5264.3 | 6384.9 to 6386.2; 5147.5 to 5148.3 |
+| log g free: primary log g | 3.600 to 3.954 | 3.465 to 3.514 |
+
+The fixed-log-g row of 2026-08-27 is the output of the notebook of that date. The code of
+that date reproduces it to the last digit (6342.503 K, 5226.975 K, chi-square 425,869.2)
+with the notebook's v sin i prior, and gives 6383.3 and 5214.1 K with the script's. The
+temperatures recorded on 2026-08-27 therefore carried an uncertainty of about 50 K from the
+piecewise-linear interpolant, which the complete box removes. The primary's change from
+6342.5 to 6313.9 K is of that size. The near-agreement of the secondary between the two
+dates (5227.0 and 5224.9 K) is not evidence of stability, since the version-1 runs of the
+same configuration span 5214.1 to 5269.5 K.
+
+Two entries of the 2026-08-27 table come from other runs. Its frozen-dilution row
+(6449.4 K, 5179.8 K, chi-square 1,853,578) is not a native fit: with the code and the
+notebook of that date the native fit gives 6444.4 and 5264.3 K and a chi-square of 435,714.
+The radius ratio of its free row, 1.5459, is reproduced by neither prior (1.6028 with the
+notebook's, 1.5141 with the script's).
 
 ### Change of the default comparison mode from matched to native
 
@@ -2515,8 +2724,9 @@ the assumed light fractions, which the fitted radius ratio only partly absorbs.
 
 ### Caveats on these numbers
 
-The formal errors here are sub-kelvin and contain no information: they are the curvature of
-an optimum on correlated residuals, and `summary()` states this whenever it prints them.
+The formal Teff errors (17.6 and 6.5 K on 2026-08-27, 16.3 and 12.7 K on 2026-10-15)
+contain no information: they are the curvature of an optimum on correlated residuals, and
+`summary()` states this whenever it prints them.
 `refit_draws` gives the number to quote and was not run for this record. HARPS provides no
 error array, so the weights are albireo's own estimate (the z-RMS 2.64 noted in the
 D-numbered AI Phe disentangling entry applies here too). This is a validation on one
@@ -4628,3 +4838,184 @@ templates narrower than the lines of a single star divide its line in either ord
 simulated star at rest whose lines are three times as broad as the templates gives a
 coefficient of -0.86 at a S/N of 5 and -0.94 at a S/N of 9, where the statistics are
 above 100 and the fixed threshold returns an orbit of two components already.
+
+## The three-code comparison at a common resolution (2026-10-15)
+
+The accuracy values of the three-code comparison (the fd3, shift-and-add and three-way
+sections of 2026-08-14 and 2026-08-15, and the re-run of 2026-08-16) scored every code
+against the injected spectra before the line-spread function. `simulate_dataset` convolves
+each epoch with the LSF, a Gaussian of σ = 6 km/s (2 px), after summing the components.
+albireo is given the LSF and returns the component spectra deconvolved, *d*. fd3 and
+shift-and-add take no LSF and return them at the instrumental resolution, *B d*. The
+recorded errors of fd3 and shift-and-add therefore contained the broadening of the LSF
+itself: *B d* − *d* on the benchmark's mask is 0.0190 / 0.0206 mean-aligned, against fd3's
+recorded 0.0198 / 0.0223. The statement that albireo is about twice as accurate, and its
+explanation, that the prior constrains the low-*k* modes, rested on those values.
+
+Harnesses: `scripts/fd3_bench.py`, which now scores at the instrumental resolution and
+prints the recorded convention beside it, and `scripts/fd3_bench_checks.py` for the noise
+realizations, the smoothing weights, the frequency bands, the bias and the number of sweeps.
+Machine and fd3 build: those of the 2026-08-16 re-run.
+
+### Scoring convention
+
+Every code is scored against *B d*, the injected spectra convolved with the simulator's own
+kernel (`gaussian_kernel` at 6 km/s, truncated at 4σ). albireo's deconvolved spectra are
+convolved with the same kernel before scoring, so that the three codes estimate the same
+quantity. The core is where *B d* is below −0.15, with 80 px left out at either end (596
+and 522 px for the two components). The mask of the recorded tables, *d* < −0.15, changes
+the aligned values of albireo, fd3 and shift-and-add at 7 and 50 sweeps by at most 0.0001
+(seed 7). The errors are given raw and mean-aligned, with the mean of the error over the
+core removed. The data do not determine that mean: albireo's smoothness prior sets it, and
+fd3 and shift-and-add leave it to the user.
+
+### Reproduction of the recorded values
+
+Before any re-scoring, the seeded harness reproduced every recorded value to the printed
+precision: the twelve values of the three-way table and the three rows of the sweep table.
+The exported fd3 inputs are checksum-identical to those of the 2026-08-16 re-run, and a new
+fd3 run gives a byte-identical `.mod` file.
+
+### Accuracy at the instrumental resolution
+
+Seed 7 is the recorded realization. The configuration is the harness's: the orbit held at
+the injected values, the LSF given to albireo, and its smoothing weights held at τ = 300 and
+η = 5.
+
+| | comp 1 raw / aligned | comp 2 raw / aligned | aligned against *d* (the recorded convention) |
+|---|---|---|---|
+| albireo | 0.0078 / **0.0033** | 0.0131 / **0.0052** | 0.0093 / 0.0116 |
+| fd3 | 0.1653 / 0.0055 | 0.2698 / 0.0090 | 0.0198 / 0.0223 |
+| shift-and-add, 7 sweeps | 0.0335 / 0.0145 | 0.0725 / 0.0226 | 0.0248 / 0.0302 |
+| shift-and-add, 50 sweeps | 0.0319 / 0.0086 | 0.0594 / 0.0113 | 0.0221 / 0.0239 |
+| shift-and-add, limit | 0.0056 / 0.0041 | 0.0106 / 0.0064 | 0.0209 / 0.0227 |
+
+Over twenty noise realizations (seeds 1 to 20 of the simulator's noise, with the spectra,
+epochs and orbit of the benchmark):
+
+| aligned, mean ± sd | comp 1 | comp 2 | relative to fd3, mean (range) per seed |
+|---|---|---|---|
+| albireo | 0.0033 ± 0.0006 | 0.0054 ± 0.0010 | 0.61 (0.46–0.81), 0.63 (0.44–0.87) |
+| fd3 | 0.0054 ± 0.0004 | 0.0085 ± 0.0006 | |
+| shift-and-add, 7 sweeps | 0.0146 ± 0.0002 | 0.0228 ± 0.0002 | 2.69, 2.68 |
+| shift-and-add, 50 sweeps | 0.0086 ± 0.0002 | 0.0117 ± 0.0003 | 1.60, 1.38 |
+| shift-and-add, limit | 0.0040 ± 0.0004 | 0.0062 ± 0.0007 | 0.73, 0.73 |
+
+albireo's aligned error is lower on both components than fd3's and than shift-and-add's at
+7 and 50 sweeps on every seed, and lower than the limit of shift-and-add on 15 of the 20.
+
+### The frequencies at which the errors differ
+
+Each error is split into three frequency bands by Gaussian filters whose transfer is one
+half at the band edges. The low band holds the periods at which the epochs give the
+difference mode less than half its information
+([math.md §5.1](math.md#51-the-low-frequency-degeneracy-the-undulations-theorem)),
+computed from the benchmark's relative shifts: periods above 171 px (514 km/s). The line
+band runs from there to the cutoff of the LSF, where its transfer is one half, at a period
+of 10.7 px. Above the cutoff *B d* has almost no power, and an error there is noise. Seed 7,
+aligned core RMS against *B d*, comp 1 / comp 2 (the parts do not add exactly in
+quadrature, because the core is a subset of the window):
+
+| | total | low band | line band | above the LSF cutoff |
+|---|---|---|---|---|
+| albireo | 0.0033 / 0.0052 | 0.0025 / 0.0036 | 0.0015 / 0.0022 | 0.0011 / 0.0018 |
+| fd3 | 0.0055 / 0.0090 | 0.0025 / 0.0036 | 0.0015 / 0.0022 | 0.0045 / 0.0074 |
+| shift-and-add, 7 sweeps | 0.0145 / 0.0226 | 0.0139 / 0.0216 | 0.0020 / 0.0024 | 0.0024 / 0.0039 |
+| shift-and-add, 50 sweeps | 0.0086 / 0.0113 | 0.0079 / 0.0101 | 0.0019 / 0.0023 | 0.0024 / 0.0039 |
+| shift-and-add, limit | 0.0041 / 0.0064 | 0.0024 / 0.0036 | 0.0019 / 0.0023 | 0.0024 / 0.0039 |
+| albireo, no LSF given | 0.0052 / 0.0078 | 0.0025 / 0.0036 | 0.0015 / 0.0022 | 0.0041 / 0.0060 |
+| albireo, no LSF, ML-II weights | 0.0035 / 0.0053 | 0.0026 / 0.0037 | 0.0015 / 0.0022 | 0.0015 / 0.0019 |
+
+In the low band and in the line band albireo and fd3 have the same error, and in the low
+band the limit of shift-and-add has it too. The explanation recorded for albireo's margin,
+that the prior constrains the low-*k* modes, therefore does not hold. At low frequencies the
+prior is weak against the data: its curvature term falls as the fourth power of the
+frequency, and its ridge outweighs the epochs only in modes longer than the window, so that
+in effect it constrains the constant offset, which the alignment removes. albireo's lower
+error lies above the LSF cutoff. albireo is given the LSF, and its deconvolved spectra,
+convolved with the LSF for scoring, lose the noise at the frequencies where *B d* has no
+power. fd3 keeps that noise. Shift-and-add interpolates each observation into the rest frame of a component,
+which smooths part of it. After 7 or 50 sweeps shift-and-add differs in the low band, where
+its iteration converges slowly.
+
+### The information given to each code
+
+albireo is given the LSF, which fd3 and shift-and-add do not take. Given an identity kernel
+instead (σ = 0.001 km/s), the information the other codes receive, albireo's aligned errors
+are 0.96 and 0.92 times fd3's over the twenty seeds (range 0.78 to 1.12). At the harness's
+weights its prior removes little of the noise above the cutoff (0.0041 / 0.0060 there,
+against fd3's 0.0045 / 0.0074).
+
+The harness holds the smoothing weights at τ = 300 and η = 5, the starting values of the
+`Disentangler` interface, which then fits them by ML-II. Fitted by ML-II at the injected
+orbit, they are τ ≈ 7,970 and 6,480 and η ≈ 2.0 and 3.4 with the LSF, and τ ≈ 21,100 and
+17,150 and η ≈ 1.6 and 2.8 without it, within 3% of these values on every seed:
+
+| aligned, 20 seeds, mean ± sd | comp 1 | comp 2 | relative to fd3 |
+|---|---|---|---|
+| LSF given, weights held (the harness) | 0.0033 ± 0.0006 | 0.0054 ± 0.0010 | 0.61, 0.63 |
+| LSF given, ML-II weights | 0.0032 ± 0.0007 | 0.0053 ± 0.0012 | 0.60, 0.63 |
+| no LSF, weights held | 0.0052 ± 0.0004 | 0.0079 ± 0.0007 | 0.96, 0.92 |
+| no LSF, ML-II weights | 0.0036 ± 0.0006 | 0.0056 ± 0.0011 | 0.66, 0.66 |
+
+With its weights fitted, albireo without the LSF removes most of the noise above the cutoff
+through the curvature term (0.0015 / 0.0019 there, seed 7), and its errors are two thirds of
+fd3's. With the LSF given, the fitted weights change the mean errors at the instrumental
+resolution by 3% or less, but they change the deconvolved spectra. Against the injected
+spectra before the LSF the aligned errors are 0.0093 / 0.0116 at the held weights (the
+values of the earlier tables) and 0.0044 / 0.0071 at the ML-II weights (seed 7; 0.0046 /
+0.0072 over the twenty seeds). fd3 and shift-and-add return no deconvolved spectrum, so
+these values have no counterpart in the comparison.
+
+### Bias
+
+On a noiseless copy of seed 7, with the weights kept, the error of each code is its bias.
+fd3's aligned bias is below 0.0001: it multiplies each Fourier mode by the transform of a
+linear interpolation, the simulator's shift operator, so all of its error is noise.
+albireo's bias is 0.0008 / 0.0014, in the low band, from the ridge of the prior.
+Shift-and-add's bias is 0.0143 / 0.0222 after 7 sweeps, 0.0080 / 0.0105 after 50, and
+0.0015 / 0.0015 at the limit, where it lies in the line band: the interpolation of each
+observation into the rest frame smooths the lines.
+
+### Shift-and-add and the number of sweeps
+
+| sweeps | comp 1 raw / aligned | comp 2 raw / aligned | wall-clock time |
+|---|---|---|---|
+| 1 | 0.0481 / 0.0385 | 0.1296 / 0.0362 | 0.0039 s |
+| 7 | 0.0335 / 0.0145 | 0.0725 / 0.0226 | 0.0269 s |
+| 50 | 0.0319 / 0.0086 | 0.0594 / 0.0113 | 0.194 s |
+| 500 | 0.0264 / 0.0098 | 0.0468 / 0.0135 | 2.38 s |
+| 5,000 | 0.0080 / 0.0047 | 0.0149 / 0.0072 | 25.8 s |
+| 20,000 | 0.0056 / 0.0041 | 0.0106 / 0.0064 | 103 s |
+| limit | 0.0056 / 0.0041 | 0.0106 / 0.0064 | |
+
+Seed 7. The times are for a fresh interpreter that never imports jax, the minimum of five
+after a warmup (20,000 sweeps: one run), with another job holding about 12% of the CPU. The
+7-sweep time is 2% above the 0.0263 s of the 2026-08-16 re-run, and the time per sweep rises
+from 3.8 ms to 5.1 ms in the longest runs.
+
+The aligned error is not monotonic in the number of sweeps. It falls to 0.0086 / 0.0113 at
+50 sweeps, rises to 0.0098 / 0.0135 at 500, and falls again to the limit, which the iterate
+reaches to 7 × 10⁻⁶ (largest absolute difference) after 20,000 sweeps. The limit is the
+fixed point of the iteration, solved directly from the shift matrices. The raw error falls
+with it, from 0.0335 / 0.0725 at seven sweeps to 0.0056 / 0.0106. In the periodic analysis
+of González & Levato the mean level of each component is a fixed point of the iteration. On
+a window padded with continuum (the module's zero padding of deviations) it is not exactly
+one, and over thousands of sweeps the padding determines it.
+
+At the instrumental resolution seven sweeps are therefore far from converged. Stopping at
+the published count leaves errors 4.4 times albireo's, almost all of it in the low band.
+5,000 sweeps (26 s) bring the errors below fd3's. The limit, after about 20,000 sweeps
+(103 s), has errors 1.2 times albireo's and 0.73 times fd3's, against 0.059 s for albireo
+and 0.064 s for fd3 on one thread. Shift-and-add is the fastest of the three codes at the
+published count of sweeps, and the slowest at its limit.
+
+### Status of the earlier tables
+
+The tables of "Comparison with fd3", "Clean-room shift-and-add implementation" and
+"Three-way comparison on identical data" now give the values at the instrumental
+resolution, with the recorded values beside them. Their wall-clock times are those recorded
+at the time, except the sweep table's, which are the fresh-process times above. The
+reproduction statements of the partial recheck and of the 2026-08-16 re-run remain true of
+the computation, which is unchanged. [The comparison with other codes](comparison.md#4-accuracy-and-speed-on-identical-data)
+quotes the values of this section.

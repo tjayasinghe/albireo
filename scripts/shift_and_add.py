@@ -51,7 +51,9 @@ The same analysis gives a limit of the method. In Fourier space the per-mode fac
 modulus exactly 1 at zero frequency, so the DC level of each component is a fixed point, and
 shift-and-add cannot determine it from constant-light data. This is the low-frequency null
 space of ``docs/math.md`` §5.1, which fd3 also exhibits. The three independent methods have
-the same degeneracy.
+the same degeneracy. The analysis is periodic. On a finite window this module pads with
+continuum, which puts the factor at zero frequency slightly below 1, so that over some 10^4
+sweeps the padding, not the data, sets the level (``docs/benchmarks.md``, 2026-10-15).
 
 Choices the papers leave open, made here and marked as this module's:
 

@@ -14,7 +14,7 @@ on real data without acquiring the data.
 
     python scripts/build_aiphe_notebook.py [--postprocess-only]
 
-A run takes roughly five minutes, nearly all of it in the three label fits. The notebook
+A run takes about four minutes, nearly all of it in the three label fits. The notebook
 is seeded.
 """
 
@@ -118,7 +118,15 @@ label fit.
 
 The light fractions are a blackbody estimate from the published radii and temperatures,
 accurate to a few per cent at best. This run therefore tests the claim that a wrong
-assumed dilution is absorbed as dilution rather than as temperature.""",
+assumed dilution is absorbed as dilution rather than as temperature.
+
+Each exposure is modelled at the resolving power its header declares: thirty
+high-accuracy-mode exposures at R = 115,000 and six high-efficiency (EGGS) exposures at
+R = 80,000, all filed under `INSTRUME = 'HARPS'`. The velocities are computed with the
+unrounded photometric period, 24.592483 d. The outputs below were produced with this
+configuration on 2026-10-15. The first version of this notebook (2026-08-27) modelled all
+36 exposures at the high-accuracy width, used the period rounded to 24.5924 d and an
+earlier build of the library.""",
     ),
     (
         PY,
@@ -136,8 +144,14 @@ print(f"light fractions assumed: {ell[0]:.4f} / {ell[1]:.4f}")""",
         """\
 fig, axes = plt.subplots(2, 1, figsize=(9.5, 5.0), sharex=True)
 for i, (ax, name) in enumerate(zip(axes, ("primary (F7 V)", "secondary (K0 IV)"), strict=True)):
-    ax.fill_between(grid.wave, 1 + d_hat[i] - 2 * std[i], 1 + d_hat[i] + 2 * std[i],
-                    color=f"C{i}", alpha=0.3, lw=0)
+    ax.fill_between(
+        grid.wave,
+        1 + d_hat[i] - 2 * std[i],
+        1 + d_hat[i] + 2 * std[i],
+        color=f"C{i}",
+        alpha=0.3,
+        lw=0,
+    )
     ax.plot(grid.wave, 1 + d_hat[i], color=f"C{i}", lw=0.8)
     ax.set_ylabel(name, fontsize=9)
     ax.set_xlim(*WINDOW)
@@ -152,7 +166,11 @@ fig.set_layout_engine("constrained")""",
 
 `log g` is declared rather than fitted. For an eclipsing binary it is known to about
 0.003 dex, an order of magnitude better than any spectroscopic determination, and Teff and
-log g correlate at about 0.98 when both are free.""",
+log g correlate at about 0.98 when both are free.
+
+The library is BOSZ 2024 at R = 20,000. Its one unpublished node (5750 K, log g 3.0,
+[M/H] = −0.75) is filled by linear interpolation along [M/H], so the nodes form a complete
+box and the fit interpolates with the Catmull-Rom cubic.""",
     ),
     (
         PY,
@@ -167,20 +185,34 @@ print(f"{library.nodes.shape[0]} nodes x {library.wave.size} px, medium {library
 def stars(logg_spec):
     return {
         "primary": ab.StarLabels(
-            library=library, teff=ab.Between(5400.0, 6900.0), logg=logg_spec(logg_pub[0]),
-            vsini=ab.Between(0.1, 30.0), v_kms=ab.Between(-15.0, 15.0)),
+            library=library,
+            teff=ab.Between(5400.0, 6900.0),
+            logg=logg_spec(logg_pub[0]),
+            vsini=ab.Between(0.1, 30.0),
+            v_kms=ab.Between(-15.0, 15.0),
+        ),
         "secondary": ab.StarLabels(
-            library=library, teff=ab.Between(4300.0, 5900.0), logg=logg_spec(logg_pub[1]),
-            vsini=ab.Between(0.1, 30.0), v_kms=ab.Between(-15.0, 15.0)),
+            library=library,
+            teff=ab.Between(4300.0, 5900.0),
+            logg=logg_spec(logg_pub[1]),
+            vsini=ab.Between(0.1, 30.0),
+            v_kms=ab.Between(-15.0, 15.0),
+        ),
     }
 
 
-common = dict(medium=dataset.epochs[0].medium, light_fractions=ell,
-              lsf_sigma_kms=ab.LSF.from_resolution(115000.0).sigma_kms,
-              std=std, mh=ab.Between(-0.9, 0.4), max_steps=400)
+# The native comparison applies no line-spread function to the templates, so this width is
+# recorded with the result and not used. The disentangling modelled each exposure at its own.
+common = dict(
+    medium=dataset.epochs[0].medium,
+    light_fractions=ell,
+    lsf_sigma_kms=ab.LSF.from_resolution(115000.0).sigma_kms,
+    std=std,
+    mh=ab.Between(-0.9, 0.4),
+    max_steps=400,
+)
 
-fixed = ab.match_labels(grid, d_hat, stars=stars(ab.Fixed),
-                        dilution=ab.RadiusRatio(), **common)
+fixed = ab.match_labels(grid, d_hat, stars=stars(ab.Fixed), dilution=ab.RadiusRatio(), **common)
 print(fixed.summary())""",
     ),
     (
@@ -198,9 +230,11 @@ table = score(fixed, "log g fixed")
 print(f"{'configuration':<16}{'component':<12}{'Teff [K]':>10}{'error':>10}{'':>8}")
 for label, name, got, dt, pct in table:
     print(f"{label:<16}{name:<12}{got:10.1f}{dt:+10.1f}{pct:+7.2f}%")
-print(f"\\nR2/R1 fitted {fixed.radius_ratio['secondary']:.4f}  "
-      f"published {R2_FRAC / R1_FRAC:.4f}  "
-      f"({100 * (fixed.radius_ratio['secondary'] / (R2_FRAC / R1_FRAC) - 1):+.1f}%)")""",
+print(
+    f"\\nR2/R1 fitted {fixed.radius_ratio['secondary']:.4f}  "
+    f"published {R2_FRAC / R1_FRAC:.4f}  "
+    f"({100 * (fixed.radius_ratio['secondary'] / (R2_FRAC / R1_FRAC) - 1):+.1f}%)"
+)""",
     ),
     (
         MD,
@@ -208,24 +242,29 @@ print(f"\\nR2/R1 fitted {fixed.radius_ratio['secondary']:.4f}  "
 ## The fit with log g free
 
 This is the failure mode the tutorial describes, on real data. Because Teff and log g are
-degenerate, log g moves to the lower bound of its prior and the temperatures decrease with
-it, while χ² improves. The lower χ² accompanies the worse physical solution.
+degenerate, both gravities fall by about half a dex, the secondary's to the lower edge of
+the grid (log g 3.0), and both temperatures fall with them, while χ² improves. The lower χ²
+accompanies the worse physical solution.
 
-The correlation report does not detect it. Once log g has reached the edge of the grid it
-stops varying, so the curvature at the optimum does not show the degeneracy that produced
-the result. A flagged correlation is evidence of a degeneracy. An empty report is not
-evidence that there is none. Only an external log g detects this case, which is the reason
-for declaring it.""",
+The correlation report does not detect it. The secondary's log g ends at the edge of the
+grid, where it no longer varies, so the curvature at the optimum does not show the
+degeneracy that produced the result, and no other pair of labels reaches the report's
+threshold of 0.95. A flagged correlation is evidence of a degeneracy. An empty report is
+not evidence that there is none. Only an external log g detects this case, which is the
+reason for declaring it.""",
     ),
     (
         PY,
         """\
-free = ab.match_labels(grid, d_hat, stars=stars(lambda g: ab.Between(3.0, 4.9)),
-                       dilution=ab.RadiusRatio(), **common)
+free = ab.match_labels(
+    grid, d_hat, stars=stars(lambda g: ab.Between(3.0, 4.9)), dilution=ab.RadiusRatio(), **common
+)
 for name in ("primary", "secondary"):
     got, pub = free.labels[name], logg_pub["primary secondary".split().index(name)]
-    print(f"{name:<10} Teff {got['teff']:7.1f}   log g {got['logg']:.3f} "
-          f"(published {pub:.3f}, {got['logg'] - pub:+.3f})")
+    print(
+        f"{name:<10} Teff {got['teff']:7.1f}   log g {got['logg']:.3f} "
+        f"(published {pub:.3f}, {got['logg'] - pub:+.3f})"
+    )
 print(f"\\nchi2 free {free.chi2:.0f}  vs  fixed {fixed.chi2:.0f}")
 print("strong correlations:", free.flagged_correlations())""",
     ),
@@ -241,15 +280,18 @@ bias is why the dilution is fitted jointly rather than assumed.""",
     (
         PY,
         """\
-rigid = ab.match_labels(grid, d_hat, stars=stars(ab.Fixed),
-                        dilution=ab.FixedDilution(), **common)
+rigid = ab.match_labels(grid, d_hat, stars=stars(ab.Fixed), dilution=ab.FixedDilution(), **common)
 print(f"{'':<18}{'primary':>22}{'secondary':>22}")
 for label, m in (("radius ratio fitted", fixed), ("dilution frozen", rigid)):
-    cells = "".join(f"{m.labels[n]['teff']:10.1f} ({m.labels[n]['teff'] - t:+6.1f})"
-                    for n, t in (("primary", TEFF1), ("secondary", TEFF2)))
+    cells = "".join(
+        f"{m.labels[n]['teff']:10.1f} ({m.labels[n]['teff'] - t:+6.1f})"
+        for n, t in (("primary", TEFF1), ("secondary", TEFF2))
+    )
     print(f"{label:<18}{cells}")
-print(f"\\nlight fractions   fitted {fixed.flux_ratio['primary']:.4f}/"
-      f"{fixed.flux_ratio['secondary']:.4f}   assumed {ell[0]:.4f}/{ell[1]:.4f}")
+print(
+    f"\\nlight fractions   fitted {fixed.flux_ratio['primary']:.4f}/"
+    f"{fixed.flux_ratio['secondary']:.4f}   assumed {ell[0]:.4f}/{ell[1]:.4f}"
+)
 print(f"chi2              fitted {fixed.chi2:.0f}   frozen {rigid.chi2:.0f}")""",
     ),
     (
@@ -257,9 +299,9 @@ print(f"chi2              fitted {fixed.chi2:.0f}   frozen {rigid.chi2:.0f}")"""
         """\
 ## The result
 
-The primary is within one per cent of its published temperature. The secondary is about
-200 K too hot, outside the 2–3 per cent claimed for this mode, and the fitted radius ratio
-is about 5 per cent low. Two explanations were tested, of which one accounts for part of
+The primary is within 0.1 per cent of its published temperature. The secondary is about
+215 K too hot, outside the 2–3 per cent claimed for this mode, and the fitted radius ratio
+is about 6 per cent low. Two explanations were tested, of which one accounts for part of
 the discrepancy.
 
 Microturbulence is not the explanation. The library is fixed at ξ = 2 km s⁻¹, while a K
@@ -274,10 +316,12 @@ The comparison mode accounts for part of the discrepancy, and is why the default
 since `d_hat` is a partial deconvolution. That is correct for the deconvolution but not
 for the cost, because convolving the residuals correlates them while the likelihood
 remains diagonal. On this dataset it inflated χ² by 4.26×, where the kernel predicts
-4.91×. `v sin i` absorbed the mis-specification and reached the lower bound of its prior
-for both components. `native` returns a physical 2.2 km s⁻¹ for both. The closed-loop test
-did not detect this, because its injected spectra pass through neither an LSF nor a
-disentangling.
+4.91×. `v sin i` absorbed the mis-specification and fell to near the lower bound of its
+prior for both components. `native` returns a physical 2.2 km s⁻¹ for both. The closed-loop
+test did not detect this, because its injected spectra pass through neither an LSF nor a
+disentangling. The current code applies to a template only the width its library lacks,
+and rejects a library broader than the instrument profile, which BOSZ at R = 20,000 is
+against HARPS, so `matched` is not available for these data.
 
 Most of the secondary's offset remains unexplained. The candidates are, in order: a 100 Å
 window that constrains temperature better for an F star than for a K subgiant, the
@@ -288,11 +332,15 @@ and the assumed light fractions, which the radius ratio only partly absorbs.""",
         PY,
         """\
 for name in ("primary", "secondary"):
-    print(f"{name:<10} vsini {fixed.labels[name]['vsini']:5.2f} km/s   "
-          f"[M/H] {fixed.labels[name]['mh']:+.3f}   "
-          f"v {fixed.labels[name]['v_kms']:+6.2f} km/s")
-print(f"\\nnulls   chi2 {fixed.chi2:.4g}   nearest node {fixed.chi2_nearest_node:.4g}   "
-      f"no template {fixed.chi2_continuum:.4g}")""",
+    print(
+        f"{name:<10} vsini {fixed.labels[name]['vsini']:5.2f} km/s   "
+        f"[M/H] {fixed.labels[name]['mh']:+.3f}   "
+        f"v {fixed.labels[name]['v_kms']:+6.2f} km/s"
+    )
+print(
+    f"\\nnulls   chi2 {fixed.chi2:.4g}   nearest node {fixed.chi2_nearest_node:.4g}   "
+    f"no template {fixed.chi2_continuum:.4g}"
+)""",
     ),
     (
         MD,
@@ -314,8 +362,9 @@ template = fixed.template("primary")
 print(f"{template.shape[0]} px on the fit grid, flux {template.min():.3f}-{template.max():.3f}")
 
 fig, ax = plt.subplots(figsize=(9.5, 3.0))
-ax.plot(grid.wave, 1 + d_hat[0] / ell[0], color="0.55", lw=0.8,
-        label="disentangled primary, undiluted")
+ax.plot(
+    grid.wave, 1 + d_hat[0] / ell[0], color="0.55", lw=0.8, label="disentangled primary, undiluted"
+)
 ax.plot(grid.wave, template, color="C3", lw=0.9, label="fitted template")
 ax.set_xlim(5180, 5220)
 ax.set_xlabel("wavelength [Å]")
@@ -331,17 +380,17 @@ fig.set_layout_engine("constrained")""",
 This run measures, on a real star, how well the mode performs its intended task, template
 selection:
 
-- The primary Teff is recovered to within 1 per cent.
-- The secondary is about 200 K too hot, outside the claimed accuracy, and the reason is
+- The primary Teff is recovered to within 0.1 per cent.
+- The secondary is about 215 K too hot, outside the claimed accuracy, and the reason is
   not yet established.
 - The radius ratio, which is not given to the fit, is returned from spectroscopy alone
-  about 5 per cent below the photometric measurement.
+  about 6 per cent below the photometric measurement.
 - log g should be declared when the system determines it. Left free, it shifts the
   temperatures with it while χ² decreases, and the correlation report is empty because
-  log g ends at a bound.
-- The formal errors here are sub-kelvin and should not be quoted. They are the curvature
-  of an optimum, not an uncertainty. `refit_draws` provides the value to quote, and
-  `summary()` states this on every call.""",
+  the secondary's log g ends at the edge of the grid.
+- The formal errors here (16 and 13 K) should not be quoted. They are the curvature of an
+  optimum, not an uncertainty. `refit_draws` provides the value to quote, and `summary()`
+  states this on every call.""",
     ),
 ]
 
