@@ -873,13 +873,21 @@ def _profiled_chi2(model_row, data, weight, basis, gram_inv):
     return jnp.sum(weight * (residual - basis @ coeffs) ** 2)
 
 
-def _scan_component(problem: LabelProblem, index: int, nodes, vsini_trials, v_trials):
-    """Profiled chi-square at every library node, for one component.
+# Library nodes per program of the warm-start scan. The temporaries of the vmapped program
+# grow linearly with the number of nodes it evaluates: one program over the 455 nodes of the
+# BOSZ FGK box needed 11.2 GB at 18,739 model pixels, and a block of 32 needs 0.36 GB with the
+# stencil gather of `BoxInterpolator`. Blocks of 32 reproduced the chi-square of the single
+# program bit for bit at 4,000 and 6,000 pixels, and that of blocks of 64 and 128 at 18,739
+# and 36,085 pixels. Blocks of 16 differed from them by up to 4e-16 relative.
+_NODE_CHUNK = 32
 
-    Returns ``(chi2, vsini, v)`` per node, each the best over the trial broadenings and
-    velocities. The components decouple because the dilution is held at its assumed value
-    (the ``FixedDilution`` model). The scan is a coarse start that places the optimizer in
-    the right basin.
+
+def _scan_program(problem: LabelProblem, index: int):
+    """``program(nodes, vsini, v)``: the profiled chi-square of one component at each node.
+
+    ``nodes`` is an ``(n, n_label)`` block of library nodes and ``vsini`` and ``v`` are one
+    trial rotation and frame velocity. The program is vmapped over the nodes and compiled
+    once per block shape.
     """
     data = problem.data[index]
     weight = problem.weight[index] / problem.sigma[index] ** 2
@@ -892,11 +900,40 @@ def _scan_component(problem: LabelProblem, index: int, nodes, vsini_trials, v_tr
         row, _ = _component_model(problem, index, node, vsini, v)
         return _profiled_chi2(row, data, weight, basis, gram_inv)
 
-    scan = jax.vmap(chi2_at, in_axes=(0, None, None))
-    best = np.full((nodes.shape[0], 3), np.inf)
+    return jax.vmap(chi2_at, in_axes=(0, None, None))
+
+
+def _node_blocks(nodes) -> list[jax.Array]:
+    """The node table in blocks of ``_NODE_CHUNK`` rows, as the scan program evaluates it.
+
+    The last block is padded with copies of the last node, as ``_EpochObjective.batch``
+    pads its restart points, so every block has one shape and the program is compiled once.
+    """
+    table = np.asarray(nodes)
+    pad = (-table.shape[0]) % _NODE_CHUNK
+    if pad:
+        table = np.concatenate([table, np.repeat(table[-1:], pad, axis=0)])
+    return [jnp.asarray(table[k : k + _NODE_CHUNK]) for k in range(0, table.shape[0], _NODE_CHUNK)]
+
+
+def _scan_component(problem: LabelProblem, index: int, nodes, vsini_trials, v_trials):
+    """Profiled chi-square at every library node, for one component.
+
+    Returns ``(chi2, vsini, v)`` per node, each the best over the trial broadenings and
+    velocities. The components decouple because the dilution is held at its assumed value
+    (the ``FixedDilution`` model). The scan is a coarse start that places the optimizer in
+    the right basin. The nodes are evaluated in blocks of ``_NODE_CHUNK``, which bounds the
+    memory of the scan independently of the size of the library.
+    """
+    scan = _scan_program(problem, index)
+    blocks = _node_blocks(nodes)
+    n = nodes.shape[0]
+    best = np.full((n, 3), np.inf)
     for vsini in vsini_trials:
         for v in v_trials:
-            chi2 = np.asarray(scan(nodes, float(vsini), float(v)))
+            chi2 = np.concatenate(
+                [np.asarray(scan(block, float(vsini), float(v))) for block in blocks]
+            )[:n]
             better = chi2 < best[:, 0]
             best[better] = np.column_stack(
                 [chi2, np.full_like(chi2, vsini), np.full_like(chi2, v)]
@@ -1259,11 +1296,20 @@ def match_labels(
         raise TypeError("dilution must be RadiusRatio(), ScalarDilution() or FixedDilution()")
 
     # -- libraries onto the model grid ------------------------------------
+    # One projection and one interpolator per library object. The pipeline declares one
+    # library for every star, and a projection larger than the library's own cache (96 MB,
+    # which the BOSZ FGK box exceeds above about 13,800 model pixels) was otherwise made and
+    # held once per star: 0.25 GB per copy at 36,085 pixels.
     projected, interpolators, label_axes = [], [], []
+    built: dict[int, tuple] = {}
     for name in names:
-        library = declared[name].library.resampled_to(grid, medium=medium)
+        source = declared[name].library
+        if id(source) not in built:
+            library = source.resampled_to(grid, medium=medium)
+            built[id(source)] = (library, library_interpolator(library, method=interpolation))
+        library, interpolator = built[id(source)]
         projected.append(library)
-        interpolators.append(library_interpolator(library, method=interpolation))
+        interpolators.append(interpolator)
         label_axes.append(tuple(library.label_names))
     hull_guard = any(not hasattr(i, "axes") for i in interpolators)
     resolving = {name: projected[i].resolving_power for i, name in enumerate(names)}
@@ -1419,7 +1465,7 @@ def match_labels(
     node_tables = [np.asarray(library.nodes) for library in projected]
     scans = []
     for i, name in enumerate(names):
-        scan = _scan_component(problem, i, jnp.asarray(node_tables[i]), scan_vsini, scan_velocities)
+        scan = _scan_component(problem, i, node_tables[i], scan_vsini, scan_velocities)
         allowed = _allowed_nodes(node_tables[i], label_axes[i], specs, name, shared_mh)
         if not allowed.any():
             raise ValueError(
@@ -1625,8 +1671,13 @@ def _laplace(model, result, seed):
 _LM_PRED_TOL = 1e-3
 # A restart round that lowers the objective by less than this ends the rounds.
 _RESTART_GAIN = 1.0
-# Batch size of the restart scans: one compiled shape for every scan.
-_SCAN_CHUNK = 32
+# Batch size of the restart scans: one compiled shape for every scan. The temporaries of the
+# batched objective grow linearly with the batch: 0.31 GB for 8 points at 18,739 model pixels
+# and 1.23 GB for 32, with the stencil gather of `BoxInterpolator`. With 8, the peak memory of
+# `Fit.match_labels` is that of its setup (`Fit.epoch_statistics`, `Fit.spectra`, `Fit.std`).
+# Scores in batches of 8 and of 32 differ by up to 3.2e-16 relative, which can change the
+# selected start only at a near tie.
+_SCAN_CHUNK = 8
 # Rotation trials of the per-component scan; clipped to each prior, which D65 ran at 0-150.
 _VSINI_TRIALS = (
     0.0, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 10.0, 12.0, 15.0, 20.0, 25.0, 30.0, 40.0, 50.0,

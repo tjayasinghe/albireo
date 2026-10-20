@@ -22,7 +22,8 @@ import pytest
 from test_library import build_library
 
 import albireo as ab
-from albireo.library import library_interpolator
+from albireo import match as match_mod
+from albireo.library import SpectralLibrary, library_interpolator
 from albireo.match import (
     FixedDilution,
     LabelProblem,
@@ -527,6 +528,128 @@ def test_template_and_nearest_node_are_usable_downstream(baseline):
     assert node["teff"] in np.unique(baseline.node_tables[0][:, 0])
     with pytest.raises(ValueError, match="unknown component"):
         baseline.template("C")
+
+
+# ---------------------------------------------------------------------------
+# memory of the label stage
+# ---------------------------------------------------------------------------
+
+# XLA temporaries of the compiled scan program, in rows of the model grid. On the 455-node toy
+# box below, the program over a block of 32 nodes needs 2,592 rows (81 per node). With the
+# earlier slab gather of `BoxInterpolator` it needed 5,632, and 80,082 for the 455 nodes in one
+# program (176 per node), the configuration that needed 11.2 GB at 18,739 model pixels. The
+# counts do not depend on the number of pixels (the same at 809 and 4,037).
+SCAN_TEMPORARY_ROWS = 4000
+
+
+class _ScanReached(Exception):
+    """Raised in place of the warm-start scan, once ``match_labels`` has built its problem."""
+
+
+@pytest.fixture(scope="module")
+def scan_inputs(grid):
+    """The problem and node table that ``match_labels`` passes to the warm-start scan.
+
+    The toy box has the 13 x 5 x 7 = 455 nodes of the BOSZ FGK R = 20,000 library.
+    """
+    box = build_library(
+        teff=np.linspace(4000.0, 7000.0, 13),
+        logg=np.linspace(3.0, 5.0, 5),
+        mh=np.linspace(-1.0, 0.5, 7),
+    )
+    captured = {}
+
+    def capture(problem, index, nodes, vsini_trials, v_trials):
+        captured.update(problem=problem, nodes=np.asarray(nodes))
+        raise _ScanReached
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(match_mod, "_scan_component", capture)
+        with pytest.raises(_ScanReached):
+            fit(box, grid, noisy_rows(box, grid))
+    assert captured["nodes"].shape == (455, 3)
+    return captured["problem"], captured["nodes"]
+
+
+def test_the_node_scan_runs_in_blocks_and_matches_one_program(scan_inputs, monkeypatch):
+    """Every call of the scan program has ``_NODE_CHUNK`` nodes, and every node is returned.
+
+    The reference is one program over all 455 nodes. The chi-square agrees to rounding, and
+    the trial rotation and velocity selected for each node are the same.
+    """
+    problem, nodes = scan_inputs
+    build = match_mod._scan_program
+    shapes = set()
+
+    def recording(problem, index):
+        program = build(problem, index)
+
+        def run(block, vsini, v):
+            shapes.add(block.shape)
+            return program(block, vsini, v)
+
+        return run
+
+    monkeypatch.setattr(match_mod, "_scan_program", recording)
+    vsini_trials, v_trials = (5.0, 20.0), (-30.0, 0.0)
+    best = match_mod._scan_component(problem, 0, nodes, vsini_trials, v_trials)
+    assert shapes == {(match_mod._NODE_CHUNK, nodes.shape[1])}
+
+    program = build(problem, 0)
+    trials = [(vsini, v) for vsini in vsini_trials for v in v_trials]
+    chi2 = np.stack([np.asarray(program(jnp.asarray(nodes), s, v)) for s, v in trials])
+    np.testing.assert_allclose(best[:, 0], chi2.min(axis=0), rtol=1e-12)
+    np.testing.assert_array_equal(best[:, 1:], np.asarray(trials)[np.argmin(chi2, axis=0)])
+
+
+def test_the_node_scan_program_has_bounded_temporaries(scan_inputs):
+    """XLA's buffer assignment of the scan program, compiled for the blocks the scan uses.
+
+    One program over the 455 nodes of the BOSZ FGK box needed 11.2 GB of temporaries at
+    18,739 model pixels, and about twice that in commit, because jaxlib releases a program's
+    temporaries after the next call of the scan has allocated its own. The test fails if the
+    nodes are evaluated in larger blocks or if the box interpolator gathers more than its
+    stencil.
+    """
+    problem, nodes = scan_inputs
+    blocks = match_mod._node_blocks(nodes)
+    np.testing.assert_array_equal(np.concatenate(blocks)[: nodes.shape[0]], nodes)
+    program = jax.jit(match_mod._scan_program(problem, 0))
+    analysis = program.lower(blocks[0], 5.0, 0.0).compile().memory_analysis()
+    if analysis is None:
+        pytest.skip("this backend reports no buffer assignment")
+    rows = analysis.temp_size_in_bytes / (8 * problem.n_pix)
+    assert rows < SCAN_TEMPORARY_ROWS
+
+
+def test_stars_that_share_a_library_share_its_projection(library, grid, monkeypatch):
+    """One projection and one interpolator per library object, however many stars use it.
+
+    The pipeline declares one library for every star. Where the library's own cache does
+    not apply (writable arrays, as here, or a projection above 96 MB), each star made and
+    held its own copy: 0.25 GB per copy at 36,085 model pixels.
+    """
+    rows = noisy_rows(library, grid)
+    projected = []
+    resample = SpectralLibrary.resampled_to
+
+    def counted(self, *args, **kwargs):
+        projected.append(self)
+        return resample(self, *args, **kwargs)
+
+    captured = {}
+
+    def capture(problem, index, nodes, vsini_trials, v_trials):
+        captured["problem"] = problem
+        raise _ScanReached
+
+    monkeypatch.setattr(SpectralLibrary, "resampled_to", counted)
+    monkeypatch.setattr(match_mod, "_scan_component", capture)
+    with pytest.raises(_ScanReached):
+        fit(library, grid, rows)
+    assert len(projected) == 1 and projected[0] is library
+    first, second = captured["problem"].interpolators
+    assert first is second
 
 
 # ---------------------------------------------------------------------------

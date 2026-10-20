@@ -789,6 +789,34 @@ This file records what changed. The reasons are recorded elsewhere:
 
 ### Fixed
 
+- **The memory of the label stage on long optical windows.** `Fit.match_labels` with
+  `compare="epochs"` needed about 12 GB on an 18,739-pixel PEPSI window with the 455-node
+  BOSZ FGK R = 20,000 library, and by XLA's buffer assignment would have needed about 47 GB
+  of commit on a 36,085-pixel APF window. The warm-start node scan evaluated all the nodes
+  in one vmapped program, with 11.2 and 21.5 GB of temporaries, and jaxlib releases a
+  program's temporaries only after the next call of the scan has allocated its own, which
+  doubles the commit. Five changes bound it. The scan evaluates the nodes in blocks of 32.
+  `BoxInterpolator` gathers only the rows of its stencil, 4 x 4 x 4 = 64 for the cubic on a
+  three-label box, instead of the first axis's stencil across the other axes, 4 x 5 x 7 = 140
+  on the BOSZ box, which halves the temporaries of every program that interpolates. The
+  restart scans of the epoch comparison evaluate 8 points per program instead of 32.
+  `Fit.match_labels` takes the spectra and their standard deviation from one solve of the
+  marginal at the MAP; `Fit.spectra()` and `Fit.std()` solve it once each, and in succession
+  the second solve allocated its buffers before those of the first were released, 7.1 GB
+  of commit at 36,085 pixels against 5.1 GB for one solve. `Fit.write_spectra` and the
+  pipeline's products, plots and spectral comparison use the same single solve. Stars that
+  declare the same library object share its projection onto the model grid and its
+  interpolator, which were made once per star where the library's own cache does not apply
+  (above 96 MB, about 13,800 model pixels for this box), 0.25 GB per copy at 36,085 pixels.
+  On a simulated 4,000-pixel case the peak commit of the stage fell from 10.2 to 3.2 GB and
+  its wall-clock time from 116 to 67 s, and every output of `LabelMatch`, both node-scan
+  surfaces included, was identical bit for bit. On simulated cases of 18,739 and 36,085
+  pixels the stage peaks at 4.1 and 5.3 GB of commit, in the node scan, with outputs
+  identical bit for bit to runs with restart batches of 32 and the earlier setup. The
+  restart scores in batches of 8 differ from those in batches of 32 by up to 3.2e-16
+  relative, so a near tie between two restart starts can be resolved differently. Tests
+  bound the XLA temporaries of the scan program on a 455-node box and check that the
+  spectra and their errors come from one solve and that stars share a library's projection.
 - **Bold symbols in the mathematics of the documentation site.** `\boldsymbol` was left
   unrendered on the site (64 expressions of `docs/math.md`, among them every
   $`\boldsymbol\Lambda`$), because MathJax's on-demand loading of the extension did not

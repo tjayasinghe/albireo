@@ -2462,6 +2462,18 @@ class Fit:
         """
         return np.asarray(spectra_std(self.marginal()))
 
+    def _spectra_and_std(self) -> tuple[np.ndarray, np.ndarray]:
+        """:meth:`spectra` and :meth:`std` from one solve of the marginal.
+
+        Each of the two methods solves the marginal at the MAP. Called in succession, the
+        second solve allocates its buffers before those of the first are released, and the
+        selected inverse of :meth:`std` adds its own. At 36,085 model pixels the pair reached
+        7.1 GB of commit, against 5.1 GB for one solve with its selected inverse. The arrays
+        are those of the two methods, bit for bit.
+        """
+        marginal = self.marginal()
+        return np.asarray(marginal.d_hat), np.asarray(spectra_std(marginal))
+
     def composite(self) -> np.ndarray:
         """The light-weighted stellar sum ``sum_i l_i d_i``, the observed quantity.
 
@@ -3054,7 +3066,7 @@ class Fit:
             kwargs["statistics"] = self.epoch_statistics(
                 resolving_power=next(iter(declared.values()))
             )
-        spectra, std = self.spectra(), self.std()
+        spectra, std = self._spectra_and_std()
         rows = [self.dis.component_names.index(name) for name in names]
         kwargs.setdefault("lsf_sigma_kms", self.dis._widest_lsf())
         return match_labels(
@@ -3081,11 +3093,12 @@ class Fit:
         """
         from albireo.io import write_spectra
 
+        spectra, std = self._spectra_and_std()
         return write_spectra(
             path,
             self.dis.grid,
-            self.spectra(),
-            self.std(),
+            spectra,
+            std,
             light_fractions=[s.light for s in self.dis.stars],
             prior=self.dis.smoothness_prior,
             meta={"COMPNAME": ",".join(self.dis.component_names)},

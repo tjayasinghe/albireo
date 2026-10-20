@@ -30,6 +30,7 @@ import scipy.linalg as sla
 from test_library import build_library
 
 import albireo as ab
+from albireo import match as match_mod
 from albireo.forward import apply_model, with_lsf
 from albireo.inference import MAPResult
 from albireo.kepler import t_conj_from_t_peri
@@ -722,3 +723,46 @@ def test_draw_refits_are_refused_for_the_epoch_comparison(plain, library):
     got = fit.match_labels(_stars(library), mh=ab.Between(-1.0, 0.5), top_k=1, restart_rounds=0)
     with pytest.raises(ValueError, match="compare='epochs'"):
         ab.refit_draws(got, np.zeros((2, 2, fit.dis.grid.n)))
+
+
+class _LabelFitReached(Exception):
+    """Raised in place of the label fit, once ``Fit.match_labels`` has prepared its input."""
+
+
+def test_the_spectra_and_their_errors_come_from_one_solve(plain, library, monkeypatch):
+    """``Fit.match_labels`` solves the marginal at the MAP once for the spectra and the errors.
+
+    ``Fit.spectra()`` and ``Fit.std()`` solve it once each. Called in succession, the second
+    solve allocated before the first was released, and the stage reached 7.1 GB of commit
+    at 36,085 model pixels against 5.1 GB for one solve with its selected inverse. The
+    arrays passed on are those of the two methods.
+    """
+    fit, _ = plain
+    spectra, std = fit.spectra(), fit.std()
+    solves = []
+    solve = ab.Fit.marginal
+
+    def counted(self):
+        solves.append(self)
+        return solve(self)
+
+    monkeypatch.setattr(ab.Fit, "marginal", counted)
+    shared = fit._spectra_and_std()
+    assert len(solves) == 1
+    np.testing.assert_array_equal(shared[0], spectra)
+    np.testing.assert_array_equal(shared[1], std)
+
+    passed = {}
+
+    def label_fit(grid, d_hat, **kwargs):
+        passed.update(d_hat=d_hat, std=kwargs["std"])
+        raise _LabelFitReached
+
+    monkeypatch.setattr(match_mod, "match_labels", label_fit)
+    solves.clear()
+    with pytest.raises(_LabelFitReached):
+        fit.match_labels(_stars(library))
+    assert len(solves) == 1
+    rows = [fit.dis.component_names.index(name) for name in ("A", "B")]
+    np.testing.assert_array_equal(passed["d_hat"], spectra[rows])
+    np.testing.assert_array_equal(passed["std"], std[rows])

@@ -4358,7 +4358,8 @@ def _compare_spectra(fit: Fit, truth_spectra: np.ndarray, windows) -> dict[str, 
     covered = (wave >= data_lo) & (wave <= data_hi)
     names = [s.name for s in fit.dis.stars]
     rows = [fit.dis.component_names.index(n) for n in names]
-    d_hat, std = fit.spectra()[rows], fit.std()[rows]
+    spectra, std = fit._spectra_and_std()
+    d_hat, std = spectra[rows], std[rows]
     d_true = truth_spectra[: len(names)]
     step = np.gradient(wave)
     if not windows:
@@ -4676,7 +4677,7 @@ def _write_products(ctx: _Context, fit: Fit, table, orbit, match, posterior) -> 
         table.write(directory / "velocities.rv", header=_velocity_header(ctx, table))
     )
     files["velocities_csv"] = os.fspath(_write_velocity_csv(directory / "velocities.csv", table))
-    spectra, std = fit.spectra(), fit.std()
+    spectra, std = fit._spectra_and_std()
     for i, name in enumerate(fit.dis.component_names):
         path = write_ascii(
             directory / f"spectrum_{_safe_name(name)}.txt",
@@ -4864,10 +4865,11 @@ def _write_plots(ctx: _Context, fit: Fit, table, orbit, templates, posterior) ->
             truth_spectra = np.vstack([truth_spectra, np.zeros((n_extra, grid.n))])
 
     def spectra_figure():
+        spectra, std = fit._spectra_and_std()
         fig, _ = plotting.plot_spectra(
             grid,
-            fit.spectra(),
-            std=fit.std(),
+            spectra,
+            std=std,
             truth=truth_spectra,
             labels=list(fit.dis.component_names),
             flux=True,

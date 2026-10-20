@@ -517,12 +517,19 @@ class BoxInterpolator:
     def __call__(self, labels):
         labels = jnp.atleast_1d(jnp.asarray(labels, dtype=jnp.float64))
         stencils = [_axis_weights(a, labels[i], self.cubic) for i, a in enumerate(self.axes)]
+        # Gather the stencil alone, 4^k rows (2^k when multilinear), and contract it one axis
+        # at a time in label order. Gathering the first axis's stencil across the whole extent
+        # of the other axes read 4 x 5 x 7 = 140 rows per evaluation of the BOSZ FGK box
+        # instead of 4 x 4 x 4 = 64, and doubled the temporaries of every program that
+        # interpolates. The products and the order of the sums are unchanged, and the results
+        # were identical bit for bit at 400 label points in eager, jit, vmap and jacfwd
+        # evaluation.
+        index = jnp.ix_(*(idx for idx, _ in stencils))
         out = []
         for values in (self.normalized, self.log_continuum):
-            acc = values
-            # Contract one axis at a time: gather the stencil, then sum it with the weights.
-            for idx, w in stencils:
-                acc = jnp.tensordot(w, acc[idx], axes=(0, 0))
+            acc = values[index]
+            for _, w in stencils:
+                acc = jnp.tensordot(w, acc, axes=(0, 0))
             out.append(acc)
         return out[0], out[1]
 
