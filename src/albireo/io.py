@@ -14,6 +14,16 @@ Two container formats are recognized automatically:
 - WCS image spectra: a 1-D image HDU with a linear or log-linear dispersion in
   ``CRVAL1``/``CDELT1``/``CRPIX1``, the IRAF-style product.
 
+Two instrument formats are recognised by their headers and read by their own modules:
+
+- PEPSI (LBT) products of the Spectroscopic Data Systems pipeline, ``INSTRUME = 'PEPSI'``
+  (:mod:`albireo.pepsi`). Barycentric, air, continuum-normalised; time and barycentric
+  correction from ``JD-TDB`` and ``SSBVEL``.
+- APF exposures extracted by the California Planet Search pipeline, 79 x 4608 images of
+  counts with no wavelengths (:mod:`albireo.apf`). They need a wavelength solution, passed
+  as ``apf={"wavelengths": "apf_wave_2022.fits"}``; the zero point and the line-spread
+  function of every exposure are measured from its telluric lines.
+
 Three header quantities determine the velocity frame of an epoch:
 
 - ``SPECSYS``, the frame of the wavelengths. ``BARYCENT`` means the pipeline has already
@@ -66,6 +76,7 @@ __all__ = [
     "read_dataset",
     "read_raw_spectra",
     "read_spectrum",
+    "region_coverage",
     "to_epoch",
     "write_spectra",
 ]
@@ -229,6 +240,11 @@ class RawSpectrum:
         Which column supplied :attr:`err`, or why none did.
     columns : Mapping[str, str]
         The table columns chosen for ``wave``, ``flux``, ``err`` and ``quality``.
+    calibration : Mapping[str, Any]
+        What an instrument reader (:mod:`albireo.pepsi`, :mod:`albireo.apf`) measured or
+        assumed: for APF the telluric zero point and its error, the line-spread width and its
+        source, and the steps taken; for PEPSI the fibre, arm, cross-disperser and product
+        kind. Empty for the generic formats.
     """
 
     wave: np.ndarray
@@ -249,6 +265,7 @@ class RawSpectrum:
     v_bary_source: str = "unknown"
     err_source: str = "unknown"
     columns: Mapping[str, str] = field(default_factory=dict, repr=False)
+    calibration: Mapping[str, Any] = field(default_factory=dict, repr=False)
 
     @property
     def n_pixels(self) -> int:
@@ -966,12 +983,16 @@ def read_spectrum(
     v_bary: float | None = None,
     resolving_power: float | None = None,
     wave_scale: float | None = None,
+    apf: Mapping[str, Any] | None = None,
 ) -> RawSpectrum:
     """Read one 1-D FITS spectrum into a :class:`RawSpectrum`.
 
     Detects the container (binary table first, then a WCS image) and reads the frame,
     time and barycentric velocity from the header, warning about each assumption it
     makes. Every derived quantity can be overridden by an argument.
+
+    PEPSI products and APF exposures are recognised first and read by
+    :func:`albireo.pepsi.read_pepsi` and :func:`albireo.apf.extract`.
 
     Parameters
     ----------
@@ -994,6 +1015,11 @@ def read_spectrum(
     wave_scale : float, optional
         Factor converting the file's wavelengths to Angstrom. Default: from the column
         or ``CUNIT1`` unit string.
+    apf : mapping, optional
+        Options for APF exposures, the keyword arguments of :func:`albireo.apf.extract`.
+        ``wavelengths`` (the solution: a path such as ``"apf_wave_2022.fits"``, an array, or
+        an :class:`albireo.apf.ApfWavelengths`) is required to read one; ``zero_point``,
+        ``lsf``, ``blaze``, ``rows``, ``iodine`` and ``mask_sky`` are optional.
 
     Returns
     -------
@@ -1026,6 +1052,19 @@ def read_spectrum(
 barycentric, v_bary=-21.708 km/s, bjd=2453243.51... (BJD_TDB)
     """
     fits = _require_astropy()
+    with fits.open(path, memmap=False) as hdulist:
+        kind = _instrument_format(hdulist)
+    if kind is not None:
+        return _read_instrument(
+            kind,
+            path,
+            instrument=instrument,
+            frame=frame,
+            bjd=bjd,
+            v_bary=v_bary,
+            resolving_power=resolving_power,
+            apf=apf,
+        )
     with fits.open(path, memmap=False) as hdulist:
         parsed = _read_bintable(hdulist, path, wave_scale) or _read_wcs_image(
             hdulist, path, wave_scale
@@ -1117,6 +1156,124 @@ barycentric, v_bary=-21.708 km/s, bjd=2453243.51... (BJD_TDB)
         v_bary_source=v_bary_source,
         err_source=parsed.err_note,
         columns=dict(parsed.columns),
+    )
+
+
+def _instrument_format(hdulist) -> str | None:
+    """``"pepsi"`` or ``"apf"`` when the file is one of the instrument formats, else ``None``."""
+    from albireo.apf import is_apf_exposure
+    from albireo.pepsi import is_pepsi
+
+    primary = hdulist[0]
+    if is_pepsi(primary.header):
+        return "pepsi"
+    data = getattr(primary, "data", None)
+    if data is not None and is_apf_exposure(primary.header, np.shape(data)):
+        return "apf"
+    return None
+
+
+def _read_instrument(
+    kind: str,
+    path: str,
+    *,
+    instrument: str | None,
+    frame: str | None,
+    bjd: float | None,
+    v_bary: float | None,
+    resolving_power: float | None,
+    apf: Mapping[str, Any] | None,
+) -> RawSpectrum:
+    """Read a PEPSI product or an APF exposure into a :class:`RawSpectrum`."""
+    if kind == "pepsi":
+        from albireo.pepsi import read_pepsi
+
+        product = read_pepsi(path, resolving_power=resolving_power)
+        return RawSpectrum(
+            wave=product.wave,
+            flux=product.flux,
+            err=product.err,
+            bjd=product.bjd if bjd is None else float(bjd),
+            v_bary=product.v_bary if v_bary is None else float(v_bary),
+            frame=frame or "barycentric",
+            instrument=str(instrument or "PEPSI"),
+            resolving_power=product.resolving_power,
+            wave_medium="air",
+            continuum_normalized=True,
+            time_source="BJD_TDB from JD-TDB" if bjd is None else "supplied by the caller",
+            path=str(path),
+            header=product.header,
+            quality=product.bad.astype(np.int8),
+            specsys="BARYCENT (PEPSI: SSBVEL removed)",
+            v_bary_source="header SSBVEL (sign reversed, m/s to km/s)"
+            if v_bary is None
+            else "supplied by the caller",
+            err_source="Var (variance), square root taken",
+            columns={"wave": "Arg", "flux": "Fun", "err": "Var", "quality": "Mask"},
+            calibration={
+                "reader": "albireo.pepsi",
+                "fiber": product.fiber,
+                "arm": product.arm,
+                "cross_disperser": product.cross_disperser,
+                "kind": product.kind,
+                "target": product.target,
+            },
+        )
+    from albireo.apf import apf_barycentric, extract, read_apf_exposure
+
+    options = dict(apf or {})
+    if "wavelengths" not in options:
+        raise ValueError(
+            f"{path}: an APF exposure from the CPS pipeline has no wavelengths. Pass the "
+            "solution: read_spectrum(path, apf={'wavelengths': 'apf_wave_2022.fits'}), or in "
+            "a pipeline configuration [read.apf] wavelengths = 'apf_wave_2022.fits'."
+        )
+    exposure = read_apf_exposure(path)
+    spectrum = extract(exposure, options.pop("wavelengths"), **options)
+    bjd_value, v_bary_value, time_source = (
+        apf_barycentric(exposure.header, path=str(path))
+        if bjd is None or v_bary is None
+        else (float(bjd), float(v_bary), "supplied by the caller")
+    )
+    if bjd is not None:
+        bjd_value, time_source = float(bjd), "supplied by the caller"
+    if v_bary is not None:
+        v_bary_value = float(v_bary)
+    fwhm = spectrum.lsf_fwhm_kms
+    zero = spectrum.zero_point
+    return RawSpectrum(
+        wave=spectrum.wave,
+        flux=spectrum.flux,
+        err=spectrum.err,
+        bjd=bjd_value,
+        v_bary=v_bary_value,
+        frame=frame or "topocentric",
+        instrument=str(instrument or "APF"),
+        resolving_power=(float(resolving_power) if resolving_power is not None else _C_KMS / fwhm),
+        wave_medium="air",
+        continuum_normalized=False,
+        time_source=time_source,
+        path=str(path),
+        header=exposure.header,
+        quality=spectrum.bad.astype(np.int8),
+        specsys="TOPOCENT (APF: wavelength solution, telluric zero point)",
+        v_bary_source="computed with astropy for the APF site"
+        if v_bary is None
+        else "supplied by the caller",
+        err_source="noise model (counts + 359.5) / 0.884 ADU^2",
+        columns={},
+        calibration={
+            "reader": "albireo.apf",
+            "drift_kms": spectrum.drift_kms,
+            "drift_err_kms": None if zero is None else zero.err_kms,
+            "telluric_regions": {} if zero is None else dict(zero.regions),
+            "lsf_fwhm_kms": fwhm,
+            "lsf_source": spectrum.lsf_source,
+            "decker": exposure.decker,
+            "iodine_in": exposure.iodine_in,
+            "target": exposure.target,
+            "notes": list(spectrum.notes),
+        },
     )
 
 
@@ -1306,7 +1463,11 @@ def _read_many(paths: Sequence[str], *, instrument, frame, options) -> list[RawS
 
 
 def _expand_paths(paths: str | Iterable[str]) -> list[str]:
-    """A glob, a directory or an explicit iterable, as a sorted list of files."""
+    """A glob, a directory or an explicit iterable, as a sorted list of files.
+
+    A directory contributes its FITS files and its PEPSI products, whose names end in the
+    product kind (``pepsib.20240101.001.dxt.bwl``) rather than ``.fits``.
+    """
     if isinstance(paths, str | os.PathLike):
         paths = os.fspath(paths)
         if os.path.isdir(paths):
@@ -1314,8 +1475,9 @@ def _expand_paths(paths: str | Iterable[str]) -> list[str]:
             # the same file, which would otherwise read every epoch twice.
             seen = {
                 os.path.normcase(path): path
-                for pattern in ("*.fits", "*.fit", "*.fits.gz", "*.FITS")
+                for pattern in ("*.fits", "*.fit", "*.fits.gz", "*.FITS", "pepsib.*", "pepsir.*")
                 for path in glob.glob(os.path.join(paths, pattern))
+                if os.path.isfile(path)
             }
             expanded = sorted(seen.values())
         else:
@@ -1324,7 +1486,35 @@ def _expand_paths(paths: str | Iterable[str]) -> list[str]:
         expanded = [str(p) for p in paths]
     if not expanded:
         raise ValueError(f"no files matched {paths!r}")
-    return expanded
+    return _without_sky_subtracted_copies(expanded)
+
+
+def _without_sky_subtracted_copies(paths: list[str]) -> list[str]:
+    """Leave out the CPS ``*_skysub.fits`` products whose unsubtracted file is also listed.
+
+    The CPS pipeline delivers some APF exposures twice, as ``r<night>.<n>.fits`` and as a
+    sky-subtracted ``r<night>.<n>_skysub.fits``. Reading both would count the exposure as two
+    epochs. The unsubtracted file is kept: on the 8 arcsec N decker the subtracted "sky"
+    contains the star's own light, and the sky lines are masked instead (:mod:`albireo.apf`).
+    """
+    present = {os.path.normcase(p) for p in paths}
+    kept, skipped = [], []
+    for path in paths:
+        stem, ext = os.path.splitext(path)
+        if stem.lower().endswith("_skysub") and os.path.normcase(stem[:-7] + ext) in present:
+            skipped.append(os.path.basename(path))
+        else:
+            kept.append(path)
+    if skipped:
+        warnings.warn(
+            f"{len(skipped)} files are sky-subtracted copies (_skysub) of other files in the "
+            f"list and are left out, so that no exposure is read twice: {', '.join(skipped[:4])}"
+            f"{' ...' if len(skipped) > 4 else ''}. To read them instead, list only the _skysub "
+            "files.",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+    return kept
 
 
 def read_raw_spectra(
@@ -1368,11 +1558,27 @@ def read_raw_spectra(
     return _read_many(expanded, instrument=instrument, frame=frame, options=options)
 
 
+def region_coverage(raw: RawSpectrum, region: Sequence[float]) -> float:
+    """The fraction of ``region`` (Angstrom) that the good pixels of ``raw`` span.
+
+    The span of the usable pixels inside the region, divided by the region's width: 1 for a
+    spectrum covering it, 0 for one that does not reach it. Gaps inside the span are not
+    subtracted.
+    """
+    lo, hi = (float(v) for v in region)
+    good = ~raw.bad_pixels & (raw.wave >= lo) & (raw.wave <= hi)
+    if good.sum() < 2:
+        return 0.0
+    inside = raw.wave[good]
+    return float((inside[-1] - inside[0]) / (hi - lo))
+
+
 def dataset_from_raw(
     raws: Sequence[RawSpectrum],
     *,
     medium: str | None = None,
     sort_by_time: bool = True,
+    min_coverage: float | None = None,
     **epoch_kwargs,
 ) -> Dataset:
     """Turn already-read :class:`RawSpectrum` objects into one :class:`~albireo.data.Dataset`.
@@ -1388,6 +1594,11 @@ def dataset_from_raw(
         Declare the wavelength scale for every epoch, overriding what the files state.
     sort_by_time : bool, optional
         Order the epochs by ``bjd``. Default ``True``.
+    min_coverage : float, optional
+        With a ``region``, leave out the spectra whose good pixels span less than this
+        fraction of it (:func:`region_coverage`), with a warning naming them: the red-arm
+        files of a PEPSI directory when the region is in the blue, for example. Default:
+        every spectrum is kept, and one that misses the region raises an error.
     **epoch_kwargs
         Passed to :func:`to_epoch`.
 
@@ -1403,6 +1614,27 @@ def dataset_from_raw(
     raws = list(raws)
     if not raws:
         raise ValueError("dataset_from_raw needs at least one spectrum")
+    region = epoch_kwargs.get("region")
+    if min_coverage is not None and region is not None:
+        covers = [region_coverage(r, region) >= float(min_coverage) for r in raws]
+        kept = [r for r, ok in zip(raws, covers, strict=True) if ok]
+        dropped = [
+            os.path.basename(r.path) or "<memory>"
+            for r, ok in zip(raws, covers, strict=True)
+            if not ok
+        ]
+        if dropped:
+            warnings.warn(
+                f"{len(dropped)} of {len(raws)} spectra cover less than {float(min_coverage):.0%} "
+                f"of the region {list(region)} and are left out: {', '.join(dropped)}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        if not kept:
+            raise ValueError(
+                f"no spectrum covers {float(min_coverage):.0%} of the region {list(region)}"
+            )
+        raws = kept
     frames = {r.frame for r in raws}
     if len(frames) > 1:
         raise ValueError(
@@ -1465,9 +1697,11 @@ def read_dataset(
     sort_by_time : bool, optional
         Order the epochs by ``bjd``. Default ``True``.
     read_kwargs : mapping, optional
-        Extra keyword arguments for :func:`read_spectrum`.
+        Extra keyword arguments for :func:`read_spectrum`, such as
+        ``{"apf": {"wavelengths": "apf_wave_2022.fits"}}`` for APF exposures.
     **epoch_kwargs
-        Passed to :func:`to_epoch` (``region``, ``smooth_angstrom``, ``tellurics``, ...).
+        Passed to :func:`to_epoch` (``region``, ``smooth_angstrom``, ``tellurics``, ...),
+        except ``min_coverage``, which goes to :func:`dataset_from_raw`.
 
     Returns
     -------

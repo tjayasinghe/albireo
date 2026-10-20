@@ -1,4 +1,4 @@
-"""The ``albireo`` command: ``init``, ``run``, ``demo`` and ``fetch``.
+"""The ``albireo`` command: ``init``, ``run``, ``demo``, ``fetch`` and ``apf-wavelengths``.
 
 The command is a thin layer over :mod:`albireo.pipeline`, whose configuration schema is
 that of the ``Disentangler`` interface plus the label and velocity stages. ``albireo init``
@@ -6,6 +6,9 @@ writes an annotated TOML configuration. ``albireo run`` passes such a file to
 :func:`albireo.pipeline.run_pipeline`. ``albireo demo`` runs the same pipeline on two
 simulated stars with known injected values. ``albireo fetch`` downloads a BLOeM star's
 public epochs and prints the ``[[stars]]`` entry that would analyse them.
+``albireo apf-wavelengths`` refits an APF wavelength solution to the stellar and telluric
+lines of one exposure (:func:`albireo.apf.refine_wavelengths`), for the ``[read.apf]``
+table of a configuration.
 
 No scientific decision is made here. Every default the pipeline applies is stated in the
 template it writes, and the quantities the pipeline cannot infer (a light fraction, a
@@ -50,6 +53,25 @@ def _build_parser() -> argparse.ArgumentParser:
     fetch = sub.add_parser("fetch", help="download a BLOeM star's public epochs (network)")
     fetch.add_argument("targets", nargs="+", metavar="ID", help="BLOeM identifiers, e.g. 1-037")
     fetch.add_argument("--out", default="data", help="directory; one sub-directory per star")
+
+    wavecal = sub.add_parser(
+        "apf-wavelengths",
+        help="refit an APF wavelength solution to one exposure's stellar and telluric lines",
+    )
+    wavecal.add_argument("reference", help="a CPS r*.fits exposure of a line-rich star (G or K)")
+    wavecal.add_argument(
+        "--base", required=True, help="the solution to refine (apf_wave_2022.fits)"
+    )
+    wavecal.add_argument("--out", required=True, help="where to write the refined solution (FITS)")
+    wavecal.add_argument("--teff", type=float, default=4750.0, help="template Teff, K (4750)")
+    wavecal.add_argument("--logg", type=float, default=4.5, help="template log g (4.5)")
+    wavecal.add_argument("--mh", type=float, default=0.0, help="template [M/H] (0.0)")
+    wavecal.add_argument(
+        "--library",
+        default="bosz2024-fgk-r20000",
+        help="the synthetic grid (albireo.library_names(); downloaded once)",
+    )
+    wavecal.add_argument("--force", action="store_true", help="overwrite --out")
     return parser
 
 
@@ -201,11 +223,51 @@ def _cmd_fetch(args) -> int:
     return status
 
 
+def _cmd_apf_wavelengths(args) -> int:
+    import numpy as np
+
+    import albireo as ab
+    from albireo import apf
+
+    out = Path(args.out)
+    if out.exists() and not args.force:
+        print(f"{out} exists (pass --force to overwrite)", file=sys.stderr)
+        return 1
+    try:
+        exposure = apf.read_apf_exposure(args.reference)
+        library = ab.fetch_library(args.library)
+        lo = max(float(np.min(library.wave)) + 1.0, 3800.0)
+        hi = min(float(np.max(library.wave)) - 1.0, 7400.0)
+        grid = ab.LogGrid.from_wavelength_range(lo, hi, dv_kms=0.25)
+        labels = {"teff": args.teff, "logg": args.logg, "mh": args.mh}
+        template = ab.Template.from_library("reference", library, labels, grid=grid, medium="air")
+        result = apf.refine_wavelengths(
+            args.base,
+            exposure,
+            template_wave=np.asarray(grid.wave),
+            template_flux=1.0 + np.asarray(template.deviation),
+            template_resolving_power=library.resolving_power,
+        )
+    except (OSError, ValueError) as exc:
+        print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    result.wavelengths.save(out, overwrite=args.force)
+    print(result.summary())
+    print(f'wrote {out}. In a configuration: [read.apf] wavelengths = "{out.as_posix()}"')
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entry point of the ``albireo`` console script."""
     parser = _build_parser()
     args = parser.parse_args(argv)
-    handlers = {"init": _cmd_init, "run": _cmd_run, "demo": _cmd_demo, "fetch": _cmd_fetch}
+    handlers = {
+        "init": _cmd_init,
+        "run": _cmd_run,
+        "demo": _cmd_demo,
+        "fetch": _cmd_fetch,
+        "apf-wavelengths": _cmd_apf_wavelengths,
+    }
     return handlers[args.command](args)
 
 

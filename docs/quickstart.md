@@ -232,6 +232,8 @@ low-level interface is the supported one.
   with NUTS at the low level.
 - [Search for a faint companion](tutorials/k2-scan.md): the SB1 companion scan.
 - [Read your own spectra](tutorials/real-data.md): from FITS files to a `Dataset`.
+- [APF and PEPSI spectra](tutorials/apf-pepsi.md): two instrument formats read
+  directly, from a directory of exposures to orbits.
 - [Scientific background](science.md): the methods and their references.
 
 ## Two conventions to note

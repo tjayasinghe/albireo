@@ -1325,6 +1325,35 @@ def test_a_template_broader_than_the_instrument_warns_and_is_used_unbroadened(sb
     assert np.all(np.isfinite(table.velocity))
 
 
+def test_a_template_broader_than_widths_declared_per_epoch_warns_once(sb2):
+    """With a width per epoch (APF exposures, HARPS HAM and EGGS) the message is the same
+    at every epoch, so a log that collapses identical warnings reports it once per template.
+    """
+    import dataclasses
+    import warnings
+
+    from albireo.forward import PER_EPOCH
+
+    dataset, _, templates = sb2
+    widths = np.linspace(2.4, 2.8, len(dataset))
+    per_epoch = Dataset(
+        [
+            dataclasses.replace(e, lsf_sigma_kms=float(w))
+            for e, w in zip(dataset, widths, strict=True)
+        ],
+        frame=dataset.frame,
+    )
+    broad = [
+        Template(n, GRID, t.deviation, sigma_kms=6.0) for n, t in zip("AB", templates, strict=True)
+    ]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        todcor(per_epoch, broad, light=LIGHT, v_range=(-150.0, 150.0), lsf_sigma_v={"a": PER_EPOCH})
+    messages = {str(w.message) for w in caught if "broader" in str(w.message)}
+    assert len(messages) == 2, messages
+    assert all("declared per epoch" in m for m in messages)
+
+
 def test_a_narrow_grid_warns_about_its_margins(sb2):
     dataset, _, _ = sb2
     tight = ab.LogGrid.from_wavelength_range(5007.5, 5052.5, dv_kms=1.5)

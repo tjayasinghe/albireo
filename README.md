@@ -107,6 +107,9 @@ equivalent is [`examples/00_quickstart.py`](examples/00_quickstart.py).
   resulting table with the same solver and conventions as the joint model.
 - **Archive access and preprocessing.** ESO Phase 3 and IRAF-style FITS spectra are read
   with the wavelength frame, time system and barycentric correction taken from the header.
+  PEPSI products and APF exposures of the CPS pipeline are recognised by their headers; an
+  APF exposure is calibrated with a wavelength solution, and its zero point and
+  line-spread width are measured from its own telluric lines (experimental).
   The ESO archive is queried and downloaded from with the standard library only.
   Continuum normalization, noise estimation and masking are provided for reduced spectra
   that lack them.

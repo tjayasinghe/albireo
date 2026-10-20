@@ -18,6 +18,7 @@ if not os.environ.get("ALBIREO_DISABLE_X64"):
 
     jax.config.update("jax_enable_x64", True)
 
+from albireo.apf import ApfWavelengths, read_apf_exposure
 from albireo.archive import (
     ArchiveRecord,
     BloemTarget,
@@ -152,6 +153,7 @@ from albireo.operators import (
     shift_spectrum,
     shift_spectrum_adjoint,
 )
+from albireo.pepsi import read_pepsi
 from albireo.pipeline import (
     Analysis,
     ComponentConfig,
@@ -209,6 +211,13 @@ from albireo.simulate import (
     synthetic_nebular_spectrum,
     synthetic_telluric_spectrum,
 )
+from albireo.telluric import (
+    TelluricLines,
+    TelluricShift,
+    telluric_lines,
+    telluric_lsf,
+    telluric_shift,
+)
 from albireo.templatefit import TemplateDeviation, TemplateFit, fit_templates, line_deviation
 from albireo.todcor import (
     Template,
@@ -225,7 +234,14 @@ __version__ = "0.1.0.dev0"
 # albireo.io requires astropy, so it is imported on first use rather than at package
 # import, which keeps `albireo.read_dataset(...)` discoverable without the [io] extra.
 _IO_EXPORTS = frozenset(
-    {"RawSpectrum", "read_dataset", "read_spectrum", "to_epoch", "write_spectra"}
+    {
+        "RawSpectrum",
+        "read_dataset",
+        "read_spectrum",
+        "region_coverage",
+        "to_epoch",
+        "write_spectra",
+    }
 )
 
 # albireo.plotting requires matplotlib (and arviz for the corner plot), so it is imported
@@ -274,6 +290,7 @@ __all__ = [
     "RVS_DR4_EPOCH",
     "TELLURIC_BANDS",
     "Analysis",
+    "ApfWavelengths",
     "ArchiveRecord",
     "BenchmarkConfig",
     "BenchmarkRun",
@@ -329,6 +346,8 @@ __all__ = [
     "StarLabels",
     "StarResult",
     "Telluric",
+    "TelluricLines",
+    "TelluricShift",
     "Template",
     "TemplateDeviation",
     "TemplateFit",
@@ -419,11 +438,14 @@ __all__ = [
     "query",
     "query_gaia_sb2",
     "radial_velocity",
+    "read_apf_exposure",
     "read_dataset",
+    "read_pepsi",
     "read_population",
     "read_spectrum",
     "rebin_operator",
     "refit_draws",
+    "region_coverage",
     "relative_velocities",
     "relative_velocity_errors",
     "resimulate",
@@ -455,6 +477,9 @@ __all__ = [
     "synthetic_telluric_spectrum",
     "t_conj_from_t_peri",
     "t_peri_from_t_conj",
+    "telluric_lines",
+    "telluric_lsf",
+    "telluric_shift",
     "to_epoch",
     "to_inference_data",
     "todcor",

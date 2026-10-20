@@ -83,7 +83,8 @@ Repository = "https://github.com/tjayasinghe/albireo"
 Issues = "https://github.com/tjayasinghe/albireo/issues"
 
 [project.scripts]
-# `albireo init | run | demo | fetch`: the pipeline's command line (albireo.cli).
+# `albireo init | run | demo | fetch | apf-wavelengths`: the pipeline's command line
+# (albireo.cli).
 albireo = "albireo.cli:main"
 
 [tool.hatch.version]
@@ -91,9 +92,14 @@ path = "src/albireo/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/albireo"]
-# The packaged example dataset (albireo.examples.load_example) and the PEP 561 marker are
-# data files, not modules, so they are listed explicitly rather than picked up as Python.
-artifacts = ["src/albireo/data_files/*.npz", "src/albireo/py.typed"]
+# The packaged example dataset (albireo.examples.load_example), the telluric line list
+# (albireo.telluric) and the PEP 561 marker are data files, not modules, so they are listed
+# explicitly rather than picked up as Python.
+artifacts = [
+    "src/albireo/data_files/*.npz",
+    "src/albireo/data_files/*.csv",
+    "src/albireo/py.typed",
+]
 
 [tool.ruff]
 line-length = 100

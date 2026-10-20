@@ -15,7 +15,8 @@ The three tiers below state where changes are expected.
 - **Experimental.** These modules are marked as such in their docstrings: `facade` (the
   `Disentangler` declaration) and `specs` (its parameter specifications), `pipeline`
   together with the `albireo` command line and the TOML schema it reads, `todcor`,
-  `rvorbit`, `library`, `match`, `templatefit`, `forecast`, `archive` and `handoff`. Their
+  `rvorbit`, `library`, `match`, `templatefit`, `forecast`, `archive`, `handoff`, and the
+  instrument readers `pepsi` and `apf` with the telluric line list `telluric`. Their
   names and interfaces are not settled and may change in any release below 1.0. Each is a
   convenience over the model layer, where the same computation is available directly.
 - **Internal.** `assembly` and `solver` have no stability guarantee.
@@ -31,6 +32,35 @@ This file records what changed. The reasons are recorded elsewhere:
 
 ### Added
 
+- **Readers for PEPSI products and APF exposures.** `read_spectrum`, `read_dataset` and
+  the pipeline recognise two instrument formats by their headers, so that a directory of
+  either is analysed like any other set of spectra. PEPSI products of the SDS pipeline
+  (`albireo.pepsi`, `INSTRUME = 'PEPSI'`) are read with the time from `JD-TDB`, the
+  barycentric correction from `SSBVEL` (sign reversed, m/s to km/s), air wavelengths in
+  the barycentric frame, and a resolving power of 44,300 for the 300 um fibre, measured
+  from the widths of 14 telluric O2 lines. APF exposures extracted by the CPS pipeline
+  (`albireo.apf`), 79 x 4608 images of counts without wavelengths, are calibrated with a
+  wavelength solution passed as `apf={"wavelengths": "apf_wave_2022.fits"}`, or
+  `[read.apf]` in a pipeline configuration. The zero point and the line-spread width of
+  every exposure are measured from its own telluric lines, the orders are divided by their
+  upper envelopes and merged without resampling, cosmic rays and night-sky lines are
+  masked, exposures through the iodine cell are refused unless `iodine="mask"`, and
+  BJD_TDB and the barycentric correction are computed with astropy at the photon-weighted
+  midpoint. `albireo.apf.refine_wavelengths` and the command `albireo apf-wavelengths`
+  refit the solution to the stellar and telluric lines of one exposure of a line-rich
+  star. On ten exposures of a K-type star not used in the fit, the scatter of chunk
+  velocities about each exposure's median falls from 0.86 to 0.56 km/s, and the offset of
+  the blue quarter of the orders from 1.2 to 0.1 km/s. `albireo.telluric` holds the
+  packaged line list (183 O2 and H2O lines, 6276-7410 A, air) and the shift and width
+  measurements. All three modules are experimental. Tutorial:
+  `docs/tutorials/apf-pepsi.md`; decision D73.
+- **`region_coverage`, `min_coverage` and `RawSpectrum.calibration`.**
+  `albireo.io.region_coverage` returns the fraction of a region that the good pixels of a
+  spectrum span, and `dataset_from_raw` and `read_dataset` take `min_coverage` to leave
+  out the spectra below it, with a warning that names them: the red-arm files of a PEPSI
+  directory when the region is in the blue, for example. `RawSpectrum.calibration` records
+  what an instrument reader measured or assumed (for APF the zero point and its error, the
+  line-spread width and its source, and the steps taken). No action is required.
 - **Diagnostics and remedies for four failure modes found on APF and PEPSI spectra.** A
   blind test on raw spectra of ten binaries found four ways in which a fit can be wrong
   without an error being raised. `docs/method.md` describes them in Sections 7, 8, 10 and
@@ -546,6 +576,21 @@ This file records what changed. The reasons are recorded elsewhere:
 
 ### Changed
 
+- **A directory contributes PEPSI products, and an APF exposure is read once.** A
+  directory passed to `read_dataset`, `read_raw_spectra` or the pipeline now contributes
+  the files named `pepsib.*` and `pepsir.*` as well as its FITS files. A list that holds
+  both `r<night>.<n>.fits` and its sky-subtracted copy `r<night>.<n>_skysub.fits` (CPS
+  products of the APF) reads the first only, with a warning; both were read before, which
+  counted the exposure twice. On the 8 arcsec N decker the subtracted sky contains the
+  star's own light. To read the sky-subtracted products, list only those files.
+- **The pipeline leaves out the files that do not reach the declared region.** A file
+  whose good pixels span less than 1% of `region` is left out, with a line in the log;
+  the run previously stopped with an error. A file that covers part of the region is kept
+  as before.
+- **A TODCOR warning is issued once per template for widths declared per epoch.** The
+  warning that a template is broader than the line-spread function named each epoch's
+  width, so a pipeline log of 20 APF exposures repeated it 40 times. For an instrument
+  declared per epoch it now names no width and is reported once per template.
 - **The regularization report of `Fit.summary()`.** It gives the move of `eta` in
   hyperprior standard deviations beside that of `tau`, and labels the first value of each
   weight as the hyperprior's centre, which it is: the start of the optimization differs

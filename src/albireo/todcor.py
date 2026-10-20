@@ -976,17 +976,25 @@ def _correlated_covariance(stack, work: _EpochWork, fine, pos, amps, amp_mode: s
 # ---------------------------------------------------------------------------
 
 
-def _effective_sigma(instrument: str, sigma_inst, template: Template) -> np.ndarray:
+def _effective_sigma(
+    instrument: str, sigma_inst, template: Template, *, per_epoch: bool = False
+) -> np.ndarray:
     sig = np.atleast_1d(np.asarray(sigma_inst, dtype=np.float64))
     if np.any(sig <= 0.0):
         raise ValueError(f"instrument {instrument!r}: LSF widths must be positive")
     excess = sig**2 - template.sigma_kms**2
     if np.any(excess < -1e-9):
+        # With a width per epoch the message names no width, so that it is the same at
+        # every epoch and is reported once rather than once per epoch.
+        lsf = (
+            f"the LSF of instrument {instrument!r} at some epochs (declared per epoch)"
+            if per_epoch
+            else f"instrument {instrument!r}'s LSF ({float(np.min(sig)):.2f} km/s)"
+        )
         warnings.warn(
             f"template {template.name!r} is broader ({template.sigma_kms:.2f} km/s) than "
-            f"instrument {instrument!r}'s LSF ({float(np.min(sig)):.2f} km/s); it is used "
-            "without further broadening, and the correlation peak will be wider than the "
-            "data's lines",
+            f"{lsf}; it is used without further broadening, and the correlation peak will be "
+            "wider than the data's lines",
             stacklevel=3,
         )
     return np.sqrt(np.clip(excess, 0.0, None))
@@ -1032,7 +1040,8 @@ def _convolved_templates(
             "already at the instruments' resolution."
         )
     sigma_inst = lsf_sigma_v[instrument]
-    if _is_per_epoch(sigma_inst):
+    per_epoch = _is_per_epoch(sigma_inst)
+    if per_epoch:
         if epoch_sigma_kms is None:
             raise ValueError(
                 f"instrument {instrument!r} is declared PER_EPOCH: the epoch's own width "
@@ -1043,7 +1052,7 @@ def _convolved_templates(
     rows = []
     narrowest = np.inf
     for t in templates:
-        sigma = _effective_sigma(instrument, sigma_inst, t)
+        sigma = _effective_sigma(instrument, sigma_inst, t, per_epoch=per_epoch)
         if anchors is None:
             if sigma.size != 1:
                 raise ValueError(

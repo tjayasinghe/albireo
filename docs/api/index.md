@@ -19,6 +19,7 @@ approximately this order:
 | Declare | [`albireo.facade`](facade.md) | `Disentangler`, the experimental front end that compiles a declaration into the modules below |
 | Fetch | [`albireo.archive`](archive.md) | ESO ObsCore/TAP queries and resumable downloads; BLOeM targets resolved by name |
 | Read | [`albireo.io`](io.md) | FITS to `RawSpectrum` to `EpochData`, with a warning for every assumption made |
+| Read | [`albireo.pepsi`](pepsi.md), [`albireo.apf`](apf.md) | two instrument formats that `albireo.io` recognises: PEPSI products, and APF exposures extracted with a wavelength solution, a telluric zero point and a telluric line-spread width ([`albireo.telluric`](telluric.md)) |
 | Repair | [`albireo.preprocess`](preprocess.md) | continuum, inverse variance, masks, one shared grid |
 | Hold | [`albireo.data`](data.md) | `EpochData` / `Dataset`, the pure-NumPy containers for user data, and `LogGrid` |
 | Build | [`albireo.forward`](forward.md) | `Dataset` + grid to `Problem`, the fixed-θ forward model |

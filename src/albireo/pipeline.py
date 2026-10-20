@@ -117,6 +117,9 @@ _DEFAULT_OUTPUT = "albireo_results"
 _LIBRARY_PAD_ANGSTROM = 2.0
 _MAX_NAME_LENGTH = 80
 _LABEL_COMPARISONS = ("epochs", "native", "matched")
+# With a region declared, a file whose good pixels span less than this fraction of it does
+# not reach the region and is left out (albireo.io.region_coverage).
+_MIN_COVERAGE = 0.01
 
 
 # ---------------------------------------------------------------------------
@@ -833,6 +836,15 @@ plots = true                    # diagnostic figures (needs matplotlib)
 resolving_power = 115000
 # [instrument.FEROS]
 # sigma_kms = 2.65             # a Gaussian sigma in km/s, instead of a resolving power
+#
+# PEPSI products and APF exposures of the CPS pipeline are recognised from their headers.
+# PEPSI's resolving power follows from the fibre (44,300 for the 300 um fibre), and the
+# width of every APF exposure is measured from its telluric lines, so neither needs an
+# [instrument] entry. APF exposures carry no wavelengths: give the solution file (the CPS
+# apf_wave_2022.fits, or one refined with `albireo apf-wavelengths`).
+# [read.apf]
+# wavelengths = "apf_wave_2022.fits"
+# iodine = "mask"              # exposures through the iodine cell: mask 5000-6200 A
 
 [analysis]
 region = [5000.0, 5300.0]       # Angstrom. Recommended: the solve cost grows with the pixel count
@@ -1057,8 +1069,21 @@ def config_from_dict(data: Mapping[str, Any], *, base_dir: str | os.PathLike | N
         library=library,
         mh=mh,
         analysis=analysis,
-        read_kwargs=dict(data.get("read", {})),
+        read_kwargs=_read_options(data.get("read", {}), base),
     )
+
+
+def _read_options(table: Mapping[str, Any], base: Path | None) -> dict[str, Any]:
+    """The [read] table, with the APF solution and blaze paths resolved like the others."""
+    options = dict(table)
+    apf = options.get("apf")
+    if isinstance(apf, Mapping):
+        apf = dict(apf)
+        for key in ("wavelengths", "blaze"):
+            if isinstance(apf.get(key), str):
+                apf[key] = _resolve_path(apf[key], base)
+        options["apf"] = apf
+    return options
 
 
 # ---------------------------------------------------------------------------
@@ -1705,7 +1730,7 @@ def _load_dataset(ctx: _Context) -> tuple[Dataset, dict[str, float]]:
     if star.dataset is not None:
         dataset = star.dataset
     else:
-        from albireo.io import dataset_from_raw, read_raw_spectra
+        from albireo.io import dataset_from_raw, read_raw_spectra, region_coverage
 
         paths = star.spectra
         if star.bloem is not None:
@@ -1727,7 +1752,22 @@ def _load_dataset(ctx: _Context) -> tuple[Dataset, dict[str, float]]:
             options["smooth_angstrom"] = settings.smooth_angstrom
         if settings.mask:
             options["mask"] = list(settings.mask)
-        dataset = dataset_from_raw(raws, medium=star.medium, **options)
+        if settings.region is not None:
+            # A directory of PEPSI products holds both arms. The files that do not reach the
+            # region (the red arm for a blue window) are left out rather than rejected; a
+            # file that covers part of it is kept, as before.
+            outside = [r for r in raws if region_coverage(r, settings.region) < _MIN_COVERAGE]
+            if outside:
+                names = ", ".join(Path(r.path).name for r in outside[:6])
+                more = f" and {len(outside) - 6} more" if len(outside) > 6 else ""
+                log(
+                    f"left out {len(outside)} of {len(raws)} files that do not reach the "
+                    f"region {list(settings.region)}: {names}{more}"
+                )
+            options["min_coverage"] = _MIN_COVERAGE
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=r".*cover less than .* of the region")
+            dataset = dataset_from_raw(raws, medium=star.medium, **options)
         if settings.region is None:
             n_pix = max(e.n_pixels for e in dataset)
             if n_pix > 20_000:
@@ -1808,7 +1848,7 @@ def _resolve_lsf(ctx: _Context, dataset: Dataset, header_lsf: Mapping[str, float
             detail = ", ".join(f"{s:.3f} km/s x{len(idx)}" for s, idx in widths.items())
             ctx.log(
                 f"instrument {key!r}: LSF width taken per epoch from the files' own "
-                f"SPEC_RES header ({detail})"
+                f"resolving power (the SPEC_RES header, or an instrument reader) ({detail})"
             )
         else:
             raise ValueError(
