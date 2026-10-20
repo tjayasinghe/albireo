@@ -49,6 +49,7 @@ print(fit.summary())
 ```
 Best fit (maximum a posteriori) of the orbit, 300 steps (stopped at the step cap)
   -ln posterior -28052.6 (unconstrained coordinates, up to a constant), |gradient| 383
+  the potential changed by 4.4e-11 nats over the last 30 steps; laplace_check() tests the maximum
   conjunction scan: t_conj = 0.71429, 1.31e+05 nats between the best and worst phase
   semi-amplitude scan: best of 176 trials at primary 41.5, secondary 62.3 km/s; started from it, +1.57e+04 nats over the declared start (50.0, 50.0)
 
@@ -59,9 +60,9 @@ Best fit (maximum a posteriori) of the orbit, 300 steps (stopped at the step cap
 
 Regularization weights of the component spectra, fitted by maximizing the marginal
 likelihood (ML-II) and held fixed for sampling: curvature weight tau and continuum weight
-eta, start -> fitted, with the move in ln tau in hyperprior standard deviations
-  primary        tau       300 ->       638 (+0.25 sigma)   eta        5 ->     10.2
-  secondary      tau       300 ->  1.15e+03 (+0.45 sigma)   eta        5 ->     3.25
+eta, centre -> fitted, with the moves in ln tau and ln eta in hyperprior standard deviations
+  primary        tau       300 ->       638 (+0.25 sigma)   eta        5 ->     10.2 (+0.24 sigma)
+  secondary      tau       300 ->  1.15e+03 (+0.45 sigma)   eta        5 ->     3.25 (-0.14 sigma)
 
   residual z-score RMS 0.997
 
@@ -76,8 +77,13 @@ Assumed, not measured:
 The injected values are *P* = 6.0 d, *K* = 42.0 and 63.0 km/s, *e* = 0.15, ω = 0.7. The
 fit takes one to three minutes on one CPU, much of it JAX compilation on the first call.
 "Stopped at the step cap" means that the optimizer's threshold, an absolute norm of the
-gradient, was not reached in 300 steps. It is not a failure here: the best-fit orbit agrees
-with the posterior means below to within about a tenth of their standard deviations.
+gradient, was not reached in 300 steps. It is not a failure here: the potential changed by
+less than 1e-10 nats over the last 30 steps, and the best-fit orbit agrees with the posterior
+means below to within about a tenth of their standard deviations. `fit.laplace_check()`
+evaluates the posterior around the best fit: here no point within one standard deviation is
+lower, and the potential rises by 0.51 to 0.60 nats at one standard deviation, as it does by
+0.5 for a Gaussian. It is the check to make before the Laplace errors of a fit stopped at its
+step cap are used ([method overview](method.md#8-uncertainties-on-the-orbit)).
 Differences of log likelihood are in nats; a difference of 1 nat corresponds to a
 chi-square difference of 2. No per-epoch radial velocity is measured at any stage: the orbit
 is inferred from the spectra directly, with the component spectra integrated out in closed
@@ -103,7 +109,9 @@ print(dis.explain())
   likelihood (ML-II, or empirical Bayes; see the
   [method overview](method.md#7-the-regularization-strength)) and then held fixed. The
   report flags any weight that did not move from its starting value, which indicates that
-  the hyperprior, not the data, sets that component's smoothness.
+  the hyperprior, not the data, sets that component's smoothness, and a continuum weight
+  that fell far below its centre, which on real spectra indicates continuum errors that
+  differ between epochs ([method overview](method.md#continuum-errors-that-differ-between-epochs)).
 
 ## Sample the posterior
 

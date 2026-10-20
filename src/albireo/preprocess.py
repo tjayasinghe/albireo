@@ -39,6 +39,7 @@ from albireo.data import EpochData
 
 __all__ = [
     "TELLURIC_BANDS",
+    "continuum_correction",
     "der_snr_sigma",
     "estimate_ivar",
     "fit_continuum",
@@ -567,6 +568,129 @@ def normalize(
             ivar = (continuum / e) ** 2
         ivar = np.where(np.isfinite(ivar) & (e > 0) & ~bad & np.isfinite(flux_norm), ivar, 0.0)
     return flux_norm, ivar, continuum
+
+
+# Pixels where the model flux is below this are left out of `continuum_correction`: the
+# ratio of data to model is noisy in deep line cores, and a model that reaches zero there
+# would make it diverge.
+_MIN_MODEL_FLUX = 0.2
+
+
+def continuum_correction(
+    wave,
+    flux,
+    ivar,
+    model,
+    *,
+    knot_spacing_angstrom: float = 12.0,
+    clip: float = 3.0,
+    exclude: Iterable[Sequence[float]] = (),
+    max_iterations: int = 5,
+) -> np.ndarray:
+    """A smooth multiplicative correction that brings an epoch's continuum to a model's.
+
+    Fits a cubic least-squares spline to ``flux / model`` with weights
+    ``sqrt(ivar) * model`` (the inverse errors of the ratio), with interior knots about
+    every ``knot_spacing_angstrom`` of covered wavelength, placed at quantiles of the
+    wavelengths used, so that no interval between knots falls in a masked gap. Pixels more
+    than ``clip`` robust standard deviations from the spline are rejected and the spline
+    refitted, until the set of pixels stops changing. Dividing the epoch by the result
+    removes structure that its ratio to the model has on scales above the knot spacing:
+    errors of the continuum normalization, such as the residual blaze of an echelle
+    spectrograph, which differ from epoch to epoch.
+
+    The knot spacing must be well below the scale of that structure. On PEPSI spectra whose
+    normalization left a ripple on scales of 40-80 A (the length of the echelle orders),
+    knots every 30 A left most of it in the epochs and knots every 12 A removed it. It must
+    also be well above the width of the lines, or the correction follows a mismatch of the
+    model in a line.
+
+    Parameters
+    ----------
+    wave, flux, ivar, model : array_like
+        Wavelengths [A], flux, inverse variance and the model flux of the epoch, shape
+        ``(n,)``. Pixels with ``ivar = 0``, a non-finite value, or a model flux below 0.2
+        (deep line cores) are not used.
+    knot_spacing_angstrom : float, optional
+        Spacing of the interior knots per angstrom of covered wavelength. Default 12.
+    clip : float, optional
+        Rejection threshold in robust standard deviations of the weighted residuals.
+        Default 3.
+    exclude : iterable of (float, float), optional
+        Wavelength ranges left out of the fit (lines whose shape the model does not
+        follow, telluric bands); the spline is interpolated across them.
+    max_iterations : int, optional
+        Largest number of rejection passes. Default 5.
+
+    Returns
+    -------
+    numpy.ndarray
+        The correction, shape ``(n,)``, positive. It is held at its edge value outside the
+        range of the pixels used.
+
+    Raises
+    ------
+    ValueError
+        If the arrays differ in shape, a parameter is out of range, or too few pixels
+        remain to fit a spline with at least one interior knot.
+    """
+    from scipy.interpolate import LSQUnivariateSpline
+
+    wave = np.asarray(wave, dtype=np.float64)
+    flux = np.asarray(flux, dtype=np.float64)
+    ivar = np.asarray(ivar, dtype=np.float64)
+    model = np.asarray(model, dtype=np.float64)
+    if not (wave.shape == flux.shape == ivar.shape == model.shape) or wave.ndim != 1:
+        raise ValueError(
+            "wave, flux, ivar and model must be 1-D of equal length; got "
+            f"{wave.shape}, {flux.shape}, {ivar.shape}, {model.shape}"
+        )
+    if not (np.isfinite(knot_spacing_angstrom) and knot_spacing_angstrom > 0.0):
+        raise ValueError(f"knot_spacing_angstrom must be positive; got {knot_spacing_angstrom}")
+    if not clip > 0.0:
+        raise ValueError(f"clip must be positive; got {clip}")
+    use = (
+        np.isfinite(wave)
+        & np.isfinite(flux)
+        & np.isfinite(ivar)
+        & (ivar > 0.0)
+        & np.isfinite(model)
+        & (model > _MIN_MODEL_FLUX)
+    )
+    for lo, hi in exclude:
+        use &= ~((wave >= float(lo)) & (wave <= float(hi)))
+    x = wave[use]
+    y = flux[use] / model[use]
+    weight = np.sqrt(ivar[use]) * model[use]
+    keep = np.ones(x.size, dtype=bool)
+    spline = None
+    for _ in range(max(int(max_iterations), 1)):
+        kept = x[keep]
+        # Covered wavelength: the steps between used pixels, with a gap counted as 1 A.
+        covered = float(np.sum(np.minimum(np.diff(kept), 1.0))) if kept.size > 1 else 0.0
+        n_knots = int(covered / float(knot_spacing_angstrom))
+        if n_knots < 1 or kept.size < 4 * (n_knots + 4):
+            raise ValueError(
+                f"{kept.size} usable pixels over {covered:.1f} A of covered wavelength are "
+                f"too few for a spline with knots every {knot_spacing_angstrom:g} A"
+            )
+        knots = np.quantile(kept, np.linspace(0.0, 1.0, n_knots + 2)[1:-1])
+        try:
+            spline = LSQUnivariateSpline(kept, y[keep], knots, w=weight[keep], k=3, ext=3)
+        except ValueError as exc:
+            raise ValueError(f"the correction spline could not be fitted ({exc})") from exc
+        residual = (y - spline(x)) * weight
+        scale = 1.4826 * float(np.median(np.abs(residual[keep])))
+        if not scale > 0.0:
+            break
+        new = np.abs(residual) < clip * scale
+        if np.array_equal(new, keep):
+            break
+        keep = new
+    correction = np.asarray(spline(wave), dtype=np.float64)
+    if not np.all(np.isfinite(correction) & (correction > 0.0)):
+        raise ValueError("the correction spline is not positive and finite everywhere")
+    return correction
 
 
 def _replace(epoch: EpochData, **changes) -> EpochData:

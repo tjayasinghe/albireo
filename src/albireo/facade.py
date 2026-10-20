@@ -28,24 +28,28 @@ block printed by :meth:`Fit.summary`.
 from __future__ import annotations
 
 import math
+import textwrap
 import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, ClassVar
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 import numpyro.distributions as dist
 from numpyro.diagnostics import effective_sample_size, hpdi, split_gelman_rubin
+from numpyro.distributions import constraints
+from numpyro.distributions.transforms import Transform, biject_to
 
 from albireo.data import Dataset
 from albireo.forward import PER_EPOCH, data_residual_zscores, declared_lsf_widths
 from albireo.grids import C_KMS, LogGrid
 from albireo.inference import (
+    LaplaceCheck,
     MarginalOrbitModel,
     keplerian_residuals,
-    laplace_inverse_mass,
+    laplace_check,
     orbit_parameters,
     orbit_velocities,
     posterior_spectra,
@@ -62,6 +66,7 @@ __all__ = [
     "LSF",
     "Between",
     "Disentangler",
+    "EpochRenormalization",
     "Fit",
     "Fixed",
     "Known",
@@ -149,11 +154,34 @@ class Smoothness:
         Centre of the ridge hyperprior, which shrinks the component toward its continuum.
     sigma
         Width of both hyperpriors, in natural logarithms.
+    eta_min
+        Lower bound on the fitted ``eta``, or ``None`` (default) for no bound. The ridge
+        is the only term of the prior that acts on the constant and the slope of a
+        component, which the curvature penalty leaves free. Where the continuum
+        normalization of the epochs differs from epoch to epoch, ML-II can lower ``eta``
+        by orders of magnitude, and the components then take up those errors as broad
+        drifts in opposite directions, which their light-weighted sum does not show. On a
+        simulated binary with a ripple of 1.3% rms on scales of 40-80 A in every epoch,
+        ``eta`` fell from 5 to 0.4 and 0.025 and the components drifted by 0.28 and 0.85
+        continuum units rms; on PEPSI spectra of a binary it fell to 0.015 and 0.0014.
+        With a bound, the hyperprior of ``ln eta`` is the normal of ``eta0`` and
+        ``sigma`` truncated at ``ln eta_min``. :meth:`Fit.summary` flags a fall of ``eta``
+        below its centre and a fitted value at the bound.
     """
 
     tau0: float = 300.0
     eta0: float = 5.0
     sigma: float = 3.0
+    eta_min: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.eta_min is not None and not (
+            np.isfinite(float(self.eta_min)) and float(self.eta_min) > 0.0
+        ):
+            raise ValueError(
+                f"eta_min must be a positive number or None; got {self.eta_min}. It bounds "
+                "the continuum weight eta from below."
+            )
 
 
 @dataclass(frozen=True)
@@ -550,20 +578,163 @@ def _place_hyperparameters(dis, priors: dict, init: dict) -> None:
     magnitude between a sharp-lined and a rotationally broadened star. The nebular
     amplitudes are placed here for the same reason as in :meth:`Fit._velocity_priors`:
     omitting them would hold the component static at amplitude 1 without reporting it.
+
+    A declared ``eta_min`` truncates the hyperprior of ``log_eta`` (:class:`_FlooredNormal`),
+    and the start is moved above the bound. Without one the site keeps its normal
+    hyperprior, so a declaration without bounds builds the same model as before they
+    existed.
     """
     ordered = dis.ordered_components
     centres = np.array([_smoothness_of(c).tau0 for c in ordered], dtype=float)
     etas = np.array([_smoothness_of(c).eta0 for c in ordered], dtype=float)
     widths = np.array([_smoothness_of(c).sigma for c in ordered], dtype=float)
     priors["log_tau"] = dist.Normal(jnp.log(jnp.asarray(centres)), jnp.asarray(widths))
-    priors["log_eta"] = dist.Normal(jnp.log(jnp.asarray(etas)), jnp.asarray(widths))
     init["log_tau"] = jnp.log(jnp.asarray(centres))
-    init["log_eta"] = jnp.log(jnp.asarray(etas))
+    floor = dis._log_eta_floor()
+    if np.all(np.isinf(floor)):
+        priors["log_eta"] = dist.Normal(jnp.log(jnp.asarray(etas)), jnp.asarray(widths))
+        init["log_eta"] = jnp.log(jnp.asarray(etas))
+    else:
+        priors["log_eta"] = _FlooredNormal(
+            jnp.log(jnp.asarray(etas)), jnp.asarray(widths), jnp.asarray(floor)
+        )
+        init["log_eta"] = jnp.asarray(_above_floor(np.log(etas), floor))
 
     if any(isinstance(c, Nebular) for c in dis.components):
         n_epochs = dis.dataset.n_epochs
         priors["log_nebular_amp"] = dist.Normal(jnp.zeros(n_epochs), 0.3).to_event(1)
         init["log_nebular_amp"] = jnp.zeros(n_epochs)
+
+
+# A start this far above a declared bound, in ln eta. The unconstrained coordinate of a
+# bounded entry is ln(ln eta - ln eta_min), which is infinite at the bound itself.
+_START_ABOVE_FLOOR = 0.1
+# Fit.summary reports eta at its bound within this distance in ln eta. At a bound that
+# holds against the data the fitted value lies 1/|d ln p / d ln eta| above it, a few
+# percent where the data pull hard.
+_AT_BOUND = 0.05
+# Fit.summary flags an eta more than this many hyperprior standard deviations below its
+# centre, in a model of two or more components (with one, the data determine its broad
+# structure directly). In a blind test on seven two-star fits of APF and PEPSI spectra,
+# the binary whose components drifted had eta at -1.9 and -2.7 sigma of the default
+# hyperprior, and the other twelve components stayed above -0.6 sigma (eta 1.1 to 297).
+_ETA_FALL_SIGMA = 1.0
+# Fit.summary flags an optimization stopped at its step cap whose potential still fell by
+# more than this over its last steps (MAPResult.potential_fall), in nats. On the same
+# blind test the fit whose components drifted fell by 60 nats over its last 25 steps (its
+# regularization weights were still moving), and the others stopped at the cap by at most
+# 0.6, two of them at kinks of the potential where the gradient stays large and no step
+# lowers the potential. The fall is an indication; laplace_check is the test.
+_STILL_FALLING_NATS = 1.0
+
+
+def _indented(text: str) -> str:
+    """``text`` wrapped at 90 columns under a flag line of a report."""
+    return textwrap.fill(text, width=90, initial_indent="    ", subsequent_indent="    ")
+
+
+def _above_floor(log_eta: np.ndarray, floor: np.ndarray) -> np.ndarray:
+    """``log_eta`` moved to at least ``_START_ABOVE_FLOOR`` above each finite bound."""
+    log_eta = np.asarray(log_eta, dtype=float)
+    floor = np.asarray(floor, dtype=float)
+    return np.where(np.isfinite(floor), np.maximum(log_eta, floor + _START_ABOVE_FLOOR), log_eta)
+
+
+class _Floor(constraints.Constraint):
+    """``x > lower_bound``, entry by entry; an entry of ``-inf`` imposes no bound."""
+
+    def __init__(self, lower_bound):
+        self.lower_bound = lower_bound
+
+    def __call__(self, x):
+        return x > self.lower_bound
+
+    def feasible_like(self, prototype):
+        lower = jnp.asarray(self.lower_bound)
+        return jnp.broadcast_to(
+            jnp.where(jnp.isfinite(lower), lower + 1.0, 0.0), jnp.shape(prototype)
+        )
+
+    def tree_flatten(self):
+        return (self.lower_bound,), (("lower_bound",), {})
+
+
+class _FloorTransform(Transform):
+    """``z -> lower + exp(z)`` where the bound is finite, the identity where it is not.
+
+    numpyro's own transform to ``greater_than`` returns ``-inf`` for an infinite bound, so
+    a vector site whose entries are bounded only in part needs this one. An unbounded entry
+    keeps the unconstrained coordinate it has under a plain normal prior.
+    """
+
+    sign = 1
+
+    def __init__(self, lower_bound):
+        self.lower_bound = lower_bound
+
+    @property
+    def codomain(self):
+        return _Floor(self.lower_bound)
+
+    def _bound(self):
+        lower = jnp.asarray(self.lower_bound)
+        finite = jnp.isfinite(lower)
+        return finite, jnp.where(finite, lower, 0.0)
+
+    def __call__(self, z):
+        finite, lower = self._bound()
+        return jnp.where(finite, lower + jnp.exp(z), z)
+
+    def _inverse(self, x):
+        finite, lower = self._bound()
+        gap = jnp.where(finite, x - lower, 1.0)
+        return jnp.where(finite, jnp.log(gap), x)
+
+    def log_abs_det_jacobian(self, z, x, intermediates=None):
+        finite, _ = self._bound()
+        return jnp.where(finite, z, 0.0)
+
+    def tree_flatten(self):
+        return (self.lower_bound,), (("lower_bound",), {})
+
+
+biject_to.register(_Floor, lambda constraint: _FloorTransform(constraint.lower_bound))
+
+
+class _FlooredNormal(dist.Distribution):
+    """A normal distribution truncated below at ``low``, entry by entry.
+
+    The density is the normal's divided by its mass above ``low``; an entry with
+    ``low = -inf`` is the normal itself. It is the hyperprior of ``log_eta`` when a
+    component declares ``Smoothness(eta_min=...)``.
+    """
+
+    arg_constraints: ClassVar[dict] = {"loc": constraints.real, "scale": constraints.positive}
+    pytree_data_fields = ("loc", "scale", "low")
+
+    def __init__(self, loc, scale, low, *, validate_args=None):
+        shape = jax.lax.broadcast_shapes(jnp.shape(loc), jnp.shape(scale), jnp.shape(low))
+        self.loc = jnp.broadcast_to(jnp.asarray(loc, dtype=jnp.float64), shape)
+        self.scale = jnp.broadcast_to(jnp.asarray(scale, dtype=jnp.float64), shape)
+        self.low = jnp.broadcast_to(jnp.asarray(low, dtype=jnp.float64), shape)
+        super().__init__(batch_shape=shape, validate_args=validate_args)
+
+    @constraints.dependent_property(is_discrete=False, event_dim=0)
+    def support(self):
+        return _Floor(self.low)
+
+    def log_prob(self, value):
+        normal = dist.Normal(self.loc, self.scale).log_prob(value)
+        # log P(X > low) for X ~ N(loc, scale); zero where low = -inf
+        mass = jax.scipy.special.log_ndtr((self.loc - self.low) / self.scale)
+        return jnp.where(value > self.low, normal - mass, -jnp.inf)
+
+    def sample(self, key, sample_shape=()):
+        lower = jax.scipy.special.ndtr((self.low - self.loc) / self.scale)
+        u = jax.random.uniform(
+            key, tuple(sample_shape) + self.batch_shape, minval=lower, maxval=1.0
+        )
+        return self.loc + self.scale * jax.scipy.special.ndtri(u)
 
 
 def _range_bounds(spec) -> tuple[float, float] | None:
@@ -1085,6 +1256,11 @@ class Disentangler:
             lsf_sigma_kms=self._widest_lsf(),
         )
 
+    def _log_eta_floor(self) -> np.ndarray:
+        """``ln eta_min`` of every component in model row order, ``-inf`` where none is declared."""
+        bounds = [_smoothness_of(c).eta_min for c in self.ordered_components]
+        return np.array([-np.inf if b is None else math.log(float(b)) for b in bounds])
+
     def _make_prior(self) -> SmoothnessPrior:
         tau = np.array([_smoothness_of(c).tau0 for c in self.ordered_components], dtype=float)
         eta = np.array([_smoothness_of(c).eta0 for c in self.ordered_components], dtype=float)
@@ -1503,7 +1679,8 @@ class Disentangler:
                             log_tau[row] -= 2.0 * math.log(c)
                             log_eta[row] -= 2.0 * math.log(c)
                         init["log_tau"] = jnp.asarray(log_tau)
-                        init["log_eta"] = jnp.asarray(log_eta)
+                        # A declared bound on eta holds for the adapted start as well.
+                        init["log_eta"] = jnp.asarray(_above_floor(log_eta, self._log_eta_floor()))
                         first_best = ", ".join(
                             f"{s.name} {k:.1f}"
                             for s, k in zip(self.stars, amplitude_scan.best, strict=True)
@@ -2272,6 +2449,49 @@ def _default_v_range(fitted: np.ndarray, templates, margin: float = 40.0):
 
 
 @dataclass(frozen=True)
+class EpochRenormalization:
+    """The epochs of a fit divided by smooth corrections against its model.
+
+    Returned by :meth:`Fit.renormalize_epochs`.
+
+    Attributes
+    ----------
+    dataset
+        The epochs divided by their corrections, with the inverse variances multiplied by
+        the square of the correction. Wavelengths, times, masks and every other field are
+        unchanged.
+    corrections
+        Per epoch, on its own pixels: the product of the corrections of all passes, so
+        that ``dataset[j].flux == original[j].flux / corrections[j]``.
+    rms
+        ``(passes, n_epochs)``: the root mean square deviation of each pass's correction
+        from 1 over the epoch's good pixels. The first pass measures the normalization
+        errors; later passes should be much smaller.
+    scale_angstrom
+        The scale used: the knot spacing of the corrections and the width of the shared
+        low-frequency part of the model.
+    """
+
+    dataset: Dataset
+    corrections: tuple[np.ndarray, ...]
+    rms: np.ndarray
+    scale_angstrom: float
+
+    def summary(self) -> str:
+        """The size of the corrections, per pass."""
+        lines = [
+            f"Epochs renormalized against the model: {self.rms.shape[1]} epochs, "
+            f"{self.rms.shape[0]} passes, scale {self.scale_angstrom:g} A"
+        ]
+        for i, row in enumerate(self.rms):
+            lines.append(
+                f"  pass {i + 1}: correction rms median {np.median(row):.4f}, largest "
+                f"{np.max(row):.4f} (epoch {int(np.argmax(row))})"
+            )
+        return "\n".join(lines)
+
+
+@dataclass(frozen=True)
 class Fit:
     """The best fit (MAP), its ML-II regularization weights, and the quantities derived.
 
@@ -2421,10 +2641,10 @@ class Fit:
         keplerian = {"period", "t_conj", "secosw", "sesinw", "k"}
         fixed = {k: v for k, v in self.dis.fixed.items() if k not in keplerian}
         model = self.dis.model.model(self.priors_used, fixed=fixed or None)
-        covariance = laplace_inverse_mass(
-            model, self.result.params, model_args=(self.dis.model.problem,)
-        )
-        return np.asarray(relative_velocity_errors(covariance, self.result.unconstrained))
+        check = laplace_check(model, self.result.params, model_args=(self.dis.model.problem,))
+        if not check.valid:
+            warnings.warn(check.message(), RuntimeWarning, stacklevel=2)
+        return np.asarray(relative_velocity_errors(check.covariance, self.result.unconstrained))
 
     def noise_correlation(self) -> dict[str, float] | None:
         """The lag-one noise correlation per instrument, as declared or as fitted.
@@ -2520,6 +2740,32 @@ class Fit:
             f"  -ln posterior {self.result.potential:.6g} (unconstrained coordinates, up to a "
             f"constant), |gradient| {self.result.grad_norm:.3g}",
         ]
+        fall, steps = (
+            self.result.potential_fall()
+            if hasattr(self.result, "potential_fall")
+            else (math.nan, 0)
+        )
+        if not self.result.converged and steps:
+            if fall > _STILL_FALLING_NATS:
+                lines.append(
+                    f"  ! the potential fell by {fall:.3g} nats over the last {steps} steps"
+                )
+                lines.append(
+                    _indented(
+                        "The optimizer was still descending, and the orbit or the "
+                        "regularization weights are not at the maximum. Continue with a "
+                        "larger max_steps. laplace_check() tests whether the Laplace "
+                        "approximation of the orbit at these weights is valid."
+                    )
+                )
+            else:
+                # The threshold is absolute and is not reached on large datasets, and an
+                # optimizer that creeps along a valley gains little per step far from the
+                # maximum, so the change is reported with the test that settles it.
+                lines.append(
+                    f"  the potential changed by {fall:.2g} nats over the last {steps} steps; "
+                    "laplace_check() tests the maximum"
+                )
         if self.phase_scan is not None:
             lines.append(
                 f"  conjunction scan: t_conj = {self.phase_scan.best:.5f}, "
@@ -2573,30 +2819,61 @@ class Fit:
         return "\n".join(lines)
 
     def _hyper_report(self) -> str:
-        """The ML-II table, flagging any hyperparameter left at its start."""
+        """The ML-II table, flagging a weight left at its start, a fallen eta, and a bound."""
         rows = [
             "Regularization weights of the component spectra, fitted by maximizing the marginal",
             "likelihood (ML-II) and held fixed for sampling: curvature weight tau and "
             "continuum weight",
-            "eta, start -> fitted, with the move in ln tau in hyperprior standard deviations",
+            "eta, centre -> fitted, with the moves in ln tau and ln eta in hyperprior "
+            "standard deviations",
         ]
-        stale = []
+        stale, fallen, bounded = [], [], []
         for name, component in zip(
             self.dis.component_names, self.dis.ordered_components, strict=True
         ):
             smooth = _smoothness_of(component)
             fitted = self.hyper[name]
             drift = (math.log(fitted["tau"]) - math.log(smooth.tau0)) / smooth.sigma
+            eta_drift = (math.log(fitted["eta"]) - math.log(smooth.eta0)) / smooth.sigma
+            bound = "" if smooth.eta_min is None else f", bound {smooth.eta_min:g}"
             rows.append(
                 f"  {name:<14s} tau {smooth.tau0:9.3g} -> {fitted['tau']:9.3g} "
-                f"({drift:+.2f} sigma)   eta {smooth.eta0:8.3g} -> {fitted['eta']:8.3g}"
+                f"({drift:+.2f} sigma)   eta {smooth.eta0:8.3g} -> {fitted['eta']:8.3g} "
+                f"({eta_drift:+.2f} sigma{bound})"
             )
             if abs(drift) < 0.02:
                 stale.append(name)
+            at_bound = (
+                smooth.eta_min is not None and math.log(fitted["eta"] / smooth.eta_min) < _AT_BOUND
+            )
+            if at_bound:
+                bounded.append((name, smooth.eta_min))
+            elif eta_drift < -_ETA_FALL_SIGMA and len(self.dis.component_names) > 1:
+                fallen.append((name, smooth.eta0, fitted["eta"]))
         rows += [
             f"  ! {name!r} tau did not move from its start: the hyperprior, not the data, "
             "is setting this component's smoothness."
             for name in stale
+        ]
+        for name, centre, eta in fallen:
+            rows.append(
+                f"  ! {name!r} eta fell more than one hyperprior standard deviation below its "
+                f"centre ({centre:g} -> {eta:.3g})."
+            )
+            rows.append(
+                _indented(
+                    f"The continuum weight allows each pixel a spread of "
+                    f"{1.0 / math.sqrt(eta):.2g} continuum units, and it is the only term that "
+                    "holds the constant and the slope of the component: continuum errors "
+                    "that differ between epochs can appear as broad drifts of the components "
+                    "in opposite directions, which their light-weighted sum does not show. "
+                    "Bound it (Smoothness(eta_min=...)) or renormalize the epochs "
+                    "(Fit.renormalize_epochs); docs/method.md, section 10."
+                )
+            )
+        rows += [
+            f"  ! {name!r} eta is at its declared bound {bound:g}: the data would take it lower."
+            for name, bound in bounded
         ]
         return "\n".join(rows)
 
@@ -2608,6 +2885,55 @@ class Fit:
             "log_tau": jnp.asarray(np.log([self.hyper[n]["tau"] for n in names])),
             "log_eta": jnp.asarray(np.log([self.hyper[n]["eta"] for n in names])),
         }
+
+    def _orbit_model(self):
+        """``(model, start)``: the orbital posterior with the ML-II weights held, at the MAP."""
+        fixed = self._fixed_hyper()
+        priors = {k: v for k, v in self.dis.priors.items() if k not in fixed}
+        if self.phase_scan is not None:
+            # The prior is one period wide, centred on the fitted conjunction (the MAP may be
+            # half a period from the phase scan's best when the semi-amplitude scan moved it).
+            centre = float(np.asarray(self.result.params["t_conj"], dtype=float))
+            period = self.phase_scan.period
+            priors["t_conj"] = dist.Uniform(centre - 0.5 * period, centre + 0.5 * period)
+        model = self.dis.model.model(priors, fixed=fixed)
+        start = {k: v for k, v in self.result.params.items() if k in priors}
+        return model, start
+
+    def laplace_check(self) -> LaplaceCheck:
+        """The Laplace approximation of the orbit at this fit, and whether it is valid.
+
+        The approximation is that of :meth:`sample`, which takes its covariance as the
+        mass matrix: the orbital sites in numpyro's unconstrained coordinates, with the
+        regularization weights held at their ML-II values. Its covariance describes the
+        posterior only at a maximum, with a positive-definite Hessian, around which the
+        potential is quadratic on the scale of one standard deviation
+        (:class:`albireo.LaplaceCheck`). A fit stopped at its step cap short of the maximum
+        fails the second condition, and a fit stopped at a kink of the potential, which
+        the linear shift operator produces at whole pixels of the model grid, the third.
+        :meth:`summary` reports the fall of the potential over the last steps, an
+        indication; this method evaluates the potential around the best fit. It costs one
+        Hessian, as :meth:`sample` does, and two evaluations of the potential per
+        orbital parameter.
+
+        Returns
+        -------
+        albireo.LaplaceCheck
+
+        Raises
+        ------
+        ValueError
+            If this fit is in ``"velocity"`` mode (:meth:`velocity_errors` checks its own
+            approximation).
+        """
+        if self.mode != "keplerian":
+            raise ValueError(
+                "laplace_check() is the approximation of the orbital posterior, and this fit "
+                "replaced the Keplerian with a free velocity table. velocity_errors() checks "
+                "the approximation it uses and warns."
+            )
+        model, start = self._orbit_model()
+        return laplace_check(model, start, model_args=(self.dis.model.problem,))
 
     def sample(
         self,
@@ -2659,18 +2985,15 @@ class Fit:
                 "with a free velocity table: there are no orbital sites to sample. Sample "
                 "the Keplerian fit instead, and use velocity_errors() here."
             )
-        fixed = self._fixed_hyper()
-        priors = {k: v for k, v in self.dis.priors.items() if k not in fixed}
-        if self.phase_scan is not None:
-            # The prior is one period wide, centred on the fitted conjunction (the MAP may be
-            # half a period from the phase scan's best when the semi-amplitude scan moved it).
-            centre = float(np.asarray(self.result.params["t_conj"], dtype=float))
-            period = self.phase_scan.period
-            priors["t_conj"] = dist.Uniform(centre - 0.5 * period, centre + 0.5 * period)
-        nuts_model = self.dis.model.model(priors, fixed=fixed)
-
-        start = {k: v for k, v in self.result.params.items() if k in priors}
-        mass = laplace_inverse_mass(nuts_model, start, model_args=(self.dis.model.problem,))
+        nuts_model, start = self._orbit_model()
+        check = laplace_check(nuts_model, start, model_args=(self.dis.model.problem,))
+        if not check.valid:
+            warnings.warn(
+                check.message() + " NUTS starts here, with this covariance as its mass matrix.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        mass = check.covariance
         mcmc = run_nuts(
             nuts_model,
             rng_key=jax.random.PRNGKey(int(seed)),
@@ -3077,6 +3400,175 @@ class Fit:
             light_fractions=[component.light for component in self.dis.stars],
             std=std[rows],
             **kwargs,
+        )
+
+    def _epoch_models(self, spectra) -> list[np.ndarray]:
+        """The model flux of every epoch on its own pixels, from ``spectra`` at this fit."""
+        from albireo.forward import apply_model
+
+        problem = self.dis.model.problem_at(self.theta)
+        out: list[np.ndarray] = [np.empty(0)] * self.dis.dataset.n_epochs
+        for group, model in zip(
+            problem.groups, apply_model(problem, jnp.asarray(spectra)), strict=True
+        ):
+            flux = np.asarray(group.r) * (np.asarray(group.base)[None, :] + np.asarray(model))
+            for local, index in enumerate(group.epoch_indices):
+                out[int(index)] = flux[local]
+        return out
+
+    def _shared_low_frequency(self, scale_angstrom: float) -> np.ndarray:
+        """The spectra with the low-frequency part of every star replaced by the composite's.
+
+        Each stellar row keeps its structure on scales below ``scale_angstrom`` (a Gaussian
+        of that width separates the two) and takes the low-frequency part of the
+        light-weighted composite, which the data determine. The composite is unchanged,
+        because the light fractions sum to one. Telluric and nebular rows are unchanged.
+        """
+        from scipy.ndimage import gaussian_filter1d
+
+        spectra = np.array(self.spectra(), dtype=np.float64)
+        n_stellar = self.dis.n_stellar
+        if n_stellar < 2:
+            return spectra
+        lights = np.array([s.light for s in self.dis.stars], dtype=np.float64)
+        step = float(np.median(np.diff(np.asarray(self.dis.grid.wave))))
+        width = float(scale_angstrom) / step
+        composite = np.tensordot(lights, spectra[:n_stellar], axes=(0, 0))
+        shared = gaussian_filter1d(composite, width, mode="nearest")
+        for i in range(n_stellar):
+            spectra[i] = spectra[i] - gaussian_filter1d(spectra[i], width, mode="nearest") + shared
+        return spectra
+
+    def renormalize_epochs(
+        self,
+        *,
+        scale_angstrom: float = 12.0,
+        passes: int = 3,
+        clip: float = 3.0,
+        exclude=(),
+    ) -> EpochRenormalization:
+        """Divide every epoch by a smooth correction fitted to its ratio to this fit's model.
+
+        The continuum normalization of an echelle spectrum leaves errors of 1-3% on the
+        scale of the orders (a residual blaze), and they differ between epochs. The
+        component spectra are static, so the model cannot follow them, except through the
+        small Doppler shifts between epochs. Two stars whose low-frequency parts are
+        shifted against each other can follow part of them, with opposite drifts of
+        several continuum units in the two components that their light-weighted sum does
+        not show, and ML-II lowers the continuum weight ``eta`` to allow it
+        (``docs/method.md``, section 10). This method removes the errors from the epochs.
+
+        Each epoch is divided by a cubic spline with knots every ``scale_angstrom``,
+        fitted to the ratio of its flux to its model (:func:`albireo.continuum_correction`).
+        The model is computed at this fit's parameters from the component spectra with the
+        low-frequency part of every star replaced by that of the light-weighted composite:
+        structure on scales above ``scale_angstrom`` is common to the stars in it. With the
+        spectra as fitted, the drifts would be part of the model, which would follow the
+        errors it is meant to remove, and the iteration converges slowly. The spectra are
+        then solved again on the corrected epochs at the same parameters, and the step is
+        repeated ``passes`` times.
+
+        The result is data: refit them, ``dataclasses.replace(fit.dis,
+        dataset=renorm.dataset).fit()``, or, at the parameters of this fit without a new
+        optimization, ``dataclasses.replace(fit, dis=dataclasses.replace(fit.dis,
+        dataset=renorm.dataset))``. On a simulated binary with a ripple of 1.3% rms on
+        scales of 40-80 A in every epoch, ML-II had lowered ``eta`` from 5 to 0.4 and
+        0.025 and the components drifted by 0.28 and 0.85 continuum units rms. After three
+        passes and a refit, ``eta`` was 6.9 and 7.8, the drifts 0.008 and 0.028, and the
+        residual z-score RMS 1.01 instead of 1.55, as in a fit to the same binary without
+        the ripple (6.7 and 13.3; 0.008 and 0.025; 1.01).
+
+        The correction cannot separate a normalization error common to every epoch from
+        the spectra, and leaves it in the composite. Lines broader than ``scale_angstrom``
+        whose shapes differ between the stars (Balmer wings) are represented in the model
+        by the composite's shape, which differs from the stars' own by about the relative
+        shift times the slope of the wings: ``exclude`` keeps them out of the corrections.
+
+        Parameters
+        ----------
+        scale_angstrom
+            The knot spacing of the corrections, and the width of the low-frequency part
+            the stars share in the model [A]. It must be well below the scale of the
+            normalization errors and well above the width of the lines. On PEPSI spectra
+            with a ripple of 40-80 A, 12 A removed it and 30 A did not.
+        passes
+            Number of passes. The corrections of the second pass are typically a tenth of
+            the first's.
+        clip
+            Rejection threshold of the correction fit, in robust standard deviations.
+        exclude
+            Wavelength ranges ``(lo, hi)`` [A] left out of the correction fits.
+
+        Returns
+        -------
+        EpochRenormalization
+
+        Raises
+        ------
+        ValueError
+            If ``scale_angstrom`` is not positive or ``passes`` is below 1.
+
+        Warns
+        -----
+        RuntimeWarning
+            If the correction of an epoch cannot be fitted (too few usable pixels); the
+            epoch is then left unchanged in that pass.
+        """
+        from albireo.preprocess import _replace, continuum_correction
+
+        if not (np.isfinite(scale_angstrom) and scale_angstrom > 0.0):
+            raise ValueError(f"scale_angstrom must be positive; got {scale_angstrom}")
+        if int(passes) < 1:
+            raise ValueError(f"passes must be at least 1; got {passes}")
+        grid = self.dis.grid
+        fit = self
+        totals = [np.ones(epoch.wave.size) for epoch in self.dis.dataset]
+        rms = []
+        for _ in range(int(passes)):
+            models = fit._epoch_models(fit._shared_low_frequency(scale_angstrom))
+            epochs, row = [], []
+            for j, epoch in enumerate(fit.dis.dataset):
+                ivar = np.asarray(epoch.effective_ivar, dtype=np.float64)
+                try:
+                    correction = continuum_correction(
+                        epoch.wave,
+                        epoch.flux,
+                        ivar,
+                        models[j],
+                        knot_spacing_angstrom=scale_angstrom,
+                        clip=clip,
+                        exclude=exclude,
+                    )
+                except ValueError as exc:
+                    warnings.warn(
+                        f"epoch {j}: {exc}; the epoch is left unchanged in this pass",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+                    correction = np.ones(epoch.wave.size)
+                totals[j] = totals[j] * correction
+                good = ivar > 0.0
+                deviation = correction[good] - 1.0
+                row.append(float(np.sqrt(np.mean(deviation**2))) if deviation.size else 0.0)
+                epochs.append(
+                    _replace(
+                        epoch,
+                        flux=np.asarray(epoch.flux) / correction,
+                        ivar=np.asarray(epoch.ivar) * correction**2,
+                    )
+                )
+            rms.append(row)
+            dis = replace(fit.dis, dataset=Dataset(epochs, frame=fit.dis.dataset.frame))
+            if (dis.grid.x0, dis.grid.dx, dis.grid.n) != (grid.x0, grid.dx, grid.n):
+                raise RuntimeError(  # pragma: no cover - the wavelengths are unchanged
+                    "the model grid changed when the epochs were renormalized"
+                )
+            fit = replace(fit, dis=dis)
+        return EpochRenormalization(
+            dataset=fit.dis.dataset,
+            corrections=tuple(totals),
+            rms=np.asarray(rms, dtype=np.float64),
+            scale_angstrom=float(scale_angstrom),
         )
 
     def write_spectra(self, path, **kwargs):

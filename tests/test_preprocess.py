@@ -14,6 +14,7 @@ import pytest
 from albireo.data import EpochData
 from albireo.preprocess import (
     TELLURIC_BANDS,
+    continuum_correction,
     der_snr_sigma,
     estimate_ivar,
     fit_continuum,
@@ -331,3 +332,59 @@ def test_telluric_bands_are_sane():
         assert 3000.0 < lo < hi < 12000.0
     starts = [lo for lo, _ in TELLURIC_BANDS]
     assert starts == sorted(starts)
+
+
+# -- the correction of an epoch against a model ---------------------------------
+
+
+def _rippled_epoch(*, ripple=0.015, noise=0.005, gap=None, seed=3):
+    """An epoch whose normalization left a ripple of 40-80 A, and its model."""
+    rng = np.random.default_rng(seed)
+    wave = np.arange(4500.0, 4800.0, 0.05)
+    model = 1.0 - 0.6 * np.exp(
+        -0.5 * ((wave[:, None] - np.linspace(4510, 4790, 60)) / 0.15) ** 2
+    ).sum(1)
+    true = 1.0 + ripple * (
+        np.sin(2 * np.pi * (wave - 4500.0) / 47.0) + 0.6 * np.cos(2 * np.pi * wave / 73.0)
+    )
+    flux = model * true + noise * rng.standard_normal(wave.size)
+    ivar = np.full(wave.size, noise**-2.0)
+    if gap is not None:
+        inside = (wave > gap[0]) & (wave < gap[1])
+        ivar[inside] = 0.0
+        flux[inside] = rng.normal(0.0, 10.0, inside.sum())
+    return wave, flux, ivar, model, true
+
+
+def test_the_continuum_correction_recovers_an_order_scale_ripple():
+    """Knots every 12 A follow a 40-80 A ripple; knots every 30 A do not."""
+    wave, flux, ivar, model, true = _rippled_epoch()
+    correction = continuum_correction(wave, flux, ivar, model)
+    assert np.std(correction / true - 1.0) < 0.001
+    coarse = continuum_correction(wave, flux, ivar, model, knot_spacing_angstrom=30.0)
+    assert np.std(coarse / true - 1.0) > 3.0 * np.std(correction / true - 1.0)
+    # Without a ripple the correction is flat to the noise of a smooth fit.
+    wave, flux, ivar, model, _ = _rippled_epoch(ripple=0.0)
+    assert np.std(continuum_correction(wave, flux, ivar, model) - 1.0) < 0.001
+
+
+def test_the_continuum_correction_bridges_masked_and_excluded_ranges():
+    wave, flux, ivar, model, true = _rippled_epoch(gap=(4600.0, 4620.0))
+    correction = continuum_correction(wave, flux, ivar, model, exclude=[(4700.0, 4710.0)])
+    assert np.all(np.isfinite(correction)) and np.all(correction > 0.0)
+    good = ivar > 0
+    assert np.std(correction[good] / true[good] - 1.0) < 0.002
+    # The garbage flux inside the gap (standard deviation 10) has no weight: across the gap
+    # the curve misses the ripple by less than its amplitude.
+    inside = (wave > 4600.0) & (wave < 4620.0)
+    assert np.max(np.abs(correction[inside] / true[inside] - 1.0)) < 0.03
+
+
+def test_the_continuum_correction_rejects_too_few_pixels_and_bad_input():
+    wave, flux, ivar, model, _ = _rippled_epoch()
+    with pytest.raises(ValueError, match="too few"):
+        continuum_correction(wave[:200], flux[:200], ivar[:200], model[:200])
+    with pytest.raises(ValueError, match="equal length"):
+        continuum_correction(wave, flux[:-1], ivar, model)
+    with pytest.raises(ValueError, match="knot_spacing"):
+        continuum_correction(wave, flux, ivar, model, knot_spacing_angstrom=0.0)

@@ -293,8 +293,8 @@ $`-\tfrac12[\ln\det(\boldsymbol\Lambda + \mathbf{A}^\top\mathbf{W}\mathbf{A}) - 
 at the fitted weight, on a grid of steps of a factor of 1.8; it is lower by 209 nats at a tenth
 of that weight and by 672 nats at ten times it.
 
-The fitted weights are reported by `fit.summary()`, with the distance the curvature weight
-moved from its starting value in units of the width of its hyperprior. The hyperprior is a
+The fitted weights are reported by `fit.summary()`, with the distance of each from the centre
+of its hyperprior in units of the width of the hyperprior. The hyperprior is a
 broad log-normal prior (a factor of about 20 per standard deviation); it keeps the optimizer
 away from extreme ratios of the two weights, at which the linear algebra loses precision
 ([math.md §3.1](math.md#31-derivation)). For the example:
@@ -302,13 +302,18 @@ away from extreme ratios of the two weights, at which the linear algebra loses p
 ```
 Regularization weights of the component spectra, fitted by maximizing the marginal
 likelihood (ML-II) and held fixed for sampling: curvature weight tau and continuum weight
-eta, start -> fitted, with the move in ln tau in hyperprior standard deviations
-  primary        tau       300 ->       638 (+0.25 sigma)   eta        5 ->     10.2
-  secondary      tau       300 ->  1.15e+03 (+0.45 sigma)   eta        5 ->     3.25
+eta, centre -> fitted, with the moves in ln tau and ln eta in hyperprior standard deviations
+  primary        tau       300 ->       638 (+0.25 sigma)   eta        5 ->     10.2 (+0.24 sigma)
+  secondary      tau       300 ->  1.15e+03 (+0.45 sigma)   eta        5 ->     3.25 (-0.14 sigma)
 ```
 
 A curvature weight that moved by less than 0.02 hyperprior standard deviations is flagged: the
-data may not constrain it, and its start then deserves a check. The weights are defined per
+data may not constrain it, and its start then deserves a check. A continuum weight that fell
+more than one hyperprior standard deviation below its centre is flagged as well, in a model of
+two or more components. It is the only term of the prior that holds the constant and the slope
+of a component, and its fall lets continuum errors that differ between epochs into the
+components (Section 10). `Smoothness(eta_min=...)` bounds it from below, and a fitted value at
+the bound is reported. The weights are defined per
 pixel of the model grid, so their values depend on its pixel size; the fitted spectrum and its
 band (Figure 3) are the quantities to inspect.
 When albireo samples the orbit (Section 8) it holds the weights at these values. This is a
@@ -353,6 +358,37 @@ solved for and their freedom is accounted for. albireo computes it in four stage
    analyses. By default it runs two chains, independent runs of the sampler, each of 500
    warm-up steps, which tune the step size and are discarded, and 500 draws. Both chains start
    at the best fit. This is `fit.sample()`.
+
+The optimizer of stage 2 stops when the norm of the gradient falls below a threshold or after a
+set number of steps (`dis.fit(max_steps=...)`, 300 by default). The threshold is absolute, and
+on a large dataset it is not reached even at the maximum, so a fit that stops at the step cap
+is common and is not by itself a failure. `fit.summary()` then reports how far the potential
+fell over the last tenth of the steps, and flags a fall of more than 1 nat. That fall is an
+indication, not a test. The Laplace approximation of stage 3 describes the posterior where three
+conditions hold, and `fit.laplace_check()` tests them at the best fit, with the regularization
+weights held as in stage 4: the curvature of $`-\ln p(\theta \mid y)`$ is positive in every
+direction; no point within one standard deviation is lower by more than 0.5 nats, which is
+tested at the Newton step (the step to the minimum of the local quadratic approximation) and at
+plus and minus one standard deviation along each principal axis of the approximation; and at
+those points $`-\ln p`$ rises by about 0.5 nats, as it does for a Gaussian. The last condition is
+needed because the shift operator interpolates linearly between the pixels of the model grid
+([math.md §10.3](math.md#103-exact-fractional-shifts-and-pixel-locking)), so $`-\ln p`$ is
+piecewise smooth, with kinks where a shift crosses a pixel. An optimizer can stop at a kink with
+a large gradient that no step lowers, and the curvature there is that of one side.
+`fit.sample()` and `fit.velocity_errors()` make the same test and warn when it fails.
+
+In a blind test on APF and PEPSI spectra, the two fits whose Laplace errors disagreed with a
+Keplerian fit to their TODCOR velocities had stopped at kinks, on PEPSI spectra fitted on a model
+grid of one pixel per LSF sigma. At a fit of seven epochs the gradient predicted a decrease of
+17.5 nats, every evaluation was higher instead, and $`-\ln p`$ rose by up to 9 nats at one
+standard deviation; on a grid twice as fine it was quadratic to 1% at the same point. A two-star
+fit stopped at 400 steps had in addition a negative eigenvalue, along which $`-\ln p`$ rose
+steeply, and Laplace errors on the semi-amplitudes up to 360 times those of the Keplerian fit.
+Three fits to APF spectra passed every condition. Errors from a point that fails are not used:
+where it is not the maximum, the optimization is continued with a larger `max_steps`, and where
+$`-\ln p`$ has kinks, the fit is repeated on a finer model grid (`Disentangler(dv_kms=...)`).
+NUTS does not require its start to be the maximum, but `fit.sample()` takes the Laplace
+covariance as a fixed mass matrix, and a poor one shows in the convergence diagnostics below.
 
 Because the spectra are integrated out analytically, the sampler moves in the six orbital
 dimensions, whatever the number of pixels; the thousands of spectral pixel values never enter
@@ -463,12 +499,62 @@ instead of choosing a value silently.
 | Light ratio | With constant light fractions the data constrain only the products $`\ell_i d_i`$: a deeper line in a fainter star fits as well as a shallower line in a brighter one. | `Star(light=...)` is required and repeated under *Assumed, not measured* in every report; every recovered line depth scales as $`1/\ell_i`$. Light fractions that vary between epochs, as in eclipses, can be inferred through the low-level interface ([`MarginalOrbitModel`](api/inference.md), which `dis.expert()` returns). |
 | Systemic velocity | Shifting both spectra one way and the systemic velocity the other leaves the data unchanged. | Set to zero; the spectra are in the frame of the center of mass, and the systemic velocity is measured afterwards from them against a template. |
 | Absolute LSF width | A broader instrumental profile with narrower intrinsic lines fits equally well. | Declared per instrument; only the differences between instruments that share the spectra are determined by the data. |
-| Constant and broad features of each star | They can be moved between the stars (Section 3). Line wings broader than the spread of the velocity difference, such as Balmer wings, belong to this regime. | Anchored by the continuum weight $`\eta_i`$; their division between the stars is set mostly by the prior, and their uncertainty is part of the band. |
+| Constant and broad features of each star | They can be moved between the stars (Section 3). Line wings broader than the spread of the velocity difference, such as Balmer wings, belong to this regime. | Anchored by the continuum weight $`\eta_i`$; their division between the stars is set mostly by the prior, and their uncertainty is part of the band. Continuum errors that differ between epochs enter it (below). |
 | Scale of a nebular component | Only the product of the nebular spectrum and its per-epoch amplitude enters the model. | The geometric mean of the amplitudes is fixed to 1. |
 
 The light ratio sets every recovered line depth, and with it the atmospheric parameters and
 abundances derived from a disentangled spectrum. In the analysis of LB-1 it changed the
 abundances but not the semi-amplitudes (Shenar et al. 2020, Appendix B.1).
+
+### Continuum errors that differ between epochs
+
+For the constant and the slope of the components, on which the curvature penalty does not act,
+the data determine only the light-weighted sum $`c = \sum_i \ell_i d_i`$, and the prior
+divides it between the stars in proportion to $`\ell_i / \eta_i`$:
+$`d_i = c\,(\ell_i/\eta_i) / \sum_j (\ell_j^2/\eta_j)`$. With equal continuum weights, a
+star of light fraction 0.75 is given $`1.2\,c`$ and its companion $`0.4\,c`$. This division
+is a property of the prior, not of the stars.
+
+The continuum normalization of an echelle spectrum leaves errors of 1-3% on the scale of the
+orders (a residual blaze), and they differ between epochs. They are not a static spectrum, and
+the model can follow them only through the small Doppler shifts between epochs: two stars whose
+broad structure is shifted against each other reproduce part of an epoch's error with opposite
+drifts of the two components, which their light-weighted sum does not show. ML-II then lowers
+$`\eta_i`$, which allows such drifts. On PEPSI spectra of a binary with 15 epochs and errors of
+this kind on scales of 40-80 Å, $`\eta`$ fell from 5 to 0.015 and 0.0014 and the components
+drifted by several continuum units. A simulated binary reproduces this: with a ripple of 1.3%
+rms in each of 14 epochs over 340 Å, $`\eta`$ fell to 0.4 and 0.025, and the components drifted
+by 0.28 and 0.85 continuum units rms on scales above 10 Å, while the drift of their weighted
+sum was 0.004. `tests/test_low_frequency.py` checks the flag and both remedies below on a
+binary with a ripple of 2.5% rms over 200 Å.
+
+`fit.summary()` flags the fall of $`\eta_i`$ (Section 7), and two remedies are provided.
+
+1. `Smoothness(eta_min=...)` bounds $`\eta_i`$ from below. With a bound of 5 the drifts of the
+   simulated binary fell to a quarter (0.07 and 0.20), but did not vanish: the errors remain in
+   the data.
+2. `fit.renormalize_epochs()` removes them from the data. Each epoch is divided by a cubic
+   spline with knots every 12 Å, fitted to its ratio to the model, and the step is repeated
+   three times at the parameters of the fit; the corrected epochs are then fitted again
+   (`dataclasses.replace(fit.dis, dataset=renorm.dataset).fit()`). In the model used for the
+   ratio, the structure of every star on scales above 12 Å is replaced by that of the
+   composite, which the data determine: with the spectra as fitted, the model would contain
+   the drifts it is meant to remove, and the corrections would converge slowly to a state
+   that keeps them. Refitted, the simulated binary gave $`\eta`$ of 6.9 and 7.8, drifts of
+   0.008 and 0.028 and a residual z-score RMS of 1.01, as for the same binary without the
+   ripple (6.7 and 13.3; 0.008 and 0.025; 1.01). The knot spacing must be well below the
+   scale of the errors and well above the width of the lines: on the PEPSI spectra, knots
+   every 30 Å left most of a 40-80 Å ripple in the epochs, and knots every 12 Å removed it.
+   A normalization error common to every epoch cannot be separated from the spectra and
+   remains in the composite.
+
+After the renormalization, the division of the remaining broad structure between the stars is
+the prior's. Giving both stars the same continuum, for example by moving the difference of
+their upper envelopes between them in proportion to the light fractions with the composite
+held fixed, is an assumption about the stars rather than a result of the fit: it removes real
+differences in line blanketing and in line wings broader than the scale of the envelope.
+albireo does not apply it, and a reallocation of this kind is stated with any spectrum it
+produced.
 
 ## 11. Per-epoch velocities instead of an orbit
 
@@ -481,7 +567,18 @@ determined only up to a constant, by the argument given for the systemic velocit
 Section 10, applied to each star: albireo removes each star's mean velocity and reports the
 variation about it, from which the semi-amplitudes and the mass ratio follow. An orbit fitted
 to such a table therefore needs one systemic velocity per star
-(`fit_rv_orbit(..., gamma="per-component")`). This mode returns the best fit, with
+(`fit_rv_orbit(..., gamma="per-component")`), and so does an orbit fitted to TODCOR velocities
+measured against the disentangled spectra (`fit.measure_velocities()`). With few epochs, or with
+the phases in a few clumps, these zero points are not separable from the shape of the orbit: a
+shift of one is matched in part by $`e`$, $`\omega`$ and the semi-amplitudes.
+`RVOrbit.gamma_correlation` reports the largest correlation of a systemic velocity with a
+semi-amplitude or an eccentricity parameter, and `fit_rv_orbit` warns above 0.9. On the TODCOR
+table of a binary with seven epochs, four of them within 0.15 in phase, the correlation was
+0.96, the two systemic velocities came out at $`\pm 0.29`$ km/s and both semi-amplitudes about
+three standard errors below those of the disentangling, although the velocities departed from
+the disentangling's orbit by less than 0.25 km/s. Tables of 9 to 19 epochs of the same survey
+stayed below 0.72. The joint fit has no zero points to fit and does not have this degeneracy.
+This mode returns the best fit, with
 uncertainties from the Laplace approximation, and is not sampled. The intended sequence is to
 fit the table, find the period from it, and then declare an `Orbit`
 ([math.md §7.6](math.md#76-free-per-epoch-velocities-the-rv-table)).
@@ -522,7 +619,8 @@ an orbit to those velocities; they are described in the tutorials on
 | Prior (regularization) | [`albireo.priors`](api/likelihood.md) | `SmoothnessPrior` | [math.md §2](math.md#2-priors-on-the-component-spectra) |
 | Marginal likelihood, spectra and bands | [`albireo.likelihood`](api/likelihood.md) | `marginal_loglikelihood`, `spectra_std`, `draw_spectra` | [math.md §3](math.md#3-marginalizing-the-spectra-analytically) |
 | Band assembly and block Cholesky | [`albireo.solver`](api/solver.md) | internal | [math.md §4](math.md#4-computational-structure-and-strategy) |
-| Best fit, Laplace, NUTS | [`albireo.inference`](api/inference.md) | `MarginalOrbitModel`, `run_map`, `laplace_inverse_mass`, `run_nuts`, `posterior_spectra` | [math.md §7](math.md#71-the-marginal-posterior-and-its-static-computation-graph) |
+| Best fit, Laplace, NUTS | [`albireo.inference`](api/inference.md) | `MarginalOrbitModel`, `run_map`, `laplace_inverse_mass`, `laplace_check`, `run_nuts`, `posterior_spectra` | [math.md §7](math.md#71-the-marginal-posterior-and-its-static-computation-graph) |
+| Continuum errors of the epochs | [`albireo.preprocess`](api/preprocess.md), [`albireo.facade`](api/facade.md) | `continuum_correction`, `Fit.renormalize_epochs` | this page, Section 10 |
 | Declaration and reports | [`albireo.facade`](api/facade.md) | `Disentangler`, `Fit`, `Posterior` | this page |
 
 The source of each module is in
@@ -551,6 +649,7 @@ The source of each module is in
 | MAP | The maximum of the posterior: the best fit, including the priors. | `dis.fit()` |
 | $`-\ln`$ posterior | The quantity the optimizer minimizes, up to a constant. numpyro, the library albireo uses for optimization and sampling, maps bounded parameters onto the whole real line first (unconstrained coordinates); the optimum there differs from the optimum in the original coordinates by the Jacobian of that mapping, which is negligible when the posterior is narrow compared with the declared range. | `fit.summary()` |
 | Laplace approximation | A Gaussian approximation of the posterior at the MAP, with covariance from the inverse curvature (Hessian); the analogue of a least-squares covariance matrix. | `fit.sample()`, `fit.velocity_errors()` |
+| Newton step | The step from a point to the minimum of the local quadratic approximation of $`-\ln p`$, the inverse Hessian times the gradient; at a maximum it is much shorter than one standard deviation. | `fit.laplace_check()` |
 | NUTS, HMC | A Markov chain Monte Carlo sampler (Hamiltonian Monte Carlo) that uses the gradient of the log posterior. | `fit.sample()` |
 | Mass matrix | The scales and correlations the sampler assumes for its steps; albireo sets it from the Laplace covariance. | `laplace_inverse_mass` |
 | Chain, warm-up | An independent run of the sampler; its first steps (the warm-up) tune the sampler and are discarded. | `fit.sample()` |

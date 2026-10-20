@@ -94,7 +94,9 @@ Inference proceeds in three stages (``docs/math.md`` §7.1-7.3):
    space the data cannot constrain below the LSF scale (§5.1), so by default they are
    estimated from the data here rather than fixed a priori.
 2. :func:`laplace_inverse_mass` evaluates the Hessian of the potential at the MAP and
-   returns its inverse as the NUTS mass matrix.
+   returns its inverse as the NUTS mass matrix. :func:`laplace_check` returns it with the
+   gradient, and tests whether the point is a maximum at which the inverse is a valid
+   covariance.
 3. :func:`run_nuts` samples ``theta`` with the No-U-Turn Sampler (Hoffman & Gelman 2014;
    Betancourt 2017) as implemented in numpyro (Phan et al. 2019), with the
    hyperparameters either held at their ML-II values (passed through ``fixed=``) or
@@ -113,8 +115,9 @@ Phan, D., Pradhan, N. & Jankowiak, M. 2019, arXiv:1912.11554
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 
 import jax
 import jax.numpy as jnp
@@ -146,9 +149,11 @@ from albireo.likelihood import MarginalResult, draw_spectra, marginal_loglikelih
 from albireo.priors import SmoothnessPrior
 
 __all__ = [
+    "LaplaceCheck",
     "MAPResult",
     "MarginalOrbitModel",
     "keplerian_residuals",
+    "laplace_check",
     "laplace_inverse_mass",
     "nebular_amplitudes",
     "orbit_parameters",
@@ -180,6 +185,12 @@ _H3_MAX = 0.2
 # (albireo.facade.Smoothness), about six sigma of the Normal(log tau0, 3) hyperpriors
 # inside this bound.
 _LOG_TAU_ETA_MAX = 30.0
+# The tests of LaplaceCheck: no evaluation within one standard deviation of a maximum is
+# lower by more than half a nat (a Gaussian's change over one standard deviation), and the
+# rise at plus and minus one standard deviation along an eigenvector, 1 for a quadratic,
+# lies within a factor of two of it.
+_LAPLACE_DROP_NATS = 0.5
+_LAPLACE_RISE_RANGE = (0.5, 2.0)
 _OUTER_SITES = ("period_out", "t_conj_out", "secosw_out", "sesinw_out", "k_out")
 _THETA_SITES = (
     "period",
@@ -1108,6 +1119,9 @@ class MAPResult:
         Whether ``grad_norm`` fell below ``tol``.
     num_steps
         Number of L-BFGS steps taken.
+    potential_trace
+        The potential at every step, in order (``potential`` is the last entry).
+        :meth:`potential_fall` reads it.
 
     Notes
     -----
@@ -1122,6 +1136,39 @@ class MAPResult:
     grad_norm: float  # unconstrained-space gradient norm
     converged: bool
     num_steps: int
+    potential_trace: tuple[float, ...] = ()
+
+    def potential_fall(self, steps: int | None = None) -> tuple[float, int]:
+        """The decrease of the potential over the last steps, in nats.
+
+        ``converged`` compares the gradient norm with an absolute threshold, and the
+        gradient's scale grows with the number of good pixels, so a fit to real data
+        routinely stops at the step cap with a large gradient at a point that no longer
+        moves. The decrease over the last steps indicates which case applies. A 1-sigma
+        displacement along any direction of a Gaussian posterior changes the log density
+        by 0.5, so an optimizer that still gains a nat or more per few steps has not
+        located the maximum to within its posterior width. The converse does not hold: an
+        optimizer that creeps along a curved valley gains little per step far from the
+        maximum, and :func:`laplace_check` measures the distance.
+
+        Parameters
+        ----------
+        steps
+            Number of final steps. Default: a tenth of the steps taken, at least 10.
+
+        Returns
+        -------
+        (float, int)
+            The decrease in nats (positive when the potential fell) and the number of
+            steps it spans; ``(nan, 0)`` without a trace of at least two entries.
+        """
+        trace = np.asarray(self.potential_trace, dtype=np.float64)
+        if trace.size < 2:
+            return float("nan"), 0
+        if steps is None:
+            steps = max(10, trace.size // 10)
+        steps = int(min(max(int(steps), 1), trace.size - 1))
+        return float(trace[-1 - steps] - trace[-1]), steps
 
 
 def run_map(
@@ -1213,9 +1260,11 @@ def run_map(
     params = jax.tree.map(jnp.asarray, model_info.param_info.z)
     state = opt.init(params)
     value, grad_norm, steps_taken = np.inf, np.inf, 0
+    trace: list[float] = []
     for steps_taken in range(1, max_steps + 1):
         params, state, value, grad = step(params, state, model_args)
         grad_norm = float(optax.tree.norm(grad))
+        trace.append(float(value))
         if not np.isfinite(grad_norm):
             raise FloatingPointError(
                 f"non-finite gradient at L-BFGS step {steps_taken} (potential {float(value)})"
@@ -1234,40 +1283,236 @@ def run_map(
         grad_norm=grad_norm,
         converged=grad_norm < tol,
         num_steps=steps_taken,
+        potential_trace=tuple(trace),
     )
 
 
-def laplace_inverse_mass(
-    model, params: Mapping, *, rng_key=None, floor: float = 1e-10, model_args: tuple | None = None
-):
-    """Unconstrained-space Laplace covariance at ``params``, for use as a NUTS mass matrix.
+@dataclass(frozen=True)
+class LaplaceCheck:
+    """The Laplace approximation at a point, and whether it describes the posterior there.
 
-    Evaluates the Hessian of the model potential at the given constrained site values
-    (typically :attr:`MAPResult.params`; extra keys are ignored), symmetrizes it, floors
-    the eigenvalues at ``floor * max_eig``, and returns the inverse as a dense array. The
-    result is passed as ``inverse_mass_matrix`` to :func:`run_nuts` built from the same
-    model. With the mass matrix preset to an approximation of the posterior covariance,
-    warmup only tunes the step size. Without it, parameter scales spanning many orders
-    of magnitude drive early trajectories to the tree-depth cap, and warmup costs more
-    than sampling (``docs/benchmarks.md``).
+    The approximation is a Gaussian centred on the point, with the inverse of the
+    potential's Hessian as covariance. It describes the posterior where three conditions
+    hold, and this record tests each.
+
+    1. The Hessian is positive definite. An eigenvalue at or below the floor is a direction
+       of zero or negative curvature, along which the floored variance is not the data's.
+       At the best fit of a two-star model stopped at its step cap with a gradient norm of
+       3.5e3, one eigenvalue was negative, and the semi-amplitude errors from the
+       covariance were up to 360 times those of a Keplerian fit to the stars' TODCOR
+       velocities (37 against 0.1 km/s).
+    2. The point is the maximum, to within the width of the approximation. The potential
+       is evaluated at the Newton step ``delta = H^-1 g`` and at half of it, and at plus
+       and minus one standard deviation along every eigenvector of positive curvature. At
+       a maximum none of these is lower than the point by more than 0.5 nats, the change
+       of the log density over one standard deviation of a Gaussian.
+    3. The potential is quadratic on the scale of the approximation: along every such
+       eigenvector it rises by 0.5 nats on average at plus and minus one standard
+       deviation, and a rise of more than twice or less than half of that fails. The shift
+       operator is linear between whole pixels of the model grid, so the potential is
+       piecewise smooth, with kinks where a shift crosses a pixel (``docs/math.md``
+       §10.3). An optimization can stop at a kink, where the gradient that
+       differentiation returns is that of one side. At the best fit of a binary of seven
+       epochs observed with PEPSI, on a model grid of one pixel per LSF sigma, the Newton
+       step from that gradient predicted a decrease of 17.5 nats, and the potential rose
+       by 0.85 nats a hundredth of the way along it and by 145 nats at the step; at one
+       standard deviation it rose by up to 9 nats instead of 0.5. On a grid twice as fine
+       the potential at the same point was quadratic to 1% in every direction.
+
+    The evaluations of conditions 2 and 3 cost one compilation of the potential and two
+    evaluations per coordinate. Without them (``laplace_check(..., probe=False)``)
+    condition 3 is not tested, and condition 2 is the Newton step's: its Mahalanobis
+    length ``sqrt(g^T H^-1 g)`` must be at most 1.
+
+    Attributes
+    ----------
+    covariance
+        The inverse Hessian with its eigenvalues floored at ``floor * max_eig``: the value
+        :func:`laplace_inverse_mass` returns.
+    labels
+        The site of each unconstrained coordinate, with an index for a vector site
+        (``"k[1]"``), in the order of ``covariance``.
+    gradient
+        Gradient of the potential at the point, in the unconstrained coordinates.
+    newton_step
+        ``H^-1 g`` over the eigenvectors whose eigenvalues exceed the floor.
+    step_sigma
+        The Newton step along each coordinate in standard deviations, ``sqrt(diag(H^-1))``
+        over the same eigenvectors.
+    eigenvalues
+        Eigenvalues of the symmetrized Hessian before the floor, ascending.
+    eigenvectors
+        The eigenvectors, as columns, in the order of ``eigenvalues``.
+    floor
+        The eigenvalue floor, as a fraction of the largest eigenvalue.
+    probed
+        Whether the potential was evaluated for conditions 2 and 3.
+    drop
+        The largest decrease of the potential among those evaluations, in nats (negative
+        when every evaluation was higher than the point); ``nan`` without them.
+    drop_at
+        Where ``drop`` was found.
+    rise
+        Per eigenvector, the sum of the changes of the potential at plus and minus one
+        standard deviation, which is 1 for a quadratic; ``nan`` for an eigenvalue at or
+        below the floor, and without the evaluations.
+    """
+
+    covariance: np.ndarray
+    labels: tuple[str, ...]
+    gradient: np.ndarray
+    newton_step: np.ndarray
+    step_sigma: np.ndarray
+    eigenvalues: np.ndarray
+    eigenvectors: np.ndarray
+    floor: float
+    probed: bool = False
+    drop: float = float("nan")
+    drop_at: str = ""
+    rise: np.ndarray = field(default_factory=lambda: np.zeros(0))
+
+    @property
+    def decrement(self) -> float:
+        """``g^T H^-1 g / 2``: the decrease of the potential to the quadratic's minimum."""
+        return float(0.5 * self.gradient @ self.newton_step)
+
+    @property
+    def step_length(self) -> float:
+        """``sqrt(g^T H^-1 g)``: the Mahalanobis length of the Newton step."""
+        return float(np.sqrt(max(2.0 * self.decrement, 0.0)))
+
+    @property
+    def n_floored(self) -> int:
+        """The number of eigenvalues at or below the floor: not positive definite there."""
+        top = float(np.max(self.eigenvalues)) if self.eigenvalues.size else 0.0
+        return int(np.sum(self.eigenvalues <= max(self.floor * top, 0.0)))
+
+    @property
+    def stationary(self) -> bool:
+        """Whether nothing within one standard deviation is lower by more than 0.5 nats."""
+        if self.probed:
+            return bool(self.drop <= _LAPLACE_DROP_NATS)
+        return bool(np.isfinite(self.decrement) and self.step_length <= 1.0)
+
+    @property
+    def quadratic(self) -> bool:
+        """Whether the potential rises as the quadratic does along every eigenvector."""
+        rise = np.asarray(self.rise, dtype=np.float64)
+        if rise.shape != self.eigenvalues.shape:
+            return True
+        rise = rise[self._curved]
+        rise = rise[~np.isnan(rise)]
+        low, high = _LAPLACE_RISE_RANGE
+        return bool(np.all((rise >= low) & (rise <= high)))
+
+    @property
+    def _curved(self) -> np.ndarray:
+        """Which eigenvalues exceed the floor: the directions of positive curvature."""
+        top = float(np.max(self.eigenvalues)) if self.eigenvalues.size else 0.0
+        return self.eigenvalues > max(self.floor * top, 0.0)
+
+    @property
+    def valid(self) -> bool:
+        """Whether the approximation describes the posterior: conditions 1 to 3 hold."""
+        return self.n_floored == 0 and self.stationary and self.quadratic
+
+    def problems(self) -> list[str]:
+        """One sentence per failed condition; empty when :attr:`valid`."""
+        out = []
+        if self.n_floored:
+            smallest = float(self.eigenvalues[0]) if self.eigenvalues.size else float("nan")
+            text = (
+                f"the Hessian has {self.n_floored} eigenvalue(s) at or below "
+                f"{self.floor:g} of the largest (the smallest is {smallest:.3g}), so the "
+                "Gaussian has no curvature along those directions and their variance is the "
+                "floor's, not the data's"
+            )
+            rise = np.asarray(self.rise, dtype=np.float64)
+            rise = rise[~self._curved] if rise.shape == self.eigenvalues.shape else rise[:0]
+            if self.probed and rise.size and np.all(np.isfinite(rise)):
+                if np.min(rise) > 0.0:
+                    text += (
+                        "; the potential rises along them, as at a kink, so the point is not "
+                        "a saddle"
+                    )
+                else:
+                    text += "; the potential falls along them: the point is a saddle"
+            out.append(text)
+        if not self.stationary:
+            if self.probed:
+                out.append(
+                    f"the point is not the maximum: the potential is {self.drop:.3g} nats "
+                    f"lower {self.drop_at}, where at a maximum nothing within one standard "
+                    "deviation is lower by more than 0.5"
+                )
+            else:
+                sigma = self.step_sigma
+                worst = int(np.nanargmax(np.where(np.isfinite(sigma), sigma, -np.inf)))
+                out.append(
+                    f"the point is not stationary: the Newton step to the maximum of the "
+                    f"local quadratic is {self.step_length:.3g} standard deviations long, "
+                    f"{float(sigma[worst]):.3g} along {self.labels[worst]}, and is predicted "
+                    f"to lower the potential by {self.decrement:.3g} nats"
+                )
+        if not self.quadratic:
+            rise = np.asarray(self.rise, dtype=np.float64)
+            ignored = np.isnan(rise) | ~self._curved
+            spread = np.where(ignored, 0.0, np.abs(np.log(np.clip(rise, 1e-300, None))))
+            worst = int(np.argmax(spread))
+            label = self.labels[int(np.argmax(np.abs(self.eigenvectors[:, worst])))]
+            width = "narrower" if rise[worst] > 1.0 else "wider"
+            out.append(
+                "the potential is not quadratic on the scale of the approximation: along the "
+                f"eigenvector mostly of {label} it rises by {rise[worst] / 2.0:.3g} nats on "
+                "average at one standard deviation instead of 0.5, so the posterior is "
+                f"{width} there than the Gaussian. The linear shift operator gives the "
+                "potential kinks at whole pixels of the model grid (docs/math.md, section "
+                "10.3), which a finer grid (dv_kms) removes"
+            )
+        return out
+
+    def message(self) -> str:
+        """The warning text for an invalid approximation."""
+        return (
+            "the Laplace approximation is not valid at these parameters: "
+            + "; ".join(self.problems())
+            + ". Errors from this covariance are not the posterior's: continue the "
+            "optimization where the point is not the maximum, use a finer model grid where "
+            "the potential has kinks, or sample."
+        )
+
+
+def laplace_check(
+    model,
+    params: Mapping,
+    *,
+    rng_key=None,
+    floor: float = 1e-10,
+    model_args: tuple | None = None,
+    probe: bool = True,
+) -> LaplaceCheck:
+    """The Laplace approximation at ``params``, with the test of whether it is valid there.
+
+    Evaluates the gradient and the Hessian of the model potential in numpyro's
+    unconstrained space at the given constrained site values (typically
+    :attr:`MAPResult.params`; extra keys are ignored), as :func:`laplace_inverse_mass` does,
+    and returns both with the floored inverse. With ``probe`` the potential is also
+    evaluated at the Newton step, at half of it, and at plus and minus one standard
+    deviation along every eigenvector of positive curvature, which tests whether the
+    point is the maximum and whether the potential is quadratic around it
+    (:class:`LaplaceCheck`). The gradient costs one reverse pass beside the Hessian's one
+    per coordinate, and the evaluations one compilation and two per coordinate.
 
     Parameters
     ----------
-    model
-        A numpyro model (from :meth:`MarginalOrbitModel.model`).
-    params
-        Constrained site values at which the Hessian is evaluated.
-    rng_key
-        JAX PRNG key for numpyro's model initialization; default ``PRNGKey(0)``.
-    floor
-        Eigenvalue floor as a fraction of the largest eigenvalue.
-    model_args
-        As in :func:`run_map` (default: the model's own ``model_args`` attribute).
+    model, params, rng_key, floor, model_args
+        As in :func:`laplace_inverse_mass`.
+    probe
+        Evaluate the potential around the point (default).
 
     Returns
     -------
-    numpy.ndarray
-        Dense inverse Hessian in the unconstrained space.
+    LaplaceCheck
     """
     rng_key = jax.random.PRNGKey(0) if rng_key is None else rng_key
     model_args = _resolve_model_args(model, model_args)
@@ -1281,6 +1526,10 @@ def laplace_inverse_mass(
     potential = model_info.potential_fn(*model_args)
     z = jax.tree.map(jnp.asarray, model_info.param_info.z)
     flat, unravel = ravel_pytree(z)
+
+    def flat_potential(zf):
+        return potential(unravel(zf))
+
     # Reverse-over-reverse is used, not jax.hessian (forward-over-reverse).
     # Forward-over-reverse runs here, since it differentiates the custom rule's backward
     # pass, which consists of plain operations. However, it was measured to return an
@@ -1289,11 +1538,166 @@ def laplace_inverse_mass(
     # matches central finite differences of the gradient to 8 digits where
     # forward-over-reverse does not (D28). Forward mode applied directly to the marginal
     # is not possible, because JAX rejects jvp of a custom_vjp function.
-    hess = jax.jacrev(jax.jacrev(lambda zf: potential(unravel(zf))))(flat)
+    hess = jax.jacrev(jax.jacrev(flat_potential))(flat)
     hess = 0.5 * (hess + hess.T)
+    gradient = np.asarray(jax.grad(flat_potential)(flat), dtype=np.float64)
     eigval, eigvec = jnp.linalg.eigh(hess)
-    eigval = jnp.maximum(eigval, floor * jnp.max(eigval))
-    return np.asarray(eigvec @ jnp.diag(1.0 / eigval) @ eigvec.T)
+    threshold = floor * jnp.max(eigval)
+    floored = jnp.maximum(eigval, threshold)
+    covariance = np.asarray(eigvec @ jnp.diag(1.0 / floored) @ eigvec.T)
+    # The Newton step over the directions in which the quadratic has a minimum.
+    vectors = np.asarray(eigvec, dtype=np.float64)
+    values = np.asarray(eigval, dtype=np.float64)
+    keep = values > max(float(threshold), 0.0)
+    projected = vectors[:, keep].T @ gradient
+    newton_step = vectors[:, keep] @ (projected / values[keep])
+    # The standard deviations over the same eigenvectors: along a direction of zero or
+    # negative curvature the floored variance is not the data's and would hide the step.
+    sd = np.sqrt(
+        np.clip(
+            np.einsum("ij,j,ij->i", vectors[:, keep], 1.0 / values[keep], vectors[:, keep]),
+            0.0,
+            None,
+        )
+    )
+    with np.errstate(divide="ignore", invalid="ignore"):
+        step_sigma = np.where(sd > 0.0, np.abs(newton_step) / sd, 0.0)
+    # The site of each flat coordinate, read from the unravelled positions.
+    positions = unravel(jnp.arange(flat.size, dtype=flat.dtype))
+    labels = [""] * int(flat.size)
+    for site, index in positions.items():
+        index = np.atleast_1d(np.asarray(index)).astype(int).ravel()
+        for j, i in enumerate(index):
+            labels[i] = site if index.size == 1 else f"{site}[{j}]"
+    check = LaplaceCheck(
+        covariance=covariance,
+        labels=tuple(labels),
+        gradient=gradient,
+        newton_step=newton_step,
+        step_sigma=step_sigma,
+        eigenvalues=values,
+        eigenvectors=vectors,
+        floor=float(floor),
+        rise=np.full(values.size, np.nan),
+    )
+    if not probe:
+        return check
+    drop, drop_at, rise = _probe_potential(
+        model_info, unravel, np.asarray(flat, dtype=np.float64), check, keep, model_args
+    )
+    return replace(check, probed=True, drop=drop, drop_at=drop_at, rise=rise)
+
+
+def _probe_potential(model_info, unravel, flat, check: LaplaceCheck, keep, model_args):
+    """The evaluations of :class:`LaplaceCheck`, conditions 2 and 3: ``(drop, where, rise)``.
+
+    The potential is compiled once, with the problem as a traced argument as in
+    :func:`run_map`, and evaluated at the Newton step, at half of it, and at plus and minus
+    one standard deviation along every eigenvector of positive curvature. Along an
+    eigenvector of negative curvature it is evaluated at plus and minus
+    ``1 / sqrt(|lambda|)``, where a saddle falls by half a nat each way. A value that is not
+    finite (a bound of the model) counts as infinitely high.
+    """
+
+    def potential_at(zf, args):
+        return model_info.potential_fn(*args)(unravel(zf))
+
+    evaluate = jax.jit(potential_at)
+
+    def value(zf) -> float:
+        result = float(evaluate(jnp.asarray(zf), model_args))
+        return result if np.isfinite(result) else np.inf
+
+    base = value(flat)
+    found = [(-np.inf, "")]
+    if np.any(check.newton_step != 0.0):
+        for fraction in (1.0, 0.5):
+            lower = base - value(flat - fraction * check.newton_step)
+            found.append((lower, f"at {fraction:g} of the Newton step from it"))
+    rise = np.full(check.eigenvalues.size, np.nan)
+    for i in np.flatnonzero(keep):
+        sigma = 1.0 / np.sqrt(check.eigenvalues[i])
+        direction = check.eigenvectors[:, i]
+        label = check.labels[int(np.argmax(np.abs(direction)))]
+        up = value(flat + sigma * direction) - base
+        down = value(flat - sigma * direction) - base
+        rise[i] = up + down
+        where = f"one standard deviation from it along the eigenvector mostly of {label}"
+        found += [(-up, where), (-down, where)]
+    top = float(np.max(check.eigenvalues)) if check.eigenvalues.size else 0.0
+    for i in np.flatnonzero(~keep & (-check.eigenvalues > check.floor * top)):
+        scale = 1.0 / np.sqrt(-check.eigenvalues[i])
+        direction = check.eigenvectors[:, i]
+        label = check.labels[int(np.argmax(np.abs(direction)))]
+        up = value(flat + scale * direction) - base
+        down = value(flat - scale * direction) - base
+        rise[i] = up + down
+        where = f"along the eigenvector of negative curvature mostly of {label}"
+        found += [(-up, where), (-down, where)]
+    drop, drop_at = max(found, key=lambda item: item[0])
+    return float(drop), drop_at, rise
+
+
+def laplace_inverse_mass(
+    model,
+    params: Mapping,
+    *,
+    rng_key=None,
+    floor: float = 1e-10,
+    model_args: tuple | None = None,
+    warn: bool = True,
+):
+    """Unconstrained-space Laplace covariance at ``params``, for use as a NUTS mass matrix.
+
+    Evaluates the Hessian of the model potential at the given constrained site values
+    (typically :attr:`MAPResult.params`; extra keys are ignored), symmetrizes it, floors
+    the eigenvalues at ``floor * max_eig``, and returns the inverse as a dense array. The
+    result is passed as ``inverse_mass_matrix`` to :func:`run_nuts` built from the same
+    model. With the mass matrix preset to an approximation of the posterior covariance,
+    warmup only tunes the step size. Without it, parameter scales spanning many orders
+    of magnitude drive early trajectories to the tree-depth cap, and warmup costs more
+    than sampling (``docs/benchmarks.md``).
+
+    As a covariance of the parameters (Laplace errors) the result is valid only at a
+    maximum of the posterior around which the potential is quadratic.
+    :func:`laplace_check` tests that, and a warning is raised here when the test fails: a
+    Hessian that is not positive definite, an optimization stopped short of the maximum,
+    or a potential with kinks at the point. As a mass matrix it still sets usable step
+    scales.
+
+    Parameters
+    ----------
+    model
+        A numpyro model (from :meth:`MarginalOrbitModel.model`).
+    params
+        Constrained site values at which the Hessian is evaluated.
+    rng_key
+        JAX PRNG key for numpyro's model initialization; default ``PRNGKey(0)``.
+    floor
+        Eigenvalue floor as a fraction of the largest eigenvalue.
+    model_args
+        As in :func:`run_map` (default: the model's own ``model_args`` attribute).
+    warn
+        Test the approximation and raise a :class:`RuntimeWarning` when
+        :attr:`LaplaceCheck.valid` is false (default). The test evaluates the potential
+        around the point (:func:`laplace_check`); ``False`` skips it.
+
+    Returns
+    -------
+    numpy.ndarray
+        Dense inverse Hessian in the unconstrained space.
+
+    Warns
+    -----
+    RuntimeWarning
+        If ``params`` is not a maximum of the posterior (:class:`LaplaceCheck`).
+    """
+    check = laplace_check(
+        model, params, rng_key=rng_key, floor=floor, model_args=model_args, probe=warn
+    )
+    if warn and not check.valid:
+        warnings.warn(check.message(), RuntimeWarning, stacklevel=2)
+    return check.covariance
 
 
 def run_nuts(

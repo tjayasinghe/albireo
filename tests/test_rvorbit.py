@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import warnings
 from dataclasses import replace
 
 import numpy as np
@@ -175,6 +176,65 @@ def test_differential_components_get_their_own_gamma():
     assert shared.gamma_mode == "shared"
     # Forcing one gamma onto two different zero points biases the semi-amplitudes.
     assert np.max(np.abs(shared.k - np.array([K1, K2]))) > 1.0
+
+
+# A double-lined binary as a disentangling's TODCOR table gives it: two differential
+# components, seven epochs at the phases of a PEPSI binary (four between 0.05 and 0.20),
+# errors of 0.04 and 0.05 km/s, and an orbit that is nearly circular.
+SPARSE_P, SPARSE_E, SPARSE_W, SPARSE_K = 6.268198, 0.015, 1.2, (63.09, 68.84)
+SPARSE_PHASES = (0.047, 0.089, 0.186, 0.202, 0.531, 0.735, 0.741)
+
+
+def _differential_table(phases, *, cycles=None, seed=0):
+    t_conj = 2460354.5
+    phases = np.asarray(phases, dtype=float)
+    if cycles is not None:
+        phases = phases + np.asarray(cycles)
+    bjd = t_conj + phases * SPARSE_P
+    t_peri = float(ab.t_peri_from_t_conj(t_conj, period=SPARSE_P, ecc=SPARSE_E, omega=SPARSE_W))
+    orbit = ab.OrbitParams(
+        period=SPARSE_P, t_peri=t_peri, ecc=SPARSE_E, omega=SPARSE_W, k=SPARSE_K, gamma=-14.8
+    )
+    sigma = np.repeat(np.array([[0.04], [0.05]]), bjd.size, axis=1)
+    velocity = orbit.component_velocities(bjd) + np.array([[0.3], [-0.3]])
+    velocity = velocity + sigma * np.random.default_rng(seed).normal(size=velocity.shape)
+    return _table_from(bjd, velocity, sigma, absolute=(False, False))
+
+
+def test_per_component_gammas_that_trade_against_the_orbit_warn():
+    """Seven clumped epochs: each zero point is matched by e and K, and the fit says so."""
+    sparse = _differential_table(SPARSE_PHASES, cycles=(0, 4, 10, 15, 15, 16, 111))
+    with pytest.warns(RuntimeWarning, match="systemic velocities are correlated with the orbit"):
+        fit = fit_rv_orbit(sparse, period=SPARSE_P, ecc=0.01, omega=SPARSE_W)
+    assert fit.gamma_mode == "one per component"
+    rho, gamma_name, other = fit.gamma_correlation
+    assert abs(rho) > 0.9 and gamma_name.startswith("gamma_") and other in ("secosw", "sesinw")
+    assert "<- the zero points trade against K and e" in fit.summary()
+
+    # The same orbit sampled evenly in phase separates the zero points from its shape.
+    even = _differential_table(np.linspace(0.03, 0.97, 14))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        well = fit_rv_orbit(even, period=SPARSE_P, ecc=0.01, omega=SPARSE_W)
+    assert abs(well.gamma_correlation[0]) < 0.5
+    assert "<- the zero points" not in well.summary()
+    assert "largest correlation of a systemic velocity" in well.summary()
+
+    # A shared systemic velocity has no zero points to correlate.
+    shared, _, _ = make_table()
+    assert fit_rv_orbit(shared, period=P).gamma_correlation is None
+
+
+def test_the_assignment_warns_once_for_the_orbit_it_returns():
+    """The candidate fits of `assign_components` do not repeat the correlation warning."""
+    table = _differential_table(SPARSE_PHASES)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _, orbit, _ = assign_components(table, period=SPARSE_P, gamma="per-component")
+    correlated = [w for w in caught if "systemic velocities are correlated" in str(w.message)]
+    assert abs(orbit.gamma_correlation[0]) > 0.9
+    assert len(correlated) == 1
+    assert correlated[0].filename == __file__
 
 
 def test_a_circular_fit_holds_the_eccentricity_at_zero():

@@ -31,6 +31,58 @@ This file records what changed. The reasons are recorded elsewhere:
 
 ### Added
 
+- **Diagnostics and remedies for four failure modes found on APF and PEPSI spectra.** A
+  blind test on raw spectra of ten binaries found four ways in which a fit can be wrong
+  without an error being raised. `docs/method.md` describes them in Sections 7, 8, 10 and
+  11.
+  - *The continuum weight.* Continuum errors that differ between epochs, such as a residual
+    blaze of 1-3% on the scale of the echelle orders, lead ML-II to lower the continuum
+    weight `eta`, and the components take them up as opposite drifts that their
+    light-weighted sum does not show. On PEPSI spectra of a binary with 15 epochs, `eta`
+    fell from 5 to 0.015 and 0.0014 and the components drifted by several continuum units.
+    `Fit.summary()` flags a component whose `eta` fell more than one hyperprior standard
+    deviation below its centre, in a model of two or more components, and
+    `Smoothness(eta_min=...)` bounds `eta` from below through a truncated hyperprior. A
+    declaration without a bound builds the same model as before, and its fits are
+    unchanged. `tests/test_low_frequency.py` reproduces the failure on a simulated binary
+    with a ripple of 2.5% rms in every epoch.
+  - *Renormalization of the epochs.* `Fit.renormalize_epochs()` divides every epoch by a
+    cubic spline with knots every 12 Å, fitted to its ratio to the model, three times at
+    the fit's parameters, and returns the corrected dataset (`EpochRenormalization`) for a
+    new fit. In the model used for the ratio, the structure of every star on scales above
+    12 Å is that of the composite, which the data determine. With the spectra as fitted,
+    the corrections converge slowly to a state that keeps the drifts. On a simulated binary
+    with a ripple of 1.3% rms per epoch, the fit after renormalization had `eta` of 6.9 and
+    7.8 (0.4 and 0.025 before) and drifts of 0.008 and 0.028 continuum units (0.28 and
+    0.85), as for the same binary without the ripple. `preprocess.continuum_correction` is
+    the spline fit of one epoch. A reallocation of the components' broad structure that
+    keeps the composite, applied in the blind test as a last step, is documented as an
+    assumption about the stars and is not provided.
+  - *A Laplace approximation where the posterior is not Gaussian.*
+    `inference.laplace_check` returns the Laplace covariance with the gradient, the
+    eigenvalues and the Newton step, and evaluates the potential at that step and at plus
+    and minus one standard deviation along every principal axis (`LaplaceCheck`). The
+    approximation is valid where the Hessian is positive definite, no evaluation is lower
+    than the point by more than 0.5 nats, and the potential rises by about 0.5 nats at one
+    standard deviation, as for a Gaussian. `laplace_inverse_mass` warns where a condition
+    fails, `Fit.laplace_check()` tests the orbit as `Fit.sample()` uses it, and
+    `Fit.sample()` and `Fit.velocity_errors()` warn. The shift operator is linear between
+    pixels, so the potential has kinks where a shift crosses one (`docs/math.md` §10.3),
+    and an optimization can stop at a kink with a large gradient that no step lowers. In
+    the blind test, the two fits whose Laplace errors disagreed with a Keplerian fit to
+    their TODCOR velocities (by up to a factor of 360, 37 against 0.1 km/s) had stopped at
+    kinks, on PEPSI spectra fitted on a model grid of one pixel per LSF sigma: the
+    potential rose by up to 9 nats at one standard deviation, and on a grid twice as fine
+    it was quadratic to 1% at the same point. Three fits to APF spectra passed.
+    `MAPResult.potential_trace` records the potential at every step and
+    `MAPResult.potential_fall()` its decrease over the last steps, which `Fit.summary()`
+    reports for a fit stopped at its step cap, flagging a decrease above 1 nat.
+  - *Per-component systemic velocities at few phases.* `RVOrbit.gamma_correlation` gives
+    the largest correlation of a per-component systemic velocity with a semi-amplitude or
+    an eccentricity parameter, `RVOrbit.summary()` prints it, and `fit_rv_orbit` warns
+    above 0.9 (`assign_components` warns once, for the orbit it returns). On a TODCOR table
+    of 7 epochs it was 0.96, and both semi-amplitudes were three standard errors below the
+    disentangling's; tables of 9 to 19 epochs stayed below 0.72.
 - **A method overview and a comparison with other codes in the documentation.**
   `docs/method.md` describes a fit step by step in the terms of a regularized least-squares
   fit, in the order Seeburger et al. (2024) use: the linear step, the curvature penalty and
@@ -494,6 +546,15 @@ This file records what changed. The reasons are recorded elsewhere:
 
 ### Changed
 
+- **The regularization report of `Fit.summary()`.** It gives the move of `eta` in
+  hyperprior standard deviations beside that of `tau`, and labels the first value of each
+  weight as the hyperprior's centre, which it is: the start of the optimization differs
+  from it where the semi-amplitude scan adapted it or a bound on `eta` moved it. A fit
+  stopped at its step cap has a line on the decrease of the potential over its last steps.
+- **`laplace_inverse_mass` warns where the Laplace approximation is not valid** (a
+  `RuntimeWarning`, from the test of `laplace_check`, which evaluates the potential twice
+  per coordinate around the point). `warn=False` skips the test and the warning. The
+  returned matrix is unchanged.
 - **`Disentangler.expert()` returns the sites the declaration holds constant.** It
   returned `(model, priors, init)`, and a model rebuilt from those three lacked the sites
   in `dis.fixed`: for a circular orbit `model.model(priors)` raises for the missing

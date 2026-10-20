@@ -181,7 +181,10 @@ dense mass matrix. Without it, warmup must adapt to `period` being constrained a
 $`10^{-3}`$ level while `k` is constrained at $`10^{-1}`$, and early trajectories reach the
 tree-depth cap. With it, warmup only tunes the step size. Mass adaptation defaults to off
 when an explicit matrix is supplied, so the early adaptation windows do not overwrite it with a
-poor few-sample estimate.
+poor few-sample estimate. The inverse is the posterior's covariance only at a maximum around
+which the posterior is close to Gaussian: `laplace_inverse_mass` warns where it is not (a
+Hessian that is not positive definite, a point short of the maximum, or kinks of the potential
+at the point), and `ab.laplace_check` returns the test with the covariance.
 
 ```python
     mcmc = ab.run_nuts(

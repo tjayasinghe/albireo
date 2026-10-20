@@ -683,6 +683,152 @@ def test_sampling_freezes_the_hyperparameters_and_says_so(dataset, truth):
     assert "Assumed, not measured" in post.summary()
 
 
+# -- the continuum weight and the stationarity of the best fit -----------------
+#
+# The flags of `Fit.summary` are tested on fits assembled from given values, so that each
+# case is reached without an optimization. The fits that produce them are in
+# tests/test_low_frequency.py.
+
+
+def _hyper(eta_primary, eta_secondary):
+    return {
+        "primary": {"tau": 600.0, "eta": eta_primary},
+        "secondary": {"tau": 1100.0, "eta": eta_secondary},
+    }
+
+
+def test_a_bound_on_eta_truncates_its_hyperprior_and_moves_the_start(dataset):
+    import jax
+    import numpyro.distributions as dist
+    from numpyro.distributions.transforms import biject_to
+
+    with pytest.raises(ValueError, match="eta_min"):
+        ab.Smoothness(eta_min=0.0)
+    # Without a bound the hyperprior is the normal it always was.
+    assert type(_dis(dataset).priors["log_eta"]) is dist.Normal
+
+    stars = [
+        ab.Star("primary", light=0.62, smoothness=ab.Smoothness(eta_min=20.0)),
+        ab.Star("secondary", light=0.38),
+    ]
+    dis = _dis(dataset, components=stars)
+    prior = dis.priors["log_eta"]
+    start = np.asarray(dis.init["log_eta"])
+    assert start[0] > np.log(20.0) and start[1] == pytest.approx(np.log(5.0))
+    normal = dist.Normal(np.log(5.0), 3.0)
+    value = np.array([np.log(30.0), np.log(0.01)])
+    density = np.asarray(prior.log_prob(value))
+    assert density[1] == pytest.approx(float(normal.log_prob(value[1])))
+    assert density[0] > float(normal.log_prob(value[0]))  # renormalized above the bound
+    assert np.isneginf(np.asarray(prior.log_prob(np.array([np.log(10.0), 0.0])))[0])
+    # The bounded entry is unconstrained through ln(ln eta - ln eta_min); the other keeps
+    # the identity it has under the normal hyperprior.
+    transform = biject_to(prior.support)
+    z = np.array([0.3, -1.7])
+    y = np.asarray(transform(z))
+    assert y[0] == pytest.approx(np.log(20.0) + np.exp(0.3)) and y[1] == -1.7
+    np.testing.assert_allclose(np.asarray(transform.inv(y)), z)
+    draws = np.asarray(prior.sample(jax.random.PRNGKey(0), (2000,)))
+    assert draws[:, 0].min() > np.log(20.0)
+
+
+def test_a_fallen_continuum_weight_is_flagged(dataset):
+    dis = _dis(dataset)
+    report = ab.Fit(dis=dis, result=None, hyper=_hyper(0.0146, 0.00135))._hyper_report()
+    assert report.count("eta fell more than one hyperprior standard deviation") == 2
+    assert "Fit.renormalize_epochs" in report and "Smoothness(eta_min=...)" in report
+    drift = (np.log(0.00135) - np.log(5.0)) / 3.0
+    assert f"({drift:+.2f} sigma)" in report
+    # 1.07 is half a hyperprior standard deviation below the centre: not flagged.
+    assert "fell" not in ab.Fit(dis=dis, result=None, hyper=_hyper(1.07, 8.3))._hyper_report()
+    # With one star the data determine its broad structure, and nothing is flagged.
+    single = _dis(
+        dataset, components=[ab.Star("only", light=1.0)], orbit=_orbit(k=ab.Between(10.0, 90.0))
+    )
+    hyper = {"only": {"tau": 300.0, "eta": 0.001}}
+    assert "fell" not in ab.Fit(dis=single, result=None, hyper=hyper)._hyper_report()
+
+
+def test_an_eta_held_at_its_bound_is_reported(dataset):
+    bounded = ab.Smoothness(eta_min=5.0)
+    stars = [
+        ab.Star("primary", light=0.62, smoothness=bounded),
+        ab.Star("secondary", light=0.38, smoothness=bounded),
+    ]
+    dis = _dis(dataset, components=stars)
+    report = ab.Fit(dis=dis, result=None, hyper=_hyper(5.02, 9.0))._hyper_report()
+    assert "'primary' eta is at its declared bound 5" in report
+    assert "'secondary' eta is at its declared bound" not in report
+    assert "bound 5)" in report and "fell" not in report
+
+
+def _fit_at_injected(dis, truth, trace, *, converged=False):
+    """A fit at the injected orbit whose optimizer record is the given potential trace."""
+    import jax.numpy as jnp
+
+    from albireo.inference import MAPResult
+
+    t_conj = float(
+        ab.t_conj_from_t_peri(
+            truth["t_peri"], period=truth["period"], ecc=truth["ecc"], omega=truth["omega"]
+        )
+    )
+    root = np.sqrt(truth["ecc"])
+    params = {
+        "period": jnp.asarray(truth["period"]),
+        "t_conj": jnp.asarray(t_conj),
+        "secosw": jnp.asarray(root * np.cos(truth["omega"])),
+        "sesinw": jnp.asarray(root * np.sin(truth["omega"])),
+        "k": jnp.asarray(truth["k"]),
+        "log_tau": jnp.log(jnp.array([600.0, 1100.0])),
+        "log_eta": jnp.log(jnp.array([10.0, 3.0])),
+    }
+    trace = tuple(float(v) for v in trace)
+    result = MAPResult(
+        params=params,
+        unconstrained={},
+        potential=trace[-1],
+        grad_norm=50.0,
+        converged=converged,
+        num_steps=len(trace),
+        potential_trace=trace,
+    )
+    return ab.Fit(dis=dis, result=result, hyper=_hyper(10.0, 3.0))
+
+
+@pytest.mark.slow
+def test_the_laplace_check_places_the_orbit_at_its_maximum_or_away_from_it(dataset):
+    from dataclasses import replace
+
+    import jax.numpy as jnp
+
+    fit = _dis(dataset).fit(max_steps=150)
+    check = fit.laplace_check()
+    assert check.valid, check.problems()
+    assert check.labels == ("k[0]", "k[1]", "period", "secosw", "sesinw", "t_conj")
+    # Half a km/s in K(primary) is about ten standard deviations.
+    params = dict(fit.result.params)
+    params["k"] = jnp.asarray(params["k"]) + jnp.array([0.5, 0.0])
+    moved = replace(fit, result=replace(fit.result, params=params))
+    away = moved.laplace_check()
+    assert not away.valid and not away.stationary and away.step_sigma[0] > 3.0
+    assert away.drop > 10.0 and check.quadratic
+    with pytest.warns(RuntimeWarning, match="not the maximum"):
+        moved.sample(num_warmup=2, num_samples=2, num_chains=1)
+
+
+def test_the_summary_reports_how_far_the_potential_fell_at_the_step_cap(dataset, truth):
+    dis = _dis(dataset)
+    falling = _fit_at_injected(dis, truth, np.linspace(100.0, 40.0, 30)).summary()
+    assert "! the potential fell by 20.7 nats over the last 10 steps" in falling
+    assert "laplace_check()" in falling
+    flat = _fit_at_injected(dis, truth, [100.0] * 20 + [99.999] * 10).summary()
+    assert "the potential changed by 0.001 nats over the last 10 steps" in flat
+    assert "! the potential" not in flat
+    done = _fit_at_injected(dis, truth, np.linspace(100.0, 40.0, 30), converged=True).summary()
+    assert "the potential" not in done
+
+
 # -- the posterior report -----------------------------------------------------
 #
 # The report is tested on stand-in draws, so that its intervals and diagnostics are

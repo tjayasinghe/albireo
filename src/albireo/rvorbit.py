@@ -54,6 +54,7 @@ from __future__ import annotations
 import contextlib
 import functools
 import math
+import re
 import warnings
 from dataclasses import dataclass, field
 
@@ -103,6 +104,16 @@ _ASSIGNMENT_OMEGAS = 8
 _ASSIGNMENT_CURVES = 200
 _ASSIGNMENT_STARTS = 3
 _ASSIGNMENT_WINDOW_STEPS = 8
+
+# The correlation of a per-component systemic velocity with a semi-amplitude or an
+# eccentricity parameter above which `fit_rv_orbit` warns (`RVOrbit.gamma_correlation`). On
+# the TODCOR tables of six double-lined binaries observed with APF and PEPSI, the table of 7
+# epochs reached 0.96 (with sqrt(e) sin w) and its semi-amplitudes were 0.15-0.18 km/s, about
+# three standard errors, below those of the disentangling, while the tables of 9 to 19 epochs
+# stayed between 0.33 and 0.72.
+_GAMMA_CORRELATION_LIMIT = 0.9
+# The start of that warning; `assign_components` filters on it while it fits candidates.
+_GAMMA_CORRELATION_WARNING = "the per-component systemic velocities are correlated with the orbit"
 
 
 def _valid_velocities(table) -> np.ndarray:
@@ -548,6 +559,44 @@ class RVOrbit:
         return self.k.size >= 2 and not ({self.names[0], self.names[1]} & set(self.held))
 
     @property
+    def gamma_correlation(self) -> tuple[float, str, str] | None:
+        """The largest correlation of a systemic velocity with a semi-amplitude or with e.
+
+        ``(rho, gamma_name, other_name)``: the correlation coefficient of largest magnitude,
+        from :attr:`covariance`, between a per-component systemic velocity and a fitted
+        semi-amplitude or eccentricity parameter (``secosw``, ``sesinw``), with the two
+        parameter names. ``None`` when the systemic velocity was shared or no such pair was
+        fitted.
+
+        A per-component systemic velocity is that component's zero point. With few epochs,
+        or with the phases in a few clumps, a shift of one zero point is partly matched by a
+        change of ``e``, ``omega`` and the semi-amplitudes, and the correlation approaches
+        one. The elements then depend on the zero points of the templates as well as on the
+        velocities, and :func:`fit_rv_orbit` warns above 0.9.
+        """
+        names = list(self.parameter_names)
+        gammas = [i for i, name in enumerate(names) if name.startswith("gamma_")]
+        others = [
+            i
+            for i, name in enumerate(names)
+            if name.startswith("k_") or name in ("secosw", "sesinw")
+        ]
+        cov = np.asarray(self.covariance, dtype=np.float64)
+        if not gammas or not others or cov.shape != (len(names), len(names)):
+            return None
+        sd = np.sqrt(np.clip(np.diag(cov), 0.0, None))
+        best = None
+        for g in gammas:
+            for o in others:
+                denominator = sd[g] * sd[o]
+                if not (np.isfinite(cov[g, o]) and denominator > 0.0):
+                    continue
+                rho = float(cov[g, o] / denominator)
+                if best is None or abs(rho) > abs(best[0]):
+                    best = (rho, names[g], names[o])
+        return best
+
+    @property
     def mass_ratio(self) -> float | None:
         """``q = M_2 / M_1 = K_1 / K_2`` for a double-lined table; ``None`` otherwise.
 
@@ -647,6 +696,18 @@ class RVOrbit:
                 + ("   (held, not fitted: too few usable velocities)" if name in self.held else "")
             )
         lines.append(f"  systemic velocity: {self.gamma_mode}")
+        correlated = self.gamma_correlation
+        if correlated is not None:
+            rho, gamma_name, other = correlated
+            lines.append(
+                f"  largest correlation of a systemic velocity with K or e: {gamma_name} with "
+                f"{other}, {rho:+.2f}"
+                + (
+                    "   <- the zero points trade against K and e at these phases"
+                    if abs(rho) > _GAMMA_CORRELATION_LIMIT
+                    else ""
+                )
+            )
         if self.mass_ratio is not None:
             masses = self.minimum_masses()
             lines.append(
@@ -856,6 +917,20 @@ def fit_rv_orbit(
         ``"shared"`` fits one systemic velocity; ``"per-component"`` fits one per
         component. Default: shared when every component's velocities are absolute, per
         component otherwise (see the module docstring).
+
+        A per-component systemic velocity is that component's zero point, and the fit has
+        one parameter more per component than with a shared one. With few epochs, or with
+        the phases in a few clumps, the zero points are not separable from the shape of
+        the orbit: a shift of one is matched in part by ``e``, ``omega`` and the
+        semi-amplitudes. On the TODCOR table of a double-lined binary with 7 epochs, four
+        of them at phases 0.05-0.20 and the others at 0.53 and 0.74, the two systemic
+        velocities came out at +0.29 and -0.29 km/s (correlation 0.96 with
+        ``sqrt(e) sin w``), ``e`` at 0.005 against 0.015 from the disentangling, and both
+        semi-amplitudes 0.15-0.18 km/s (about three standard errors) lower, although the
+        velocities departed from the disentangling's orbit by less than 0.25 km/s.
+        :attr:`RVOrbit.gamma_correlation` reports the largest such correlation, and a
+        warning is raised above 0.9. The disentangling's own orbit has no zero points to
+        fit and does not have this degeneracy.
     circular
         Hold ``e = 0`` and ``omega = 0``. The two eccentricity parameters are removed from
         the fit rather than held at the singular origin of the ``sqrt(e)``
@@ -868,6 +943,16 @@ def fit_rv_orbit(
     Returns
     -------
     RVOrbit
+
+    Warns
+    -----
+    RuntimeWarning
+        If a per-component systemic velocity is correlated with a semi-amplitude or an
+        eccentricity parameter by more than 0.9 in magnitude
+        (:attr:`RVOrbit.gamma_correlation`).
+    UserWarning
+        If a shared systemic velocity is fitted to components whose zero points are not
+        all absolute.
     """
     from scipy.optimize import least_squares
 
@@ -1055,7 +1140,7 @@ def fit_rv_orbit(
     par_names = ["period", "t_conj"] + ([] if circular else ["secosw", "sesinw"])
     par_names += [f"k_{n}" for n in names]
     par_names += ["gamma"] if n_gamma == 1 else [f"gamma_{n}" for n in names]
-    return RVOrbit(
+    orbit = RVOrbit(
         names=tuple(names),
         period=p,
         t_conj=tc,
@@ -1074,6 +1159,31 @@ def fit_rv_orbit(
         covariance=cov,
         parameter_names=tuple(par_names),
         held=tuple(name for name, h in zip(names, held_components, strict=True) if h),
+    )
+    _warn_if_gamma_correlated(orbit, stacklevel=3)
+    return orbit
+
+
+def _warn_if_gamma_correlated(orbit: RVOrbit, *, stacklevel: int) -> None:
+    """Warn when a per-component systemic velocity trades against K or e (see the limit).
+
+    An orbit without the attribute (a stand-in for :func:`fit_rv_orbit` in a test, say)
+    is not checked.
+    """
+    correlated = getattr(orbit, "gamma_correlation", None)
+    if correlated is None or abs(correlated[0]) <= _GAMMA_CORRELATION_LIMIT:
+        return
+    rho, gamma_name, other = correlated
+    warnings.warn(
+        f"{_GAMMA_CORRELATION_WARNING} at these phases ({gamma_name} with {other}: "
+        f"{rho:+.2f}, above {_GAMMA_CORRELATION_LIMIT:g}). A shift of one zero point is "
+        "then matched in part by e, omega and the semi-amplitudes, so these elements "
+        "depend on the zero points of the templates as well as on the velocities; on a "
+        "table of 7 epochs this lowered both semi-amplitudes by three standard errors. "
+        "The orbit of the disentangling has no zero points to fit. With absolute "
+        "templates (a label fit), one shared systemic velocity can be fitted instead.",
+        RuntimeWarning,
+        stacklevel=stacklevel,
     )
 
 
@@ -1690,11 +1800,48 @@ def assign_components(
     A :class:`ValueError` from the first fit is raised, as :func:`fit_rv_orbit` raises it
     for a table that cannot support an orbit. An assignment whose table cannot be fitted
     is left out.
+
+    The warning of :func:`fit_rv_orbit` on correlated per-component systemic velocities is
+    given once, for the orbit returned, and not for the candidate fits.
     """
+    result = _assign_components(
+        table,
+        period=period,
+        circular=circular,
+        gamma=gamma,
+        threshold=threshold,
+        max_rounds=max_rounds,
+        exchange=exchange,
+        light_ratio_max=light_ratio_max,
+        period_window=period_window,
+    )
+    _warn_if_gamma_correlated(result[1], stacklevel=3)
+    return result
+
+
+def _assign_components(
+    table,
+    *,
+    period: float,
+    circular: bool,
+    gamma: str | None,
+    threshold: float,
+    max_rounds: int,
+    exchange: bool,
+    light_ratio_max: float | None,
+    period_window: float,
+):
+    """:func:`assign_components`, with the candidate fits' correlation warnings filtered."""
 
     def fit_from(start_period):
         def fit(candidate):
-            return fit_rv_orbit(candidate, period=start_period, circular=circular, gamma=gamma)
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message=re.escape(_GAMMA_CORRELATION_WARNING),
+                    category=RuntimeWarning,
+                )
+                return fit_rv_orbit(candidate, period=start_period, circular=circular, gamma=gamma)
 
         return fit
 

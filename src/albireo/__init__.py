@@ -36,6 +36,7 @@ from albireo.facade import (
     LSF,
     Between,
     Disentangler,
+    EpochRenormalization,
     Fit,
     Fixed,
     Known,
@@ -77,9 +78,11 @@ from albireo.gaia import (
 from albireo.grids import C_KMS, LogGrid, air_to_vacuum, log_doppler_shift, vacuum_to_air
 from albireo.handoff import export_draws, write_gssp, write_ispec
 from albireo.inference import (
+    LaplaceCheck,
     MAPResult,
     MarginalOrbitModel,
     keplerian_residuals,
+    laplace_check,
     laplace_inverse_mass,
     nebular_amplitudes,
     orbit_parameters,
@@ -175,6 +178,7 @@ from albireo.population import (
 )
 from albireo.preprocess import (
     TELLURIC_BANDS,
+    continuum_correction,
     der_snr_sigma,
     estimate_ivar,
     fit_continuum,
@@ -282,6 +286,7 @@ __all__ = [
     "DetectionLimit",
     "Disentangler",
     "EpochData",
+    "EpochRenormalization",
     "EpochStatistics",
     "Fit",
     "Fixed",
@@ -291,6 +296,7 @@ __all__ = [
     "K2ScanResult",
     "Known",
     "LabelMatch",
+    "LaplaceCheck",
     "LogGrid",
     "MAPResult",
     "MainSequence",
@@ -338,6 +344,7 @@ __all__ = [
     "clear_example_cache",
     "clear_library_cache",
     "config_from_dict",
+    "continuum_correction",
     "convolve_spectrum",
     "convolve_varying",
     "convolve_varying_adjoint",
@@ -369,6 +376,7 @@ __all__ = [
     "interp_operator",
     "k2_scan",
     "keplerian_residuals",
+    "laplace_check",
     "laplace_inverse_mass",
     "library_info",
     "library_interpolator",

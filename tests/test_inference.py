@@ -4,9 +4,12 @@ The NUTS closed-loop test is the acceptance test: posterior means of K_1, K_2 wi
 of the injected values with a converged, divergence-free chain (``internal/design.md`` §8).
 """
 
+from dataclasses import replace
+
 import jax
 import jax.numpy as jnp
 import numpy as np
+import numpyro
 import numpyro.distributions as dist
 import pytest
 from numpyro.infer import init_to_value
@@ -482,6 +485,142 @@ def test_run_map_closure_and_argument_paths_agree(gate_data):
         np.testing.assert_allclose(
             v, via_closure.unconstrained[site], rtol=1e-6, atol=1e-9, err_msg=site
         )
+
+
+# ---------------------------------------------------------------------------
+# Whether a Laplace approximation is taken at a maximum
+# ---------------------------------------------------------------------------
+
+# A two-parameter Gaussian posterior: broad priors and a correlated likelihood, so the
+# mode and the Hessian are known in closed form.
+_MEAN = np.array([1.0, -2.0])
+_LIKELIHOOD_COV = np.array([[1.0, 0.5], [0.5, 2.0]])
+_PRIOR_SIGMA = 10.0
+
+
+def _gaussian_model(curvature_y=1.0):
+    precision = np.linalg.inv(_LIKELIHOOD_COV) * np.array([[1.0, 1.0], [1.0, curvature_y]])
+
+    def model():
+        x = numpyro.sample("x", dist.Normal(0.0, _PRIOR_SIGMA))
+        y = numpyro.sample("y", dist.Normal(0.0, _PRIOR_SIGMA))
+        r = jnp.stack([x, y]) - jnp.asarray(_MEAN)
+        numpyro.factor("likelihood", -0.5 * r @ jnp.asarray(precision) @ r)
+
+    hessian = precision + np.eye(2) / _PRIOR_SIGMA**2
+    mode = np.linalg.solve(hessian, precision @ _MEAN)
+    return model, hessian, mode
+
+
+def test_the_laplace_check_accepts_the_mode_and_measures_the_distance_to_it():
+    model, hessian, mode = _gaussian_model()
+    at_mode = ab.laplace_check(model, {"x": mode[0], "y": mode[1]})
+    assert at_mode.valid and at_mode.stationary and at_mode.n_floored == 0
+    assert at_mode.labels == ("x", "y")
+    np.testing.assert_allclose(at_mode.covariance, np.linalg.inv(hessian), rtol=1e-8)
+    assert at_mode.decrement < 1e-12 and at_mode.problems() == []
+
+    # Three standard deviations away along x: the Newton step of a quadratic returns to
+    # the mode exactly, and 2 * decrement is the squared Mahalanobis distance.
+    sd = np.sqrt(np.diag(np.linalg.inv(hessian)))
+    away = mode + np.array([3.0 * sd[0], 0.0])
+    check = ab.laplace_check(model, {"x": away[0], "y": away[1]})
+    assert not check.stationary and not check.valid
+    np.testing.assert_allclose(check.newton_step, away - mode, rtol=1e-8, atol=1e-12)
+    np.testing.assert_allclose(check.step_sigma[0], 3.0, rtol=1e-8)
+    displacement = away - mode
+    np.testing.assert_allclose(2.0 * check.decrement, displacement @ hessian @ displacement)
+    np.testing.assert_allclose(check.step_length, np.sqrt(displacement @ hessian @ displacement))
+    # The potential is evaluated there: for a quadratic the decrease at the Newton step is
+    # the predicted one, and the rise at one standard deviation is 0.5 nats each way.
+    assert check.probed and check.quadratic
+    np.testing.assert_allclose(check.drop, check.decrement, rtol=1e-6)
+    np.testing.assert_allclose(check.rise, 1.0, rtol=1e-6)
+    assert "not the maximum" in check.problems()[0] and "Newton step" in check.message()
+    with pytest.warns(RuntimeWarning, match="not the maximum"):
+        covariance = laplace_inverse_mass(model, {"x": away[0], "y": away[1]})
+    np.testing.assert_allclose(covariance, check.covariance)
+    # Without the evaluations the Newton step decides, from the gradient alone.
+    newton = ab.laplace_check(model, {"x": away[0], "y": away[1]}, probe=False)
+    assert not newton.probed and np.isnan(newton.drop) and np.all(np.isnan(newton.rise))
+    assert not newton.stationary and "3 along x" in newton.message()
+
+
+def test_the_laplace_check_finds_a_kink_that_the_gradient_does_not_show():
+    """A V-shaped term at the mode: the gradient vanishes there, the potential rises steeply."""
+    _, hessian, mode = _gaussian_model()
+    sd = np.sqrt(np.diag(np.linalg.inv(hessian)))
+
+    def model():
+        x = numpyro.sample("x", dist.Normal(0.0, _PRIOR_SIGMA))
+        y = numpyro.sample("y", dist.Normal(0.0, _PRIOR_SIGMA))
+        r = jnp.stack([x, y]) - jnp.asarray(_MEAN)
+        precision = jnp.asarray(np.linalg.inv(_LIKELIHOOD_COV))
+        numpyro.factor("likelihood", -0.5 * r @ precision @ r)
+        numpyro.factor("kink", -2.0 / sd[0] * jnp.abs(x - mode[0]))
+
+    point = {"x": mode[0], "y": mode[1]}
+    check = ab.laplace_check(model, point)
+    # Differentiation returns the gradient of one side of the kink, so the Newton step
+    # predicts a decrease that the potential does not have: every evaluation is higher.
+    assert check.step_length > 1.0 and check.decrement > 0.5
+    assert check.drop < 0.0 and check.stationary and check.n_floored == 0
+    assert not check.quadratic and not check.valid and np.nanmax(check.rise) > 2.0
+    problems = check.problems()
+    assert len(problems) == 1 and "not quadratic" in problems[0] and "narrower" in problems[0]
+    # The gradient alone calls the point a slope.
+    assert not ab.laplace_check(model, point, probe=False).stationary
+
+
+def test_the_laplace_check_reports_a_saddle():
+    """Negative curvature along y: no maximum there, whatever the gradient."""
+    model, hessian, mode = _gaussian_model(curvature_y=-1.0)
+    assert np.min(np.linalg.eigvalsh(hessian)) < 0.0
+    check = ab.laplace_check(model, {"x": mode[0], "y": mode[1]})
+    assert check.n_floored == 1 and not check.valid
+    # The potential is evaluated along the direction of negative curvature and falls there.
+    assert "eigenvalue" in check.problems()[0] and "the point is a saddle" in check.problems()[0]
+    with pytest.warns(RuntimeWarning, match="not valid"):
+        laplace_inverse_mass(model, {"x": mode[0], "y": mode[1]})
+
+
+def test_the_report_of_a_kink_names_a_direction_of_positive_curvature():
+    """A floored direction is reported as such, not as the worst rise of the quadratic test."""
+    from albireo.inference import LaplaceCheck
+
+    check = LaplaceCheck(
+        covariance=np.eye(2),
+        labels=("k[0]", "period"),
+        gradient=np.zeros(2),
+        newton_step=np.zeros(2),
+        step_sigma=np.zeros(2),
+        eigenvalues=np.array([-1.0, 4.0]),
+        eigenvectors=np.eye(2),
+        floor=1e-10,
+        probed=True,
+        drop=-0.3,
+        drop_at="",
+        rise=np.array([60.0, 3.0]),
+    )
+    assert check.n_floored == 1 and check.stationary and not check.quadratic
+    floored, kink = check.problems()
+    assert "not a saddle" in floored
+    assert "mostly of period it rises by 1.5 nats" in kink
+
+
+def test_the_map_records_its_potential_and_how_far_it_fell_at_the_end():
+    model, _, _ = _gaussian_model()
+    result = run_map(model, init={"x": 40.0, "y": -40.0}, max_steps=3, tol=0.0)
+    assert len(result.potential_trace) == result.num_steps == 3
+    assert result.potential_trace[-1] == result.potential
+    fall, steps = result.potential_fall()
+    assert steps == 2 and fall == result.potential_trace[0] - result.potential_trace[-1] > 0.0
+
+    trace = (100.0, 40.0, 12.0, 5.0, 4.0, 3.5, 3.4, 3.35, 3.34, 3.335, 3.334, 3.3335)
+    fixed = replace(result, potential_trace=trace)
+    assert fixed.potential_fall() == (pytest.approx(trace[1] - trace[-1]), 10)
+    assert fixed.potential_fall(3) == (pytest.approx(trace[-4] - trace[-1]), 3)
+    assert replace(result, potential_trace=()).potential_fall()[1] == 0
 
 
 @pytest.mark.slow
