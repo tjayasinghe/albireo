@@ -600,6 +600,24 @@ This file records what changed. The reasons are recorded elsewhere:
 
 ### Changed
 
+- **The period comparison of `period = "search"` also values each candidate at its own
+  table orbit (D75).** The comparison scored each candidate by the best its coarse scans
+  reached. The scans hold the period at the table's value and the eccentricity at its
+  start, which is the default e = 0.05 at 0.5 rad wherever the table does not detect the
+  eccentricity at three sigma, and they place the conjunction and the semi-amplitudes on
+  lattices; the table's own orbit was never evaluated. On a seven-epoch PEPSI binary at
+  R = 44,300 the scans placed the table's correct period, 6.2663 d with an undetected
+  eccentricity, 3.3 km/s rms from the measured epoch velocities, and an eccentric alias at
+  7.80 d was chosen by 11,487 nats although the true orbit is 24,606 nats higher on the
+  same coarse model. The final orbit then had a table reduced chi-square of 1611.
+  `_decide_period_by_disentangling` now also evaluates each candidate at its table orbit
+  (`_table_orbit_trial`) and takes the larger value. On that binary the table's period is
+  kept by 29,453 nats and the run ends at P = 6.268254 d, K = 62.83 and 68.51 km/s, the
+  orbit a declared period gives. On the 53 Gaia RVS benchmark systems replayed with a
+  comparison, the trial restores one period lost the same way (mixed-0014) and changes no
+  correct decision. Each entry of `bootstrap.decision.candidates` in `result.json` gains
+  `scan_nats`, `table_orbit_nats` and `scored_at`, and its `n_trials` counts the
+  table-orbit trial.
 - **The pipeline's label stage smooths the epochs where the library is broader than them.**
   It stopped with the flag "the library is broadened to R = 20000 ... use a library at a
   higher resolving power than the data", and the epoch velocities stayed differential with

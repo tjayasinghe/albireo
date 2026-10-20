@@ -1,0 +1,145 @@
+{
+ "candidates": [
+  {
+   "period": 6.2663,
+   "table_chi2": 244.97,
+   "n_points": 14,
+   "n_parameters": 7,
+   "table_k": [
+    62.49,
+    68.4
+   ],
+   "table_ecc": 0.0049,
+   "table_ecc_err": 0.0044,
+   "comparison_nats": 81630.8,
+   "comparison_k": [
+    59.47,
+    66.49
+   ],
+   "comparison_ecc_start": 0.05,
+   "comparison_conjunction_minus_table_days": -0.1547,
+   "comparison_epoch_velocity_rms_kms": [
+    3.25,
+    3.5
+   ],
+   "table_orbit_nats": 153971.0,
+   "table_orbit_epoch_velocity_rms_kms": [
+    0.49,
+    0.48
+   ],
+   "table_orbit_circular_nats": 154723.0,
+   "refined_30_steps_nats": 155647.6,
+   "matched_ecc_scans_nats": 150061.9,
+   "circular_scans_nats": 154779.1
+  },
+  {
+   "period": 3.131407,
+   "table_chi2": 6895.46,
+   "n_points": 14,
+   "n_parameters": 7,
+   "table_k": [
+    87.2,
+    92.18
+   ],
+   "table_ecc": 0.4768,
+   "table_ecc_err": 0.0607,
+   "comparison_nats": 17582.0,
+   "comparison_k": [
+    25.72,
+    25.44
+   ],
+   "comparison_ecc_start": 0.05,
+   "comparison_conjunction_minus_table_days": 1.1087,
+   "comparison_epoch_velocity_rms_kms": [
+    56.21,
+    60.22
+   ],
+   "table_orbit_nats": 65875.6,
+   "table_orbit_epoch_velocity_rms_kms": [
+    42.71,
+    46.14
+   ],
+   "table_orbit_circular_nats": -231986.9,
+   "refined_30_steps_nats": null,
+   "matched_ecc_scans_nats": 17278.5,
+   "circular_scans_nats": 14829.7
+  },
+  {
+   "period": 5.526168,
+   "table_chi2": 7766.99,
+   "n_points": 14,
+   "n_parameters": 7,
+   "table_k": [
+    64.93,
+    67.75
+   ],
+   "table_ecc": 0.1662,
+   "table_ecc_err": 0.034,
+   "comparison_nats": 61299.1,
+   "comparison_k": [
+    64.93,
+    67.75
+   ],
+   "comparison_ecc_start": 0.1662,
+   "comparison_conjunction_minus_table_days": 0.0222,
+   "comparison_epoch_velocity_rms_kms": [
+    44.32,
+    47.34
+   ],
+   "table_orbit_nats": 74741.4,
+   "table_orbit_epoch_velocity_rms_kms": [
+    43.86,
+    46.86
+   ],
+   "table_orbit_circular_nats": -18334.8,
+   "refined_30_steps_nats": null,
+   "matched_ecc_scans_nats": 61299.1,
+   "circular_scans_nats": 1394.6
+  },
+  {
+   "period": 7.800055,
+   "table_chi2": 8118.59,
+   "n_points": 14,
+   "n_parameters": 7,
+   "table_k": [
+    86.44,
+    94.64
+   ],
+   "table_ecc": 0.3316,
+   "table_ecc_err": 0.0148,
+   "comparison_nats": 93117.7,
+   "comparison_k": [
+    82.22,
+    90.94
+   ],
+   "comparison_ecc_start": 0.3316,
+   "comparison_conjunction_minus_table_days": -0.0585,
+   "comparison_epoch_velocity_rms_kms": [
+    3.15,
+    3.4
+   ],
+   "table_orbit_nats": 124517.6,
+   "table_orbit_epoch_velocity_rms_kms": [
+    1.93,
+    2.04
+   ],
+   "table_orbit_circular_nats": -230616.4,
+   "refined_30_steps_nats": 128912.9,
+   "matched_ecc_scans_nats": 93117.7,
+   "circular_scans_nats": -131262.8
+  }
+ ],
+ "true_basin_nats": 155702.1,
+ "alias_basin_nats": 131096.1,
+ "substitutions_at_candidate_1_nats": {
+  "period": 15054.6,
+  "t_conj": -53538.2,
+  "k": -14881.3,
+  "secosw": -68269.9,
+  "sesinw": 2067.9,
+  "ecc (secosw+sesinw)": -65667.2,
+  "circular": -62889.9,
+  "period+t_conj": -75033.7,
+  "period+t_conj+ecc": 38392.9
+ }
+}

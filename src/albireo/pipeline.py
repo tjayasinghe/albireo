@@ -2469,6 +2469,33 @@ def _coarse_marginal(scanner: Disentangler, init: Mapping[str, Any]) -> float:
     return float(scanner.model.log_likelihood(theta))
 
 
+def _table_orbit_trial(init: Mapping[str, Any], orbit, spec: Orbit, settings: Analysis) -> dict:
+    """A comparison declaration's starting values with the candidate's table orbit in place.
+
+    The period is the table's. The conjunction is the table's where the declaration scans
+    it; a conjunction the star declares is kept. A semi-amplitude is the table's where it
+    lies inside the declared range, and the declaration's start elsewhere. Where the
+    eccentricity is sampled, ``(sqrt(e) cos w, sqrt(e) sin w)`` are the table's, with ``e``
+    held at or below ``ecc_max``. Every other site keeps its starting value, so the
+    hyperparameters are those at which the scans run.
+    """
+    theta = dict(init)
+    if "period" in theta:
+        theta["period"] = float(orbit.period)
+    if spec.t_conj == "scan" and "t_conj" in theta:
+        theta["t_conj"] = float(orbit.t_conj)
+    k = np.asarray(orbit.k, dtype=float)
+    start = np.atleast_1d(np.asarray(init["k"], dtype=float))
+    usable = np.isfinite(k) & (k >= settings.k_min) & (k <= settings.k_max)
+    theta["k"] = np.where(usable, k, start)
+    e, omega = float(orbit.ecc), float(orbit.omega)
+    if "secosw" in theta and "sesinw" in theta and np.isfinite(e) and np.isfinite(omega):
+        root = math.sqrt(min(max(e, 0.0), float(settings.ecc_max)))
+        theta["secosw"] = root * math.cos(omega)
+        theta["sesinw"] = root * math.sin(omega)
+    return theta
+
+
 def _decide_period_by_disentangling(ctx: _Context, dataset: Dataset, lsf, ranked) -> dict | None:
     """Decide among the best few candidate periods by the disentangling's likelihood.
 
@@ -2488,14 +2515,32 @@ def _decide_period_by_disentangling(ctx: _Context, dataset: Dataset, lsf, ranked
     compared here. Each is declared as :func:`_bootstrap_spec` declares it for a
     comparison, on the same coarse grid that the ``Disentangler`` scans use
     (:meth:`albireo.Disentangler._scan_declaration`, twice the pixel, a quarter to an
-    eighth of the full model's cost). Its value is the best marginal log-likelihood the
-    coarse declaration reaches: the conjunction-phase scan over one period, then, where a
-    semi-amplitude is a range, the coarse semi-amplitude scan, whose best trial is taken
-    when it is better than the start. The values are comparable because every candidate
-    is evaluated on the same data with the same noise model, the same declaration-wide
-    semi-amplitude bounds and therefore the same model grid. The marginal log-likelihood
-    also includes no prior (:func:`_coarse_marginal`), so a period is not favoured for
-    agreeing with a prior.
+    eighth of the full model's cost). Its value is the larger of two marginal
+    log-likelihoods of the coarse declaration. One is at the candidate's own table orbit
+    (:func:`_table_orbit_trial`). The other is the best the scans reach: the
+    conjunction-phase scan over one period, then, where a semi-amplitude is a range, the
+    coarse semi-amplitude scan, whose best trial is taken when it is better than the
+    start. The values are comparable because every candidate is evaluated on the same data
+    with the same noise model, the same declaration-wide semi-amplitude bounds and
+    therefore the same model grid, and with the same two kinds of trial. The marginal
+    log-likelihood also includes no prior (:func:`_coarse_marginal`), so a period is not
+    favoured for agreeing with a prior.
+
+    The table orbit is a trial because the scans do not evaluate it (D75). They hold the
+    period at the table's value and the eccentricity at its start, which is the table's
+    only where the table detects it at three sigma (:func:`_element_starts`) and otherwise
+    0.05 at 0.5 rad, and they place the conjunction and the semi-amplitudes on lattices. On
+    a seven-epoch PEPSI binary at R = 44,300 the scans placed the table's best candidate,
+    whose eccentricity of 0.005 +- 0.004 was not detected, 3.3 km/s rms from the measured
+    epoch velocities and 74,071 nats below its basin, and an alias at 7.80 d, whose
+    eccentricity of 0.33 was detected, 37,978 nats below its own. The alias was chosen by
+    11,487 nats, although the true basin was 24,606 nats higher on the same coarse model.
+    The candidate's table orbit, 0.49 km/s rms from the measured velocities, was 1,731 nats
+    below its basin, and with the trial the table's period is kept by 29,453 nats. On the
+    53 Gaia RVS benchmark systems replayed with a comparison, the table orbit lies above the
+    scans' best for 105 of the 212 candidates (median -0.1 nats, 90th percentile +219), and
+    the trial changes two decisions: it restores the true period of mixed-0014, the same
+    failure at R = 11,500, and moves mixed-0011 between two wrong periods.
 
     The prior-amplitude profile and the second scan pass of :meth:`albireo.Disentangler.fit`
     are not run. They refine a fit within a basin, and this comparison only selects the
@@ -2524,6 +2569,9 @@ def _decide_period_by_disentangling(ctx: _Context, dataset: Dataset, lsf, ranked
         dis = _declare(ctx, dataset, lsf, spec, None)
         scanner = dis._scan_declaration()
         init = dict(dis.init)
+        # The candidate's own table orbit is evaluated before the scans move the start.
+        trial = _table_orbit_trial(init, orbit, spec, settings)
+        at_table = _coarse_marginal(scanner, trial)
         scan = None
         if spec.t_conj == "scan":
             scan = scanner._scan_phase(init)
@@ -2547,8 +2595,20 @@ def _decide_period_by_disentangling(ctx: _Context, dataset: Dataset, lsf, ranked
             declared_t = init.get("t_conj", dis.fixed.get("t_conj", np.nan))
             t_conj = float(np.asarray(declared_t, dtype=float))
             moved = False
-        n_trials = (0 if scan is None else int(np.size(scan.values))) + (
-            0 if amp is None else int(amp.n_trials)
+        scan_value = value
+        scored_at = "scans"
+        if np.isfinite(at_table) and at_table > value:
+            # The chosen candidate's final declaration is built from its table orbit
+            # (_bootstrap_spec), so no scanned semi-amplitude replaces the table's start.
+            value = float(at_table)
+            k_best = [float(v) for v in np.atleast_1d(np.asarray(trial["k"], dtype=float))]
+            t_conj = float(np.asarray(trial.get("t_conj", t_conj), dtype=float))
+            moved = False
+            scored_at = "table orbit"
+        n_trials = (
+            1
+            + (0 if scan is None else int(np.size(scan.values)))
+            + (0 if amp is None else int(amp.n_trials))
         )
         seconds = time.perf_counter() - started
         entries.append(
@@ -2556,6 +2616,9 @@ def _decide_period_by_disentangling(ctx: _Context, dataset: Dataset, lsf, ranked
                 "period": float(orbit.period),
                 "table_chi2": float(orbit.chi2),
                 "value_nats": value,
+                "scan_nats": scan_value,
+                "table_orbit_nats": float(at_table),
+                "scored_at": scored_at,
                 "k": [float(k) for k in k_best],
                 "t_conj": t_conj,
                 "scan_moved": moved,
@@ -2565,8 +2628,13 @@ def _decide_period_by_disentangling(ctx: _Context, dataset: Dataset, lsf, ranked
         )
         log(
             f"    -> marginal {value:.1f} nats at K {[round(k, 1) for k in k_best]} km/s, "
-            f"t_conj {t_conj:.4f} ({n_trials} trials, {seconds:.0f} s"
-            + ("; the scan moved the start)" if moved else "; the start was kept)")
+            f"t_conj {t_conj:.4f} ({n_trials} trials, {seconds:.0f} s; "
+            + (
+                f"the table orbit, above the scans' best of {scan_value:.1f})"
+                if scored_at == "table orbit"
+                else f"the scans' best, above the table orbit's {at_table:.1f}; "
+                + ("the scan moved the start)" if moved else "the start was kept)")
+            )
         )
         del scanner, dis, amp, scan
         gc.collect()

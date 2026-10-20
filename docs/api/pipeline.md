@@ -270,28 +270,48 @@ rather than held at the table's value, which is as uncertain as the table's peri
 semi-amplitude is the declared range started at the table's value rather than a Gaussian
 around it. This gives every candidate the same velocity budget and therefore the same model
 grid, and marginal likelihoods evaluated on grids of different length are not comparable. A
-candidate's value is the best marginal log-likelihood its coarse declaration reaches
+candidate's value is the larger of two marginal log-likelihoods of its coarse declaration
 (`_scan_declaration`, twice the model pixel, a quarter to an eighth of the full model's
-cost per solve). The conjunction-phase scan over one period is followed, where a
-semi-amplitude is a range, by the coarse semi-amplitude scan, whose best trial is taken
-when it is better than the start. The values are comparable because the data, the noise
-model, the model grid and the coarse scan grids are the same for every candidate, and
-because the marginal log-likelihood includes no prior that could favour a period. The
-prior-amplitude profile and the second scan pass of [`Disentangler.fit`](facade.md) are not
-run. They refine a fit within a basin, and this comparison only selects the basin. The cost
-is 42 phase trials plus about 300 semi-amplitude trials per candidate for two components
-over a hundredfold semi-amplitude range, of order a minute or two per candidate on a dozen
-epochs. Each candidate's declaration holds a compiled model and is released as soon as its
-value is known.
+cost per solve). One is at the candidate's own table orbit: the period, conjunction,
+semi-amplitudes and eccentricity fitted to the velocity table, with a semi-amplitude
+outside the declared range replaced by its start. The other is the best the scans reach:
+the conjunction-phase scan over one period, followed, where a semi-amplitude is a range,
+by the coarse semi-amplitude scan, whose best trial is taken when it is better than the
+start. The values are comparable because the data, the noise model, the model grid and the
+two kinds of trial are the same for every candidate, and because the marginal
+log-likelihood includes no prior that could favour a period. The prior-amplitude profile
+and the second scan pass of [`Disentangler.fit`](facade.md) are not run. They refine a fit
+within a basin, and this comparison only selects the basin. The cost is one evaluation at
+the table orbit, 42 phase trials and about 300 semi-amplitude trials per candidate for two
+components over a hundredfold semi-amplitude range, of order a minute or two per candidate
+on a dozen epochs. Each candidate's declaration holds a compiled model and is released as
+soon as its value is known.
+
+The table orbit is evaluated because the scans do not evaluate it (D75). They hold the
+period at the table's value and the eccentricity at its start, which is the table's value
+only where the table detects it at three sigma and otherwise 0.05 at 0.5 rad, and they
+place the conjunction and the semi-amplitudes on lattices. On a seven-epoch PEPSI binary
+at R = 44,300 the scans placed the table's correct candidate, whose eccentricity the table
+did not detect, 3.3 km/s rms from the measured epoch velocities, and an eccentric alias at
+7.80 d was chosen by 11,487 nats although the true orbit is 24,606 nats higher on the same
+model. That candidate's table orbit is 0.49 km/s rms from the measured velocities. With it
+the table's period is kept by 29,453 nats, and the run ends at the orbit that a declared
+period gives. On the 53 Gaia RVS benchmark systems replayed with the current code, the
+table orbit is above the scans' best for half of the candidates, and the trial restores
+the period of the one system on which the scans had failed in the same way (mixed-0014)
+without changing any correct decision. On that set the comparison corrects one table
+choice (K-12-041) and overturns one correct choice (gaia-40041022325608704, by 7 nats with
+the trial and 55 without it).
 
 When the comparison changes the period, a flag names both periods and the margin ("the
 table preferred P ... at chi2 ...; the disentangling prefers P ... by N nats"). `result.json`
 records the comparison under `bootstrap.decision`. `by` is `"disentangling"` when the
 comparison changed the period and `"table"` when the table's choice was kept or no
-comparison ran. Each candidate has an entry with its period, table chi-square, marginal
-value in nats, the scan's best semi-amplitudes and conjunction, the number of trials and the
-time in seconds. The chosen period and the margins over the runner-up and over the table's
-choice are also recorded.
+comparison ran. Each candidate has an entry with its period, table chi-square, value in
+nats, the two trials that value is the larger of (`scan_nats`, `table_orbit_nats`), the
+one that gave it (`scored_at`, `"scans"` or `"table orbit"`), that trial's semi-amplitudes
+and conjunction, the number of trials and the time in seconds. The chosen period and the
+margins over the runner-up and over the table's choice are also recorded.
 
 **Component order.** Components must be declared in order of decreasing mass, which for a
 main-sequence pair is the brighter star first. The likelihood does not determine which

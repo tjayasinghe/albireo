@@ -602,6 +602,10 @@ def test_a_period_search_bootstraps_from_library_templates(library, tmp_path):
     result = run_star(star, config, progress=False)
     bootstrap = result.report["bootstrap"]
     assert abs(bootstrap["period"] - ORBIT.period) < 0.02 * ORBIT.period, bootstrap
+    # Each compared candidate is valued at the better of its scans and its table orbit.
+    for entry in bootstrap["decision"]["candidates"]:
+        assert entry["value_nats"] == max(entry["scan_nats"], entry["table_orbit_nats"])
+        assert entry["scored_at"] in ("scans", "table orbit")
     # The template table the bootstrap measured is a separate product, written before
     # the disentangling, so the period decision can be examined from disk.
     template_table = Path(result.report["files"]["template_velocities"])
@@ -694,6 +698,56 @@ def test_a_free_eccentricity_starts_from_the_table_orbit_when_it_is_usable():
     assert _element_starts(ctx, _Orbit(0.4, 1.2), star, circular) is None
     orbit = _declared_orbit(star, settings, starts=[23.0, 34.0], elements=(0.4, 1.2))
     assert float(np.asarray(orbit.ecc.start())) == 0.4
+
+
+def test_the_table_orbit_trial_puts_the_candidates_table_orbit_into_the_comparisons_start():
+    """The period comparison also values each candidate at its own table orbit (D75).
+
+    The scans start a candidate whose table does not detect its eccentricity at e = 0.05,
+    and place its conjunction on a lattice. On a seven-epoch PEPSI binary that left the
+    table's correct period 74,071 nats below its basin while its table orbit, never
+    evaluated, was 1,731 below it.
+    """
+    from albireo.facade import Between as _Between
+    from albireo.facade import Fixed as _Fixed
+    from albireo.facade import Orbit as _Orbit
+    from albireo.pipeline import _table_orbit_trial
+
+    settings = Analysis(k_min=2.0, k_max=150.0, ecc_max=0.5)
+    table_orbit = SimpleNamespace(
+        period=6.2663, t_conj=2460355.68, ecc=0.04, omega=1.2, k=np.array([62.5, 300.0])
+    )
+    init = {
+        "period": 6.30,
+        "t_conj": 2460355.50,
+        "k": np.array([60.0, 70.0]),
+        "secosw": 0.1,
+        "sesinw": 0.2,
+        "log_tau": np.array([5.7, 5.7]),
+    }
+    spec = _Orbit(
+        period=_Between(6.0, 6.5),
+        k=[_Between(2.0, 150.0, start_at=60.0), _Between(2.0, 150.0, start_at=70.0)],
+        t_conj="scan",
+        ecc=_Between(0.0, 0.5),
+    )
+    trial = _table_orbit_trial(init, table_orbit, spec, settings)
+    assert trial["period"] == 6.2663 and trial["t_conj"] == 2460355.68
+    # A semi-amplitude outside the declared range is not a measurement: the start is kept.
+    np.testing.assert_allclose(trial["k"], [62.5, 70.0])
+    np.testing.assert_allclose(trial["secosw"] ** 2 + trial["sesinw"] ** 2, 0.04)
+    np.testing.assert_allclose(np.arctan2(trial["sesinw"], trial["secosw"]), 1.2)
+    assert trial["log_tau"] is init["log_tau"], "the hyperparameters are the scans' own"
+    assert init["period"] == 6.30 and init["t_conj"] == 2460355.50, "the start is unchanged"
+    # A conjunction the star declares is kept, and a held eccentricity is not sampled.
+    declared = replace(spec, t_conj=_Fixed(2460355.60))
+    assert _table_orbit_trial(init, table_orbit, declared, settings)["t_conj"] == 2460355.50
+    held = {k: v for k, v in init.items() if k not in ("secosw", "sesinw")}
+    assert "secosw" not in _table_orbit_trial(held, table_orbit, spec, settings)
+    # An eccentricity above the prior is held at its bound.
+    wide = SimpleNamespace(**{**vars(table_orbit), "ecc": 0.8})
+    trial = _table_orbit_trial(init, wide, spec, settings)
+    np.testing.assert_allclose(trial["secosw"] ** 2 + trial["sesinw"] ** 2, 0.5)
 
 
 def test_an_exchanged_pair_is_recognised_and_the_truth_reordered():
@@ -1653,7 +1707,8 @@ def test_the_disentangling_decides_among_the_best_candidate_periods(toy, tmp_pat
     e = 0.72 against a true 5.356 d. Both lie inside the declared ranges, so the range
     filter does not remove them. The three candidate orbits here represent that case: the
     first has the lowest chi-square, the second has the highest marginal likelihood of the
-    disentangling, and the fit is started from the second.
+    disentangling, and the fit is started from the second. Each candidate's value is the
+    better of its scans and its own table orbit (D75).
     """
     from types import SimpleNamespace
 
@@ -1707,6 +1762,10 @@ def test_the_disentangling_decides_among_the_best_candidate_periods(toy, tmp_pat
         6.10400: (-850.0, -840.0, [38.0, 61.0]),
         1.12943: (-980.0, -990.0, [180.0, 186.0]),
     }
+    # period -> the marginal at the candidate's own table orbit (D75). Every value is below
+    # that candidate's scans here, so the scans decide; the last part of the test raises one.
+    table_orbit = {0.24847: -1100.0, 6.10400: -900.0, 1.12943: -1050.0}
+    trials = []
 
     class _Phase:
         def __init__(self, best, values):
@@ -1727,13 +1786,18 @@ def test_the_disentangling_decides_among_the_best_candidate_periods(toy, tmp_pat
             return self.best_value - self.start_value
 
     class _FakeDis:
-        """Only what the comparison uses: a coarse copy, a phase scan, a K scan."""
+        """Only what the comparison uses: a coarse copy, a model, a phase scan, a K scan."""
 
         def __init__(self, spec):
             centre = 0.5 * (float(spec.period.lo) + float(spec.period.hi))
             self.period = min(scanned, key=lambda p: abs(p - centre))
             self.init = {"k": np.array([10.0, 20.0]), "t_conj": 2455000.0}
             self.fixed = {}
+            self.model = SimpleNamespace(log_likelihood=self._at_table_orbit)
+
+        def _at_table_orbit(self, theta):
+            trials.append({key: np.asarray(value) for key, value in theta.items()})
+            return table_orbit[self.period]
 
         def _scan_declaration(self):
             return self
@@ -1797,7 +1861,8 @@ def test_the_disentangling_decides_among_the_best_candidate_periods(toy, tmp_pat
     assert [c["scan_moved"] for c in decision["candidates"]] == [False, True, False]
     assert decision["candidates"][1]["k"] == pytest.approx([38.0, 61.0])
     assert decision["candidates"][0]["k"] == pytest.approx([10.0, 20.0])  # the rejected scan
-    assert all(c["n_trials"] == 319 for c in decision["candidates"])  # 317 K trials, 2 phases
+    # 317 K trials, 2 phases and the table orbit.
+    assert all(c["n_trials"] == 320 for c in decision["candidates"])
     assert all(c["seconds"] >= 0.0 for c in decision["candidates"])
     assert [c["table_chi2"] for c in decision["candidates"]] == [8.0, 31.0, 45.0]
     # Three candidates were declared, on identical semi-amplitude bounds, and no object
@@ -1811,6 +1876,39 @@ def test_the_disentangling_decides_among_the_best_candidate_periods(toy, tmp_pat
     # The chosen candidate's scan moved, so its semi-amplitudes start the disentangling
     # where the range is searched (this orbit's secondary is outside the declared range).
     assert [float(s.start_at) for s in spec.k] == pytest.approx([38.0, 61.0])
+    # Each candidate was also valued at its own table orbit, with the table's conjunction
+    # and, where a semi-amplitude lies outside the declared range (233, 239, 300, 182 and
+    # 185 km/s against k_max = 120), the declaration's start in its place (D75).
+    assert [c["table_orbit_nats"] for c in decision["candidates"]] == pytest.approx(
+        [-1100.0, -900.0, -1050.0]
+    )
+    assert [c["scan_nats"] for c in decision["candidates"]] == pytest.approx(
+        [-1000.0, -840.0, -980.0]
+    )
+    assert [c["scored_at"] for c in decision["candidates"]] == ["scans"] * 3
+    assert [float(t["t_conj"]) for t in trials] == pytest.approx([2455000.5] * 3)
+    assert [t["k"].tolist() for t in trials] == [[10.0, 20.0], [40.0, 20.0], [10.0, 20.0]]
+
+    # A table orbit above its scans' best is that candidate's value, and the table orbit
+    # rather than the scans' semi-amplitudes starts the disentangling.
+    declared.clear()
+    trials.clear()
+    table_orbit[6.10400] = -820.0
+    above = _context(star, tmp_path / "table_orbit", Analysis(), library="stub")
+    spec, block = _bootstrap(above, dataset, {"TOY": 5.5}, None)
+    decision = block["report"]["decision"]
+    assert decision["chosen_period"] == pytest.approx(6.10400)
+    assert decision["margin_nats"] == pytest.approx(160.0)  # over the 1.129 d scans' -980
+    chosen = decision["candidates"][1]
+    assert chosen["scored_at"] == "table orbit" and chosen["value_nats"] == pytest.approx(-820.0)
+    assert chosen["scan_nats"] == pytest.approx(-840.0) and chosen["scan_moved"] is False
+    assert chosen["k"] == pytest.approx([40.0, 20.0]) and chosen["t_conj"] == pytest.approx(
+        2455000.5
+    )
+    # The table's 300 km/s secondary is outside the range, which is then searched from 1.5
+    # times the primary's 40 km/s.
+    assert [float(s.start_at) for s in spec.k] == pytest.approx([40.0, 60.0])
+    json.dumps(_jsonable(block["report"]))
 
     # With the setting at zero the table's choice is kept and no model is built.
     declared.clear()
