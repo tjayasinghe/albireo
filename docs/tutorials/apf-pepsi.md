@@ -229,17 +229,40 @@ renormalised the PEPSI products on 12 Å scales and removed a residual continuum
 between the epochs; the pipeline uses the products' own normalisation. The run took
 24 minutes.
 
+**Systemic velocities.** The label stage smooths the epochs of both instruments to the
+library's resolution (see the limitations), its frame offsets set the zero points, and the
+orbit has one systemic velocity. It differs from that of the dedicated analysis by
++0.32 km/s on APF and +0.18 km/s on PEPSI. On APF the velocities of the two reductions
+against the same library templates differ by +0.30 km/s epoch by epoch (rms 0.10 km/s), so
+the difference lies in the wavelength scales of the reductions and not in the label fit;
+which scale is correct was not established. On PEPSI it is within the dedicated analysis's
+error of 0.42 km/s. The zero points of the two stars differ by 0.18 km/s on APF and 0.19 km/s
+on PEPSI, and on APF the shared systemic velocity carries that difference into the orbit:
+K_A rises by 0.02 km/s, e from 0.0037 to 0.0048, and the reduced chi-square from 5.4 to 6.3.
+These runs used libraries restricted to the stars' range (112 and 126 nodes); the label stage
+took 6 minutes and at most 5 GB.
+
 ## Limitations
 
-- **Systemic velocities and labels.** The label stage compares library spectra with the
-  epochs at the instrument's resolution, and a library spectrum cannot be sharpened. None of
-  the libraries that albireo fetches has a resolving power above APF's or PEPSI's (the BOSZ
-  grids are at R = 20,000), so the stage stops with a flag that says so, and the epoch
-  velocities remain differential: each component keeps its own unidentified zero point. The
-  period, the eccentricity and the semi-amplitudes are measured; the systemic velocity and
-  the labels are not. Velocities with an absolute zero point can be measured against library
-  templates with [`albireo.fit_templates`][albireo.templatefit.fit_templates], whose
-  templates may be broader than the data.
+- **Systemic velocities and labels at the library's resolution.** A library spectrum cannot
+  be sharpened, and the BOSZ grids at R = 20,000 are broader than both instruments. The
+  label stage therefore smooths the epochs to the library's resolution (sigma 7.04 km/s,
+  R of about 18,100) before it compares them with the templates, and flags it
+  ([§9.2b](../math.md#92b-epochs-sharper-than-the-library)). The frame offsets it measures
+  set the zero points of the epoch velocities, which are then absolute, and the orbit has
+  one systemic velocity. The labels are those of spectra at R of about 18,100: v sin i
+  below about 7 km/s is not resolved, and on the APF binary the temperatures were 120-170 K
+  above, and the gravities 0.3 dex above, those of a comparison at the data's resolution. The
+  `bosz2024-fgk-r50000` and `bosz2024-hot-r50000` libraries are sharper than PEPSI and are
+  compared with it at its own resolution, which needs `dv_kms` below 1.3 km/s for an exact
+  grid compensation; they are broader than most APF exposures, which are smoothed to them.
+- **Memory of the label stage.** The label stage evaluates every library node on the model
+  grid at once. With the 455-node `bosz2024-fgk-r20000` box it held about 12 GB on the
+  620 A PEPSI window and passed 11 GB on the 1200 A APF window before it was stopped for
+  lack of memory on a 31 GB machine running other jobs. A library restricted to the stars'
+  range keeps it at 4-5 GB: build it from the nodes of the registered box
+  (`SpectralLibrary` with the selected `nodes`, `normalized` and `log_continuum` rows, then
+  `albireo.save_library`) and declare the file as `[labels] library`.
 - **Scattered light.** PEPSI spectra are not sky-subtracted, and the APF T decker
   (2 x 3 arcsec) leaves no room for a sky measurement. Scattered moonlight or twilight adds
   a solar spectrum at the topocentric rest velocity, which the model does not contain; such

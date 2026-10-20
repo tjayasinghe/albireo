@@ -2523,6 +2523,11 @@ class Fit:
         The :class:`SemiAmplitudeScan` run before optimization, or ``None`` when no
         semi-amplitude was a range, the scan was switched off, or the fit is in
         ``"velocity"`` mode.
+    smoothing
+        ``None`` for a fit to the epochs as observed. For a fit returned by
+        :meth:`smoothed`, one entry per smoothed instrument: the instrument, its widths
+        before and after, and the diagnostics of the convolution
+        (:func:`albireo.preprocess.smooth_epoch`).
     """
 
     dis: Disentangler
@@ -2532,6 +2537,7 @@ class Fit:
     mode: str = "keplerian"
     priors_used: dict = field(default_factory=dict, repr=False)
     k_scan: SemiAmplitudeScan | None = None
+    smoothing: tuple | None = None
 
     @property
     def params(self) -> dict:
@@ -3265,7 +3271,14 @@ class Fit:
         for group in problem.groups:
             declared = self._stellar_lsf_widths(group)
             instrument = group.instrument
-            reduced = _quadrature_width(declared, resolving_power, f"instrument {instrument!r}")
+            try:
+                reduced = _quadrature_width(declared, resolving_power, f"instrument {instrument!r}")
+            except ValueError as exc:
+                raise ValueError(
+                    f"{exc} Alternatively, Fit.match_labels(..., smoothing='auto') smooths "
+                    "the epochs to the library's resolution and compares them there "
+                    "(Fit.smoothed)."
+                ) from exc
             widths.append((instrument, reduced))
             applied = reduced
             if grid_compensation:
@@ -3289,6 +3302,9 @@ class Fit:
         notes = _grid_compensation_notes(floored_at, narrow_at, dv)
         for note in notes:
             warnings.warn(note, UserWarning, stacklevel=2)
+        # A fit to smoothed epochs (Fit.smoothed) states so where its labels are reported;
+        # the caller asked for it, so it is recorded rather than warned.
+        notes = [*notes, *_smoothing_notes(self.smoothing, resolving_power)]
         return EpochStatistics.from_problem(
             problem,
             names=[s.name for s in self.dis.stars],
@@ -3302,9 +3318,184 @@ class Fit:
             grid_variance_kms2=_grid_variance(dv) if grid_compensation else 0.0,
             operator_sigma_kms=applied_widths,
             notes=notes,
+            smoothed_lsf_sigma_kms=tuple(
+                (entry["instrument"], float(entry["sigma_kms"])) for entry in self.smoothing or ()
+            ),
         )
 
-    def match_labels(self, stars, **kwargs):
+    def smoothing_widths(self, resolving_power, sigma_q="auto") -> dict[str, float]:
+        """The widths to which the epochs must be smoothed for a library at ``resolving_power``.
+
+        An instrument is listed when the library is at or below its resolving power, the
+        case in which :meth:`epoch_statistics` raises: some declared width is not broader
+        than the library's ``sigma_lib``. Its target is ``max(sqrt(sigma_lib^2 +
+        sigma_q^2), w_max)``, where ``w_max`` is the widest width the instrument declares,
+        so that every epoch can be brought to it and the epoch operator still applies
+        ``sigma_q`` to the templates. An instrument broader than the library at every
+        epoch is compared as observed and is not listed. :meth:`match_labels` with
+        ``smoothing=`` uses these widths (:meth:`smoothed`).
+
+        Parameters
+        ----------
+        resolving_power
+            The library's resolving power (:attr:`albireo.SpectralLibrary.resolving_power`).
+            ``None``, an intrinsic library, needs no smoothing.
+        sigma_q
+            The width in km/s the operator applies to the templates after the smoothing, or
+            ``"auto"`` (default) for ``max(3 km/s, 1.2 dv)``. Three km/s was used for the
+            measurement of D74, where 5 km/s moved the systemic velocity by 0.02 km/s. The
+            grid compensation is floored below ``sigma_q = 0.91 dv`` and approximate below
+            ``sigma_q = dv`` (:meth:`epoch_statistics`), so ``"auto"`` stays above 1.2
+            model pixels.
+
+        Returns
+        -------
+        dict
+            Instrument to target Gaussian sigma in km/s; empty when nothing needs smoothing.
+
+        Raises
+        ------
+        ValueError
+            If ``sigma_q`` is not positive, or if an instrument to be smoothed declares a
+            wavelength-dependent LSF, which the convolution does not reproduce.
+        """
+        from albireo.match import _resolution_sigma_kms
+
+        if resolving_power is None:
+            return {}
+        if isinstance(sigma_q, str):
+            if sigma_q != "auto":
+                raise ValueError(f"sigma_q must be 'auto' or a width in km/s; got {sigma_q!r}")
+            q = max(_AUTO_SMOOTHING_KMS, _AUTO_SMOOTHING_PIXELS * float(self.dis.grid.dv_kms))
+        else:
+            q = float(sigma_q)
+            if not (np.isfinite(q) and q > 0.0):
+                raise ValueError(f"sigma_q must be a positive width in km/s; got {sigma_q!r}")
+        sigma_lib = _resolution_sigma_kms(float(resolving_power))
+        targets = {}
+        for key, widths in self.dis._lsf_widths().items():
+            if float(np.min(widths)) > sigma_lib:
+                continue
+            if _coerce_lsf(self.dis.lsf[key], key).anchors_angstrom is not None:
+                raise ValueError(
+                    f"instrument {key!r} declares a wavelength-dependent LSF, and the library "
+                    f"(R = {float(resolving_power):g}) is broader than part of it. Smoothing "
+                    "to one width does not reproduce a profile that varies along the order; "
+                    "declare one width for the instrument, or use a library sharper than the "
+                    "data."
+                )
+            targets[key] = float(max(np.hypot(sigma_lib, q), float(np.max(widths))))
+        return targets
+
+    def smoothed(self, sigma_kms, *, fill_max: int = 3) -> Fit:
+        """This fit on its epochs convolved to broader Gaussian line-spread functions.
+
+        Every epoch of each instrument in ``sigma_kms`` is convolved to that width with
+        :func:`albireo.preprocess.smooth_epoch`, which keeps the input inverse variances,
+        and the instrument's LSF is declared at it. The orbit, the smoothness
+        hyperparameters and the other instruments are this fit's. The epoch statistics of
+        the result are exact for the smoothed epochs at this fit's MAP, and the label fit's
+        frame offsets are in this fit's frame, so they serve as zero points of this fit's
+        templates. The result is not a new MAP: its components are the conditional mean of
+        the smoothed epochs at this fit's parameters.
+
+        Parameters
+        ----------
+        sigma_kms
+            Mapping of instrument name to target Gaussian sigma in km/s, as returned by
+            :meth:`smoothing_widths`.
+        fill_max
+            Passed to :func:`albireo.preprocess.smooth_epoch`.
+
+        Returns
+        -------
+        Fit
+            A fit on the smoothed epochs, with :attr:`smoothing` recording what was done.
+
+        Raises
+        ------
+        ValueError
+            If an instrument is not in the dataset, if a target is narrower than an epoch's
+            width, if an instrument declares a wavelength-dependent LSF or a noise
+            correlation, or if an epoch keeps no pixel with a whole kernel.
+        """
+        from albireo.preprocess import _smoothed
+
+        targets = {str(k): float(v) for k, v in dict(sigma_kms).items()}
+        if not targets:
+            return self
+        dataset = self.dis.dataset
+        unknown = sorted(set(targets) - set(dataset.instruments))
+        if unknown:
+            raise ValueError(
+                f"no epochs of instrument(s) {unknown}; the dataset has "
+                f"{sorted(dataset.instruments)}"
+            )
+        declared = self.dis.noise_correlation
+        for key in targets:
+            correlation = declared.get(key, 0.0) if isinstance(declared, Mapping) else declared
+            if correlation is not None and not (
+                isinstance(correlation, int | float) and float(correlation) == 0.0
+            ):
+                raise ValueError(
+                    f"instrument {key!r} declares a noise correlation ({correlation!r}). A "
+                    "convolution changes the correlation of the noise, and the AR(1) model "
+                    "of the declaration would no longer describe it."
+                )
+        widths = {}
+        for key in targets:
+            spec = _coerce_lsf(self.dis.lsf[key], key)
+            if spec.anchors_angstrom is not None:
+                raise ValueError(
+                    f"instrument {key!r} declares a wavelength-dependent LSF, which smoothing "
+                    "to one width does not reproduce; declare one width for the instrument"
+                )
+            widths[key] = spec
+        epochs, diagnostics = [], {key: [] for key in targets}
+        for epoch in dataset:
+            key = epoch.instrument
+            if key not in targets:
+                epochs.append(epoch)
+                continue
+            spec = widths[key]
+            own = epoch.lsf_sigma_kms if spec.is_per_epoch else float(spec.sigma_kms)
+            smoothed_epoch, info = _smoothed(epoch, targets[key], own, fill_max)
+            epochs.append(smoothed_epoch)
+            diagnostics[key].append({**info, "from_sigma_kms": float(own)})
+        lsf = dict(self.dis.lsf)
+        for key, target in targets.items():
+            lsf[key] = LSF(sigma_kms=target)
+        dis = replace(self.dis, dataset=Dataset(tuple(epochs), frame=dataset.frame), lsf=lsf)
+        entries = []
+        for key, target in targets.items():
+            rows = diagnostics[key]
+            entries.append(
+                {
+                    "instrument": key,
+                    "sigma_kms": target,
+                    "from_sigma_kms": (
+                        min(r["from_sigma_kms"] for r in rows),
+                        max(r["from_sigma_kms"] for r in rows),
+                    ),
+                    "kernel_sigma_kms": (
+                        min(r["kernel_sigma_kms"] for r in rows),
+                        max(r["kernel_sigma_kms"] for r in rows),
+                    ),
+                    "sum_k2": float(np.median([r["sum_k2"] for r in rows])),
+                    "kept_fraction": sum(r["kept"] for r in rows) / sum(r["good"] for r in rows),
+                    "filled": int(sum(r["filled"] for r in rows)),
+                    "n_epochs": len(rows),
+                }
+            )
+        return replace(
+            self,
+            dis=dis,
+            phase_scan=None,
+            k_scan=None,
+            smoothing=(*(self.smoothing or ()), *entries),
+        )
+
+    def match_labels(self, stars, *, smoothing=None, **kwargs):
         """Fit Teff, log g, [M/H] and v sin i to the stellar components of this fit.
 
         This declarative form of :func:`albireo.match_labels` takes the grid, the recovered
@@ -3323,6 +3514,16 @@ class Fit:
         converged the same way (``docs/math.md`` §9.2a). ``compare="native"`` and
         ``compare="matched"`` compare with the disentangled components instead.
 
+        A library spectrum cannot be sharpened, so the epoch comparison raises where the
+        library is at or below an instrument's resolving power. With ``smoothing`` the
+        epochs of such an instrument are smoothed to the library's resolution instead
+        (:meth:`smoothing_widths`, :meth:`smoothed`), and the labels and frame offsets are
+        measured there. The statistics record it in their notes, the labels then carry the
+        library's resolution, and a v sin i below the smoothed width is not resolved
+        (``docs/math.md`` §9.2b). On two binaries observed at R = 44,000-56,000 the frame
+        offsets agreed with those from libraries sharper than the data to 0.02-0.07 km/s in
+        the systemic velocity (D74).
+
         Only the stellar rows are passed on: a telluric or nebular component has no
         atmospheric parameters, and the epoch comparison holds it at its posterior mean.
         The light fractions are passed with the stars because the label fit's dilution
@@ -3333,6 +3534,12 @@ class Fit:
         stars
             Mapping of star name to :class:`albireo.StarLabels`, one per stellar component
             of this declaration. Names must match :attr:`Disentangler.stars`.
+        smoothing
+            ``None`` (default) compares the epochs as observed. ``"auto"``, or a width
+            ``sigma_q`` in km/s, smooths the epochs of every instrument at or below whose
+            resolving power the library is (:meth:`smoothing_widths`); instruments the
+            library resolves are compared as observed. Only for the epoch comparison, and
+            not with ``statistics``.
         **kwargs
             Passed to :func:`albireo.match_labels`. ``statistics`` may be passed to reuse
             statistics built once with :meth:`epoch_statistics`.
@@ -3346,7 +3553,10 @@ class Fit:
         ValueError
             If ``stars`` names a component that is not a star of this declaration, if it
             omits one, if the dataset does not declare its wavelength medium, or, for the
-            epoch comparison, if the stars' libraries declare different resolving powers.
+            epoch comparison, if the stars' libraries declare different resolving powers,
+            if the library is at or below an instrument's resolving power and ``smoothing``
+            is not given, or if ``smoothing`` is given with another comparison or with
+            ``statistics``.
 
         Notes
         -----
@@ -3377,6 +3587,17 @@ class Fit:
             )
         ordered = {name: stars[name] for name in names}
         compare = kwargs.setdefault("compare", "epochs")
+        if smoothing is not None and compare != "epochs":
+            raise ValueError(
+                f"smoothing= applies to the epoch comparison, and compare={compare!r} compares "
+                "the templates with the disentangled components"
+            )
+        if smoothing is not None and kwargs.get("statistics") is not None:
+            raise ValueError(
+                "pass either smoothing= or statistics=: statistics built elsewhere fix the "
+                "epochs they were built from (Fit.smoothed(...).epoch_statistics(...) builds "
+                "them from smoothed epochs)"
+            )
         if compare == "epochs" and kwargs.get("statistics") is None:
             declared = {name: ordered[name].library.resolving_power for name in names}
             if len(set(declared.values())) > 1:
@@ -3386,9 +3607,12 @@ class Fit:
                     "star's template must start at the same resolution. Use libraries at one "
                     "resolving power, or pass compare='native'."
                 )
-            kwargs["statistics"] = self.epoch_statistics(
-                resolving_power=next(iter(declared.values()))
-            )
+            resolving = next(iter(declared.values()))
+            if smoothing is not None:
+                targets = self.smoothing_widths(resolving, smoothing)
+                if targets:
+                    return self.smoothed(targets).match_labels(stars, **kwargs)
+            kwargs["statistics"] = self.epoch_statistics(resolving_power=resolving)
         spectra, std = self._spectra_and_std()
         rows = [self.dis.component_names.index(name) for name in names]
         kwargs.setdefault("lsf_sigma_kms", self.dis._widest_lsf())
@@ -4007,6 +4231,44 @@ def _hyper_of(params: Mapping, names: Sequence[str]) -> dict[str, dict[str, floa
     tau = np.exp(np.atleast_1d(np.asarray(params["log_tau"], dtype=float)))
     eta = np.exp(np.atleast_1d(np.asarray(params["log_eta"], dtype=float)))
     return {name: {"tau": float(tau[i]), "eta": float(eta[i])} for i, name in enumerate(names)}
+
+
+_AUTO_SMOOTHING_KMS = 3.0
+"""The default width, in km/s, that the epoch operator applies to the templates after the
+epochs are smoothed to a library broader than them (:meth:`Fit.smoothing_widths`). It is the
+value of the D74 measurement on two binaries observed at R = 44,000-56,000 against BOSZ at
+R = 20,000; 5 km/s moved the systemic velocity by 0.02 km/s there."""
+
+_AUTO_SMOOTHING_PIXELS = 1.2
+"""The least default width in model pixels. The grid compensation of the epoch operator is
+floored below 0.91 pixel and approximate below one (:meth:`Fit.epoch_statistics`)."""
+
+
+def _smoothing_notes(smoothing, resolving_power) -> list[str]:
+    """One note per instrument whose epochs a fit was smoothed (:meth:`Fit.smoothed`)."""
+    notes = []
+    for entry in smoothing or ():
+        sigma = float(entry["sigma_kms"])
+        lo, hi = entry["from_sigma_kms"]
+        own = f"{lo:.3f} km/s" if lo == hi else f"{lo:.3f}-{hi:.3f} km/s"
+        resolving = C_KMS / (sigma * 2.0 * math.sqrt(2.0 * math.log(2.0)))
+        library = (
+            ""
+            if resolving_power is None
+            else f" the library (R = {float(resolving_power):,.0f}) is at least as broad as "
+            f"their line-spread function ({own}), so"
+        )
+        notes.append(
+            f"epochs of {entry['instrument']!r} smoothed to sigma {sigma:.3f} km/s "
+            f"(R = {resolving:,.0f}) before the comparison:{library} the labels and the frame "
+            f"offsets are measured at that resolution, and v sin i below about {sigma:.0f} "
+            "km/s is not resolved. The epochs keep their own inverse variances on pixels the "
+            "convolution correlates, so the formal errors are upper bounds on the noise part "
+            f"and a perfect model has a chi-square of about sum(k^2) = {entry['sum_k2']:.3f} "
+            f"per pixel ({entry['kept_fraction']:.1%} of the good pixels kept; "
+            "docs/math.md 9.2b)"
+        )
+    return notes
 
 
 def _has_scanned(value) -> bool:

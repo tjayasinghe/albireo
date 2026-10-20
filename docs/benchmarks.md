@@ -5107,3 +5107,125 @@ the computation, which is unchanged. [The comparison with other codes](compariso
 quotes the values of this section. The agreement of albireo and shift-and-add on the observed
 spectra of AI Phe was scored in the same convention on 2026-10-19
 ([AI Phoenicis](#agreement-with-shift-and-add-at-a-common-resolution-2026-10-19)).
+
+## Labels from epochs sharper than the library (D74, 2026-10-19)
+
+The label stage's epoch comparison applies `sqrt(sigma_inst^2 - sigma_lib^2)` to the
+templates (§9.2a of the method), so it cannot run where the library is broader than the
+data. Three routes to absolute epoch velocities, a systemic velocity and labels for such
+data were measured on the two binaries of the APF and PEPSI validation
+([tutorial](tutorials/apf-pepsi.md)), whose spectra are not distributed with albireo. PEPSI:
+seven epochs at R = 44,300 (sigma 2.874 km/s). APF: twenty epochs at R = 46,600-56,000
+(sigma 2.273-2.731 km/s). Both were fitted on a model grid of 2 km/s.
+
+Harness: the fits of the validation runs were rebuilt from their saved MAPs with the
+pipeline's own declaration functions. The model grids, velocities and hyperparameters are
+as recorded, and the rebuilt fits reproduce the written velocity tables to 5e-7 km/s, so no
+disentangling was repeated. The scripts were run from the session's scratch area and are not
+part of the repository.
+
+### The routes
+
+- **(a) Smoothed epochs.** The label fit on epochs smoothed to
+  `sqrt(sigma_lib^2 + sigma_q^2)` = 7.04 km/s (BOSZ at R = 20,000, `sigma_q` = 3 km/s), with
+  the epochs' own inverse variances. This is the route adopted (`Fit.match_labels(...,
+  smoothing="auto")`; method §9.2b).
+- **(b) Library-template zero points.** Each component's zero point is the median, over the
+  epochs, of the velocity against a library template less its differential velocity. The
+  templates are at the pipeline's starting labels, or at labels fitted by `fit_templates`,
+  which is how the dedicated analysis of the validation set its zero points.
+- **(c) Libraries sharper than the data.** The label fit at the data's resolution on a
+  1.4 km/s model grid. For PEPSI the library is BOSZ at R = 50,000 (126 nodes, 6250-7500 K,
+  log g 4.0-5.0, [M/H] -2.0 to -0.5). For APF it is the original-resolution BOSZ synthesis,
+  intrinsic spectra sampled every 1.07 km/s, convolved to 1.0 km/s and declared at
+  R = 117,000 (60 nodes, 5500-6500 K, log g 3.0-4.5, [M/H] -1.25 to -0.75).
+
+### Systemic velocities
+
+The systemic velocity is the shared gamma of `fit_rv_orbit` on the absolute table, and
+`gamma_A - gamma_B` is the difference of the two gammas of the same fit with one systemic
+velocity per component. Values are relative to route (c), in km/s; the orbit errors of
+gamma are 0.03 km/s (APF) and 0.015 km/s (PEPSI).
+
+| route | APF | APF gamma_A - gamma_B | PEPSI | PEPSI gamma_A - gamma_B |
+|---|---|---|---|---|
+| (c) sharper library | 0 | +0.120 | 0 | -0.098 |
+| (a) smoothed, epochs' own variances | +0.036 | +0.178 | -0.045 | +0.029 |
+| (a) smoothed, propagated variances | +0.024 | +0.174 | | |
+| (a) `sigma_q` = 5 km/s | | | -0.067 | +0.065 |
+| (b) labels from `fit_templates` | +0.017 | +0.197 | -0.029 | -0.055 |
+| (b) starting labels | -0.043 | +0.181 | -0.060 | +0.378 |
+| (b) labels from `fit_templates`, epochs smoothed | | | +0.022 | +0.146 |
+| dedicated analysis | +0.023 | +0.096 | -0.226 | -1.177 |
+
+The dedicated analysis used its own reduction of the APF exposures. Velocities against the
+same library templates differ between the two reductions by +0.302 km/s per APF epoch (median
+of the mean of the two stars, rms 0.102 km/s over 19 epochs) and -0.004 km/s per PEPSI epoch
+(rms 0.005 km/s), and its APF row is given on the reader's scale. Which of the two APF scales
+is correct was not established here. Its PEPSI row comes from its own orbit
+(K_A = 63.09 km/s against 62.78) and from a per-star estimator over seven epochs, with an
+error of 0.42 km/s.
+
+One grid step in one label of one star (250 K, 0.5 dex in log g, 0.25 dex in [M/H]) moves
+the systemic velocity of route (b) by at most 0.021 km/s (APF) and 0.042 km/s (PEPSI).
+Fitting the orbit to the library-template velocities themselves, instead of taking the
+median offsets, spreads it over 0.07 and 0.12 km/s. The routes share the BOSZ line list and
+its one-dimensional LTE rest frame, so this comparison measures the handling of the
+resolution and the template mismatch, not the absolute accuracy of the systemic velocity.
+
+### Labels
+
+Teff (K), log g, [M/H] and v sin i (km/s) of route (a) against route (c):
+
+| | APF A | APF B | PEPSI A |
+|---|---|---|---|
+| Teff | +166 | +122 | -9 |
+| log g | +0.34 | +0.29 | +0.13 |
+| [M/H] | +0.04 | +0.04 | -0.01 |
+| v sin i | -1.6 | below the smoothed width | -1.2 |
+
+The PEPSI secondary is on the box's lower Teff and upper log g bounds in both routes and is
+flagged as collapsed; the box does not bracket it. `fit_templates` at R = 20,000 against the
+APF epochs put log g on the box's bound for both stars and v sin i at 3.4 and 2.7 km/s,
+against 9.2 and 6.4 from route (c). The reduced chi-square of route (c) is 1.13 on APF (the
+disentangling's z-rms 1.008); that of route (a) is 3.4 times its noise expectation.
+
+### The noise treatment and the smoothing width
+
+With the epochs' own inverse variances and with the propagated variances, route (a) gave
+zero points within 0.014 km/s and labels within 12 K and 0.01 dex on APF. The formal errors
+differ by `(sum k^2)^-1/2` = 4.7 (`sum k^2` = 0.045 on APF, 0.126 on PEPSI), and the reduced
+chi-squares by 22. Route (a) on PEPSI with the registered FGK box, whose [M/H] axis ends at
+-1.0 (the fit extrapolated to -1.24), and with the low-metallicity box gave systemic
+velocities 0.011 km/s apart, while the primary's Teff differed by 410 K and its [M/H] by
+0.43 dex.
+
+### Cost
+
+Wall-clock times were measured with two or three jobs on the 32-thread desktop. The
+smoothing takes under 15 s. The label stage took 200-560 s for route (a) and 650-700 s for
+route (c). Its peak memory was about 12 GB with the 455-node FGK box on the 18,739-pixel PEPSI
+grid and 4-5 GB with boxes of 60-126 nodes. With the 455-node box on the 36,085-pixel APF
+grid it passed 11 GB within half a minute and was stopped when the machine, which was
+running other jobs, ran out of memory. The label stage evaluates every node of the library
+on the model grid at once, so its memory grows with both. `fit_templates` took 15 s (PEPSI) and 230 s
+(APF). The R = 50,000 boxes are 1371 MB (FGK) and 1140 MB (hot) to download; the
+original-resolution files are 12.5 MB per node, about 5.7 GB for the FGK box.
+
+### The pipeline's own stages
+
+Run through the pipeline's label, zero-point, velocity and orbit stages with the adopted
+code (`smoothing="auto"`, a kernel truncated at five sigma), the two binaries gave the
+systemic velocities of route (a) to 0.003 km/s, with the smoothing flagged and the
+zero points adopted. On APF the shared systemic velocity carries the stars' 0.18 km/s
+zero-point difference into the orbit: K_A rises by 0.02 km/s (its error is 0.05), e from
+0.0037 to 0.0048, and the reduced chi-square from 5.4 to 6.3.
+
+### Scope of these numbers
+
+There are two binaries, with one spectral window each. The comparison does not test the
+absolute systemic velocity, for which the line list, the 1D atmospheres, convective
+blueshift and gravitational redshift are common to every route. The closed loop of
+`tests/test_label_smoothing.py` tests the smoothing alone: with epochs at 7 km/s and a library
+at R = 15,000 the labels and frame offsets agree with those of the native comparison with
+the intrinsic library to 3 K, 0.003 dex and 0.03 km/s.

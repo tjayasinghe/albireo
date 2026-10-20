@@ -1688,6 +1688,65 @@ reduced chi-square of 0.998. The native comparison returned 118.6 K, 0.180 dex, 
 results from the label and orbit errors: with both held at the injected values it fell to a few
 thousandths.
 
+### 9.2b Epochs sharper than the library
+
+Where $`\sigma_{\mathrm{lib}} \ge \sigma_{\mathrm{inst}}`$ the quadrature width of §9.2a is not
+real and the epochs cannot be compared with the library as observed. The fallback broadens the
+epochs instead. Every epoch $`e`$ of such an instrument is convolved, in velocity, with a
+Gaussian of
+
+```math
+\sigma_{s,e} = \sqrt{\sigma_t^2 - \sigma_e^2}, \qquad
+\sigma_t = \max\!\Big(\sqrt{\sigma_{\mathrm{lib}}^2 + \sigma_q^2},\ \max_e \sigma_e\Big) ,
+```
+
+with $`\sigma_q = \max(3\ \mathrm{km/s},\ 1.2\,\Delta v)`$ by default, and the instrument is
+declared at $`\sigma_t`$. The comparison of §9.2a then applies $`\sigma_q`$, less the grid
+compensation, to the templates. `Fit.smoothing_widths` returns $`\sigma_t`$ per instrument,
+`Fit.smoothed` builds the fit on the smoothed epochs at the original MAP, and
+`Fit.match_labels(..., smoothing="auto")` runs the label fit there; the pipeline's label stage
+uses it wherever the library is at or below an instrument's resolving power. The frame offsets
+are in the frame of the original fit and set its templates' zero points.
+
+`albireo.smooth_epoch` evaluates the kernel on the native pixels in $`u = c\ln\lambda`$, weights
+each pixel by its width in $`u`$, truncates the kernel at $`5\,\sigma_s`$ and normalises it over
+the pixels it covers. A run of at most three masked pixels is filled by linear interpolation
+before the convolution and stays masked. A pixel whose kernel reaches a longer masked run or an
+end of the epoch is masked in the result, because a truncated kernel is asymmetric and shifts
+the lines under it.
+
+**The likelihood of smoothed epochs.** With white noise of variance $`\sigma^2`$ and a smoothing
+operator $`K`$, the smoothed noise has covariance $`\sigma^2 K K^\top`$. For invertible $`K`$
+its exact likelihood equals that of the epochs as observed with the template replaced by
+$`K^{-1}`$ of itself, which is the sharpening that no library allows, so every usable likelihood
+of smoothed epochs is approximate. Let $`\delta`$ be the change of the model with a parameter
+and $`\tilde K(k)`$ the kernel's transfer function. A diagonal likelihood with the propagated
+variances $`\sigma^2 \sum k^2`$ assigns a signal that is smooth on the kernel scale
+$`1/\sum k^2`$ times its information, the mis-specification of `"matched"` (D55). A diagonal
+likelihood with the epochs' own variances $`\sigma^2`$ assigns the curvature
+$`H = \sum_k |\tilde K|^2 |\tilde\delta|^2/\sigma^2`$, while the variance of its score is
+$`J = \sum_k |\tilde K|^4 |\tilde\delta|^2/\sigma^2 \le H`$. The variance of the estimator,
+$`J/H^2`$, therefore does not exceed the formal $`1/H`$: the curvature errors are upper bounds
+on the noise part of the error. The fallback keeps the epochs' own variances. The chi-square of
+a perfect model is then $`\sum k^2`$ per pixel rather than one, and the two treatments differ
+in the location of the minimum only through the relative weights of epochs with different
+$`\sum k^2`$.
+
+**Measurement (D74).** On two binaries observed at $`R = 44{,}300`$ (PEPSI, seven epochs) and
+$`R = 46{,}600`$ to $`56{,}000`$ (APF, twenty epochs), against BOSZ at $`R = 20{,}000`$, the
+systemic velocities from the smoothed epochs ($`\sigma_t = 7.04`$ km/s) differed by 0.045 and
+0.036 km/s from those of the label fit at the data's resolution with libraries sharper than the
+data (BOSZ at $`R = 50{,}000`$ for PEPSI, and the original-resolution synthesis convolved to
+$`R \approx 117{,}000`$ for APF). The two noise treatments gave zero points within 0.014 km/s
+and labels within 12 K and 0.01 dex, with formal errors in the ratio $`(\sum k^2)^{-1/2} = 4.7`$;
+$`\sigma_q = 5`$ km/s instead of 3 moved the systemic velocity by 0.022 km/s. The labels differed
+from those at the data's resolution by up to 170 K in $`T_{\mathrm{eff}}`$ and 0.35 dex in
+$`\log g`$ on the APF pair, and by 10 K and 0.13 dex on the PEPSI primary. The smoothing
+discards the information above the library's cutoff, and $`v\sin i`$ below about $`\sigma_t`$
+is not resolved. On the closed loop of `tests/test_label_smoothing.py` (epochs at 7 km/s, a
+library at $`R = 15{,}000`$, comparison at 10.4 km/s) the labels and frame offsets agreed with
+those of the native comparison with the intrinsic library to 3 K, 0.003 dex and 0.03 km/s.
+
 ### 9.3 Interpolation of the spectral grid
 
 $`\mathcal{I}`$ interpolates the flux, not the model atmosphere, and the continuum in the

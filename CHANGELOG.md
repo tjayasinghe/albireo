@@ -32,6 +32,30 @@ This file records what changed. The reasons are recorded elsewhere:
 
 ### Added
 
+- **Labels and absolute velocities from epochs sharper than the library.** The epoch
+  comparison of the label fit raises where the library is at or below an instrument's
+  resolving power, because a library spectrum cannot be sharpened, and no fetched library
+  is sharper than APF or PEPSI. `Fit.match_labels(..., smoothing="auto")` now smooths the
+  epochs of such an instrument to the library's resolution, `sqrt(sigma_lib^2 + sigma_q^2)`
+  with `sigma_q = max(3 km/s, 1.2 dv)`, and runs the comparison there; the frame offsets it
+  measures set the zero points of the original fit's templates. `albireo.smooth_epoch`
+  convolves one epoch in velocity on its native pixels, with pixel-width weights, filled
+  cosmic-ray hits and a kernel kept whole at every pixel it returns, and keeps the epoch's
+  own inverse variances, so that the formal errors are upper bounds on the noise part.
+  `Fit.smoothing_widths` gives the widths, `Fit.smoothed` the fit on smoothed epochs at the
+  original MAP, and `EpochStatistics.smoothed_lsf_sigma_kms`, `Fit.smoothing` and a note on
+  the statistics record what was done. On an APF binary (R = 46,600-56,000) and a PEPSI
+  binary (R = 44,300) against BOSZ at R = 20,000, the systemic velocities differ by 0.036
+  and 0.045 km/s from those of libraries sharper than the data. The labels are measured at
+  the library's resolution, and v sin i below about the smoothed width is not resolved.
+  The method is in `docs/math.md` §9.2b and the measurement in `docs/benchmarks.md`;
+  decision D74.
+- **BOSZ 2024 at R = 50,000: `bosz2024-fgk-r50000` and `bosz2024-hot-r50000`.** The FGK
+  and hot boxes of the R = 20,000 entries at the archive's sharpest broadened product, with
+  the same nodes, band, medium and composition. The downloads are 1371 and 1140 MB and the
+  cached builds 112.5 and 93.1 MB. They are sharper than an instrument below R = 50,000,
+  PEPSI among them, and are compared with it at its own resolution; HARPS, ESPRESSO and
+  most APF exposures are sharper than them, and are smoothed (above).
 - **Readers for PEPSI products and APF exposures.** `read_spectrum`, `read_dataset` and
   the pipeline recognise two instrument formats by their headers, so that a directory of
   either is analysed like any other set of spectra. PEPSI products of the SDS pipeline
@@ -576,6 +600,17 @@ This file records what changed. The reasons are recorded elsewhere:
 
 ### Changed
 
+- **The pipeline's label stage smooths the epochs where the library is broader than them.**
+  It stopped with the flag "the library is broadened to R = 20000 ... use a library at a
+  higher resolving power than the data", and the epoch velocities stayed differential with
+  one gamma per component. It now runs the label fit on the epochs of those instruments
+  smoothed to the library's resolution (`smoothing="auto"`), adopts its frame offsets as
+  zero points as before, and flags the smoothing with the width, the resolving power and
+  the consequences for v sin i and for the errors. The frame-offset scan steps by twice the
+  smoothed width, and `result.json` records the widths under `labels.epoch_operator` and
+  `velocities.zero_points`. With a library sharper than every instrument nothing changes.
+  The error `Fit.epoch_statistics` raises for a library broader than the data names
+  `smoothing=` as the alternative.
 - **A directory contributes PEPSI products, and an APF exposure is read once.** A
   directory passed to `read_dataset`, `read_raw_spectra` or the pipeline now contributes
   the files named `pepsib.*` and `pepsir.*` as well as its FITS files. A list that holds

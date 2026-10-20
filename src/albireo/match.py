@@ -656,6 +656,13 @@ class EpochStatistics:
     notes
         Where the compensation was incomplete: a width floored at half a model pixel, or a
         model grid coarser than ``sigma_q``. Each was also raised as a ``UserWarning``.
+        Where the epochs were smoothed to the library's resolution
+        (:meth:`albireo.Fit.smoothed`), one note per smoothed instrument, which is not
+        warned.
+    smoothed_lsf_sigma_kms
+        ``((instrument, sigma_kms), ...)`` for the instruments whose epochs were smoothed to
+        that Gaussian width before the statistics were formed, and empty for epochs as
+        observed. ``lsf_sigma_kms`` is then the quadrature width at the smoothed width.
     """
 
     h: jax.Array
@@ -673,6 +680,7 @@ class EpochStatistics:
     grid_variance_kms2: float = 0.0
     operator_sigma_kms: tuple = ()
     notes: tuple = ()
+    smoothed_lsf_sigma_kms: tuple = ()
 
     @property
     def n_star(self) -> int:
@@ -697,6 +705,7 @@ class EpochStatistics:
             self.grid_variance_kms2,
             self.operator_sigma_kms,
             self.notes,
+            self.smoothed_lsf_sigma_kms,
         )
         return children, aux
 
@@ -739,6 +748,11 @@ class EpochStatistics:
                 )
         if self.conditioned:
             lines.append(f"  held at their posterior mean: {', '.join(self.conditioned)}")
+        if self.smoothed_lsf_sigma_kms:
+            lines.append(
+                "  epochs smoothed before the comparison: "
+                + ", ".join(f"{k} to {s:.3f} km/s" for k, s in self.smoothed_lsf_sigma_kms)
+            )
         lines.extend(f"  ! {note}" for note in self.notes)
         return "\n".join(lines)
 
@@ -781,6 +795,7 @@ class EpochStatistics:
         grid_variance_kms2: float = 0.0,
         operator_sigma_kms=None,
         notes=(),
+        smoothed_lsf_sigma_kms=(),
     ) -> EpochStatistics:
         """Assemble ``h``, ``z^T W z`` and the band of ``G`` from a fixed problem.
 
@@ -805,6 +820,8 @@ class EpochStatistics:
             As for the disentangling's own band assembly (``MarginalOrbitModel``).
         lsf_sigma_kms, library_resolving_power, conditioned, grid_variance_kms2, notes
             Recorded on the result; see the class attributes.
+        smoothed_lsf_sigma_kms
+            Recorded on the result; see the class attribute.
         operator_sigma_kms
             Recorded on the result; ``None`` records ``lsf_sigma_kms``, which is right for
             an operator built without the grid compensation.
@@ -853,6 +870,7 @@ class EpochStatistics:
             if operator_sigma_kms is None
             else widths(operator_sigma_kms),
             notes=tuple(str(n) for n in notes),
+            smoothed_lsf_sigma_kms=tuple((str(k), float(s)) for k, s in smoothed_lsf_sigma_kms),
         )
 
 
@@ -1512,6 +1530,8 @@ def match_labels(
             instrument: list(widths) for instrument, widths in statistics.lsf_sigma_kms
         }
         assumptions["epoch_grid_variance_kms2"] = float(statistics.grid_variance_kms2)
+        if statistics.smoothed_lsf_sigma_kms:
+            assumptions["epoch_smoothed_lsf_sigma_kms"] = dict(statistics.smoothed_lsf_sigma_kms)
         if statistics.conditioned:
             assumptions["conditioned_on_posterior_mean"] = list(statistics.conditioned)
         return _fit_epochs(

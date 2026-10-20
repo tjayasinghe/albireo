@@ -50,22 +50,26 @@ node depends partly on that interpolation.
 ## The library's own resolving power
 
 A published grid is not an intrinsic spectrum: every BOSZ entry in the registry is the
-R = 20,000 file, so each line is already broadened by a Gaussian of
-$`\sigma_{\mathrm{lib}} = c/(R\, 2\sqrt{2\ln 2}) = 6.37`$ km/s. A comparison that convolves such
-a template with the whole instrument profile broadens it twice, and the fitted *v* sin *i*
-absorbs the difference. On the D65 Gaia RVS benchmark this put *v* sin *i* at the lower
-bound of its prior on 6 of 24 components. `SpectralLibrary.resolving_power` therefore
-reports the value, and the label fit applies only the quadrature width
-$`\sqrt{\sigma_{\mathrm{inst}}^2 - \sigma_{\mathrm{lib}}^2}`$ wherever it convolves a template
-([§9.2a](../math.md#92a-comparing-in-the-epoch-space)). It rejects a library at or below
-the instrument's resolving power.
+R = 20,000 file, or the R = 50,000 file for the two `-r50000` entries, so each line is already
+broadened by a Gaussian of $`\sigma_{\mathrm{lib}} = c/(R\, 2\sqrt{2\ln 2})`$, 6.37 or
+2.55 km/s. A comparison that convolves such a template with the whole instrument profile
+broadens it twice, and the fitted *v* sin *i* absorbs the difference. On the D65 Gaia RVS
+benchmark this put *v* sin *i* at the lower bound of its prior on 6 of 24 components.
+`SpectralLibrary.resolving_power` therefore reports the value, and the label fit applies only
+the quadrature width $`\sqrt{\sigma_{\mathrm{inst}}^2 - \sigma_{\mathrm{lib}}^2}`$ wherever it
+convolves a template ([§9.2a](../math.md#92a-comparing-in-the-epoch-space)). A library at or
+below the instrument's resolving power cannot be brought to it by any convolution. The
+comparisons against the disentangled components reject it, and the epoch comparison rejects
+it unless the epochs are smoothed to the library's resolution instead
+(`Fit.match_labels(..., smoothing="auto")`, [§9.2b](../math.md#92b-epochs-sharper-than-the-library)),
+which the pipeline's label stage does by itself.
 
 The property reads `meta["resolving_power"]`, the key to set on a manually built library,
 and otherwise `meta["resolution"]`, which `ingest_bosz` records:
 
 | source | `resolving_power` |
 |---|---|
-| `fetch_library` / `ingest_bosz`, all four `bosz2024-*` entries | 20,000, preserved through the cache, `wave_range=`, `sliced`, `in_medium` and `resampled_to` |
+| `fetch_library` / `ingest_bosz`, the `bosz2024-*` entries | 20,000, or 50,000 for the two `-r50000` entries, preserved through the cache, `wave_range=`, `sliced`, `in_medium` and `resampled_to` |
 | `pollux-ob-smc24`, built manually (`ingest_pollux` raises) | `None` unless the builder sets `meta["resolving_power"]`, which it should |
 | `albireo.simulate.synthetic_library` and any library declaring neither key | `None`: an intrinsic grid |
 
@@ -80,8 +84,8 @@ once per machine:
 import albireo as ab
 
 ab.library_names()
-# ['bosz2024-fgk-r20000', 'bosz2024-fgk-rvs', 'bosz2024-hot-r20000',
-#  'bosz2024-hot-rvs', 'pollux-ob-smc24']
+# ['bosz2024-cool-rvs', 'bosz2024-fgk-r20000', 'bosz2024-fgk-r50000', 'bosz2024-fgk-rvs',
+#  'bosz2024-hot-r20000', 'bosz2024-hot-r50000', 'bosz2024-hot-rvs', 'pollux-ob-smc24']
 
 ab.library_info("bosz2024-fgk-r20000")["licence"]   # check the licence before downloading
 library = ab.fetch_library("bosz2024-fgk-r20000")   # ~621 MB once, ~51 MB cached
@@ -97,7 +101,9 @@ be a silent failure.
 |---|---|---|---|---|
 | `bosz2024-fgk-r20000` | BOSZ 2024, MARCS, R = 20,000 | Teff 4000–7000 K (250 K), log g 3–5 (0.5), [M/H] −1→+0.5 | 4000–7000 Å | 455, one filled |
 | `bosz2024-fgk-rvs` | the same nodes | as above | 8350–8850 Å, the Gaia RVS window | 455, one filled |
+| `bosz2024-fgk-r50000` | BOSZ 2024, MARCS, R = 50,000 | as `bosz2024-fgk-r20000` | 4000–7000 Å | 455, one filled |
 | `bosz2024-hot-r20000` | BOSZ 2024, MARCS + ATLAS9, R = 20,000 | Teff 7000–10,000 K (250 K), log g 3.5–5 (0.5), [M/H] −1→+0.5 | 4000–7000 Å | 364, all published |
+| `bosz2024-hot-r50000` | BOSZ 2024, MARCS + ATLAS9, R = 50,000 | as `bosz2024-hot-r20000` | 4000–7000 Å | 364, all published |
 | `bosz2024-hot-rvs` | the same nodes | as above | 8350–8850 Å, the Gaia RVS window | 364, all published |
 | `pollux-ob-smc24` | POLLUX, CMFGEN, non-LTE | Teff 23–55 kK, log g 2.5–4.5, [M/H] = −0.73 fixed | 3850–4650 Å | 915 |
 

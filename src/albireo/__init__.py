@@ -191,6 +191,7 @@ from albireo.preprocess import (
     normalize,
     select_region,
     share_wavelength_grid,
+    smooth_epoch,
 )
 from albireo.priors import (
     NEBULAR_LINES,
@@ -469,6 +470,7 @@ __all__ = [
     "shift_spectrum_adjoint",
     "simulate_dataset",
     "simulate_rvs_dataset",
+    "smooth_epoch",
     "solve_kepler",
     "spectra_query",
     "spectra_std",

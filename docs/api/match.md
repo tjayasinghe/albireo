@@ -87,10 +87,13 @@ research notes it cites):
   $`\ell^0_i`$, so the fit measures the light fraction. In the benchmark's orbit tier it
   reduced the median error of the declared light from 0.043 to 0.011.
 - **The template is broadened only by what the library lacks.** A published grid is already at
-  its resolving power (`SpectralLibrary.resolving_power`, 20,000 for BOSZ), so the stellar
-  operator uses $`\sigma_q = \sqrt{\sigma_{\mathrm{inst}}^2 - \sigma_{\mathrm{lib}}^2}`$, and a library
-  at or below the instrument's resolving power is rejected. `"matched"` applies the same
-  reduction to its template.
+  its resolving power (`SpectralLibrary.resolving_power`, 20,000 or 50,000 for BOSZ), so the
+  stellar operator uses $`\sigma_q = \sqrt{\sigma_{\mathrm{inst}}^2 - \sigma_{\mathrm{lib}}^2}`$.
+  A library at or below the instrument's resolving power is rejected unless the epochs are
+  smoothed to the library's resolution, `Fit.match_labels(..., smoothing="auto")`
+  ([§9.2b](../math.md#92b-epochs-sharper-than-the-library)), which the pipeline's label stage
+  does by itself. `"matched"` applies the same reduction to its template and has no such
+  fallback.
 - **The model grid's smoothing is compensated.** A template is mapped to the epoch pixels
   through five discrete steps on the model grid (the library's box average, the rotation
   kernel's pixel integration, the frame shift and the epoch shifts by linear interpolation,

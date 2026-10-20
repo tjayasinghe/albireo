@@ -236,23 +236,27 @@ class SpectralLibrary:
         """The resolving power the library's spectra are already broadened to, or ``None``.
 
         A published grid is not an intrinsic spectrum. BOSZ is distributed at fixed
-        resolving powers, and every registry entry here is its ``R = 20,000`` file, so a
-        line in it is already broadened by a Gaussian of
-        ``sigma = c / (R 2 sqrt(2 ln 2))``, 6.37 km/s. Applying the full instrument profile
-        to such a template broadens it twice. The label fit therefore applies only the
-        quadrature difference ``sqrt(sigma_inst^2 - sigma_lib^2)`` wherever it convolves a
-        template (``docs/math.md`` §9.2a), and rejects a library at or below the
-        instrument's resolving power, which no convolution can undo.
+        resolving powers, and every registry entry here is its ``R = 20,000`` file or, for
+        the ``-r50000`` entries, its ``R = 50,000`` file, so a line in it is already
+        broadened by a Gaussian of ``sigma = c / (R 2 sqrt(2 ln 2))``, 6.37 or 2.55 km/s.
+        Applying the full instrument profile to such a template broadens it twice. The label
+        fit therefore applies only the quadrature difference
+        ``sqrt(sigma_inst^2 - sigma_lib^2)`` wherever it convolves a template
+        (``docs/math.md`` §9.2a). A library at or below the instrument's resolving power
+        cannot be brought to it by any convolution: the comparisons against the
+        disentangled components reject it, and the epoch comparison rejects it unless the
+        epochs are smoothed to the library's resolution instead
+        (:meth:`albireo.Fit.match_labels` with ``smoothing=``).
 
         It is read from ``meta["resolving_power"]`` when present (the key to set on a
         manually built library), otherwise from ``meta["resolution"]`` (the key the BOSZ
         ingest records). ``None`` means an intrinsic-resolution grid, broadened only by its
         line physics. Per source:
 
-        - :func:`ingest_bosz` and :func:`fetch_library` for all four ``bosz2024-*``
-          registry entries: 20,000, from ``meta["resolution"]``, which the cache, the
-          wavelength sub-slice and every transform (``sliced``, ``in_medium``,
-          ``resampled_to``) leave unchanged.
+        - :func:`ingest_bosz` and :func:`fetch_library` for the ``bosz2024-*`` registry
+          entries: 20,000, or 50,000 for the two ``-r50000`` entries, from
+          ``meta["resolution"]``, which the cache, the wavelength sub-slice and every
+          transform (``sliced``, ``in_medium``, ``resampled_to``) leave unchanged.
         - ``pollux-ob-smc24``: there is no ingest (:func:`ingest_pollux` raises), so a
           library built manually from that archive returns ``None`` unless its ``meta``
           declares ``"resolving_power"``. Declare it: ``None`` asserts an intrinsic grid.
@@ -945,6 +949,10 @@ _BOSZ_FGK_AXES: dict[str, Any] = {
     "mh": [-1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5],
 }
 _BOSZ_FIXED: dict[str, Any] = {"alpha": 0.0, "carbon": 0.0, "vmicro": 2, "resolution": 20000}
+# The same composition at the archive's sharpest broadened product. Verified against the
+# archive index on 2026-10-19: of the boxes' nodes only the FGK gap below is unpublished, as
+# at R = 20,000; the shards are 2.4-3.1 MB each, and the shared wavelength file 11.25 MB.
+_BOSZ_FIXED_R50000: dict[str, Any] = {**_BOSZ_FIXED, "resolution": 50000}
 
 # The hot box is one uniform 250 K axis from the top of the FGK box to 10,000 K, so the
 # Catmull-Rom weights, which assume equal node spacing, are valid across the whole range.
@@ -1006,6 +1014,19 @@ _BOSZ_GAPS = (
 _BOSZ_RECOMPUTE_NOTE = (
     "BOSZ 2024 was recomputed on 2025-09-25 to correct the hydrogen lines and the OH+ band "
     "strength. Anything cached before that date is the earlier calculation."
+)
+
+# Both R = 50,000 entries state this. The numbers follow from sigma_lib = 2.546 km/s and the
+# grid compensation of the epoch comparison (docs/math.md 9.2a), which is floored where
+# dv > sqrt(6/5) sigma_q and approximate where dv > sigma_q.
+_BOSZ_R50000_CAVEAT = (
+    "The spectra are broadened to R = 50,000, a Gaussian sigma of 2.55 km/s, so they are "
+    "sharper than an instrument only below that resolving power. HARPS, ESPRESSO and most APF "
+    "exposures are sharper than this library, and the label fit smooths their epochs to it "
+    "(Fit.match_labels with smoothing=, D74). Above R = 35,700 the width the epoch operator "
+    "still applies, sqrt(sigma_inst^2 - sigma_lib^2), is below 2.5 km/s, and the model grid "
+    "must be finer than that width for the grid compensation to be exact: dv below 1.3 km/s "
+    "for PEPSI at R = 44,300, whose width is 1.33 km/s."
 )
 
 # Both RVS entries state this, and they must state the same thing: this is the only band in
@@ -1091,6 +1112,27 @@ _LIBRARIES: dict[str, _Library] = {
         download_mb=621.0,
         cache_mb=5.1,
     ),
+    "bosz2024-fgk-r50000": _Library(
+        name="bosz2024-fgk-r50000",
+        description="BOSZ 2024 (MARCS) FGK optical, R = 50,000, 4000-7000 Angstrom",
+        source="bosz2024",
+        version="1",
+        wave_range=(4000.0, 7000.0),
+        medium="air",
+        label_names=("teff", "logg", "mh"),
+        axes=_BOSZ_FGK_AXES,
+        fixed=_BOSZ_FIXED_R50000,
+        licence="CC BY 4.0",
+        citation="Meszaros et al. 2024, A&A 688, A197 (arXiv:2407.10872)",
+        doi="10.17909/T95G68",
+        upstream_note=_BOSZ_RECOMPUTE_NOTE,
+        caveats=(*_BOSZ_CAVEATS, _BOSZ_R50000_CAVEAT),
+        known_gaps=_BOSZ_GAPS,
+        # The download is the sum of the archive's file sizes on 2026-10-19, the wavelength
+        # file included; the cache is the built file, measured the same day.
+        download_mb=1370.6,
+        cache_mb=112.5,
+    ),
     "bosz2024-hot-r20000": _Library(
         name="bosz2024-hot-r20000",
         description=(
@@ -1111,6 +1153,29 @@ _LIBRARIES: dict[str, _Library] = {
         known_gaps=(),
         download_mb=532.0,
         cache_mb=41.0,
+    ),
+    "bosz2024-hot-r50000": _Library(
+        name="bosz2024-hot-r50000",
+        description=(
+            "BOSZ 2024 (MARCS + ATLAS9) A and early-F optical, R = 50,000, 4000-7000 Angstrom"
+        ),
+        source="bosz2024",
+        version="1",
+        wave_range=(4000.0, 7000.0),
+        medium="air",
+        label_names=("teff", "logg", "mh"),
+        axes=_BOSZ_HOT_AXES,
+        fixed=_BOSZ_FIXED_R50000,
+        licence="CC BY 4.0",
+        citation="Meszaros et al. 2024, A&A 688, A197 (arXiv:2407.10872)",
+        doi="10.17909/T95G68",
+        upstream_note=_BOSZ_RECOMPUTE_NOTE,
+        caveats=(*_BOSZ_HOT_CAVEATS, _BOSZ_R50000_CAVEAT),
+        known_gaps=(),
+        # The download is the sum of the archive's file sizes on 2026-10-19, the wavelength
+        # file included; the cache is the built file, measured the same day.
+        download_mb=1139.9,
+        cache_mb=93.1,
     ),
     "bosz2024-hot-rvs": _Library(
         name="bosz2024-hot-rvs",

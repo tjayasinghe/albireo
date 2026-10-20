@@ -45,8 +45,13 @@ WAVE = np.linspace(5150.0, 5250.0, 1200)
 INTRINSIC_WIDTH = 0.25  # Angstrom; v sin i broadening is applied by a kernel, never here
 
 
-def spectrum_rule(teff, logg, mh, wave=WAVE):
+def spectrum_rule(teff, logg, mh, wave=WAVE, broaden_kms=0.0):
     """A smooth analytic stand-in for a synthetic spectrum.
+
+    ``broaden_kms`` convolves every line with a Gaussian of that sigma in velocity, as a
+    published grid is broadened to its resolving power. The convolution is analytic: each
+    line keeps its equivalent width and its sigma becomes
+    ``sqrt(INTRINSIC_WIDTH^2 + (center * broaden_kms / c)^2)``.
 
     The tests that use it depend on two properties.
 
@@ -71,19 +76,28 @@ def spectrum_rule(teff, logg, mh, wave=WAVE):
     )
     flux = np.ones_like(wave)
     for center, depth in lines:
-        flux = flux - depth * np.exp(-0.5 * ((wave - center) / INTRINSIC_WIDTH) ** 2)
+        width = np.hypot(INTRINSIC_WIDTH, center * float(broaden_kms) / ab.C_KMS)
+        flux = flux - depth * (INTRINSIC_WIDTH / width) * np.exp(
+            -0.5 * ((wave - center) / width) ** 2
+        )
     log_continuum = 30.0 + 4.0 * np.log(teff / 5000.0) - 0.02 * (wave - wave[0]) / 100.0
     return flux, log_continuum
 
 
-def build_library(teff=TEFF, logg=LOGG, mh=MH, medium="air", drop=()):
+def build_library(teff=TEFF, logg=LOGG, mh=MH, medium="air", drop=(), resolving_power=None):
+    """The toy grid; with ``resolving_power`` its lines are broadened to it and it says so."""
+    broaden = 0.0
+    meta = {"grid": "toy", "citation": "generated in tests"}
+    if resolving_power is not None:
+        broaden = ab.C_KMS / (float(resolving_power) * 2.0 * np.sqrt(2.0 * np.log(2.0)))
+        meta["resolving_power"] = float(resolving_power)
     nodes, normalized, continua = [], [], []
     for t in teff:
         for g in logg:
             for m in mh:
                 if (t, g, m) in drop:
                     continue
-                flux, log_continuum = spectrum_rule(t, g, m)
+                flux, log_continuum = spectrum_rule(t, g, m, broaden_kms=broaden)
                 nodes.append((t, g, m))
                 normalized.append(flux)
                 continua.append(log_continuum)
@@ -94,7 +108,7 @@ def build_library(teff=TEFF, logg=LOGG, mh=MH, medium="air", drop=()):
         log_continuum=np.asarray(continua),
         wave=WAVE,
         medium=medium,
-        meta={"grid": "toy", "citation": "generated in tests"},
+        meta=meta,
     )
 
 
@@ -138,11 +152,13 @@ def test_resolving_power_is_read_from_the_metadata(library):
     for bad in ("orig", -1.0, 0.0, float("nan")):
         with pytest.raises(ValueError, match="finite positive resolving power"):
             _ = library.replace(meta={"resolution": bad}).resolving_power
-    # the registry fixes every BOSZ entry at R = 20,000, which the ingest records
+    # the registry fixes every BOSZ entry at R = 20,000, or at R = 50,000 for the two entries
+    # named so, and the ingest records it
     for name in lib_mod.library_names():
         info = lib_mod.library_info(name)
         if info["source"] == "bosz2024":
-            assert info["fixed"]["resolution"] == 20000
+            expected = 50000 if name.endswith("-r50000") else 20000
+            assert info["fixed"]["resolution"] == expected, name
     from albireo.simulate import synthetic_library
 
     assert synthetic_library(n_pix=64).resolving_power is None
@@ -788,7 +804,72 @@ def test_the_registry_lists_what_it_can_build():
     names = ab.library_names()
     assert "bosz2024-fgk-r20000" in names
     assert {"bosz2024-hot-r20000", "bosz2024-hot-rvs"} <= set(names)
+    assert {"bosz2024-fgk-r50000", "bosz2024-hot-r50000"} <= set(names)
     assert names == sorted(names)
+
+
+@pytest.mark.parametrize(
+    ("name", "twin", "n_nodes", "download_mb", "cache_mb"),
+    [
+        ("bosz2024-fgk-r50000", "bosz2024-fgk-r20000", 455, 1370.6, 112.5),
+        ("bosz2024-hot-r50000", "bosz2024-hot-r20000", 364, 1139.9, 93.1),
+    ],
+)
+def test_the_r50000_boxes_are_their_r20000_twins_at_the_sharper_product(
+    name, twin, n_nodes, download_mb, cache_mb
+):
+    """Same nodes, band, medium and composition as the R = 20,000 entry, at R = 50,000.
+
+    The download is the sum of the archive's file sizes on 2026-10-19, the shared wavelength
+    file included, and the cache is the file built that day (64,956 pixels per node). The
+    caveat states the instruments the library is sharper than.
+    """
+    entry, other = lib_mod._LIBRARIES[name], lib_mod._LIBRARIES[twin]
+    assert entry.axes is other.axes and entry.wave_range == other.wave_range
+    assert entry.medium == other.medium == "air" and entry.label_names == other.label_names
+    assert entry.fixed == {**other.fixed, "resolution": 50000}
+    assert entry.known_gaps == other.known_gaps
+    info = ab.library_info(name)
+    assert info["n_nodes"] == n_nodes and info["download_mb"] == download_mb
+    assert info["cache_mb"] == cache_mb
+    assert info["licence"] == "CC BY 4.0" and info["doi"] == "10.17909/T95G68"
+    caveat = next(c for c in info["caveats"] if "R = 50,000" in c)
+    assert "2.55 km/s" in caveat and "smoothing=" in caveat
+    url = lib_mod._bosz_url(6000.0, 4.0, 0.0, **entry.fixed)
+    assert url == (
+        "https://archive.stsci.edu/hlsps/bosz/bosz2024/r50000/m+0.00/"
+        "bosz2024_mp_t6000_g+4.0_m+0.00_a+0.00_c+0.00_v2_r50000_resam.txt.gz"
+    )
+    assert lib_mod._bosz_wave_url(50000).endswith("/wavelength_grids/bosz2024_wave_r50000.txt")
+
+
+R50000_SHARDS = Path(__file__).resolve().parent / "data" / "bosz2024_r50000_shards.txt"
+
+
+def test_every_node_the_r50000_boxes_request_is_published():
+    """The archive index harvested 2026-10-19 holds every node of both boxes but one.
+
+    The one is the FGK box's documented gap, (5750 K, log g 3.0, [M/H] -0.75), absent at
+    R = 50,000 as at R = 20,000 and filled by the ingest. A change to the axes, to the
+    atmosphere dispatch or to the file-name convention appears here as an absent name rather
+    than as a 404 partway through a 1.4 GB build.
+    """
+    lines = R50000_SHARDS.read_text(encoding="utf-8").splitlines()
+    published = {line for line in lines if line and not line.startswith("#")}
+    assert len(published) == 979
+    gap = "bosz2024_ms_t5750_g+3.0_m-0.75_a+0.00_c+0.00_v2_r50000_resam.txt.gz"
+    for name, expected_missing in (
+        ("bosz2024-fgk-r50000", {gap}),
+        ("bosz2024-hot-r50000", set()),
+    ):
+        entry = lib_mod._LIBRARIES[name]
+        requested = {
+            lib_mod._bosz_filename(teff, logg, mh, **entry.fixed)
+            for teff in entry.axes["teff"]
+            for logg in entry.axes["logg"]
+            for mh in entry.axes["mh"]
+        }
+        assert requested - published == expected_missing, name
 
 
 @pytest.mark.parametrize("name", ["bosz2024-hot-rvs", "bosz2024-hot-r20000"])
@@ -1107,3 +1188,19 @@ def test_the_archive_still_serves_what_the_registry_expects():
     with urllib.request.urlopen(request, timeout=60) as response:
         assert response.status == 200
         assert int(response.headers["Content-Length"]) > 100_000
+
+
+@pytest.mark.network
+def test_the_archive_still_serves_the_r50000_product():
+    """Headers for one R = 50,000 shard and its wavelength file; no spectrum is fetched."""
+    import urllib.request
+
+    fixed = lib_mod._LIBRARIES["bosz2024-fgk-r50000"].fixed
+    for url, smallest in (
+        (lib_mod._bosz_url(6000.0, 4.0, 0.0, **fixed), 2_000_000),
+        (lib_mod._bosz_wave_url(50000), 10_000_000),
+    ):
+        request = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "albireo test"})
+        with urllib.request.urlopen(request, timeout=60) as response:
+            assert response.status == 200
+            assert int(response.headers["Content-Length"]) > smallest, url

@@ -2071,6 +2071,10 @@ class _StubFit:
     def templates(self):
         return list(self._templates)
 
+    def smoothing_widths(self, resolving_power, sigma_q="auto"):
+        """No instrument of the stub is sharper than a library: nothing is smoothed."""
+        return {}
+
     def summary(self):
         return "  stub fit"
 
@@ -2654,6 +2658,10 @@ def test_the_label_comparison_is_declared_checked_and_passed_to_the_fit(toy, lib
         )
         assert _labels(ctx, fit, library) is not None
         assert seen["compare"] == compare and seen["max_steps"] == 70
+        # The epoch comparison smooths the epochs where the library is broader (D74); the
+        # comparisons against the disentangled components have no such fallback.
+        assert seen.get("smoothing") == ("auto" if compare == "epochs" else None)
+        seen.clear()
         log = (ctx.directory / "log.txt").read_text(encoding="utf-8")
         assert f"label fit ({compare} comparison)" in log and budget in log
 
@@ -2733,6 +2741,7 @@ def test_the_label_stage_flags_and_records_the_grid_compensation(toy, tmp_path):
         lsf_sigma_kms=(("TOY", (3.0,)),),
         operator_sigma_kms=(("TOY", (2.313,)),),
         notes=(floored,),
+        smoothed_lsf_sigma_kms=(),
     )
     match = _EpochMatch({"A": 0.62, "B": 0.38}, errors={"A": 0.004, "B": 0.004})
     match.statistics = statistics
@@ -2746,6 +2755,7 @@ def test_the_label_stage_flags_and_records_the_grid_compensation(toy, tmp_path):
         "grid_variance_kms2": 12.48,
         "quadrature_sigma_kms": [["TOY", [3.0]]],
         "operator_sigma_kms": [["TOY", [2.313]]],
+        "smoothed_lsf_sigma_kms": {},
         "notes": [floored],
     }
     json.dumps(described)  # result.json stores it unchanged
@@ -2758,6 +2768,7 @@ def test_the_label_stage_flags_and_records_the_grid_compensation(toy, tmp_path):
         lsf_sigma_kms=(("TOY", (5.5,)),),
         operator_sigma_kms=(),
         notes=(),
+        smoothed_lsf_sigma_kms=(),
     )
     match.statistics = statistics
     ctx = _context(star, tmp_path / "quiet")

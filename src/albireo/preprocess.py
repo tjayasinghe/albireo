@@ -50,6 +50,7 @@ __all__ = [
     "normalize",
     "select_region",
     "share_wavelength_grid",
+    "smooth_epoch",
 ]
 
 
@@ -1090,3 +1091,192 @@ def share_wavelength_grid(
                 mask=None if epoch.mask is None else epoch.mask[lo:hi],
             )
     return [e for e in out if e is not None]
+
+
+_C_KMS = 299_792.458
+
+_SMOOTHING_REACH = 5.0
+"""Truncation of the smoothing kernel, in kernel sigmas. A pixel closer than this to a long
+masked run or to an end of the epoch is masked in the result, so every kept pixel has the
+whole kernel. The Gaussian weight beyond five sigma is 6e-7 of the total. At four sigma the
+weight at the edge, 3e-5 of the total, entered or left a row's kernel with the rounding of
+the pixel velocities wherever the edge fell on a pixel, and the equivalent width of a line
+changed by 2e-6."""
+
+
+def _masked_runs(bad: np.ndarray) -> list[tuple[int, int]]:
+    """``(start, stop)`` of each run of True values, ``stop`` exclusive."""
+    edges = np.diff(np.concatenate([[0], bad.astype(np.int8), [0]]))
+    return list(zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1), strict=True))
+
+
+def _smoothed(
+    epoch: EpochData, sigma_kms: float, from_sigma_kms: float, fill_max: int
+) -> tuple[EpochData, dict]:
+    """:func:`smooth_epoch` with its diagnostics: the kernel width in km/s, the median of
+    ``sum(k^2)`` over the kept pixels, and the numbers of good, kept and filled pixels."""
+    sigma_to = float(sigma_kms)
+    sigma_from = float(from_sigma_kms)
+    if not (np.isfinite(sigma_to) and sigma_to > 0.0):
+        raise ValueError(f"the target width must be a positive number of km/s; got {sigma_kms}")
+    if not (np.isfinite(sigma_from) and sigma_from > 0.0):
+        raise ValueError(f"the epoch's own width must be positive; got {from_sigma_kms}")
+    if sigma_to < sigma_from * (1.0 - 1e-9):
+        raise ValueError(
+            f"the target width {sigma_to:.4f} km/s is narrower than the epoch's own "
+            f"{sigma_from:.4f} km/s; a spectrum cannot be sharpened by a convolution"
+        )
+    if int(fill_max) < 0:
+        raise ValueError(f"fill_max must be a non-negative number of pixels; got {fill_max}")
+    good = epoch.good
+    n_good = int(good.sum())
+    if n_good == 0:
+        raise ValueError("the epoch has no unmasked pixel to smooth")
+    variance = sigma_to**2 - sigma_from**2
+    if variance <= (1e-6 * sigma_to) ** 2:
+        info = {"kernel_sigma_kms": 0.0, "sum_k2": 1.0, "good": n_good, "kept": n_good}
+        return _replace(epoch, lsf_sigma_kms=sigma_to), {**info, "filled": 0}
+    sigma_s = float(np.sqrt(variance))
+
+    u = _C_KMS * np.log(np.asarray(epoch.wave, dtype=np.float64))
+    n = u.size
+    flux = np.where(good, epoch.flux, 0.0)
+    long_bad = ~good
+    filled = np.zeros(n, dtype=bool)
+    for start, stop in _masked_runs(~good):
+        if stop - start <= int(fill_max) and start > 0 and stop < n:
+            filled[start:stop] = True
+            long_bad[start:stop] = False
+    if filled.any():
+        flux[filled] = np.interp(u[filled], u[good], np.asarray(epoch.flux)[good])
+
+    # The kernel of every pixel, truncated at the reach, weighted by the pixel width in u and
+    # normalised over the pixels it covers.
+    reach = _SMOOTHING_REACH * sigma_s
+    width = np.gradient(u)
+    # The windows are found with a margin, and the support is then cut on the difference
+    # itself: u_i - u_j is exactly antisymmetric in floating point, so pixel j is in the
+    # kernel of pixel i exactly when i is in the kernel of j.
+    lo = np.searchsorted(u, u - reach * (1.0 + 1e-9), side="left")
+    hi = np.searchsorted(u, u + reach * (1.0 + 1e-9), side="right")
+    counts = hi - lo
+    rows = np.repeat(np.arange(n), counts)
+    cols = np.repeat(lo, counts) + (
+        np.arange(int(counts.sum())) - np.repeat(np.cumsum(counts) - counts, counts)
+    )
+    offset = u[rows] - u[cols]
+    weights = np.where(
+        np.abs(offset) <= reach, np.exp(-0.5 * (offset / sigma_s) ** 2) * width[cols], 0.0
+    )
+    weights /= np.bincount(rows, weights=weights, minlength=n)[rows]
+    smoothed = np.bincount(rows, weights=weights * flux[cols], minlength=n)
+    sum_k2 = np.bincount(rows, weights=weights**2, minlength=n)
+
+    # A pixel keeps its value only where its whole kernel lies on usable pixels.
+    keep = good & (u - u[0] >= reach) & (u[-1] - u >= reach)
+    bad_u = u[long_bad]
+    if bad_u.size:
+        j = np.searchsorted(bad_u, u)
+        left = np.where(j > 0, u - bad_u[np.maximum(j - 1, 0)], np.inf)
+        right = np.where(j < bad_u.size, bad_u[np.minimum(j, bad_u.size - 1)] - u, np.inf)
+        keep &= np.minimum(left, right) > reach
+    if not keep.any():
+        raise ValueError(
+            f"no pixel of this epoch keeps a whole smoothing kernel of {sigma_s:.2f} km/s "
+            f"(truncated at {_SMOOTHING_REACH:g} sigma): the epoch is shorter than the kernel, "
+            "or masked too densely"
+        )
+    out = _replace(
+        epoch,
+        flux=np.where(keep, smoothed, 1.0),
+        ivar=np.where(keep, epoch.ivar, 0.0),
+        mask=None,
+        lsf_sigma_kms=sigma_to,
+    )
+    info = {
+        "kernel_sigma_kms": sigma_s,
+        "sum_k2": float(np.median(sum_k2[keep])),
+        "good": n_good,
+        "kept": int(keep.sum()),
+        "filled": int(filled.sum()),
+    }
+    return out, info
+
+
+def smooth_epoch(
+    epoch: EpochData,
+    sigma_kms: float,
+    *,
+    from_sigma_kms: float | None = None,
+    fill_max: int = 3,
+) -> EpochData:
+    """Convolve an epoch to a broader Gaussian line-spread function.
+
+    The label fit compares the epochs with library spectra that are already broadened to
+    the library's resolving power, and a library spectrum cannot be sharpened. Where the
+    library is broader than an instrument, the epochs are broadened instead
+    (:meth:`albireo.Fit.match_labels` with ``smoothing=``). The flux is convolved with a
+    Gaussian of ``sigma_s = sqrt(sigma_kms^2 - from_sigma_kms^2)``, so that the epoch's
+    line-spread function becomes a Gaussian of ``sigma_kms``.
+
+    The kernel is evaluated in velocity, ``u = c ln(lambda)``, on the native pixels, and
+    each pixel is weighted by its width in ``u``, so a non-uniform sampling such as merged
+    echelle orders is integrated correctly. The kernel is truncated at five ``sigma_s`` and
+    normalised over the pixels it covers. Masked pixels are treated so that the kernel of
+    every pixel kept in the result is whole and symmetric, since an asymmetric kernel
+    shifts the lines it contains. A run of at most ``fill_max`` masked pixels (a cosmic-ray
+    hit) is filled by linear interpolation in velocity before the convolution and stays
+    masked in the result. A pixel whose kernel reaches a longer masked run or an end of the
+    epoch is masked in the result.
+
+    The result keeps the input inverse variances, with zeros where it is masked. The
+    convolution correlates the noise over the kernel width and reduces its variance per
+    pixel by ``sum(k^2)``. A diagonal likelihood with the reduced variances counts the
+    information of a signal that is smooth on the kernel scale ``1 / sum(k^2)`` times, the
+    mis-specification found in the ``"matched"`` comparison (D55). With the input variances
+    such a signal is counted once and the information above the kernel's cutoff less than
+    once, so curvature errors computed from them are upper bounds on the noise part of the
+    error. The chi-square of a perfect model is then about ``sum(k^2)`` per pixel, not one
+    (``docs/math.md`` §9.2b).
+
+    Parameters
+    ----------
+    epoch : EpochData
+        The epoch to broaden.
+    sigma_kms : float
+        Gaussian sigma of the result's line-spread function, in km/s.
+    from_sigma_kms : float, optional
+        Gaussian sigma of the epoch's own line-spread function, in km/s. Default:
+        :attr:`~albireo.data.EpochData.lsf_sigma_kms`.
+    fill_max : int, optional
+        Longest run of masked pixels filled before the convolution. Default 3.
+
+    Returns
+    -------
+    EpochData
+        The broadened epoch on the same pixels, declaring ``lsf_sigma_kms = sigma_kms``.
+
+    Raises
+    ------
+    ValueError
+        If the epoch declares no width and none is given, if ``sigma_kms`` is narrower than
+        the epoch's own width, or if no pixel keeps a whole kernel.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from albireo.data import EpochData
+    >>> wave = 5000.0 * np.exp(np.arange(2000) * 1.0 / 299_792.458)  # 1 km/s pixels
+    >>> line = 1.0 - 0.5 * np.exp(-0.5 * (np.arange(2000) - 1000.0) ** 2 / 3.0**2)
+    >>> epoch = EpochData(wave=wave, flux=line, ivar=np.ones(2000), bjd=0.0, lsf_sigma_kms=3.0)
+    >>> broad = smooth_epoch(epoch, 5.0)
+    >>> broad.lsf_sigma_kms, round(float(broad.flux.min()), 3)
+    (5.0, 0.7)
+    """
+    sigma_from = epoch.lsf_sigma_kms if from_sigma_kms is None else from_sigma_kms
+    if sigma_from is None:
+        raise ValueError(
+            "the epoch declares no line-spread width (EpochData.lsf_sigma_kms); pass "
+            "from_sigma_kms, the width the epoch was taken at"
+        )
+    return _smoothed(epoch, sigma_kms, sigma_from, fill_max)[0]

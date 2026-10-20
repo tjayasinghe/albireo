@@ -3450,7 +3450,17 @@ def _labels(ctx: _Context, fit: Fit, library):
         dilution = FixedDilution()
     else:
         dilution = ScalarDilution()
-    reach, step = _v_zero_scan(fit, settings)
+    # Where the library is at or below an instrument's resolving power, the epoch comparison
+    # smooths that instrument's epochs to the library's resolution (D74), and the
+    # frame-offset scan steps by the smoothed width.
+    smoothed: dict[str, float] = {}
+    if settings.label_compare == "epochs":
+        try:
+            smoothed = fit.smoothing_widths(lib.resolving_power)
+        except ValueError as exc:
+            ctx.flag(f"labels skipped: {exc}")
+            return None
+    reach, step = _v_zero_scan(fit, settings, smoothed)
     scan_velocities = np.arange(-reach, reach + 0.5 * step, step)
     stars = {}
     for c in star.components:
@@ -3467,6 +3477,8 @@ def _labels(ctx: _Context, fit: Fit, library):
         "max_steps": settings.label_steps,
         "scan_velocities": scan_velocities,
     }
+    if settings.label_compare == "epochs":
+        options["smoothing"] = "auto"
     if ctx.config.mh is not None:
         options["mh"] = _spec(ctx.config.mh, "mh")
     budget = (
@@ -3477,6 +3489,12 @@ def _labels(ctx: _Context, fit: Fit, library):
     log(
         f"label fit ({settings.label_compare} comparison) against {lib.n_nodes} nodes, "
         f"{len(scan_velocities)} trial frame offsets over +-{reach:g} km/s, {budget}"
+        + (
+            "; epochs smoothed to the library's resolution for "
+            + ", ".join(f"{k} ({s:.3f} km/s)" for k, s in smoothed.items())
+            if smoothed
+            else ""
+        )
     )
     try:
         match = fit.match_labels(stars, **options)
@@ -3591,11 +3609,28 @@ def _assess_labels(ctx: _Context, match, declared_light: Mapping[str, float]) ->
         )
 
 
-def _v_zero_scan(fit: Fit, settings: Analysis) -> tuple[float, float]:
-    """Half-range and trial step of the label fit's scan over each component's frame offset."""
+def _v_zero_scan(
+    fit: Fit, settings: Analysis, smoothed: Mapping[str, float] | None = None
+) -> tuple[float, float]:
+    """Half-range and trial step of the label fit's scan over each component's frame offset.
+
+    The step is twice the narrowest line-spread width of the comparison. ``smoothed`` maps
+    an instrument whose epochs the comparison smooths to the library's resolution to that
+    width (:meth:`albireo.Fit.smoothing_widths`), which replaces the instrument's own.
+    """
     reach = float(settings.v_zero_range)
-    step = max(2.0 * fit.dis._narrowest_lsf(), 5.0, 2.0 * reach / 120.0)
+    narrowest = fit.dis._narrowest_lsf()
+    if smoothed:
+        widths = fit.dis._lsf_widths()
+        narrowest = min(smoothed.get(key, float(np.min(w))) for key, w in widths.items())
+    step = max(2.0 * narrowest, 5.0, 2.0 * reach / 120.0)
     return reach, step
+
+
+def _smoothed_widths(match) -> dict[str, float]:
+    """The widths the label fit smoothed instruments to, from its statistics; else empty."""
+    statistics = getattr(match, "statistics", None)
+    return dict(getattr(statistics, "smoothed_lsf_sigma_kms", ()) or ())
 
 
 def _beats_both_nulls(match) -> bool:
@@ -3623,7 +3658,7 @@ def _disowned_zero_points(
             f"the label fit beats neither null (chi2 {match.chi2:.1f}, nearest node "
             f"{match.chi2_nearest_node:.1f}, no template {match.chi2_continuum:.1f})"
         )
-    reach, step = _v_zero_scan(fit, ctx.settings)
+    reach, step = _v_zero_scan(fit, ctx.settings, _smoothed_widths(match))
     for name, offset in offsets.items():
         gap = reach - abs(offset)
         if gap <= step:
@@ -3665,6 +3700,7 @@ def _templates(ctx: _Context, fit: Fit, match) -> list:
         "adopted": not refused,
         "v_zero_kms": offsets,
         "refused": refused,
+        "smoothed_lsf_sigma_kms": _smoothed_widths(match),
     }
     if refused:
         ctx.flag(
@@ -4271,7 +4307,9 @@ def _describe_operator(statistics) -> dict[str, Any]:
     and ``operator_sigma_kms`` what the operator applied once the model grid's own smoothing,
     ``grid_variance_kms2``, was removed from it (:meth:`albireo.Fit.epoch_statistics`).
     There is one entry per epoch group and one width per LSF anchor. ``notes`` records a
-    floored width or a model grid coarser than the width, each also flagged.
+    floored width or a model grid coarser than the width, each also flagged, and the
+    smoothing of the epochs to the library's resolution, whose widths are in
+    ``smoothed_lsf_sigma_kms`` (D74).
     """
     operator = statistics.operator_sigma_kms or statistics.lsf_sigma_kms
     return {
@@ -4280,6 +4318,7 @@ def _describe_operator(statistics) -> dict[str, Any]:
         "grid_variance_kms2": float(statistics.grid_variance_kms2),
         "quadrature_sigma_kms": [[k, list(v)] for k, v in statistics.lsf_sigma_kms],
         "operator_sigma_kms": [[k, list(v)] for k, v in operator],
+        "smoothed_lsf_sigma_kms": dict(statistics.smoothed_lsf_sigma_kms),
         "notes": list(statistics.notes),
     }
 
