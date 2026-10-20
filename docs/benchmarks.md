@@ -652,10 +652,17 @@ The residual z-RMS is 2.64 rather than 1. HARPS provides no error array, so the 
 are albireo's own scatter estimate, and any formal error bar from this fit is ~2.6× too
 small until the weights are rescaled.
 
-The spectra from albireo and the clean-room shift-and-add agree on these observed data,
-with mean-aligned RMS differences of 0.029 and 0.037 in the line cores of the 5340–5440 Å
-window, against line depths near 0.8. With no true spectrum, this is the available
-consistency check. Shift-and-add again took 0.07 s against albireo's 11 s.
+With no true spectrum, the available consistency check is the agreement between the spectra
+of albireo and of the clean-room shift-and-add (seven sweeps) in the line cores of the
+5340–5440 Å window, against line depths near 0.8. Scored at the instrumental resolution, with
+albireo's spectra convolved with the epochs' line-spread functions as in D72, the
+mean-aligned RMS differences are 0.026 and 0.031 in the configuration of 2026-08-15, and
+0.025 and 0.030 in that of the current harness (2026-10-19). The values first recorded, 0.029
+and 0.037, compared albireo's deconvolved spectra with shift-and-add's at the instrumental
+resolution. Most of the remaining difference lies at periods above about 7.7 Å, which the
+epochs determine weakly
+([below](#agreement-with-shift-and-add-at-a-common-resolution-2026-10-19)). Shift-and-add
+took 0.07 s against albireo's 11 s (2026-08-15).
 
 ### Defect found on observed data
 
@@ -710,6 +717,61 @@ result is recorded for the other configurations of the script (the six exposures
 stationary third light, refits at several light fractions, the period held at the
 photometric value, rescaled weights, a jitter site). The results and the log of the two fits
 are in `internal/research/2026-09-03-adoption/aiphe_offset/`.
+
+### Agreement with shift-and-add at a common resolution (2026-10-19)
+
+The agreement with shift-and-add was first scored against albireo's deconvolved spectra,
+while shift-and-add returns its spectra at the instrumental resolution, the convention that
+D72 corrected on simulated data. Shift-and-add co-adds the 36 epochs with equal weights,
+each at its own resolution, so its spectra are at the resolution of the mean of the epochs'
+line-spread functions: thirty Gaussians of σ = 1.107 km/s and six of 1.591 km/s.
+`aiphe_bench.py` now convolves albireo's spectra with each epoch's kernel, averages the
+results over the epochs, and prints the agreement in both conventions. The core is where
+component 1 is below −0.10, at the instrumental resolution in the new convention and
+deconvolved in the recorded one, with a twelfth of the grid left out at either end. The
+mean of the difference over the core is removed. Shift-and-add runs seven sweeps, as in the
+harness. The results and logs are in `internal/research/2026-10-19-aiphe-recheck/`.
+
+| configuration | deconvolved (recorded convention) | instrumental resolution |
+|---|---|---|
+| 5340–5440 Å, HAM width for all 36, P = 24.5924 d (2026-08-15) | 0.0287 / 0.0366 | 0.0260 / 0.0315 |
+| the same, each epoch at its declared width | 0.0292 / 0.0375 | 0.0261 / 0.0317 |
+| 5341–5440 Å, declared widths, P = 24.592483 d (the harness now) | 0.0282 / 0.0362 | **0.0248 / 0.0305** |
+
+The first row reproduces the recorded 0.029 and 0.037. At the instrumental resolution the
+differences are 9 to 16 per cent smaller. The broadening of the line-spread function itself,
+the difference between albireo's spectra at the instrumental resolution and deconvolved, is
+0.012 and 0.019 in the same cores and adds to the difference approximately in quadrature.
+The declared widths, the unrounded period and the window start change the values by at most
+0.0013.
+
+Most of the remaining difference lies at low frequencies. Split into the bands of the D72
+analysis (a low band at periods above 535 px, or 430 km/s, where the 36 epochs give the
+difference mode less than half its information; a line band from there to the cutoff of the
+mean line-spread function, at a period of 7.9 px; and the band above the cutoff), the
+difference in the current configuration is:
+
+| shift-and-add | total | low band | line band | above the cutoff |
+|---|---|---|---|---|
+| 7 sweeps | 0.0248 / 0.0305 | 0.0233 / 0.0267 | 0.0061 / 0.0120 | 0.0018 / 0.0029 |
+| 50 sweeps | 0.0161 / 0.0217 | 0.0141 / 0.0165 | 0.0061 / 0.0119 | 0.0018 / 0.0029 |
+| limit of the iteration | 0.0186 / 0.0242 | 0.0174 / 0.0200 | 0.0061 / 0.0119 | 0.0018 / 0.0029 |
+
+The limit is solved directly, as in D72, and agrees with 5,000 sweeps to 1.5 × 10⁻⁵.
+
+In the low band the difference depends on shift-and-add's iteration: on the number of
+sweeps and, at the limit, on the edges of the window. Moving the start of the window from
+5340 to 5341 Å, with everything else kept, changes shift-and-add's converged spectra by 0.018
+and 0.021 (mean-aligned, almost all in the low band), its spectra after seven sweeps by
+0.0014 and 0.0015, and albireo's by 0.0023 and 0.0028. The agreement at the limit is
+therefore 0.0074 / 0.0140 for the window starting at 5340 Å and 0.0186 / 0.0242 for the one
+starting at 5341 Å. The period alone changes neither code's spectra in the low band. In the
+line band the two codes differ by 0.006 and 0.011 to 0.012 at every number of sweeps and in
+every configuration, against deepest lines of 0.71 and 0.97 at the instrumental resolution.
+On the harness's default window, 5150–5250 Å, which contains the Mg I b lines, the
+agreement after seven sweeps is 0.0517 / 0.0624 at the instrumental resolution (0.0535 /
+0.0651 deconvolved), of which 0.0502 / 0.0599 lies in the low band and 0.0058 / 0.0119 in
+the line band.
 
 ### AI Phe: the eclipse and the spectroscopic light ratio
 
@@ -2709,13 +2771,37 @@ The first candidate cause of the secondary's offset was the library's fixed
 microturbulence. BOSZ provides xi in {0, 1, 2, 4} km/s and the registry fixes it at 2. A K
 subgiant requires nearer 1.3, and too much microturbulence makes the model's metal lines
 too strong, which a fit can compensate by raising Teff. The sign is as required: at the
-t5250/g3.5 node, xi = 2 gives 8.45 per cent more equivalent width than xi = 1, so a 160-node
-library was rebuilt at xi = 1.
+t5250/g3.5 node, xi = 2 gives 8.45 per cent more equivalent width than xi = 1 (2026-08-27,
+definition not recorded; 11.6 per cent over 5150-5250 A at [M/H] 0 on 2026-10-19, from the
+same BOSZ files), so a 160-node library was rebuilt at xi = 1: Teff 4500-6750 K, log g
+3.0-4.5, [M/H] -0.50 to +0.25.
 
-The secondary's offset increased (+292 K against +273 K), and chi-square with it (1.97e6
-against 1.81e6). [M/H] changed instead, by +0.10 dex: the documented [M/H]-xi degeneracy
-absorbed the change, as math.md 9.2 describes. The test is recorded so that it is not
-repeated.
+On 2026-08-27 the secondary's offset increased (+292 K against +273 K), and chi-square with
+it (1.97e6 against 1.81e6), while [M/H] rose by 0.10 dex. Those chi-square values are about
+4.3 times those of a native fit, the inflation of `compare="matched"`, then the default
+([above](#change-of-the-default-comparison-mode-from-matched-to-native)).
+
+The test was repeated in native mode on 2026-10-19 with the configuration of the re-run of
+2026-10-15: each exposure at its declared width, P = 24.592483 d, log g declared, dilution
+fitted. Both libraries cover the 160 nodes, at xi = 2 and xi = 1, and were built from the
+cached BOSZ files by the current ingest. They form a complete box, so the fit interpolates
+with the Catmull-Rom cubic. The xi = 2 build is identical to the same nodes of the registry's
+version-2 build, and the xi = 1 build to that of 2026-08-27. The Teff and [M/H] priors are
+confined to the box. Both fits converged, in 688 and 990 L-BFGS steps:
+
+| xi | primary Teff | secondary Teff | [M/H] | v sin i [km/s] | R2/R1 | chi2 |
+|---|---|---|---|---|---|---|
+| 2 km/s | 6314.7 K (+0.08%) | 5225.2 K (+4.29%) | -0.050 | 2.21 / 2.20 | 1.5299 | 419,616 |
+| 1 km/s | 6285.8 K (-0.38%) | 5263.5 K (+5.06%) | +0.089 | 2.00 / 2.00 | 1.5258 | 454,292 |
+
+At xi = 1 the secondary's offset increases from +215 to +254 K, chi-square by 34,677 (8.3
+per cent) and [M/H] by 0.14 dex, while the primary falls by 29 K. With the dilution frozen
+at the blackbody estimate (both fits converged), the secondary rises by 21 K, the primary by
+0.9 K, [M/H] by 0.14 dex and chi-square by 40,419. The conclusion of 2026-08-27 holds in
+native mode: the fixed xi = 2 does not explain the secondary's offset, and [M/H] moves with
+xi, the [M/H]-xi degeneracy that math.md 9.2 describes. With the 160 nodes at xi = 2 the fit
+agrees with the 455-node library to 1 K. The results and logs are in
+`internal/research/2026-10-19-aiphe-recheck/`.
 
 Most of the secondary's offset remains unexplained. Three candidates are untested: a 100 A
 window constraining temperature far more strongly for an F star than for a K subgiant, the
@@ -5018,4 +5104,6 @@ resolution, with the recorded values beside them. Their wall-clock times are tho
 at the time, except the sweep table's, which are the fresh-process times above. The
 reproduction statements of the partial recheck and of the 2026-08-16 re-run remain true of
 the computation, which is unchanged. [The comparison with other codes](comparison.md#4-accuracy-and-speed-on-identical-data)
-quotes the values of this section.
+quotes the values of this section. The agreement of albireo and shift-and-add on the observed
+spectra of AI Phe was scored in the same convention on 2026-10-19
+([AI Phoenicis](#agreement-with-shift-and-add-at-a-common-resolution-2026-10-19)).

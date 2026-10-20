@@ -57,6 +57,7 @@ import albireo as ab
 from albireo.forward import build_problem
 from albireo.kepler import t_peri_from_t_conj
 from albireo.likelihood import marginal_loglikelihood
+from albireo.operators import convolve_spectrum, gaussian_kernel
 from albireo.priors import SmoothnessPrior
 
 # --- the published system (Maxted et al. 2020, MNRAS 498, 332) ---------------
@@ -133,6 +134,22 @@ def published_velocities(bjd: np.ndarray) -> np.ndarray:
     v1 = np.asarray(ab.radial_velocity(t, omega=omega, k=K1_PUB, **common))
     v2 = np.asarray(ab.radial_velocity(t, omega=omega + np.pi, k=K2_PUB, **common))
     return np.stack([v1, v2])
+
+
+def instrumental_resolution(d_hat: np.ndarray, dataset, grid) -> np.ndarray:
+    """albireo's deconvolved spectra at the resolution of shift-and-add's output.
+
+    Shift-and-add co-adds the epochs with equal weights, each at its own resolution, so its
+    spectra are at the resolution of the mean of the epochs' line-spread functions. Each
+    spectrum is convolved with every epoch's Gaussian, the kernel the forward model applies,
+    and the results are averaged over the epochs (docs/benchmarks.md, D72).
+    """
+    widths, counts = np.unique([ep.lsf_sigma_kms for ep in dataset], return_counts=True)
+    out = np.zeros_like(d_hat)
+    for width, count in zip(widths, counts, strict=True):
+        kernel = gaussian_kernel(width / grid.dv_kms)
+        out += count * np.stack([np.asarray(convolve_spectrum(row, kernel)) for row in d_hat])
+    return out / counts.sum()
 
 
 def main() -> None:
@@ -213,17 +230,23 @@ def main() -> None:
         f"  deepest line   comp 1 {(sa[0] / ell[0]).min():.4f}, comp 2 {(sa[1] / ell[1]).min():.4f}"
     )
 
-    # Agreement between the two reconstructions in the line cores.
-    core = d_hat[0] < -0.10
-    interior = np.zeros_like(core)
+    # Agreement between the two reconstructions in the line cores. albireo's spectra are
+    # compared at the instrumental resolution (D72) and, as for the values recorded on
+    # 2026-08-15, deconvolved.
+    interior = np.zeros(grid.n, dtype=bool)
     interior[grid.n // 12 : -grid.n // 12] = True
-    core &= interior
-    for i in range(2):
-        diff = (sa[i] / ell[i] - d_hat[i])[core]
-        print(
-            f"  comp {i + 1} vs albireo in line cores: RMS {np.sqrt(np.mean(diff**2)):.4f} "
-            f"(mean-aligned {np.std(diff):.4f}, {core.sum()} px)"
-        )
+    for label, reference in (
+        ("at the instrumental resolution", instrumental_resolution(d_hat, ds, grid)),
+        ("deconvolved (the convention of 2026-08-15)", d_hat),
+    ):
+        core = (reference[0] < -0.10) & interior
+        print(f"  against albireo {label}, in the line cores ({core.sum()} px):")
+        for i in range(2):
+            diff = (sa[i] / ell[i] - reference[i])[core]
+            print(
+                f"    comp {i + 1}: RMS {np.sqrt(np.mean(diff**2)):.4f}, "
+                f"mean-aligned {np.std(diff):.4f}"
+            )
 
     # ---- the orbit, which is the external ground truth ------------------------
     if args.fit:

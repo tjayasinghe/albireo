@@ -1,0 +1,80 @@
+albireo 0.1.0.dev0 from C:\Users\thari\Documents\GitHub\albireo\src\albireo\__init__.py
+C:\Users\thari\Documents\GitHub\albireo\src\albireo\io.py:1491: RuntimeWarning: data\aiphe\ADP.2014-09-25T15-33-00.737.fits: the ERR column holds no finite positive value, so the file carries no usable uncertainties and albireo will estimate them from the scatter instead (to_epoch's ivar_scaling). This is normal for FEROS and HARPS, whose pipelines produce no error spectrum, but it means the weights are albireo's assumption rather than the archive's.
+(the same for 35 more of the 36 files.)
+  raws = read_raw_spectra(paths, instrument=instrument, frame=frame, read_kwargs=read_kwargs)
+
+=== 2026-08-15: window (5340.0, 5440.0), P = 24.5924 d, LSF {'HARPS': 1.1070540764100707}, grid 7324 px, light fractions 0.5345 / 0.4655
+  non-positive flux pixels per epoch: max 0, total 0
+C:\Users\thari\Documents\GitHub\albireo\internal\research\2026-10-19-aiphe-recheck\runs\aiphe_sa_common_resolution.py:133: RuntimeWarning: instrument 'HARPS': its epochs declare 2 different LSF widths (1.107 km/s for epochs [0, 1, 2, 3, 4, 5, 6, 7, '...']; 1.591 km/s for epochs [23, 24, 32, 33, 34, 35]), and all of them are modelled with the supplied [1.107] km/s. A resolving power is a property of the exposure, not of the instrument name (HARPS HAM and EGGS modes both say INSTRUME = 'HARPS'). Pass lsf_sigma_v={'HARPS': PER_EPOCH} to model each epoch at its declared width, or give the modes distinct instrument keys.
+  problem = build_problem(grid, ds, velocities=vel, light_fractions=ell, lsf_sigma_v=lsf)
+  albireo: 17.8 s, residual z-RMS 2.3656
+  shift-and-add: 1 0.018 s, 7 0.145 s, 50 1.010 s, 500 10.274 s, 5000 103.392 s, limit 2.016 s
+  core px: recorded 848, common 855
+  deepest (interior): {'d_hat': [-0.7327377996007096, -0.9891014260320827], 'B d_hat': [-0.7132740241981618, -0.972019191292593], 'shift-and-add 7': [-0.7825540849265089, -0.9053198908534171]}
+  B d_hat - d_hat (raw / aligned, comp 1  comp 2):
+    common core   0.0121 / 0.0118  0.0202 / 0.0194
+    recorded core 0.0121 / 0.0116  0.0203 / 0.0193
+  shift-and-add against albireo (raw / aligned, comp 1  comp 2):
+         1  recorded 0.0786 / 0.0637  0.1122 / 0.0498   common 0.0789 / 0.0623  0.1037 / 0.0449   common, HAM kernel 0.0787 / 0.0623  0.1046 / 0.0452
+         7  recorded 0.0610 / 0.0287  0.0823 / 0.0366   common 0.0622 / 0.0260  0.0738 / 0.0315   common, HAM kernel 0.0619 / 0.0261  0.0746 / 0.0315
+        50  recorded 0.0515 / 0.0237  0.0721 / 0.0321   common 0.0529 / 0.0206  0.0635 / 0.0259   common, HAM kernel 0.0526 / 0.0207  0.0643 / 0.0259
+       500  recorded 0.0228 / 0.0163  0.0394 / 0.0251   common 0.0223 / 0.0114  0.0292 / 0.0167   common, HAM kernel 0.0220 / 0.0115  0.0300 / 0.0167
+      5000  recorded 0.0184 / 0.0138  0.0229 / 0.0228   common 0.0115 / 0.0073  0.0155 / 0.0131   common, HAM kernel 0.0119 / 0.0074  0.0150 / 0.0131
+     limit  recorded 0.0185 / 0.0138  0.0229 / 0.0228   common 0.0115 / 0.0073  0.0155 / 0.0131   common, HAM kernel 0.0119 / 0.0074  0.0151 / 0.0131
+  bands (f_low 0.00187, f_lsf 0.1270 cycles/px), aligned, per component:
+         7  0.0260 0.0246 0.0061 0.0017  |  0.0315 0.0282 0.0113 0.0026
+        50  0.0206 0.0193 0.0060 0.0017  |  0.0259 0.0223 0.0113 0.0026
+     limit  0.0073 0.0025 0.0060 0.0017  |  0.0131 0.0032 0.0113 0.0026
+  limit against 5000 sweeps, largest difference 5.04e-05
+C:\Users\thari\Documents\GitHub\albireo\src\albireo\io.py:1491: RuntimeWarning: data\aiphe\ADP.2014-09-25T15-33-00.737.fits: the ERR column holds no finite positive value, so the file carries no usable uncertainties and albireo will estimate them from the scatter instead (to_epoch's ivar_scaling). This is normal for FEROS and HARPS, whose pipelines produce no error spectrum, but it means the weights are albireo's assumption rather than the archive's.
+(the same for 35 more of the 36 files.)
+  raws = read_raw_spectra(paths, instrument=instrument, frame=frame, read_kwargs=read_kwargs)
+
+=== per-epoch: window (5340.0, 5440.0), P = 24.5924 d, LSF {'HARPS': 'per-epoch'}, grid 7328 px, light fractions 0.5345 / 0.4655
+  non-positive flux pixels per epoch: max 0, total 0
+  albireo: 12.7 s, residual z-RMS 2.3672
+  shift-and-add: 1 0.019 s, 7 0.135 s, 50 0.897 s, 500 8.894 s, 5000 92.614 s, limit 2.178 s
+  core px: recorded 852, common 853
+  deepest (interior): {'d_hat': [-0.7323878243440305, -0.9889373035282836], 'B d_hat': [-0.7142917659375553, -0.9732707054287378], 'shift-and-add 7': [-0.7825540849269033, -0.9053198908519475]}
+  B d_hat - d_hat (raw / aligned, comp 1  comp 2):
+    common core   0.0122 / 0.0119  0.0206 / 0.0197
+    recorded core 0.0122 / 0.0117  0.0206 / 0.0196
+  shift-and-add against albireo (raw / aligned, comp 1  comp 2):
+         1  recorded 0.0784 / 0.0637  0.1129 / 0.0505   common 0.0789 / 0.0623  0.1042 / 0.0451   common, HAM kernel 0.0787 / 0.0624  0.1051 / 0.0454
+         7  recorded 0.0610 / 0.0292  0.0831 / 0.0375   common 0.0621 / 0.0261  0.0743 / 0.0317   common, HAM kernel 0.0618 / 0.0262  0.0751 / 0.0318
+        50  recorded 0.0516 / 0.0242  0.0731 / 0.0332   common 0.0528 / 0.0208  0.0640 / 0.0262   common, HAM kernel 0.0525 / 0.0209  0.0649 / 0.0263
+       500  recorded 0.0232 / 0.0170  0.0407 / 0.0265   common 0.0222 / 0.0116  0.0299 / 0.0171   common, HAM kernel 0.0220 / 0.0118  0.0307 / 0.0173
+      5000  recorded 0.0192 / 0.0146  0.0243 / 0.0243   common 0.0119 / 0.0076  0.0157 / 0.0137   common, HAM kernel 0.0124 / 0.0079  0.0155 / 0.0139
+     limit  recorded 0.0192 / 0.0146  0.0243 / 0.0243   common 0.0119 / 0.0076  0.0157 / 0.0137   common, HAM kernel 0.0124 / 0.0079  0.0155 / 0.0139
+  bands (f_low 0.00187, f_lsf 0.1270 cycles/px), aligned, per component:
+         7  0.0261 0.0245 0.0063 0.0018  |  0.0317 0.0281 0.0117 0.0029
+        50  0.0208 0.0193 0.0063 0.0018  |  0.0262 0.0223 0.0116 0.0029
+     limit  0.0076 0.0026 0.0063 0.0018  |  0.0137 0.0032 0.0116 0.0029
+  limit against 5000 sweeps, largest difference 5.08e-05
+C:\Users\thari\Documents\GitHub\albireo\src\albireo\io.py:1491: RuntimeWarning: data\aiphe\ADP.2014-09-25T15-33-00.737.fits: the ERR column holds no finite positive value, so the file carries no usable uncertainties and albireo will estimate them from the scatter instead (to_epoch's ivar_scaling). This is normal for FEROS and HARPS, whose pipelines produce no error spectrum, but it means the weights are albireo's assumption rather than the archive's.
+(the same for 35 more of the 36 files.)
+  raws = read_raw_spectra(paths, instrument=instrument, frame=frame, read_kwargs=read_kwargs)
+
+=== current: window (5341.0, 5440.0), P = 24.592483 d, LSF {'HARPS': 'per-epoch'}, grid 7258 px, light fractions 0.5344 / 0.4656
+  non-positive flux pixels per epoch: max 0, total 0
+  albireo: 18.0 s, residual z-RMS 2.3712
+  shift-and-add: 1 0.012 s, 7 0.090 s, 50 0.935 s, 500 8.588 s, 5000 61.344 s, limit 2.208 s
+  core px: recorded 844, common 847
+  deepest (interior): {'d_hat': [-0.7327091806342841, -0.9890741428466283], 'B d_hat': [-0.7139144274730311, -0.9700110195198461], 'shift-and-add 7': [-0.7863762055723887, -0.9042982620034175]}
+  B d_hat - d_hat (raw / aligned, comp 1  comp 2):
+    common core   0.0123 / 0.0120  0.0204 / 0.0195
+    recorded core 0.0123 / 0.0118  0.0204 / 0.0193
+  shift-and-add against albireo (raw / aligned, comp 1  comp 2):
+         1  recorded 0.0786 / 0.0634  0.1131 / 0.0497   common 0.0791 / 0.0618  0.1046 / 0.0442   common, HAM kernel 0.0789 / 0.0619  0.1055 / 0.0444
+         7  recorded 0.0607 / 0.0282  0.0828 / 0.0362   common 0.0620 / 0.0248  0.0742 / 0.0305   common, HAM kernel 0.0617 / 0.0250  0.0750 / 0.0306
+        50  recorded 0.0523 / 0.0204  0.0742 / 0.0294   common 0.0539 / 0.0161  0.0653 / 0.0217   common, HAM kernel 0.0535 / 0.0162  0.0662 / 0.0219
+       500  recorded 0.0412 / 0.0214  0.0612 / 0.0303   common 0.0424 / 0.0174  0.0523 / 0.0230   common, HAM kernel 0.0421 / 0.0175  0.0531 / 0.0232
+      5000  recorded 0.0341 / 0.0224  0.0526 / 0.0312   common 0.0347 / 0.0186  0.0434 / 0.0242   common, HAM kernel 0.0344 / 0.0187  0.0442 / 0.0243
+     limit  recorded 0.0341 / 0.0224  0.0526 / 0.0312   common 0.0347 / 0.0186  0.0434 / 0.0242   common, HAM kernel 0.0344 / 0.0187  0.0442 / 0.0243
+  bands (f_low 0.00187, f_lsf 0.1270 cycles/px), aligned, per component:
+         7  0.0248 0.0233 0.0061 0.0018  |  0.0305 0.0267 0.0120 0.0029
+        50  0.0161 0.0141 0.0061 0.0018  |  0.0217 0.0165 0.0119 0.0029
+     limit  0.0186 0.0174 0.0061 0.0018  |  0.0242 0.0200 0.0119 0.0029
+  limit against 5000 sweeps, largest difference 1.47e-05
+
+done

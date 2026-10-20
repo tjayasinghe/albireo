@@ -1,0 +1,72 @@
+{
+ "v2-455": {
+  "nodes": 455,
+  "content_sha256": "fbf989cd781b3aaf288f268d6a9f269fe1afeff4df20f8a729af2cb5f8be2960",
+  "vmicro": 2
+ },
+ "xi2-160": {
+  "nodes": 160,
+  "complete_box": true,
+  "content_sha256": "5f6a800acdd50f42f56c987448f9dea946a29e68f81a41f0b9d5a856544f7023",
+  "vmicro": 2,
+  "build_s": 22.37779189999992,
+  "bounds": {
+   "teff": [
+    4500.0,
+    6750.0
+   ],
+   "logg": [
+    3.0,
+    4.5
+   ],
+   "mh": [
+    -0.5,
+    0.25
+   ]
+  }
+ },
+ "xi1-160": {
+  "nodes": 160,
+  "complete_box": true,
+  "content_sha256": "21b4f15c51428d80b9f3a0c3aab736e6e0fa8ac419310d903a332414c72dfc62",
+  "vmicro": 1,
+  "build_s": 23.249658799999906,
+  "bounds": {
+   "teff": [
+    4500.0,
+    6750.0
+   ],
+   "logg": [
+    3.0,
+    4.5
+   ],
+   "mh": [
+    -0.5,
+    0.25
+   ]
+  }
+ },
+ "xi2-160 against v2-455": {
+  "same_wave": true,
+  "max_abs_normalized": 0.0,
+  "max_abs_log_continuum": 0.0
+ },
+ "xi1-160 against bosz-vmic1-v1 (2026-08-27)": {
+  "same_wave": true,
+  "max_abs_normalized": 0.0,
+  "max_abs_log_continuum": 0.0,
+  "old_content_sha256": "21b4f15c51428d80b9f3a0c3aab736e6e0fa8ac419310d903a332414c72dfc62"
+ },
+ "equivalent_width_at_t5250_g3.5_m0.0": {
+  "5150-5250": {
+   "xi1_A": 17.557776752906854,
+   "xi2_A": 19.590746922365383,
+   "xi2_over_xi1_minus_1": 0.11578744838078392
+  },
+  "4000-7000": {
+   "xi1_A": 379.43128761438925,
+   "xi2_A": 427.41863493370835,
+   "xi2_over_xi1_minus_1": 0.1264717720592614
+  }
+ }
+}

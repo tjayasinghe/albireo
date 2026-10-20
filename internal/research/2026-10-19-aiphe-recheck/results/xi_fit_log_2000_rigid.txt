@@ -1,0 +1,14 @@
+albireo 0.1.0.dev0 from C:\Users\thari\Documents\GitHub\albireo\src\albireo\__init__.py
+P = 24.592483 d, LSF {'HARPS': 'per-epoch'}, grid margin 1.5914 km/s
+C:\Users\thari\Documents\GitHub\albireo\src\albireo\io.py:1491: RuntimeWarning: C:\Users\thari\Documents\GitHub\albireo\data\aiphe\ADP.2014-09-25T15-33-00.737.fits: the ERR column holds no finite positive value, so the file carries no usable uncertainties and albireo will estimate them from the scatter instead (to_epoch's ivar_scaling). This is normal for FEROS and HARPS, whose pipelines produce no error spectrum, but it means the weights are albireo's assumption rather than the archive's.
+(the same for 35 more of the 36 files.)
+  raws = read_raw_spectra(paths, instrument=instrument, frame=frame, read_kwargs=read_kwargs)
+disentangled 7582 px in 15.5 s
+
+=== xi2-160/box: 160 nodes x 975 px, vmicro 2, complete box True, priors {'teff_primary': (5400.0, 6750.0), 'teff_secondary': (4500.0, 5900.0), 'mh': (-0.5, 0.25)}
+  rigid  Teff  6385.01 /  5148.00  [M/H] -0.068  vsini 2.35 / 2.06  light 0.5441 / 0.4559  R2/R1 nan  chi2 427534.6  nearest node 581663.0  (52 s, 1495 steps, |g| 0.00747)
+
+=== xi1-160/box: 160 nodes x 975 px, vmicro 1, complete box True, priors {'teff_primary': (5400.0, 6750.0), 'teff_secondary': (4500.0, 5900.0), 'mh': (-0.5, 0.25)}
+  rigid  Teff  6385.89 /  5169.05  [M/H] +0.073  vsini 2.05 / 1.77  light 0.5441 / 0.4559  R2/R1 nan  chi2 467953.4  nearest node 613739.1  (36 s, 1768 steps, |g| 0.00808)
+
+done

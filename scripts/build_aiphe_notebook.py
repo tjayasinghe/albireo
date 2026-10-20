@@ -307,9 +307,9 @@ the discrepancy.
 Microturbulence is not the explanation. The library is fixed at ξ = 2 km s⁻¹, while a K
 subgiant requires nearer 1.3 km s⁻¹. Excess microturbulence makes the model lines too
 strong, which the fit could compensate by raising Teff. A library rebuilt at ξ = 1 km s⁻¹
-changes the equivalent widths by 8.5 per cent, in the expected direction, but makes the
-secondary's temperature and χ² both worse. [M/H] absorbs the change in ξ instead
-(+0.10 dex), the documented [M/H]–ξ degeneracy.
+changes the equivalent widths in this window by 11.6 per cent at 5250 K and log g 3.5, in
+the expected direction, but makes the secondary's temperature and χ² both worse. [M/H]
+absorbs the change in ξ instead (+0.14 dex), the documented [M/H]–ξ degeneracy.
 
 The comparison mode accounts for part of the discrepancy, and is why the default is
 `native`. `matched` convolves both the model and the data with the LSF before comparing,

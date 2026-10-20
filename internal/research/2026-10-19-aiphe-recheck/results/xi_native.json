@@ -1,0 +1,1326 @@
+{
+ "v2-455/script/fixed": {
+  "labels": {
+   "primary": {
+    "teff": 6313.901528369969,
+    "logg": 4.001114833582631,
+    "mh": -0.05047249045356128,
+    "vsini": 2.216678616419461,
+    "v_kms": -3.5960872788620755
+   },
+   "secondary": {
+    "teff": 5224.866932486009,
+    "logg": 3.597925508555683,
+    "mh": -0.05047249045356128,
+    "vsini": 2.201957245394393,
+    "v_kms": -3.288171583457986
+   }
+  },
+  "formal": {
+   "primary": {
+    "teff": 16.347585664994007,
+    "mh": 0.01173446296149619,
+    "vsini": 0.12957457760910893,
+    "v_kms": 0.0552483745312012
+   },
+   "secondary": {
+    "teff": 12.665040073133216,
+    "mh": 0.01173446296149619,
+    "vsini": 0.11939144833145575,
+    "v_kms": 0.054390700222815794
+   }
+  },
+  "flux_ratio": {
+   "primary": 0.5085645735598141,
+   "secondary": 0.49143542644018573
+  },
+  "radius_ratio": {
+   "primary": 1.0,
+   "secondary": 1.5297227536970117
+  },
+  "chi2": 419615.1276954682,
+  "n_pixels_used": 15164,
+  "chi2_nearest_node": 581662.9775162211,
+  "chi2_continuum": 1949626.4220430306,
+  "flagged": [],
+  "num_steps": 400,
+  "grad_norm": 2.7537666349328735,
+  "converged": false,
+  "multimodal": false,
+  "candidates": [
+   [
+    581662.9775162211
+   ],
+   [
+    587311.645987975
+   ],
+   [
+    591558.1394083514
+   ],
+   [
+    607265.9927729126
+   ]
+  ],
+  "assumptions": {
+   "light_fractions": [
+    0.5441119717092525,
+    0.4558880282907475
+   ],
+   "lsf_sigma_kms": 1.1070540764100707,
+   "medium": "air",
+   "compare": "native",
+   "library_resolving_power": {
+    "primary": 20000.0,
+    "secondary": 20000.0
+   },
+   "macro_kms": {
+    "primary": 0.0,
+    "secondary": 0.0
+   },
+   "offset_order": 2,
+   "dilution": "radius_ratio",
+   "library_filled_nodes": {
+    "primary": "1 node(s) filled by interpolation, not published: teff 5750, logg 3, mh -0.75 (along mh)",
+    "secondary": "1 node(s) filled by interpolation, not published: teff 5750, logg 3, mh -0.75 (along mh)"
+   },
+   "vmicro": {
+    "primary": 2,
+    "secondary": 2
+   },
+   "grids": {
+    "primary": "bosz2024-fgk-r20000",
+    "secondary": "bosz2024-fgk-r20000"
+   }
+  },
+  "logg_pub": [
+   4.001114833582631,
+   3.597925508555683
+  ],
+  "wall_s": 83.27472460000013,
+  "summary": "LabelMatch (native comparison): 2 component(s), 15164 pixels, chi2 = 419615.1\n  null (no template)   chi2 = 1949626.4\n  null (nearest node)  chi2 = 581663.0\n\n  primary:\n    teff     6313.902 K +- 16.348 formal\n    logg        4.001 dex   (fixed)\n    mh         -0.050 dex +- 0.012 formal\n    vsini       2.217 km/s +- 0.130 formal\n    v_kms      -3.596 km/s +- 0.055 formal\n    light fraction 0.5086 (median over the band)\n  secondary:\n    teff     5224.867 K +- 12.665 formal\n    logg        3.598 dex   (fixed)\n    mh         -0.050 dex +- 0.012 formal\n    vsini       2.202 km/s +- 0.119 formal\n    v_kms      -3.288 km/s +- 0.054 formal\n    light fraction 0.4914 (median over the band)\n\n  Formal errors only. On disentangled spectra these run 5-10x optimistic,\n  because the residuals are correlated rather than white (Gebruers+ 2022:\n  70 K formal against 425 K realistic). Refit the spectral posterior draws\n  with refit_draws(match, draws) before quoting these anywhere.\n\n  L-BFGS used all 400 steps it was given (final gradient norm 2.75). That is normal: the\n  tolerance is absolute and unreachable at this scale, but if the fitted\n  chi-square is not well below the nearest-node null, re-run with more.\n\n  Assumed, not measured:\n    light_fractions: [0.5441119717092525, 0.4558880282907475]\n    lsf_sigma_kms: 1.1070540764100707\n    medium: air\n    compare: native\n    library_resolving_power: {'primary': 20000.0, 'secondary': 20000.0}\n    macro_kms: {'primary': 0.0, 'secondary': 0.0}\n    offset_order: 2\n    dilution: radius_ratio\n    library_filled_nodes: {'primary': '1 node(s) filled by interpolation, not published: teff 5750, logg 3, mh -0.75 (along mh)', 'secondary': '1 node(s) filled by interpolation, not published: teff 5750, logg 3, mh -0.75 (along mh)'}\n    vmicro: {'primary': 2, 'secondary': 2}\n    grids: {'primary': 'bosz2024-fgk-r20000', 'secondary': 'bosz2024-fgk-r20000'}",
+  "correlations": [
+   [
+    "mh",
+    "teff_primary",
+    0.6180120009842895
+   ],
+   [
+    "ratio_secondary",
+    "teff_secondary",
+    -0.5194674120816011
+   ],
+   [
+    "mh",
+    "teff_secondary",
+    0.5140277863130258
+   ]
+  ]
+ },
+ "v2-455/script/rigid": {
+  "labels": {
+   "primary": {
+    "teff": 6385.261351829996,
+    "logg": 4.001114833582631,
+    "mh": -0.06748521208731051,
+    "vsini": 2.355957279482949,
+    "v_kms": -3.590758599949881
+   },
+   "secondary": {
+    "teff": 5148.1019501433775,
+    "logg": 3.597925508555683,
+    "mh": -0.06748521208731051,
+    "vsini": 2.0568581208940544,
+    "v_kms": -3.2863917541066154
+   }
+  },
+  "formal": {
+   "primary": {
+    "teff": 15.828710489977007,
+    "mh": 0.012068192802553994,
+    "vsini": 0.13378287537892808,
+    "v_kms": 0.05372387655473222
+   },
+   "secondary": {
+    "teff": 11.832087571975949,
+    "mh": 0.012068192802553994,
+    "vsini": 0.0967325924450584,
+    "v_kms": 0.05546402329247987
+   }
+  },
+  "flux_ratio": {
+   "primary": 0.5441119717092525,
+   "secondary": 0.4558880282907475
+  },
+  "radius_ratio": {},
+  "chi2": 427533.39554728015,
+  "n_pixels_used": 15164,
+  "chi2_nearest_node": 581662.9775162211,
+  "chi2_continuum": 1949626.4220430306,
+  "flagged": [],
+  "num_steps": 400,
+  "grad_norm": 1.7765724976657105,
+  "converged": false,
+  "multimodal": false,
+  "candidates": [
+   [
+    581662.9775162211
+   ],
+   [
+    587311.645987975
+   ],
+   [
+    591558.1394083514
+   ],
+   [
+    607265.9927729126
+   ]
+  ],
+  "assumptions": {
+   "light_fractions": [
+    0.5441119717092525,
+    0.4558880282907475
+   ],
+   "lsf_sigma_kms": 1.1070540764100707,
+   "medium": "air",
+   "compare": "native",
+   "library_resolving_power": {
+    "primary": 20000.0,
+    "secondary": 20000.0
+   },
+   "macro_kms": {
+    "primary": 0.0,
+    "secondary": 0.0
+   },
+   "offset_order": 2,
+   "dilution": "fixed",
+   "library_filled_nodes": {
+    "primary": "1 node(s) filled by interpolation, not published: teff 5750, logg 3, mh -0.75 (along mh)",
+    "secondary": "1 node(s) filled by interpolation, not published: teff 5750, logg 3, mh -0.75 (along mh)"
+   },
+   "vmicro": {
+    "primary": 2,
+    "secondary": 2
+   },
+   "grids": {
+    "primary": "bosz2024-fgk-r20000",
+    "secondary": "bosz2024-fgk-r20000"
+   }
+  },
+  "logg_pub": [
+   4.001114833582631,
+   3.597925508555683
+  ],
+  "wall_s": 49.286026900000024,
+  "summary": "LabelMatch (native comparison): 2 component(s), 15164 pixels, chi2 = 427533.4\n  null (no template)   chi2 = 1949626.4\n  null (nearest node)  chi2 = 581663.0\n\n  primary:\n    teff     6385.261 K +- 15.829 formal\n    logg        4.001 dex   (fixed)\n    mh         -0.067 dex +- 0.012 formal\n    vsini       2.356 km/s +- 0.134 formal\n    v_kms      -3.591 km/s +- 0.054 formal\n    light fraction 0.5441 (median over the band)\n  secondary:\n    teff     5148.102 K +- 11.832 formal\n    logg        3.598 dex   (fixed)\n    mh         -0.067 dex +- 0.012 formal\n    vsini       2.057 km/s +- 0.097 formal\n    v_kms      -3.286 km/s +- 0.055 formal\n    light fraction 0.4559 (median over the band)\n\n  Formal errors only. On disentangled spectra these run 5-10x optimistic,\n  because the residuals are correlated rather than white (Gebruers+ 2022:\n  70 K formal against 425 K realistic). Refit the spectral posterior draws\n  with refit_draws(match, draws) before quoting these anywhere.\n\n  L-BFGS used all 400 steps it was given (final gradient norm 1.78). That is normal: the\n  tolerance is absolute and unreachable at this scale, but if the fitted\n  chi-square is not well below the nearest-node null, re-run with more.\n\n  Assumed, not measured:\n    light_fractions: [0.5441119717092525, 0.4558880282907475]\n    lsf_sigma_kms: 1.1070540764100707\n    medium: air\n    compare: native\n    library_resolving_power: {'primary': 20000.0, 'secondary': 20000.0}\n    macro_kms: {'primary': 0.0, 'secondary': 0.0}\n    offset_order: 2\n    dilution: fixed\n    library_filled_nodes: {'primary': '1 node(s) filled by interpolation, not published: teff 5750, logg 3, mh -0.75 (along mh)', 'secondary': '1 node(s) filled by interpolation, not published: teff 5750, logg 3, mh -0.75 (along mh)'}\n    vmicro: {'primary': 2, 'secondary': 2}\n    grids: {'primary': 'bosz2024-fgk-r20000', 'secondary': 'bosz2024-fgk-r20000'}",
+  "correlations": [
+   [
+    "mh",
+    "teff_primary",
+    0.7003718022018928
+   ],
+   [
+    "mh",
+    "teff_secondary",
+    0.5573180884452289
+   ]
+  ]
+ },
+ "v2-455/box/fixed": {
+  "labels": {
+   "primary": {
+    "teff": 6315.210820342069,
+    "logg": 4.001114833582631,
+    "mh": -0.050029490126544895,
+    "vsini": 2.2049064395648426,
+    "v_kms": -3.5956452884866685
+   },
+   "secondary": {
+    "teff": 5224.558897976234,
+    "logg": 3.597925508555683,
+    "mh": -0.050029490126544895,
+    "vsini": 2.191447655352851,
+    "v_kms": -3.2902130305629598
+   }
+  },
+  "formal": {
+   "primary": {
+    "teff": 16.34663114378032,
+    "mh": 0.011724571083179529,
+    "vsini": 0.1290585061923595,
+    "v_kms": 0.05506955533302928
+   },
+   "secondary": {
+    "teff": 12.658757968306833,
+    "mh": 0.011724571083179529,
+    "vsini": 0.11882751947843663,
+    "v_kms": 0.05422854369523267
+   }
+  },
+  "flux_ratio": {
+   "primary": 0.5086866970562647,
+   "secondary": 0.4913133029437349
+  },
+  "radius_ratio": {
+   "primary": 1.0,
+   "secondary": 1.5302744623288245
+  },
+  "chi2": 419623.9176728494,
+  "n_pixels_used": 15164,
+  "chi2_nearest_node": 581662.9775162211,
+  "chi2_continuum": 1949626.4220430306,
+  "flagged": [],
+  "num_steps": 400,
+  "grad_norm": 14.390148478578555,
+  "converged": false,
+  "multimodal": false,
+  "candidates": [
+   [
+    581662.9775162211
+   ],
+   [
+    587311.645987975
+   ],
+   [
+    591558.1394083514
+   ],
+   [
+    607265.9927729126
+   ]
+  ],
+  "assumptions": {
+   "light_fractions": [
+    0.5441119717092525,
+    0.4558880282907475
+   ],
+   "lsf_sigma_kms": 1.1070540764100707,
+   "medium": "air",
+   "compare": "native",
+   "library_resolving_power": {
+    "primary": 20000.0,
+    "secondary": 20000.0
+   },
+   "macro_kms": {
+    "primary": 0.0,
+    "secondary": 0.0
+   },
+   "offset_order": 2,
+   "dilution": "radius_ratio",
+   "library_filled_nodes": {
+    "primary": "1 node(s) filled by interpolation, not published: teff 5750, logg 3, mh -0.75 (along mh)",
+    "secondary": "1 node(s) filled by interpolation, not published: teff 5750, logg 3, mh -0.75 (along mh)"
+   },
+   "vmicro": {
+    "primary": 2,
+    "secondary": 2
+   },
+   "grids": {
+    "primary": "bosz2024-fgk-r20000",
+    "secondary": "bosz2024-fgk-r20000"
+   }
+  },
+  "logg_pub": [
+   4.001114833582631,
+   3.597925508555683
+  ],
+  "wall_s": 67.01751209999998,
+  "summary": "LabelMatch (native comparison): 2 component(s), 15164 pixels, chi2 = 419623.9\n  null (no template)   chi2 = 1949626.4\n  null (nearest node)  chi2 = 581663.0\n\n  primary:\n    teff     6315.211 K +- 16.347 formal\n    logg        4.001 dex   (fixed)\n    mh         -0.050 dex +- 0.012 formal\n    vsini       2.205 km/s +- 0.129 formal\n    v_kms      -3.596 km/s +- 0.055 formal\n    light fraction 0.5087 (median over the band)\n  secondary:\n    teff     5224.559 K +- 12.659 formal\n    logg        3.598 dex   (fixed)\n    mh         -0.050 dex +- 0.012 formal\n    vsini       2.191 km/s +- 0.119 formal\n    v_kms      -3.290 km/s +- 0.054 formal\n    light fraction 0.4913 (median over the band)\n\n  Formal errors only. On disentangled spectra these run 5-10x optimistic,\n  because the residuals are correlated rather than white (Gebruers+ 2022:\n  70 K formal against 425 K realistic). Refit the spectral posterior draws\n  with refit_draws(match, draws) before quoting these anywhere.\n\n  L-BFGS used all 400 steps it was given (final gradient norm 14.4). That is normal: the\n  tolerance is absolute and unreachable at this scale, but if the fitted\n  chi-square is not well below the nearest-node null, re-run with more.\n\n  Assumed, not measured:\n    light_fractions: [0.5441119717092525, 0.4558880282907475]\n    lsf_sigma_kms: 1.1070540764100707\n    medium: air\n    compare: native\n    library_resolving_power: {'primary': 20000.0, 'secondary': 20000.0}\n    macro_kms: {'primary': 0.0, 'secondary': 0.0}\n    offset_order: 2\n    dilution: radius_ratio\n    library_filled_nodes: {'primary': '1 node(s) filled by interpolation, not published: teff 5750, logg 3, mh -0.75 (along mh)', 'secondary': '1 node(s) filled by interpolation, not published: teff 5750, logg 3, mh -0.75 (along mh)'}\n    vmicro: {'primary': 2, 'secondary': 2}\n    grids: {'primary': 'bosz2024-fgk-r20000', 'secondary': 'bosz2024-fgk-r20000'}",
+  "correlations": [
+   [
+    "mh",
+    "teff_primary",
+    0.6180034374318571
+   ],
+   [
+    "ratio_secondary",
+    "teff_secondary",
+    -0.5194774694717629
+   ],
+   [
+    "mh",
+    "teff_secondary",
+    0.5137461969287936
+   ]
+  ]
+ },
+ "v2-455/box/rigid": {
+  "labels": {
+   "primary": {
+    "teff": 6379.364825150045,
+    "logg": 4.001114833582631,
+    "mh": -0.071801375523466,
+    "vsini": 2.226362025919665,
+    "v_kms": -3.588096986040597
+   },
+   "secondary": {
+    "teff": 5143.50287134648,
+    "logg": 3.597925508555683,
+    "mh": -0.071801375523466,
+    "vsini": 2.0948934966962702,
+    "v_kms": -3.286800118513524
+   }
+  },
+  "formal": {
+   "primary": {
+    "teff": 15.74255731756001,
+    "mh": 0.01206669439507117,
+    "vsini": 0.13131186568220962,
+    "v_kms": 0.052367702362904944
+   },
+   "secondary": {
+    "teff": 11.795719371941995,
+    "mh": 0.01206669439507117,
+    "vsini": 0.1032466498438366,
+    "v_kms": 0.05618360119981933
+   }
+  },
+  "flux_ratio": {
+   "primary": 0.5441119717092525,
+   "secondary": 0.4558880282907475
+  },
+  "radius_ratio": {},
+  "chi2": 427581.4054497078,
+  "n_pixels_used": 15164,
+  "chi2_nearest_node": 581662.9775162211,
+  "chi2_continuum": 1949626.4220430306,
+  "flagged": [],
+  "num_steps": 400,
+  "grad_norm": 91.07724340496988,
+  "converged": false,
+  "multimodal": false,
+  "candidates": [
+   [
+    581662.9775162211
+   ],
+   [
+    587311.645987975
+   ],
+   [
+    591558.1394083514
+   ],
+   [
+    607265.9927729126
+   ]
+  ],
+  "assumptions": {
+   "light_fractions": [
+    0.5441119717092525,
+    0.4558880282907475
+   ],
+   "lsf_sigma_kms": 1.1070540764100707,
+   "medium": "air",
+   "compare": "native",
+   "library_resolving_power": {
+    "primary": 20000.0,
+    "secondary": 20000.0
+   },
+   "macro_kms": {
+    "primary": 0.0,
+    "secondary": 0.0
+   },
+   "offset_order": 2,
+   "dilution": "fixed",
+   "library_filled_nodes": {
+    "primary": "1 node(s) filled by interpolation, not published: teff 5750, logg 3, mh -0.75 (along mh)",
+    "secondary": "1 node(s) filled by interpolation, not published: teff 5750, logg 3, mh -0.75 (along mh)"
+   },
+   "vmicro": {
+    "primary": 2,
+    "secondary": 2
+   },
+   "grids": {
+    "primary": "bosz2024-fgk-r20000",
+    "secondary": "bosz2024-fgk-r20000"
+   }
+  },
+  "logg_pub": [
+   4.001114833582631,
+   3.597925508555683
+  ],
+  "wall_s": 47.20802209999988,
+  "summary": "LabelMatch (native comparison): 2 component(s), 15164 pixels, chi2 = 427581.4\n  null (no template)   chi2 = 1949626.4\n  null (nearest node)  chi2 = 581663.0\n\n  primary:\n    teff     6379.365 K +- 15.743 formal\n    logg        4.001 dex   (fixed)\n    mh         -0.072 dex +- 0.012 formal\n    vsini       2.226 km/s +- 0.131 formal\n    v_kms      -3.588 km/s +- 0.052 formal\n    light fraction 0.5441 (median over the band)\n  secondary:\n    teff     5143.503 K +- 11.796 formal\n    logg        3.598 dex   (fixed)\n    mh         -0.072 dex +- 0.012 formal\n    vsini       2.095 km/s +- 0.103 formal\n    v_kms      -3.287 km/s +- 0.056 formal\n    light fraction 0.4559 (median over the band)\n\n  Formal errors only. On disentangled spectra these run 5-10x optimistic,\n  because the residuals are correlated rather than white (Gebruers+ 2022:\n  70 K formal against 425 K realistic). Refit the spectral posterior draws\n  with refit_draws(match, draws) before quoting these anywhere.\n\n  L-BFGS used all 400 steps it was given (final gradient norm 91.1). That is normal: the\n  tolerance is absolute and unreachable at this scale, but if the fitted\n  chi-square is not well below the nearest-node null, re-run with more.\n\n  Assumed, not measured:\n    light_fractions: [0.5441119717092525, 0.4558880282907475]\n    lsf_sigma_kms: 1.1070540764100707\n    medium: air\n    compare: native\n    library_resolving_power: {'primary': 20000.0, 'secondary': 20000.0}\n    macro_kms: {'primary': 0.0, 'secondary': 0.0}\n    offset_order: 2\n    dilution: fixed\n    library_filled_nodes: {'primary': '1 node(s) filled by interpolation, not published: teff 5750, logg 3, mh -0.75 (along mh)', 'secondary': '1 node(s) filled by interpolation, not published: teff 5750, logg 3, mh -0.75 (along mh)'}\n    vmicro: {'primary': 2, 'secondary': 2}\n    grids: {'primary': 'bosz2024-fgk-r20000', 'secondary': 'bosz2024-fgk-r20000'}",
+  "correlations": [
+   [
+    "mh",
+    "teff_primary",
+    0.6993170637641192
+   ],
+   [
+    "mh",
+    "teff_secondary",
+    0.5571144952523445
+   ]
+  ]
+ },
+ "xi2-160/box/fixed": {
+  "labels": {
+   "primary": {
+    "teff": 6314.798787856308,
+    "logg": 4.001114833582631,
+    "mh": -0.049646427797221504,
+    "vsini": 2.2125045789500875,
+    "v_kms": -3.5961537083219
+   },
+   "secondary": {
+    "teff": 5225.344372286449,
+    "logg": 3.597925508555683,
+    "mh": -0.049646427797221504,
+    "vsini": 2.2021502088772436,
+    "v_kms": -3.2886593462505687
+   }
+  },
+  "formal": {
+   "primary": {
+    "teff": 16.34001483935876,
+    "mh": 0.011720769446573388,
+    "vsini": 0.12939681259145186,
+    "v_kms": 0.05517977171225053
+   },
+   "secondary": {
+    "teff": 12.657643306340013,
+    "mh": 0.011720769446573388,
+    "vsini": 0.1193837129986244,
+    "v_kms": 0.054375647869867164
+   }
+  },
+  "flux_ratio": {
+   "primary": 0.508567021200366,
+   "secondary": 0.4914329787996344
+  },
+  "radius_ratio": {
+   "primary": 1.0,
+   "secondary": 1.5298370480575467
+  },
+  "chi2": 419613.4079291828,
+  "n_pixels_used": 15164,
+  "chi2_nearest_node": 581662.9775162211,
+  "chi2_continuum": 1949626.4220430306,
+  "flagged": [],
+  "num_steps": 400,
+  "grad_norm": 4.179863607770111,
+  "converged": false,
+  "multimodal": false,
+  "candidates": [
+   [
+    581662.9775162211
+   ],
+   [
+    587311.645987975
+   ],
+   [
+    591558.1394083514
+   ],
+   [
+    607265.9927729126
+   ]
+  ],
+  "assumptions": {
+   "light_fractions": [
+    0.5441119717092525,
+    0.4558880282907475
+   ],
+   "lsf_sigma_kms": 1.1070540764100707,
+   "medium": "air",
+   "compare": "native",
+   "library_resolving_power": {
+    "primary": 20000.0,
+    "secondary": 20000.0
+   },
+   "macro_kms": {
+    "primary": 0.0,
+    "secondary": 0.0
+   },
+   "offset_order": 2,
+   "dilution": "radius_ratio",
+   "vmicro": {
+    "primary": 2,
+    "secondary": 2
+   },
+   "grids": {
+    "primary": "aiphe-recheck-xi2-box160",
+    "secondary": "aiphe-recheck-xi2-box160"
+   }
+  },
+  "logg_pub": [
+   4.001114833582631,
+   3.597925508555683
+  ],
+  "wall_s": 45.49353560000009,
+  "summary": "LabelMatch (native comparison): 2 component(s), 15164 pixels, chi2 = 419613.4\n  null (no template)   chi2 = 1949626.4\n  null (nearest node)  chi2 = 581663.0\n\n  primary:\n    teff     6314.799 K +- 16.340 formal\n    logg        4.001 dex   (fixed)\n    mh         -0.050 dex +- 0.012 formal\n    vsini       2.213 km/s +- 0.129 formal\n    v_kms      -3.596 km/s +- 0.055 formal\n    light fraction 0.5086 (median over the band)\n  secondary:\n    teff     5225.344 K +- 12.658 formal\n    logg        3.598 dex   (fixed)\n    mh         -0.050 dex +- 0.012 formal\n    vsini       2.202 km/s +- 0.119 formal\n    v_kms      -3.289 km/s +- 0.054 formal\n    light fraction 0.4914 (median over the band)\n\n  Formal errors only. On disentangled spectra these run 5-10x optimistic,\n  because the residuals are correlated rather than white (Gebruers+ 2022:\n  70 K formal against 425 K realistic). Refit the spectral posterior draws\n  with refit_draws(match, draws) before quoting these anywhere.\n\n  L-BFGS used all 400 steps it was given (final gradient norm 4.18). That is normal: the\n  tolerance is absolute and unreachable at this scale, but if the fitted\n  chi-square is not well below the nearest-node null, re-run with more.\n\n  Assumed, not measured:\n    light_fractions: [0.5441119717092525, 0.4558880282907475]\n    lsf_sigma_kms: 1.1070540764100707\n    medium: air\n    compare: native\n    library_resolving_power: {'primary': 20000.0, 'secondary': 20000.0}\n    macro_kms: {'primary': 0.0, 'secondary': 0.0}\n    offset_order: 2\n    dilution: radius_ratio\n    vmicro: {'primary': 2, 'secondary': 2}\n    grids: {'primary': 'aiphe-recheck-xi2-box160', 'secondary': 'aiphe-recheck-xi2-box160'}",
+  "correlations": [
+   [
+    "mh",
+    "teff_primary",
+    0.6176410787874635
+   ],
+   [
+    "ratio_secondary",
+    "teff_secondary",
+    -0.5197936378677126
+   ],
+   [
+    "mh",
+    "teff_secondary",
+    0.5133713141240194
+   ]
+  ]
+ },
+ "xi2-160/box/rigid": {
+  "labels": {
+   "primary": {
+    "teff": 6386.433805502831,
+    "logg": 4.001114833582631,
+    "mh": -0.0667744787781216,
+    "vsini": 2.3421589145661548,
+    "v_kms": -3.5905337579702543
+   },
+   "secondary": {
+    "teff": 5147.326016677113,
+    "logg": 3.597925508555683,
+    "mh": -0.0667744787781216,
+    "vsini": 2.0402775036964873,
+    "v_kms": -3.2913862074424394
+   }
+  },
+  "formal": {
+   "primary": {
+    "teff": 15.847109197606182,
+    "mh": 0.012065836566473106,
+    "vsini": 0.13337696166914179,
+    "v_kms": 0.05358918135322731
+   },
+   "secondary": {
+    "teff": 11.823181663718463,
+    "mh": 0.012065836566473106,
+    "vsini": 0.09218738242331544,
+    "v_kms": 0.05505621587869585
+   }
+  },
+  "flux_ratio": {
+   "primary": 0.5441119717092525,
+   "secondary": 0.4558880282907475
+  },
+  "radius_ratio": {},
+  "chi2": 427529.15314986126,
+  "n_pixels_used": 15164,
+  "chi2_nearest_node": 581662.9775162211,
+  "chi2_continuum": 1949626.4220430306,
+  "flagged": [],
+  "num_steps": 400,
+  "grad_norm": 16.07781662165149,
+  "converged": false,
+  "multimodal": false,
+  "candidates": [
+   [
+    581662.9775162211
+   ],
+   [
+    587311.645987975
+   ],
+   [
+    591558.1394083514
+   ],
+   [
+    607265.9927729126
+   ]
+  ],
+  "assumptions": {
+   "light_fractions": [
+    0.5441119717092525,
+    0.4558880282907475
+   ],
+   "lsf_sigma_kms": 1.1070540764100707,
+   "medium": "air",
+   "compare": "native",
+   "library_resolving_power": {
+    "primary": 20000.0,
+    "secondary": 20000.0
+   },
+   "macro_kms": {
+    "primary": 0.0,
+    "secondary": 0.0
+   },
+   "offset_order": 2,
+   "dilution": "fixed",
+   "vmicro": {
+    "primary": 2,
+    "secondary": 2
+   },
+   "grids": {
+    "primary": "aiphe-recheck-xi2-box160",
+    "secondary": "aiphe-recheck-xi2-box160"
+   }
+  },
+  "logg_pub": [
+   4.001114833582631,
+   3.597925508555683
+  ],
+  "wall_s": 33.7698676,
+  "summary": "LabelMatch (native comparison): 2 component(s), 15164 pixels, chi2 = 427529.2\n  null (no template)   chi2 = 1949626.4\n  null (nearest node)  chi2 = 581663.0\n\n  primary:\n    teff     6386.434 K +- 15.847 formal\n    logg        4.001 dex   (fixed)\n    mh         -0.067 dex +- 0.012 formal\n    vsini       2.342 km/s +- 0.133 formal\n    v_kms      -3.591 km/s +- 0.054 formal\n    light fraction 0.5441 (median over the band)\n  secondary:\n    teff     5147.326 K +- 11.823 formal\n    logg        3.598 dex   (fixed)\n    mh         -0.067 dex +- 0.012 formal\n    vsini       2.040 km/s +- 0.092 formal\n    v_kms      -3.291 km/s +- 0.055 formal\n    light fraction 0.4559 (median over the band)\n\n  Formal errors only. On disentangled spectra these run 5-10x optimistic,\n  because the residuals are correlated rather than white (Gebruers+ 2022:\n  70 K formal against 425 K realistic). Refit the spectral posterior draws\n  with refit_draws(match, draws) before quoting these anywhere.\n\n  L-BFGS used all 400 steps it was given (final gradient norm 16.1). That is normal: the\n  tolerance is absolute and unreachable at this scale, but if the fitted\n  chi-square is not well below the nearest-node null, re-run with more.\n\n  Assumed, not measured:\n    light_fractions: [0.5441119717092525, 0.4558880282907475]\n    lsf_sigma_kms: 1.1070540764100707\n    medium: air\n    compare: native\n    library_resolving_power: {'primary': 20000.0, 'secondary': 20000.0}\n    macro_kms: {'primary': 0.0, 'secondary': 0.0}\n    offset_order: 2\n    dilution: fixed\n    vmicro: {'primary': 2, 'secondary': 2}\n    grids: {'primary': 'aiphe-recheck-xi2-box160', 'secondary': 'aiphe-recheck-xi2-box160'}",
+  "correlations": [
+   [
+    "mh",
+    "teff_primary",
+    0.7002644218723728
+   ],
+   [
+    "mh",
+    "teff_secondary",
+    0.5570319377524076
+   ]
+  ]
+ },
+ "xi1-160/box/fixed": {
+  "labels": {
+   "primary": {
+    "teff": 6285.250808357454,
+    "logg": 4.001114833582631,
+    "mh": 0.09085584922357814,
+    "vsini": 1.9703762947366323,
+    "v_kms": -3.661703336955064
+   },
+   "secondary": {
+    "teff": 5267.012432306672,
+    "logg": 3.597925508555683,
+    "mh": 0.09085584922357814,
+    "vsini": 1.9662099775631898,
+    "v_kms": -3.3234107096210455
+   }
+  },
+  "formal": {
+   "primary": {
+    "teff": 18.294801377769705,
+    "mh": 0.01376276092993255,
+    "vsini": 0.210693626497237,
+    "v_kms": 0.06340887207864844
+   },
+   "secondary": {
+    "teff": 15.366478230302953,
+    "mh": 0.01376276092993255,
+    "vsini": 0.1752365506886616,
+    "v_kms": 0.05775593581713477
+   }
+  },
+  "flux_ratio": {
+   "primary": 0.49547559972421557,
+   "secondary": 0.5045244002757853
+  },
+  "radius_ratio": {
+   "primary": 1.0,
+   "secondary": 1.5236845455202812
+  },
+  "chi2": 454275.80981803196,
+  "n_pixels_used": 15164,
+  "chi2_nearest_node": 613739.0832447269,
+  "chi2_continuum": 1949626.4220430306,
+  "flagged": [],
+  "num_steps": 400,
+  "grad_norm": 150.11532181537467,
+  "converged": false,
+  "multimodal": true,
+  "candidates": [
+   [
+    613928.332630327
+   ],
+   [
+    613931.6709387179
+   ],
+   [
+    620521.5909436203
+   ],
+   [
+    632221.1005283976
+   ]
+  ],
+  "assumptions": {
+   "light_fractions": [
+    0.5441119717092525,
+    0.4558880282907475
+   ],
+   "lsf_sigma_kms": 1.1070540764100707,
+   "medium": "air",
+   "compare": "native",
+   "library_resolving_power": {
+    "primary": 20000.0,
+    "secondary": 20000.0
+   },
+   "macro_kms": {
+    "primary": 0.0,
+    "secondary": 0.0
+   },
+   "offset_order": 2,
+   "dilution": "radius_ratio",
+   "vmicro": {
+    "primary": 1,
+    "secondary": 1
+   },
+   "grids": {
+    "primary": "aiphe-recheck-xi1-box160",
+    "secondary": "aiphe-recheck-xi1-box160"
+   }
+  },
+  "logg_pub": [
+   4.001114833582631,
+   3.597925508555683
+  ],
+  "wall_s": 53.69154010000011,
+  "summary": "LabelMatch (native comparison): 2 component(s), 15164 pixels, chi2 = 454275.8\n  null (no template)   chi2 = 1949626.4\n  null (nearest node)  chi2 = 613739.1\n\n  primary:\n    teff     6285.251 K +- 18.295 formal\n    logg        4.001 dex   (fixed)\n    mh          0.091 dex +- 0.014 formal\n    vsini       1.970 km/s +- 0.211 formal\n    v_kms      -3.662 km/s +- 0.063 formal\n    light fraction 0.4955 (median over the band)\n  secondary:\n    teff     5267.012 K +- 15.366 formal\n    logg        3.598 dex   (fixed)\n    mh          0.091 dex +- 0.014 formal\n    vsini       1.966 km/s +- 0.175 formal\n    v_kms      -3.323 km/s +- 0.058 formal\n    light fraction 0.5045 (median over the band)\n\n  Formal errors only. On disentangled spectra these run 5-10x optimistic,\n  because the residuals are correlated rather than white (Gebruers+ 2022:\n  70 K formal against 425 K realistic). Refit the spectral posterior draws\n  with refit_draws(match, draws) before quoting these anywhere.\n\n  The scan found a second basin within delta chi2 < 9. The reported labels are\n  the better of them, not the only ones consistent with the data.\n\n  L-BFGS used all 400 steps it was given (final gradient norm 150). That is normal: the\n  tolerance is absolute and unreachable at this scale, but if the fitted\n  chi-square is not well below the nearest-node null, re-run with more.\n\n  Assumed, not measured:\n    light_fractions: [0.5441119717092525, 0.4558880282907475]\n    lsf_sigma_kms: 1.1070540764100707\n    medium: air\n    compare: native\n    library_resolving_power: {'primary': 20000.0, 'secondary': 20000.0}\n    macro_kms: {'primary': 0.0, 'secondary': 0.0}\n    offset_order: 2\n    dilution: radius_ratio\n    vmicro: {'primary': 1, 'secondary': 1}\n    grids: {'primary': 'aiphe-recheck-xi1-box160', 'secondary': 'aiphe-recheck-xi1-box160'}",
+  "correlations": [
+   [
+    "mh",
+    "teff_primary",
+    0.6265604713944174
+   ],
+   [
+    "mh",
+    "teff_secondary",
+    0.6052183899949323
+   ],
+   [
+    "ratio_secondary",
+    "teff_secondary",
+    -0.509556988250481
+   ]
+  ]
+ },
+ "xi1-160/box/rigid": {
+  "labels": {
+   "primary": {
+    "teff": 6385.9294399774,
+    "logg": 4.001114833582631,
+    "mh": 0.07277778661190526,
+    "vsini": 2.0541463209801556,
+    "v_kms": -3.647118278919285
+   },
+   "secondary": {
+    "teff": 5168.710730990254,
+    "logg": 3.597925508555683,
+    "mh": 0.07277778661190526,
+    "vsini": 1.7832619587057674,
+    "v_kms": -3.3116030922573962
+   }
+  },
+  "formal": {
+   "primary": {
+    "teff": 16.161717103896272,
+    "mh": 0.012352018737177143,
+    "vsini": 0.10748609167981564,
+    "v_kms": 0.05800230445875938
+   },
+   "secondary": {
+    "teff": 11.529106987816746,
+    "mh": 0.012352018737177143,
+    "vsini": 0.17273309478127774,
+    "v_kms": 0.06284771885025896
+   }
+  },
+  "flux_ratio": {
+   "primary": 0.5441119717092525,
+   "secondary": 0.4558880282907475
+  },
+  "radius_ratio": {},
+  "chi2": 467955.330968417,
+  "n_pixels_used": 15164,
+  "chi2_nearest_node": 613739.0832447269,
+  "chi2_continuum": 1949626.4220430306,
+  "flagged": [],
+  "num_steps": 400,
+  "grad_norm": 3.2577351427842243,
+  "converged": false,
+  "multimodal": true,
+  "candidates": [
+   [
+    613928.332630327
+   ],
+   [
+    613931.6709387179
+   ],
+   [
+    620521.5909436203
+   ],
+   [
+    632221.1005283976
+   ]
+  ],
+  "assumptions": {
+   "light_fractions": [
+    0.5441119717092525,
+    0.4558880282907475
+   ],
+   "lsf_sigma_kms": 1.1070540764100707,
+   "medium": "air",
+   "compare": "native",
+   "library_resolving_power": {
+    "primary": 20000.0,
+    "secondary": 20000.0
+   },
+   "macro_kms": {
+    "primary": 0.0,
+    "secondary": 0.0
+   },
+   "offset_order": 2,
+   "dilution": "fixed",
+   "vmicro": {
+    "primary": 1,
+    "secondary": 1
+   },
+   "grids": {
+    "primary": "aiphe-recheck-xi1-box160",
+    "secondary": "aiphe-recheck-xi1-box160"
+   }
+  },
+  "logg_pub": [
+   4.001114833582631,
+   3.597925508555683
+  ],
+  "wall_s": 33.433454299999994,
+  "summary": "LabelMatch (native comparison): 2 component(s), 15164 pixels, chi2 = 467955.3\n  null (no template)   chi2 = 1949626.4\n  null (nearest node)  chi2 = 613739.1\n\n  primary:\n    teff     6385.929 K +- 16.162 formal\n    logg        4.001 dex   (fixed)\n    mh          0.073 dex +- 0.012 formal\n    vsini       2.054 km/s +- 0.107 formal\n    v_kms      -3.647 km/s +- 0.058 formal\n    light fraction 0.5441 (median over the band)\n  secondary:\n    teff     5168.711 K +- 11.529 formal\n    logg        3.598 dex   (fixed)\n    mh          0.073 dex +- 0.012 formal\n    vsini       1.783 km/s +- 0.173 formal\n    v_kms      -3.312 km/s +- 0.063 formal\n    light fraction 0.4559 (median over the band)\n\n  Formal errors only. On disentangled spectra these run 5-10x optimistic,\n  because the residuals are correlated rather than white (Gebruers+ 2022:\n  70 K formal against 425 K realistic). Refit the spectral posterior draws\n  with refit_draws(match, draws) before quoting these anywhere.\n\n  The scan found a second basin within delta chi2 < 9. The reported labels are\n  the better of them, not the only ones consistent with the data.\n\n  L-BFGS used all 400 steps it was given (final gradient norm 3.26). That is normal: the\n  tolerance is absolute and unreachable at this scale, but if the fitted\n  chi-square is not well below the nearest-node null, re-run with more.\n\n  Assumed, not measured:\n    light_fractions: [0.5441119717092525, 0.4558880282907475]\n    lsf_sigma_kms: 1.1070540764100707\n    medium: air\n    compare: native\n    library_resolving_power: {'primary': 20000.0, 'secondary': 20000.0}\n    macro_kms: {'primary': 0.0, 'secondary': 0.0}\n    offset_order: 2\n    dilution: fixed\n    vmicro: {'primary': 1, 'secondary': 1}\n    grids: {'primary': 'aiphe-recheck-xi1-box160', 'secondary': 'aiphe-recheck-xi1-box160'}",
+  "correlations": [
+   [
+    "mh",
+    "teff_primary",
+    0.677056489181564
+   ],
+   [
+    "mh",
+    "teff_secondary",
+    0.5515953415493239
+   ]
+  ]
+ },
+ "xi2-160/box/fixed/steps2000": {
+  "labels": {
+   "primary": {
+    "teff": 6314.7445321262385,
+    "logg": 4.001114833582631,
+    "mh": -0.049826740701878314,
+    "vsini": 2.212819496571538,
+    "v_kms": -3.596344283155142
+   },
+   "secondary": {
+    "teff": 5225.161395917575,
+    "logg": 3.597925508555683,
+    "mh": -0.049826740701878314,
+    "vsini": 2.2049478110837573,
+    "v_kms": -3.2878442333012803
+   }
+  },
+  "formal": {
+   "primary": {
+    "teff": 16.34273081334792,
+    "mh": 0.01172291391699427,
+    "vsini": 0.12940994801478056,
+    "v_kms": 0.05518692419644653
+   },
+   "secondary": {
+    "teff": 12.659165545978523,
+    "mh": 0.01172291391699427,
+    "vsini": 0.11954191130126154,
+    "v_kms": 0.05443002226740364
+   }
+  },
+  "flux_ratio": {
+   "primary": 0.5085870810457169,
+   "secondary": 0.4914129189542823
+  },
+  "radius_ratio": {
+   "primary": 1.0,
+   "secondary": 1.529882920257748
+  },
+  "chi2": 419615.48173125106,
+  "n_pixels_used": 15164,
+  "chi2_nearest_node": 581662.9775162211,
+  "chi2_continuum": 1949626.4220430306,
+  "flagged": [],
+  "num_steps": 688,
+  "grad_norm": 0.008924229623094854,
+  "converged": true,
+  "multimodal": false,
+  "candidates": [
+   [
+    581662.9775162211
+   ],
+   [
+    587311.645987975
+   ],
+   [
+    591558.1394083514
+   ],
+   [
+    607265.9927729126
+   ]
+  ],
+  "assumptions": {
+   "light_fractions": [
+    0.5441119717092525,
+    0.4558880282907475
+   ],
+   "lsf_sigma_kms": 1.1070540764100707,
+   "medium": "air",
+   "compare": "native",
+   "library_resolving_power": {
+    "primary": 20000.0,
+    "secondary": 20000.0
+   },
+   "macro_kms": {
+    "primary": 0.0,
+    "secondary": 0.0
+   },
+   "offset_order": 2,
+   "dilution": "radius_ratio",
+   "vmicro": {
+    "primary": 2,
+    "secondary": 2
+   },
+   "grids": {
+    "primary": "aiphe-recheck-xi2-box160",
+    "secondary": "aiphe-recheck-xi2-box160"
+   }
+  },
+  "logg_pub": [
+   4.001114833582631,
+   3.597925508555683
+  ],
+  "wall_s": 67.75050350000015,
+  "summary": "LabelMatch (native comparison): 2 component(s), 15164 pixels, chi2 = 419615.5\n  null (no template)   chi2 = 1949626.4\n  null (nearest node)  chi2 = 581663.0\n\n  primary:\n    teff     6314.745 K +- 16.343 formal\n    logg        4.001 dex   (fixed)\n    mh         -0.050 dex +- 0.012 formal\n    vsini       2.213 km/s +- 0.129 formal\n    v_kms      -3.596 km/s +- 0.055 formal\n    light fraction 0.5086 (median over the band)\n  secondary:\n    teff     5225.161 K +- 12.659 formal\n    logg        3.598 dex   (fixed)\n    mh         -0.050 dex +- 0.012 formal\n    vsini       2.205 km/s +- 0.120 formal\n    v_kms      -3.288 km/s +- 0.054 formal\n    light fraction 0.4914 (median over the band)\n\n  Formal errors only. On disentangled spectra these run 5-10x optimistic,\n  because the residuals are correlated rather than white (Gebruers+ 2022:\n  70 K formal against 425 K realistic). Refit the spectral posterior draws\n  with refit_draws(match, draws) before quoting these anywhere.\n\n  Assumed, not measured:\n    light_fractions: [0.5441119717092525, 0.4558880282907475]\n    lsf_sigma_kms: 1.1070540764100707\n    medium: air\n    compare: native\n    library_resolving_power: {'primary': 20000.0, 'secondary': 20000.0}\n    macro_kms: {'primary': 0.0, 'secondary': 0.0}\n    offset_order: 2\n    dilution: radius_ratio\n    vmicro: {'primary': 2, 'secondary': 2}\n    grids: {'primary': 'aiphe-recheck-xi2-box160', 'secondary': 'aiphe-recheck-xi2-box160'}",
+  "correlations": [
+   [
+    "mh",
+    "teff_primary",
+    0.617704725598293
+   ],
+   [
+    "ratio_secondary",
+    "teff_secondary",
+    -0.5196939749041363
+   ],
+   [
+    "mh",
+    "teff_secondary",
+    0.5134862806225667
+   ]
+  ]
+ },
+ "xi1-160/box/fixed/steps2000": {
+  "labels": {
+   "primary": {
+    "teff": 6285.768021582386,
+    "logg": 4.001114833582631,
+    "mh": 0.08902773848678969,
+    "vsini": 2.000592919387197,
+    "v_kms": -3.6536928680878127
+   },
+   "secondary": {
+    "teff": 5263.544839652564,
+    "logg": 3.597925508555683,
+    "mh": 0.08902773848678969,
+    "vsini": 2.004373330358573,
+    "v_kms": -3.316833987197837
+   }
+  },
+  "formal": {
+   "primary": {
+    "teff": 18.239890633398296,
+    "mh": 0.013633598026202377,
+    "vsini": 0.0441374337864095,
+    "v_kms": 0.06360367770987882
+   },
+   "secondary": {
+    "teff": 15.199922901320912,
+    "mh": 0.013633598026202377,
+    "vsini": 0.057398675543419424,
+    "v_kms": 0.05561983154005246
+   }
+  },
+  "flux_ratio": {
+   "primary": 0.4956920424446079,
+   "secondary": 0.504307957555392
+  },
+  "radius_ratio": {
+   "primary": 1.0,
+   "secondary": 1.5258381899640527
+  },
+  "chi2": 454292.24434998666,
+  "n_pixels_used": 15164,
+  "chi2_nearest_node": 613739.0832447269,
+  "chi2_continuum": 1949626.4220430306,
+  "flagged": [],
+  "num_steps": 990,
+  "grad_norm": 0.008539081758925602,
+  "converged": true,
+  "multimodal": true,
+  "candidates": [
+   [
+    613928.332630327
+   ],
+   [
+    613931.6709387179
+   ],
+   [
+    620521.5909436203
+   ],
+   [
+    632221.1005283976
+   ]
+  ],
+  "assumptions": {
+   "light_fractions": [
+    0.5441119717092525,
+    0.4558880282907475
+   ],
+   "lsf_sigma_kms": 1.1070540764100707,
+   "medium": "air",
+   "compare": "native",
+   "library_resolving_power": {
+    "primary": 20000.0,
+    "secondary": 20000.0
+   },
+   "macro_kms": {
+    "primary": 0.0,
+    "secondary": 0.0
+   },
+   "offset_order": 2,
+   "dilution": "radius_ratio",
+   "vmicro": {
+    "primary": 1,
+    "secondary": 1
+   },
+   "grids": {
+    "primary": "aiphe-recheck-xi1-box160",
+    "secondary": "aiphe-recheck-xi1-box160"
+   }
+  },
+  "logg_pub": [
+   4.001114833582631,
+   3.597925508555683
+  ],
+  "wall_s": 67.12199060000012,
+  "summary": "LabelMatch (native comparison): 2 component(s), 15164 pixels, chi2 = 454292.2\n  null (no template)   chi2 = 1949626.4\n  null (nearest node)  chi2 = 613739.1\n\n  primary:\n    teff     6285.768 K +- 18.240 formal\n    logg        4.001 dex   (fixed)\n    mh          0.089 dex +- 0.014 formal\n    vsini       2.001 km/s +- 0.044 formal\n    v_kms      -3.654 km/s +- 0.064 formal\n    light fraction 0.4957 (median over the band)\n  secondary:\n    teff     5263.545 K +- 15.200 formal\n    logg        3.598 dex   (fixed)\n    mh          0.089 dex +- 0.014 formal\n    vsini       2.004 km/s +- 0.057 formal\n    v_kms      -3.317 km/s +- 0.056 formal\n    light fraction 0.5043 (median over the band)\n\n  Formal errors only. On disentangled spectra these run 5-10x optimistic,\n  because the residuals are correlated rather than white (Gebruers+ 2022:\n  70 K formal against 425 K realistic). Refit the spectral posterior draws\n  with refit_draws(match, draws) before quoting these anywhere.\n\n  The scan found a second basin within delta chi2 < 9. The reported labels are\n  the better of them, not the only ones consistent with the data.\n\n  Assumed, not measured:\n    light_fractions: [0.5441119717092525, 0.4558880282907475]\n    lsf_sigma_kms: 1.1070540764100707\n    medium: air\n    compare: native\n    library_resolving_power: {'primary': 20000.0, 'secondary': 20000.0}\n    macro_kms: {'primary': 0.0, 'secondary': 0.0}\n    offset_order: 2\n    dilution: radius_ratio\n    vmicro: {'primary': 1, 'secondary': 1}\n    grids: {'primary': 'aiphe-recheck-xi1-box160', 'secondary': 'aiphe-recheck-xi1-box160'}",
+  "correlations": [
+   [
+    "mh",
+    "teff_primary",
+    0.6261972719450614
+   ],
+   [
+    "mh",
+    "teff_secondary",
+    0.5994388310361896
+   ],
+   [
+    "ratio_secondary",
+    "teff_secondary",
+    -0.5108368825460303
+   ]
+  ]
+ },
+ "xi2-160/box/rigid/steps2000": {
+  "labels": {
+   "primary": {
+    "teff": 6385.006128947818,
+    "logg": 4.001114833582631,
+    "mh": -0.06767255601161071,
+    "vsini": 2.353077947369562,
+    "v_kms": -3.5906898885063683
+   },
+   "secondary": {
+    "teff": 5148.004064936166,
+    "logg": 3.597925508555683,
+    "mh": -0.06767255601161071,
+    "vsini": 2.057032468340732,
+    "v_kms": -3.286486945933129
+   }
+  },
+  "formal": {
+   "primary": {
+    "teff": 15.813492610001221,
+    "mh": 0.012057237808044496,
+    "vsini": 0.13368417351745374,
+    "v_kms": 0.05369267451988147
+   },
+   "secondary": {
+    "teff": 11.827242765682236,
+    "mh": 0.012057237808044496,
+    "vsini": 0.09676142944631255,
+    "v_kms": 0.05546716094367756
+   }
+  },
+  "flux_ratio": {
+   "primary": 0.5441119717092525,
+   "secondary": 0.4558880282907475
+  },
+  "radius_ratio": {},
+  "chi2": 427534.579150328,
+  "n_pixels_used": 15164,
+  "chi2_nearest_node": 581662.9775162211,
+  "chi2_continuum": 1949626.4220430306,
+  "flagged": [],
+  "num_steps": 1495,
+  "grad_norm": 0.007474330238033886,
+  "converged": true,
+  "multimodal": false,
+  "candidates": [
+   [
+    581662.9775162211
+   ],
+   [
+    587311.645987975
+   ],
+   [
+    591558.1394083514
+   ],
+   [
+    607265.9927729126
+   ]
+  ],
+  "assumptions": {
+   "light_fractions": [
+    0.5441119717092525,
+    0.4558880282907475
+   ],
+   "lsf_sigma_kms": 1.1070540764100707,
+   "medium": "air",
+   "compare": "native",
+   "library_resolving_power": {
+    "primary": 20000.0,
+    "secondary": 20000.0
+   },
+   "macro_kms": {
+    "primary": 0.0,
+    "secondary": 0.0
+   },
+   "offset_order": 2,
+   "dilution": "fixed",
+   "vmicro": {
+    "primary": 2,
+    "secondary": 2
+   },
+   "grids": {
+    "primary": "aiphe-recheck-xi2-box160",
+    "secondary": "aiphe-recheck-xi2-box160"
+   }
+  },
+  "logg_pub": [
+   4.001114833582631,
+   3.597925508555683
+  ],
+  "wall_s": 51.57481390000021,
+  "summary": "LabelMatch (native comparison): 2 component(s), 15164 pixels, chi2 = 427534.6\n  null (no template)   chi2 = 1949626.4\n  null (nearest node)  chi2 = 581663.0\n\n  primary:\n    teff     6385.006 K +- 15.813 formal\n    logg        4.001 dex   (fixed)\n    mh         -0.068 dex +- 0.012 formal\n    vsini       2.353 km/s +- 0.134 formal\n    v_kms      -3.591 km/s +- 0.054 formal\n    light fraction 0.5441 (median over the band)\n  secondary:\n    teff     5148.004 K +- 11.827 formal\n    logg        3.598 dex   (fixed)\n    mh         -0.068 dex +- 0.012 formal\n    vsini       2.057 km/s +- 0.097 formal\n    v_kms      -3.286 km/s +- 0.055 formal\n    light fraction 0.4559 (median over the band)\n\n  Formal errors only. On disentangled spectra these run 5-10x optimistic,\n  because the residuals are correlated rather than white (Gebruers+ 2022:\n  70 K formal against 425 K realistic). Refit the spectral posterior draws\n  with refit_draws(match, draws) before quoting these anywhere.\n\n  Assumed, not measured:\n    light_fractions: [0.5441119717092525, 0.4558880282907475]\n    lsf_sigma_kms: 1.1070540764100707\n    medium: air\n    compare: native\n    library_resolving_power: {'primary': 20000.0, 'secondary': 20000.0}\n    macro_kms: {'primary': 0.0, 'secondary': 0.0}\n    offset_order: 2\n    dilution: fixed\n    vmicro: {'primary': 2, 'secondary': 2}\n    grids: {'primary': 'aiphe-recheck-xi2-box160', 'secondary': 'aiphe-recheck-xi2-box160'}",
+  "correlations": [
+   [
+    "mh",
+    "teff_primary",
+    0.6999667043486411
+   ],
+   [
+    "mh",
+    "teff_secondary",
+    0.5569743405138934
+   ]
+  ]
+ },
+ "xi1-160/box/rigid/steps2000": {
+  "labels": {
+   "primary": {
+    "teff": 6385.890816025257,
+    "logg": 4.001114833582631,
+    "mh": 0.0733389936702773,
+    "vsini": 2.0534788109370803,
+    "v_kms": -3.647435810685465
+   },
+   "secondary": {
+    "teff": 5169.045812893607,
+    "logg": 3.597925508555683,
+    "mh": 0.0733389936702773,
+    "vsini": 1.7743749977408505,
+    "v_kms": -3.312846514867795
+   }
+  },
+  "formal": {
+   "primary": {
+    "teff": 16.169142869780128,
+    "mh": 0.012387023727228623,
+    "vsini": 0.10738957468429293,
+    "v_kms": 0.05799262623341915
+   },
+   "secondary": {
+    "teff": 11.542842396911047,
+    "mh": 0.012387023727228623,
+    "vsini": 0.17213570583977167,
+    "v_kms": 0.06276059245202252
+   }
+  },
+  "flux_ratio": {
+   "primary": 0.5441119717092525,
+   "secondary": 0.4558880282907475
+  },
+  "radius_ratio": {},
+  "chi2": 467953.36115692393,
+  "n_pixels_used": 15164,
+  "chi2_nearest_node": 613739.0832447269,
+  "chi2_continuum": 1949626.4220430306,
+  "flagged": [],
+  "num_steps": 1768,
+  "grad_norm": 0.008075660475665332,
+  "converged": true,
+  "multimodal": true,
+  "candidates": [
+   [
+    613928.332630327
+   ],
+   [
+    613931.6709387179
+   ],
+   [
+    620521.5909436203
+   ],
+   [
+    632221.1005283976
+   ]
+  ],
+  "assumptions": {
+   "light_fractions": [
+    0.5441119717092525,
+    0.4558880282907475
+   ],
+   "lsf_sigma_kms": 1.1070540764100707,
+   "medium": "air",
+   "compare": "native",
+   "library_resolving_power": {
+    "primary": 20000.0,
+    "secondary": 20000.0
+   },
+   "macro_kms": {
+    "primary": 0.0,
+    "secondary": 0.0
+   },
+   "offset_order": 2,
+   "dilution": "fixed",
+   "vmicro": {
+    "primary": 1,
+    "secondary": 1
+   },
+   "grids": {
+    "primary": "aiphe-recheck-xi1-box160",
+    "secondary": "aiphe-recheck-xi1-box160"
+   }
+  },
+  "logg_pub": [
+   4.001114833582631,
+   3.597925508555683
+  ],
+  "wall_s": 36.36125549999997,
+  "summary": "LabelMatch (native comparison): 2 component(s), 15164 pixels, chi2 = 467953.4\n  null (no template)   chi2 = 1949626.4\n  null (nearest node)  chi2 = 613739.1\n\n  primary:\n    teff     6385.891 K +- 16.169 formal\n    logg        4.001 dex   (fixed)\n    mh          0.073 dex +- 0.012 formal\n    vsini       2.053 km/s +- 0.107 formal\n    v_kms      -3.647 km/s +- 0.058 formal\n    light fraction 0.5441 (median over the band)\n  secondary:\n    teff     5169.046 K +- 11.543 formal\n    logg        3.598 dex   (fixed)\n    mh          0.073 dex +- 0.012 formal\n    vsini       1.774 km/s +- 0.172 formal\n    v_kms      -3.313 km/s +- 0.063 formal\n    light fraction 0.4559 (median over the band)\n\n  Formal errors only. On disentangled spectra these run 5-10x optimistic,\n  because the residuals are correlated rather than white (Gebruers+ 2022:\n  70 K formal against 425 K realistic). Refit the spectral posterior draws\n  with refit_draws(match, draws) before quoting these anywhere.\n\n  The scan found a second basin within delta chi2 < 9. The reported labels are\n  the better of them, not the only ones consistent with the data.\n\n  Assumed, not measured:\n    light_fractions: [0.5441119717092525, 0.4558880282907475]\n    lsf_sigma_kms: 1.1070540764100707\n    medium: air\n    compare: native\n    library_resolving_power: {'primary': 20000.0, 'secondary': 20000.0}\n    macro_kms: {'primary': 0.0, 'secondary': 0.0}\n    offset_order: 2\n    dilution: fixed\n    vmicro: {'primary': 1, 'secondary': 1}\n    grids: {'primary': 'aiphe-recheck-xi1-box160', 'secondary': 'aiphe-recheck-xi1-box160'}",
+  "correlations": [
+   [
+    "mh",
+    "teff_primary",
+    0.677846931221627
+   ],
+   [
+    "mh",
+    "teff_secondary",
+    0.552696805142446
+   ]
+  ]
+ }
+}

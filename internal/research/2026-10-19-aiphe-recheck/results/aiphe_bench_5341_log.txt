@@ -1,0 +1,29 @@
+albireo 0.1.0.dev0 — AI Phoenicis (HD 6980), real HARPS spectra
+window 5341-5440 A, dv = 0.8 km/s
+light fractions at 5390 A: 0.5344 / 0.4656 (blackbody)
+C:\Users\thari\Documents\GitHub\albireo\src\albireo\io.py:1491: RuntimeWarning: data\aiphe\ADP.2014-09-25T15-33-00.737.fits: the ERR column holds no finite positive value, so the file carries no usable uncertainties and albireo will estimate them from the scatter instead (to_epoch's ivar_scaling). This is normal for FEROS and HARPS, whose pipelines produce no error spectrum, but it means the weights are albireo's assumption rather than the archive's.
+(the same for 35 more of the 36 files.)
+  raws = read_raw_spectra(paths, instrument=instrument, frame=frame, read_kwargs=read_kwargs)
+
+Dataset: 36 epochs, frame='barycentric'
+  BJD_TDB 2455721.83348 to 2458098.56024 (span 2376.72676 d)
+  instruments (1):
+    HARPS  36 epochs, 5341.00-5440.00 A, 356436 px, LSF sigma 1.107 km/s x30, 1.591 km/s x6
+  good pixels: 355669 / 356436 (99.8%)
+model grid: 7258 pixels
+published RVs: comp 1 -54.3..+47.8 km/s, comp 2 -45.9..+52.1
+max separation |v1 - v2| = 106.4 km/s
+
+albireo (orbit fixed at published): 15.88 s
+  residual z-RMS 2.3712  (1.0 = the noise model is right)
+  median band    0.01643 in normalized flux
+  deepest line   comp 1 -0.7327, comp 2 -0.9891
+
+shift-and-add (7 sweeps): 0.133 s
+  deepest line   comp 1 -0.7864, comp 2 -0.9043
+  against albireo at the instrumental resolution, in the line cores (847 px):
+    comp 1: RMS 0.0620, mean-aligned 0.0248
+    comp 2: RMS 0.0742, mean-aligned 0.0305
+  against albireo deconvolved (the convention of 2026-08-15), in the line cores (844 px):
+    comp 1: RMS 0.0607, mean-aligned 0.0282
+    comp 2: RMS 0.0828, mean-aligned 0.0362

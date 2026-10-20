@@ -849,6 +849,17 @@ This file records what changed. The reasons are recorded elsewhere:
   realizations, albireo without the LSF and with ML-II weights, the error by frequency band,
   the bias and the dependence on the number of sweeps. `docs/benchmarks.md` ("The three-code
   comparison at a common resolution") and `docs/comparison.md` §4 are corrected.
+- **Two AI Phoenicis statements, measured again under the corrected conventions.**
+  `scripts/aiphe_bench.py` compared albireo's deconvolved spectra with those of
+  shift-and-add, which are at the instrumental resolution. It now convolves albireo's spectra
+  with each epoch's line-spread function, averages them over the epochs, and prints the
+  recorded convention beside the result. After seven sweeps the mean-aligned differences are
+  0.025 / 0.030 on 5341–5440 Å, recorded as 0.029 / 0.037 on 5340–5440 Å, and most of the
+  remainder lies at periods the epochs determine weakly. The test of the library's
+  microturbulence, run in August with `compare="matched"`, was repeated in native mode: at
+  ξ = 1 km/s the secondary is again hotter (+254 K against +215 K) and χ² larger (454,292
+  against 419,616). `docs/benchmarks.md` is corrected, with the earlier values kept, and the
+  AI Phe tutorial quotes the native figures.
 - **`todcor` on two identical templates with free amplitudes.** Where two templates are the
   same spectrum and their shifts nearly coincide, the normal equations are singular to
   rounding, the minimum chi-square can come out negative and a variance of the error
