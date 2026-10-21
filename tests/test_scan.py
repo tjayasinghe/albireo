@@ -115,6 +115,38 @@ def test_null_dataset_yields_negative_detection():
     assert result.detection.max() < 0.0
 
 
+def test_the_null_model_keeps_the_priors_half_bandwidth(monkeypatch):
+    """The scan builds its null model with the prior's half-bandwidth.
+
+    ``calibrate.detection_limit`` keeps it, and the scan dropped it, so with a declared
+    half-bandwidth above the model's own bound the two assembled different null bands.
+    """
+    import albireo.scan as scan_mod
+
+    priors = []
+    build = scan_mod.MarginalOrbitModel
+
+    def capture(*args, **kwargs):
+        priors.append(kwargs["prior"])
+        return build(*args, **kwargs)
+
+    monkeypatch.setattr(scan_mod, "MarginalOrbitModel", capture)
+    ds, _ = _simulate(with_companion=False)
+    wide = ab.SmoothnessPrior(PRIOR.tau, PRIOR.eta, half_bandwidth=40)
+    ab.k2_scan(
+        GRID,
+        ds,
+        orbit=_sb1_orbit(),
+        k1=K1,
+        k2_grid=K2_GRID[:2],
+        light_fractions=ELL,
+        lsf_sigma_v={"a": 7.0},
+        prior=wide,
+        v_rel_max_kms=105.0,
+    )
+    assert [p.half_bandwidth for p in priors] == [40, 40]
+
+
 def test_scan_validation_errors():
     ds, _ = _simulate(with_companion=False)
     orbit = _sb1_orbit()

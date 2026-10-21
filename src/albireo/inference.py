@@ -701,12 +701,16 @@ class MarginalOrbitModel:
             # set how much. An inferred (tau, eta) therefore replaces the scalars and
             # keeps the construction-time profiles. Dropping them here would leave a
             # windowed component unconfined whenever ML-II is enabled, without an error.
+            # The declared half-bandwidth is structure too and is kept with them.
             base = self.fixed_prior
+            if base is None:
+                return SmoothnessPrior(jnp.exp(theta["log_tau"]), jnp.exp(theta["log_eta"]))
             return SmoothnessPrior(
                 jnp.exp(theta["log_tau"]),
                 jnp.exp(theta["log_eta"]),
-                None if base is None else base.tau_profile,
-                None if base is None else base.eta_profile,
+                base.tau_profile,
+                base.eta_profile,
+                half_bandwidth=base.half_bandwidth,
             )
         if self.fixed_prior is None:
             raise ValueError(

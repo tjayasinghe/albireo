@@ -253,13 +253,16 @@ def k2_scan(
     }
     model = MarginalOrbitModel(grid, dataset, light_fractions=ell, prior=prior, **common)
     # The null model drops the companion; every other component keeps its own prior
-    # entry, so the indices are 0 (primary) plus the trailing non-stellar ones.
+    # entry, so the indices are 0 (primary) plus the trailing non-stellar ones. It keeps
+    # the prior's half-bandwidth, as calibrate.detection_limit does, so that the scan and
+    # the calibration assemble the same null model.
     null_idx = np.asarray([0, *range(2, n_expected)])
     null_prior = SmoothnessPrior(
         prior.tau[null_idx],
         prior.eta[null_idx],
         None if prior.tau_profile is None else prior.tau_profile[null_idx],
         None if prior.eta_profile is None else prior.eta_profile[null_idx],
+        half_bandwidth=prior.half_bandwidth,
     )
     null_model = MarginalOrbitModel(
         grid,

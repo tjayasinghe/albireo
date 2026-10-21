@@ -230,6 +230,26 @@ def test_hyperparameter_theta_matches_fixed_prior(gate_data):
     np.testing.assert_allclose(via_theta, float(model_fixed.log_likelihood(_theta())), rtol=1e-12)
 
 
+def test_inferred_hyperparameters_keep_the_declared_half_bandwidth(gate_data):
+    """An inferred (tau, eta) keeps the declared prior's half-bandwidth with its profiles.
+
+    It reverted to the default of 2, so under ML-II the band was assembled narrower than
+    the declared prior requests.
+    """
+    ds, _, _ = gate_data
+    tau, eta = jnp.asarray([400.0, 900.0]), jnp.asarray([7.0, 30.0])
+    model = MarginalOrbitModel(
+        GRID,
+        ds,
+        light_fractions=ELL,
+        lsf_sigma_v=LSF,
+        v_rel_max_kms=float(K_TRUE.sum()) * (1 + ECC_TRUE) * 1.35,
+        prior=SmoothnessPrior(tau=tau, eta=eta, half_bandwidth=60),
+    )
+    theta_h = {**_theta(), "log_tau": jnp.log(tau), "log_eta": jnp.log(eta)}
+    assert model._prior(theta_h).half_bandwidth == 60
+
+
 def test_gradient_matches_finite_differences(gate_data):
     _, _, model = gate_data
     prior_theta = {
