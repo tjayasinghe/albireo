@@ -48,6 +48,28 @@ def test_solver_gradients_match_implicit_analytic():
     np.testing.assert_allclose(np.asarray(de_de), np.asarray(jnp.sin(e_anom) / denom), rtol=1e-10)
 
 
+def test_an_integer_eccentricity_is_differentiated_as_its_float():
+    """``ecc=0`` for a circular orbit has a float0 tangent, which supports no arithmetic.
+
+    The derivative rule raised ``Called multiply with a float0 array`` for it.
+    """
+    m = jnp.linspace(-3.0, 3.0, 7)
+    for derivative in (jax.grad, jax.jacfwd):
+        integer = jax.vmap(derivative(lambda mm: solve_kepler(mm, 0)))(m)
+        floating = jax.vmap(derivative(lambda mm: solve_kepler(mm, 0.0)))(m)
+        np.testing.assert_allclose(np.asarray(integer), np.asarray(floating), rtol=1e-14)
+        np.testing.assert_allclose(np.asarray(integer), 1.0, rtol=1e-14)  # dE/dM at e = 0
+
+    def rv(t_peri, ecc):
+        t = jnp.asarray([0.3, 1.7, 4.1])
+        return radial_velocity(t, period=5.0, t_peri=t_peri, ecc=ecc, omega=0.4, k=30.0).sum()
+
+    expected = float(jax.grad(rv)(0.1, 0.0))
+    assert float(jax.grad(rv)(0.1, 0)) == pytest.approx(expected, rel=1e-14)
+    jitted = jax.jit(jax.grad(rv), static_argnums=1)
+    assert float(jitted(0.1, 0)) == pytest.approx(expected, rel=1e-12)
+
+
 def test_solver_gradients_match_fd():
     m0, e0 = 1.234, 0.55
     h = 1e-6

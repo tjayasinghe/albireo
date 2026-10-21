@@ -91,6 +91,11 @@ def _solve_kepler_jvp(primals, tangents):
     #   dE = (dM + sin(E) de) / (1 - e cos(E))
     m, e = primals
     dm, de = tangents
+    if de.dtype == jax.dtypes.float0:
+        # An integer eccentricity (ecc=0 for a circular orbit) is not differentiated, and
+        # its tangent is a float0 array, which supports no arithmetic. Its contribution is
+        # zero.
+        de = 0.0
     e_anom = solve_kepler(m, e)
     denom = 1.0 - jnp.asarray(e) * jnp.cos(e_anom)
     tangent = (jnp.broadcast_to(dm, e_anom.shape) + jnp.sin(e_anom) * de) / denom
@@ -143,13 +148,7 @@ def t_peri_from_t_conj(t_conj, *, period, ecc, omega):
     system, is the one eclipsed. With the primary's ``omega``, ``t_conj`` is the time of
     primary eclipse. The inverse mapping is ``nu -> E -> M -> t``.
     """
-    nu_conj = 0.5 * jnp.pi - omega
-    e_conj = 2.0 * jnp.arctan2(
-        jnp.sqrt(1.0 - ecc) * jnp.sin(0.5 * nu_conj),
-        jnp.sqrt(1.0 + ecc) * jnp.cos(0.5 * nu_conj),
-    )
-    m_conj = e_conj - ecc * jnp.sin(e_conj)
-    return t_conj - m_conj * period / (2.0 * jnp.pi)
+    return t_conj - _conjunction_mean_anomaly(ecc, omega) * period / (2.0 * jnp.pi)
 
 
 def t_conj_from_t_peri(t_peri, *, period, ecc, omega):
@@ -159,13 +158,21 @@ def t_conj_from_t_peri(t_peri, *, period, ecc, omega):
     component whose ``omega`` is given (its eclipse in an eclipsing system). Returns the
     conjunction in the same cycle as ``t_peri``, at or after it by less than one period.
     """
+    m_conj = _conjunction_mean_anomaly(ecc, omega)
+    return t_peri + jnp.mod(m_conj, 2.0 * jnp.pi) * period / (2.0 * jnp.pi)
+
+
+def _conjunction_mean_anomaly(ecc, omega):
+    """Mean anomaly at the conjunction ``nu + omega = pi/2``, by ``nu -> E -> M``.
+
+    :func:`_t_peri_from_t_conj_numpy` is the same chain for scalars in NumPy.
+    """
     nu_conj = 0.5 * jnp.pi - omega
     e_conj = 2.0 * jnp.arctan2(
         jnp.sqrt(1.0 - ecc) * jnp.sin(0.5 * nu_conj),
         jnp.sqrt(1.0 + ecc) * jnp.cos(0.5 * nu_conj),
     )
-    m_conj = e_conj - ecc * jnp.sin(e_conj)
-    return t_peri + jnp.mod(m_conj, 2.0 * jnp.pi) * period / (2.0 * jnp.pi)
+    return e_conj - ecc * jnp.sin(e_conj)
 
 
 def true_anomaly_numpy(t, *, period: float, t_peri: float, ecc: float) -> np.ndarray:
