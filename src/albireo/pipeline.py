@@ -1014,8 +1014,9 @@ logg = 3.6
 # medium = "air"
 # [[stars.components]]
 # name = "A"
-# light = "measure"             # with a declared period ("search" or a range) only: the
-#                               # fractions the library templates receive in a correlation
+# light = "measure"             # with a declared period (a range, a value or "search")
+#                               # only: the fractions the library templates receive in a
+#                               # correlation
 """
 
 
@@ -1059,10 +1060,15 @@ def _resolve_path(value: Any, base_dir: Path | None) -> Any:
     candidate = Path(value)
     if candidate.is_absolute():
         return value
-    # A path under the home directory ("~/data/*.fits") is expanded, not joined.
-    expanded = candidate.expanduser()
-    if expanded.is_absolute():
-        return os.fspath(expanded)
+    # A path under the home directory ("~" or "~/data/*.fits") is expanded, not joined.
+    # Only the bare tilde followed by a separator is expanded: a file name that begins
+    # with a tilde ("~x.fits") is a file in the configuration's directory, not the
+    # "~user" form, which would name another user's home directory.
+    separators = tuple(sep for sep in (os.sep, os.altsep, "/") if sep)
+    if value == "~" or value.startswith(tuple("~" + sep for sep in separators)):
+        expanded = candidate.expanduser()
+        if expanded.is_absolute():
+            return os.fspath(expanded)
     return os.fspath(base_dir / candidate)
 
 
@@ -1217,7 +1223,9 @@ class StarResult:
     warnings
         Every distinct warning the stages raised.
     files
-        Paths of the written products, keyed by kind.
+        Paths of the written products, keyed by kind. For a failed star: the log, the
+        traceback, and the products written before the failure with ``products.json``,
+        which lists them.
     report
         The JSON-able report (the contents of ``result.json``).
     summary
@@ -1526,8 +1534,9 @@ def _run_star_guarded(
     return result
 
 
-# The files that state a star's outcome: a result and its summary, or the traceback.
-_STATUS_FILES = ("result.json", "summary.txt", "error.txt")
+# The files that state a star's outcome: a result and its summary, or the traceback and
+# the list of products written before the failure.
+_STATUS_FILES = ("result.json", "summary.txt", "error.txt", "products.json")
 
 
 def _run_star_recorded(
@@ -1564,6 +1573,25 @@ def _run_star_recorded(
                 with contextlib.suppress(OSError):
                     (directory / name).unlink(missing_ok=True)
             (directory / "error.txt").write_text(text, encoding="utf-8")
+            files = {"log": os.fspath(log_path), "error": os.fspath(directory / "error.txt")}
+            # The products written before the failure (a template table, for example) are
+            # kept and listed in products.json, from which the next run of the star removes
+            # them as it removes those an earlier result.json lists.
+            partial = {
+                key: path
+                for key, path in ctx.files.items()
+                if key not in {"log", "report", "summary"} and os.path.isfile(path)
+            }
+            if partial:
+                manifest = directory / "products.json"
+                with contextlib.suppress(OSError):
+                    manifest.write_text(
+                        json.dumps(
+                            {"star": star.name, "status": "failed", "files": partial}, indent=2
+                        ),
+                        encoding="utf-8",
+                    )
+                    files = {**files, **partial, "products": os.fspath(manifest)}
             return StarResult(
                 name=star.name,
                 status="failed",
@@ -1571,7 +1599,7 @@ def _run_star_recorded(
                 seconds=dict(ctx.seconds),
                 flags=list(ctx.flags),
                 warnings=list(log.warnings),
-                files={"log": os.fspath(log_path), "error": os.fspath(directory / "error.txt")},
+                files=files,
                 error=f"{type(exc).__name__}: {exc}",
                 traceback=text,
             )
@@ -1612,22 +1640,26 @@ def _write_star_report(
 def _remove_previous_products(star: StarConfig, directory: Path, log: _Log) -> None:
     """Remove what an earlier run of this star wrote into ``directory``.
 
-    The status files are always removed, and so is every product that the earlier
-    ``result.json`` lists under ``files``, where it lies directly in ``directory``. A
-    re-run therefore leaves no earlier result beside a new traceback, and no earlier
-    traceback or product beside a new result: a stage this run does not reach leaves no
-    file. Nothing else is removed, in particular not the ``spectra`` sub-directory into
-    which a BLOeM star's epochs are fetched, and not a velocity file the star declares as
-    an input.
+    The status files are always removed, and so is every product that the earlier run
+    lists under ``files``, where it lies directly in ``directory``: a successful run lists
+    its products in ``result.json``, and a failed one lists those written before the
+    failure in ``products.json``. A re-run therefore leaves no earlier result beside a new
+    traceback, and no earlier traceback or listed product beside a new result. Nothing else
+    is removed, in particular not the ``spectra`` sub-directory into which a BLOeM star's
+    epochs are fetched, not a velocity file the star declares as an input, and not a file
+    that no record lists (the products of a failed run of a version that wrote no
+    ``products.json``).
     """
     listed: list[Path] = []
-    previous = directory / "result.json"
-    if previous.is_file():
+    for record in ("result.json", "products.json"):
+        previous = directory / record
+        if not previous.is_file():
+            continue
         try:
             files = json.loads(previous.read_text(encoding="utf-8")).get("files") or {}
-            listed = [Path(p) for p in files.values() if isinstance(p, str)]
+            listed += [Path(p) for p in files.values() if isinstance(p, str)]
         except (OSError, ValueError, AttributeError):
-            listed = []
+            continue
     root = directory.resolve()
     protected = {root / "log.txt"}
     if isinstance(star.velocities, str | os.PathLike):
@@ -2083,6 +2115,8 @@ def _resolve_lsf(ctx: _Context, dataset: Dataset, header_lsf: Mapping[str, float
     when every epoch of the instrument declares its own width (a file's resolving power,
     or :attr:`albireo.EpochData.lsf_sigma_kms` of an in-memory epoch), the instrument is
     modelled per epoch. ``header_lsf`` holds the widths the files declared, for the log.
+    The widths of in-memory epochs are adopted with a flag, since they may be nominal
+    rather than delivered widths.
     """
     out: dict[str, LSF] = {}
     for key in dataset.instruments:
@@ -2094,11 +2128,21 @@ def _resolve_lsf(ctx: _Context, dataset: Dataset, header_lsf: Mapping[str, float
             out[key] = LSF.per_epoch()
             widths = declared_lsf_widths(dataset, key)
             detail = ", ".join(f"{s:.3f} km/s x{len(idx)}" for s, idx in widths.items())
-            source = (
-                "the files' own resolving power (the SPEC_RES header, or an instrument reader)"
-                if key in header_lsf
-                else "the widths the epochs declare (EpochData.lsf_sigma_kms)"
-            )
+            if key in header_lsf:
+                source = (
+                    "the files' own resolving power (the SPEC_RES header, or an instrument reader)"
+                )
+            else:
+                source = "the widths the epochs declare (EpochData.lsf_sigma_kms)"
+                # The widths of an in-memory dataset may be nominal ones (gaia.deliver
+                # defaults to the nominal RVS width, narrower than the delivered one), so
+                # their adoption without a declaration is flagged, not only logged.
+                ctx.flag(
+                    f"no LSF declared for instrument {key!r}: the widths its epochs carry "
+                    f"(EpochData.lsf_sigma_kms: {detail}) are modelled per epoch; declare "
+                    f"lsf on the star or [instrument.{key}] where they are not the delivered "
+                    "widths"
+                )
             ctx.log(f"instrument {key!r}: LSF width taken per epoch from {source} ({detail})")
         else:
             raise ValueError(
@@ -3037,29 +3081,46 @@ def _decide_period_by_disentangling(ctx: _Context, dataset: Dataset, lsf, ranked
         value = entries[i]["value_nats"]
         return value if np.isfinite(value) else -np.inf
 
+    def margin_over(i: int, j: int) -> float | None:
+        """The margin of entry ``i`` over entry ``j``; ``None`` where one is not finite."""
+        if i == j:
+            return 0.0
+        a, b = entries[i]["value_nats"], entries[j]["value_nats"]
+        return float(a - b) if np.isfinite(a) and np.isfinite(b) else None
+
     order = sorted(range(len(entries)), key=ranking, reverse=True)
     chosen, runner_up = order[0], order[1]
-    margin = entries[chosen]["value_nats"] - entries[runner_up]["value_nats"]
-    over_table = entries[chosen]["value_nats"] - entries[0]["value_nats"]
+    margin = margin_over(chosen, runner_up)
+    over_table = margin_over(chosen, 0)
     log(
         f"period decided by the disentangling: P {entries[chosen]['period']:.5f} d, "
-        f"{margin:.0f} nats over the runner-up P {entries[runner_up]['period']:.5f} d "
+        + (
+            f"{margin:.0f} nats over the runner-up"
+            if margin is not None
+            else "no finite marginal likelihood to compare with the runner-up"
+        )
+        + f" P {entries[runner_up]['period']:.5f} d "
         + ("(the table's choice stands)" if chosen == 0 else "(the table had preferred another)")
     )
     if chosen != 0:
         ctx.flag(
             f"the table preferred P {entries[0]['period']:.5f} d at chi2 "
             f"{entries[0]['table_chi2']:.1f}; the disentangling prefers P "
-            f"{entries[chosen]['period']:.5f} d by {over_table:.0f} nats of marginal "
-            "likelihood, and that period is the one the fit is started from. The table's "
+            f"{entries[chosen]['period']:.5f} d "
+            + (
+                f"by {over_table:.0f} nats of marginal likelihood"
+                if over_table is not None
+                else "(the table's period has no finite marginal likelihood)"
+            )
+            + ", and that period is the one the fit is started from. The table's "
             "chi-square is fitted to a dozen velocities with five free parameters; the "
             "marginal likelihood uses every pixel of every epoch"
         )
     return {
         "index": chosen,
         "entries": entries,
-        "margin_nats": float(margin),
-        "over_table_nats": float(over_table),
+        "margin_nats": margin,
+        "over_table_nats": over_table,
     }
 
 
@@ -3071,7 +3132,8 @@ def _describe_period_decision(decision: dict | None, *, period: float, reason: s
     disentangling confirmed it or because the comparison did not run, which ``reason``
     then states. ``margin_nats`` is the chosen candidate's margin over the second-best in
     nats of marginal log-likelihood, and ``over_table_nats`` its margin over the table's
-    choice, which is zero when the two agree.
+    choice, which is zero when the two agree. A margin over a candidate without a finite
+    marginal likelihood is ``None``.
     """
     if decision is None:
         return {
@@ -3084,12 +3146,13 @@ def _describe_period_decision(decision: dict | None, *, period: float, reason: s
             "reason": reason,
         }
     entries, chosen = decision["entries"], decision["index"]
+    margin, over_table = decision["margin_nats"], decision["over_table_nats"]
     return {
         "by": "table" if chosen == 0 else "disentangling",
         "candidates": [{**entry, "chosen": i == chosen} for i, entry in enumerate(entries)],
         "chosen_period": float(entries[chosen]["period"]),
-        "margin_nats": float(decision["margin_nats"]),
-        "over_table_nats": float(decision["over_table_nats"]),
+        "margin_nats": None if margin is None else float(margin),
+        "over_table_nats": None if over_table is None else float(over_table),
         "table_period": float(entries[0]["period"]),
         "reason": reason,
     }
@@ -3256,14 +3319,23 @@ def _bootstrap(ctx: _Context, dataset: Dataset, lsf, library):
     if decision is None:
         decided = "  the lowest chi-square candidate is the period; no comparison ran\n"
     else:
+        margin, over_table = described["margin_nats"], described["over_table_nats"]
         decided = (
             f"  {len(decision['entries'])} of them compared by the disentangling's marginal "
             f"likelihood on the coarse grid: {described['chosen_period']:.5f} d, "
-            f"{described['margin_nats']:.0f} nats over the runner-up"
+            + (
+                f"{margin:.0f} nats over the runner-up"
+                if margin is not None
+                else "the runner-up has no finite marginal likelihood"
+            )
             + (
                 "; the table's chi-square had preferred "
-                f"{described['table_period']:.5f} d, by {described['over_table_nats']:.0f} "
-                "nats the worse of the two\n"
+                f"{described['table_period']:.5f} d, "
+                + (
+                    f"by {over_table:.0f} nats the worse of the two\n"
+                    if over_table is not None
+                    else "which has no finite marginal likelihood\n"
+                )
                 if described["by"] == "disentangling"
                 else " (the table's choice confirmed)\n"
             )
@@ -4316,8 +4388,10 @@ def _measure_epoch_velocities(ctx: _Context, fit: Fit, templates: list, lights):
     the star. The velocities stay differential, as when the label fit's offsets are
     rejected (:func:`_disowned_zero_points`), and the orbit fit has one systemic velocity
     per component. A failure with no zero point to drop is re-raised, and so is one that
-    the measurement without zero points repeats: it does not concern the zero points, so
-    they are kept in the record and no flag names them.
+    the measurement without zero points repeats (same type and message): it does not
+    concern the zero points, so they are kept in the record and no flag names them. A
+    different failure of the measurement without zero points is raised from the first one,
+    and the record and the flags state that the zero points were dropped.
 
     Where the amplitudes are fitted freely (``lights`` is ``"global"``) and no epoch gives
     positive ones, there is no amplitude to hold. The table is then measured with the
@@ -4357,26 +4431,37 @@ def _measure_epoch_velocities(ctx: _Context, fit: Fit, templates: list, lights):
         retried: list[str] = []
         try:
             table = measure(dropped, retried)
-        except ValueError:
-            for note in notes:
-                ctx.flag(note)
-            raise exc from None
-        ctx.flag(
-            "template zero points dropped, so the velocities stay differential (one gamma "
-            f"per component in the orbit fit): {exc}"
-        )
-        for note in retried:
-            ctx.flag(note)
-        previous = ctx.zero_points or {}
-        ctx.zero_points = {
-            **previous,
-            "adopted": False,
-            "refused": [*previous.get("refused", []), str(exc)],
-        }
+        except ValueError as retry_exc:
+            if type(retry_exc) is type(exc) and str(retry_exc) == str(exc):
+                # The same failure without the zero points: they did not cause it.
+                for note in notes:
+                    ctx.flag(note)
+                raise exc from None
+            # The zero points were dropped and the measurement without them failed for
+            # another reason. That failure is the one raised, and the record states the drop.
+            _record_dropped_zero_points(ctx, exc, retried)
+            raise retry_exc from exc
+        _record_dropped_zero_points(ctx, exc, retried)
         return table, dropped
     for note in notes:
         ctx.flag(note)
     return table, templates
+
+
+def _record_dropped_zero_points(ctx: _Context, exc: Exception, notes: list[str]) -> None:
+    """Flag and record template zero points dropped after the failure ``exc``."""
+    ctx.flag(
+        "template zero points dropped, so the velocities stay differential (one gamma "
+        f"per component in the orbit fit): {exc}"
+    )
+    for note in notes:
+        ctx.flag(note)
+    previous = ctx.zero_points or {}
+    ctx.zero_points = {
+        **previous,
+        "adopted": False,
+        "refused": [*previous.get("refused", []), str(exc)],
+    }
 
 
 def _orbit(ctx: _Context, fit: Fit, table):
@@ -4522,11 +4607,12 @@ def _mirror_within(values, nats: float) -> bool:
     """Whether a phase scan has a rival mode within ``nats`` of its best trial.
 
     The trials of :meth:`albireo.Disentangler._scan_phase` are equally spaced over one
-    period, so the scan is circular. The rival is the best trial at least a quarter of the
-    trials away from the best one on that circle. This includes the antipode, where the
-    component-swapped mirror lies, its neighbours, where a mirror between two trials or an
-    eccentric mirror lies, and excludes the trials adjacent to the best, which belong to
-    the same mode. Trials whose value is not finite are left out.
+    period, so the scan is circular. The rival is the best trial at least a quarter period
+    (a quarter of the trials, rounded up) away from the best one on that circle. This
+    includes the antipode, where the component-swapped mirror lies, its neighbours, where a
+    mirror between two trials or an eccentric mirror lies, and excludes the trials adjacent
+    to the best, which belong to the same mode. Trials whose value is not finite are left
+    out.
     """
     values = np.asarray(values, dtype=float).reshape(-1)
     n = values.size
@@ -4536,7 +4622,8 @@ def _mirror_within(values, nats: float) -> bool:
     best = int(np.argmax(finite))
     distance = np.abs(np.arange(n) - best)
     distance = np.minimum(distance, n - distance)
-    far = finite[distance >= max(1, n // 4)]
+    # At least a quarter of the trials, rounded up, so at least a quarter period (11 of 42).
+    far = finite[distance >= -(-n // 4)]
     return bool(far.size and np.isfinite(far.max()) and finite[best] - far.max() < nats)
 
 
@@ -5724,10 +5811,11 @@ def _release_compiled_programs() -> None:
     resident memory after each star rose from 1.95 to 3.94 GB with the stars' live objects
     released, and stayed between 0.61 and 0.69 GB with this call after each star. The next
     star compiles its programs again: the toy stars, whose time is mostly compilation,
-    took 40 to 47 s instead of 26 to 34 s. The recompilation was not measured on real
-    data, where an APF and a PEPSI star of the blind test took 1,870 and 1,411 s. Every
-    product of the five stars was identical bit for bit. The call clears every cache of
-    JAX in the process, those of other code included.
+    took 40 to 47 s instead of 26 to 34 s. The recompilation was not measured with the
+    label stage, whose library interpolator and label fit are compiled again for every
+    star, nor on real data, where an APF and a PEPSI star of the blind test took 1,870 and
+    1,411 s. Every product of the five stars was identical bit for bit. The call clears
+    every cache of JAX in the process, those of other code included.
     """
     import jax
 
@@ -5755,6 +5843,7 @@ def run_pipeline(
     stars: Sequence[str] | None = None,
     progress: bool = True,
     keep_live: bool = True,
+    release_compiled: bool | None = None,
 ) -> PipelineRun:
     """Run every star of a configuration and write the batch products.
 
@@ -5777,11 +5866,17 @@ def run_pipeline(
         (default). They include the :class:`~albireo.Fit` with its compiled model and the
         label match with its sufficient statistics, tens of MB per star on a short window
         and up to about a GB on an echelle star, so a batch that keeps them holds every
-        star's at once. ``False`` releases them after each star, and also the programs
-        JAX compiled for it, which JAX otherwise keeps for the life of the process
-        (:func:`_release_compiled_programs`); the memory of the batch is then that of one
-        star, at the cost of compiling again for the next star. The ``albireo`` command
-        passes ``False``. Workers never return live objects.
+        star's at once. ``False`` releases them after each star, and by default also the
+        programs JAX compiled for it (see ``release_compiled``); the memory of the batch is
+        then that of one star. The ``albireo`` command passes ``False``. Workers never
+        return live objects.
+    release_compiled
+        With ``jobs = 1``, release the programs JAX compiled for each star before the next
+        (:func:`_release_compiled_programs`), which JAX otherwise keeps for the life of the
+        process, at the cost of compiling them again for the next star. The call clears
+        every JAX cache of the process, those of other code included. Default: ``True``
+        where ``keep_live`` is ``False``, ``False`` otherwise. Workers do not release
+        their programs.
 
     Returns
     -------
@@ -5846,11 +5941,12 @@ def run_pipeline(
             flush=True,
         )
     if n_jobs == 1:
+        release = not keep_live if release_compiled is None else bool(release_compiled)
         for i, star in enumerate(selected):
             results[star.name] = _run_star_guarded(
                 star, config, subdirs[star.name], progress=progress, keep_live=keep_live
             )
-            if not keep_live and i + 1 < len(selected):
+            if release and i + 1 < len(selected):
                 _release_compiled_programs()
     else:
         env = _thread_environment(n_jobs)

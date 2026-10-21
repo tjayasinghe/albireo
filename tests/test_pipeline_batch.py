@@ -97,6 +97,11 @@ def test_a_batch_that_keeps_no_live_objects_releases_the_compiled_programs(tmp_p
     cleared.clear()
     run_pipeline(config, progress=False)
     assert not cleared, "a batch that keeps the live objects keeps the programs"
+    # The release can be chosen independently of the live objects.
+    run_pipeline(config, progress=False, keep_live=False, release_compiled=False)
+    assert not cleared
+    run_pipeline(config, progress=False, release_compiled=True)
+    assert len(cleared) == 2
 
 
 # ---------------------------------------------------------------------------

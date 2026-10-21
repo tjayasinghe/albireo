@@ -2576,6 +2576,24 @@ def test_a_failure_the_zero_points_did_not_cause_leaves_them_in_the_record(toy, 
     assert not ctx.flags, ctx.flags
     assert ctx.zero_points == adopted
 
+    # A window failure that the drop resolves, followed by another failure without the
+    # zero points: the second failure is raised, chained to the first, and the record
+    # states the drop that was made.
+    class _FailsAfterTheDrop:
+        def measure_velocities(self, *, templates, light):
+            if any(t.v_zero_kms is not None for t in templates):
+                raise ValueError("component 'B': the default search window misses it")
+            raise ValueError("epoch 3: 12 usable pixels, fewer than the correlation needs")
+
+    other = _context(star, tmp_path / "after_the_drop")
+    other.zero_points = dict(adopted)
+    with pytest.raises(ValueError, match="12 usable pixels") as raised:
+        _measure_epoch_velocities(other, _FailsAfterTheDrop(), pinned, [0.62, 0.38])
+    assert "search window" in str(raised.value.__cause__)
+    assert any(f.startswith("template zero points dropped") for f in other.flags), other.flags
+    assert other.zero_points["adopted"] is False
+    assert "search window" in " ".join(other.zero_points["refused"])
+
 
 def test_the_declared_fractions_are_held_only_while_the_smoothness_stayed_near_its_start(
     toy, tmp_path
@@ -2930,8 +2948,12 @@ def test_a_diverged_disentangling_stops_the_star(toy, library, tmp_path, monkeyp
     assert (directory / "error.txt").is_file()
     assert not (directory / "velocities.rv").exists(), "the velocity stage did not run"
     assert not (directory / "labels.txt").exists(), "the label stage did not run"
-    # The table measured before the disentangling stays on disk, as a separate product.
+    # The table measured before the disentangling stays on disk, as a separate product,
+    # and products.json lists it, so that the next run of the star removes it.
     assert (directory / "template_velocities.rv").is_file()
+    listed = json.loads((directory / "products.json").read_text(encoding="utf-8"))["files"]
+    assert Path(listed["template_velocities"]) == directory / "template_velocities.rv"
+    assert result.files["template_velocities"] == listed["template_velocities"]
     log = (directory / "log.txt").read_text(encoding="utf-8")
     assert "flag: the disentangling diverged" in log
     assert "FAILED: RuntimeError" in log

@@ -182,6 +182,13 @@ def test_the_mirror_flag_compares_the_best_phase_with_the_best_away_from_it(tmp_
     clear[5] = np.nan
     assert not _mirror_within(clear, 1.0)
     assert not _mirror_within([np.nan, np.nan], 1.0) and not _mirror_within([3.0], 1.0)
+    # The rival lies at least a quarter period away: of 42 trials, 11 (0.262 P), not 10.
+    flat = np.full(42, -100.0)
+    flat[0] = 0.0
+    flat[10] = -0.5
+    assert not _mirror_within(flat, 1.0)
+    flat[11] = -0.5
+    assert _mirror_within(flat, 1.0)
 
 
 def test_a_z_score_rms_that_is_not_finite_stops_the_star(tmp_path):

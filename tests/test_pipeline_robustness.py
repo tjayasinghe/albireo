@@ -184,7 +184,11 @@ def test_a_path_under_the_home_directory_is_expanded(tmp_path):
     resolved = _resolve_path("~/data/*.fits", tmp_path)
     assert resolved == os.fspath(Path("~/data/*.fits").expanduser())
     assert not resolved.startswith(os.fspath(tmp_path))
+    assert _resolve_path("~", tmp_path) == os.fspath(Path("~").expanduser())
     assert _resolve_path("data/*.fits", tmp_path) == os.fspath(tmp_path / "data/*.fits")
+    # A file name that begins with a tilde is not the "~user" form.
+    assert _resolve_path("~x.fits", tmp_path) == os.fspath(tmp_path / "~x.fits")
+    assert _resolve_path("~$temp.fits", tmp_path) == os.fspath(tmp_path / "~$temp.fits")
     absolute = os.fspath(tmp_path / "x.fits")
     assert _resolve_path(absolute, Path("elsewhere")) == absolute
 
@@ -251,14 +255,24 @@ def test_a_medium_declared_on_the_star_keeps_each_epochs_line_spread_width(tmp_p
         components=_components(),
         lsf={"PEPSI": "per-epoch"},
     )
-    lsf = _resolve_lsf(_ctx(star, tmp_path / "declared"), vacuum, {})
+    declared = _ctx(star, tmp_path / "declared")
+    lsf = _resolve_lsf(declared, vacuum, {})
     assert lsf["PEPSI"].is_per_epoch
+    assert not declared.flags
     undeclared = replace(star, lsf={})
     ctx = _ctx(undeclared, tmp_path / "undeclared")
     assert _resolve_lsf(ctx, vacuum, {})["PEPSI"].is_per_epoch
     assert "from the widths the epochs declare" in (ctx.directory / "log.txt").read_text(
         encoding="utf-8"
     )
+    # Adopting an in-memory dataset's widths without a declaration is flagged, since they
+    # may be nominal widths rather than delivered ones.
+    assert len(ctx.flags) == 1 and "no LSF declared for instrument 'PEPSI'" in ctx.flags[0]
+    assert "2.900 km/s x3" in ctx.flags[0]
+    # Widths that the files declare are not flagged.
+    files = _ctx(undeclared, tmp_path / "files")
+    assert _resolve_lsf(files, vacuum, {"PEPSI": 2.9})["PEPSI"].is_per_epoch
+    assert not files.flags
     bare = Dataset(tuple(_epochs("PEPSI", [5000.0, 5000.0])))
     with pytest.raises(ValueError, match="no line-spread function for instrument 'PEPSI'"):
         _resolve_lsf(_ctx(undeclared, tmp_path / "bare"), bare, {})
@@ -415,6 +429,44 @@ def test_a_failed_rerun_leaves_no_earlier_result_beside_its_traceback(tmp_path):
     log = _Log("star", directory / "log.txt", progress=False)
     pipeline_module._remove_previous_products(star, directory, log)
     assert not (directory / "error.txt").exists()
+
+
+def test_the_products_of_a_failed_run_are_listed_and_removed_by_the_next(tmp_path, monkeypatch):
+    """A failed run lists the products it wrote, and the next run of the star removes them.
+
+    A template table is written before the disentangling, so a failed run can leave one
+    that no ``result.json`` lists. A later run on a route that does not write it would
+    otherwise leave it beside its own result.
+    """
+    directory = tmp_path / "star"
+    star = _files_star("star")
+    config = PipelineConfig(stars=[star], output=tmp_path)
+    table = directory / "template_velocities.rv"
+
+    def failing(ctx):
+        table.write_text("an earlier table\n", encoding="utf-8")
+        ctx.files["template_velocities"] = os.fspath(table)
+        raise ValueError("the disentangling failed")
+
+    monkeypatch.setattr(pipeline_module, "_run_stages", failing)
+    result = pipeline_module._run_star_guarded(
+        star, config, directory, progress=False, keep_live=False
+    )
+    assert not result.ok and "disentangling failed" in result.error
+    assert result.files["template_velocities"] == os.fspath(table)
+    manifest = json.loads((directory / "products.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "failed"
+    assert manifest["files"] == {"template_velocities": os.fspath(table)}
+
+    def succeeding(ctx):
+        return {"star": ctx.star.name, "status": "ok"}, "a summary", {}
+
+    monkeypatch.setattr(pipeline_module, "_run_stages", succeeding)
+    result = pipeline_module._run_star_guarded(
+        star, config, directory, progress=False, keep_live=False
+    )
+    assert result.ok
+    assert sorted(p.name for p in directory.iterdir()) == ["log.txt", "result.json", "summary.txt"]
 
 
 def test_the_light_measured_by_the_bootstrap_is_flagged_once_with_the_fractions_used(
@@ -582,6 +634,22 @@ def test_a_non_finite_marginal_likelihood_does_not_decide_the_period(tmp_path, m
     assert decision["margin_nats"] == pytest.approx(30.0)
     flag = next(f for f in ctx.flags if "not finite" in f)
     assert "[2.95]" in flag
+
+    # A margin over a candidate without a finite value is not a number of nats: the
+    # decision and its report state None, and the texts say why.
+    from albireo.pipeline import _describe_period_decision
+
+    alone = _ctx(star, tmp_path / "alone", library="stub")
+    ranked = [(_orbit(2.95, (40.0, 70.0)), None), (_orbit(6.31, (30.0, 55.0)), None)]
+    decision = _decide_period_by_disentangling(alone, None, {}, ranked)
+    assert decision["index"] == 1
+    assert decision["margin_nats"] is None and decision["over_table_nats"] is None
+    described = _describe_period_decision(decision, period=6.31, reason="compared")
+    assert described["margin_nats"] is None and described["over_table_nats"] is None
+    assert any("the table's period has no finite marginal likelihood" in f for f in alone.flags)
+    log = (alone.directory / "log.txt").read_text(encoding="utf-8")
+    assert "nan nats over the runner-up" not in log
+    assert "no finite marginal likelihood to compare with the runner-up P 2.95000 d" in log
 
 
 def test_the_candidate_periods_share_one_coarse_model_with_identical_values(tmp_path, compilations):
