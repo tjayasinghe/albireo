@@ -59,6 +59,7 @@ import contextlib
 import csv
 import dataclasses
 import datetime as _dt
+import functools
 import gc
 import hashlib
 import importlib.util
@@ -1489,7 +1490,8 @@ def run_star(
         The shared :class:`PipelineConfig` (instrument facts, library, settings). Default:
         one built from the star alone.
     directory
-        Where to write. Default: ``<config.output>/<star name>``.
+        Where to write. Default: ``<config.output>/<star name>``, the directory
+        :func:`run_pipeline` gives the star where it belongs to ``config``.
     progress
         Print one line per stage.
     """
@@ -1497,9 +1499,12 @@ def run_star(
         star = StarConfig(**dict(star))
     if config is None:
         config = PipelineConfig(stars=[star])
-    where = (
-        Path(directory) if directory is not None else Path(config.output) / _safe_name(star.name)
-    )
+    if directory is not None:
+        where = Path(directory)
+    elif any(s.name == star.name for s in config.stars):
+        where = _star_directories(Path(config.output), config.stars)[star.name]
+    else:
+        where = Path(config.output) / _safe_name(star.name)
     result = _run_star_guarded(star, config, where, progress=progress, keep_live=True)
     if not result.ok:
         raise RuntimeError(f"{star.name}: {result.error}\n{result.traceback or ''}")
@@ -1759,10 +1764,15 @@ def _run_stages(ctx: _Context) -> tuple[dict[str, Any], str, dict[str, Any]]:
     live["fit"] = fit
     sections.append(dis.explain())
     sections.append(fit.summary())
+    # Each evaluation of the z-score rms and of the spectra with their band solves the
+    # marginal at the MAP again, with the same result. The rms is evaluated once, and the
+    # spectra once, when a stage first needs them.
+    z_rms = float(fit.z_rms)
+    spectra_and_std = functools.cache(lambda: fit._spectra_and_std())
     report["declaration"] = _describe_declaration(dis)
-    report["disentangling"] = _describe_fit(fit)
-    _assess_fit(ctx, fit)
-    _refuse_diverged(ctx, fit)
+    report["disentangling"] = _describe_fit(fit, z_rms=z_rms)
+    _assess_fit(ctx, fit, z_rms=z_rms)
+    _refuse_diverged(ctx, fit, z_rms=z_rms)
     if fit.k_scan is not None:
         scan = fit.k_scan
         chosen = ", ".join(f"{s.name} {k:.1f}" for s, k in zip(dis.stars, scan.best, strict=True))
@@ -1861,7 +1871,7 @@ def _run_stages(ctx: _Context) -> tuple[dict[str, Any], str, dict[str, Any]]:
     _assess_table(ctx, table)
     log(
         f"velocities: {int(table.good.sum())}/{table.n_epochs} usable epochs, median sigma "
-        + ", ".join(f"{n} {np.nanmedian(table.sigma[i]):.3f}" for i, n in enumerate(table.names))
+        + ", ".join(f"{n} {_finite_median(table.sigma[i]):.3f}" for i, n in enumerate(table.names))
         + " km/s, "
         + ("absolute" if all(table.absolute) else "differential")
         + f", amplitudes {light_source}"
@@ -1903,17 +1913,34 @@ def _run_stages(ctx: _Context) -> tuple[dict[str, Any], str, dict[str, Any]]:
                 live["labels"] = match
 
     # 9. truth, for simulations
+    truth = dict(star.truth or {})
     if star.truth:
-        block, comparison = _compare_truth(ctx, fit, table, rv_orbit, match)
+        block, comparison = _compare_truth(
+            ctx, fit, table, rv_orbit, match, spectra_and_std=spectra_and_std
+        )
         sections.append(block)
         report["truth"] = comparison
+        if comparison["components_exchanged"]:
+            # The figures overlay the truth in the order it was compared in.
+            truth = _exchanged_truth(truth, [s.name for s in dis.stars])
 
     # 10. products and figures
     with ctx.stage("write"):
-        _write_products(ctx, fit, table, rv_orbit, match, posterior)
+        _write_products(
+            ctx, fit, table, rv_orbit, match, posterior, spectra_and_std=spectra_and_std
+        )
     if settings.plots:
         with ctx.stage("plots"):
-            _write_plots(ctx, fit, table, rv_orbit, templates, posterior)
+            _write_plots(
+                ctx,
+                fit,
+                table,
+                rv_orbit,
+                templates,
+                posterior,
+                truth=truth,
+                spectra_and_std=spectra_and_std,
+            )
 
     if ctx.flags:
         sections.append("Flags:\n" + "\n".join(f"  - {f}" for f in ctx.flags))
@@ -3851,9 +3878,11 @@ def _orbit_over_candidates(
         if other.chi2 - best.chi2 < 25.0
     ]
     if ambiguous:
+        # On the search route the comparison by the disentangling decides after this flag,
+        # so the reference is named by its chi-square and not as the period chosen.
         ctx.flag(
             f"period ambiguous: {len(ambiguous)} other fitted period(s) lie within delta chi2 "
-            f"25 of the chosen {best.period:.4f} d: "
+            f"25 of the lowest chi-square one, {best.period:.4f} d: "
             + ", ".join(f"{a['period']:.4f} d at +{a['delta_chi2']:.1f}" for a in ambiguous)
         )
     return (
@@ -4058,7 +4087,10 @@ def _v_zero_scan(
 ) -> tuple[float, float]:
     """Half-range and trial step of the label fit's scan over each component's frame offset.
 
-    The step is twice the narrowest line-spread width of the comparison. ``smoothed`` maps
+    The step is twice the narrowest line-spread width of the comparison, with two floors:
+    5 km/s, and one 120th of the full range ``2 * reach``, so that the scan has at most 121
+    trials. The floors set the step for every width under 2.5 km/s, and at the default
+    half-range of 300 km/s both are 5 km/s, for 121 trials. ``smoothed`` maps
     an instrument whose epochs the comparison smooths to the library's resolution to that
     width (:meth:`albireo.Fit.smoothing_widths`), which replaces the instrument's own.
     """
@@ -4283,7 +4315,9 @@ def _measure_epoch_velocities(ctx: _Context, fit: Fit, templates: list, lights):
     95 km/s apart, on velocities spanning 60. The zero points are then dropped rather than
     the star. The velocities stay differential, as when the label fit's offsets are
     rejected (:func:`_disowned_zero_points`), and the orbit fit has one systemic velocity
-    per component. A failure with no zero point to drop is re-raised.
+    per component. A failure with no zero point to drop is re-raised, and so is one that
+    the measurement without zero points repeats: it does not concern the zero points, so
+    they are kept in the record and no flag names them.
 
     Where the amplitudes are fitted freely (``lights`` is ``"global"``) and no epoch gives
     positive ones, there is no amplitude to hold. The table is then measured with the
@@ -4296,36 +4330,53 @@ def _measure_epoch_velocities(ctx: _Context, fit: Fit, templates: list, lights):
     """
     from albireo.todcor import _LightNotMeasured
 
-    def measure(pair):
+    def measure(pair, notes: list[str]):
         try:
             return fit.measure_velocities(templates=pair, light=lights)
         except _LightNotMeasured:
-            ctx.flag(
+            notes.append(
                 "the freely fitted template amplitudes are not positive at any epoch, so none "
                 "is held: the table has the amplitudes of each epoch, which are not light "
                 "fractions, and the templates do not describe the components"
             )
             return fit.measure_velocities(templates=pair, light="free")
 
+    # The flags of a measurement are raised once it is known which measurement the table
+    # comes from.
+    notes: list[str] = []
     try:
-        return measure(templates), templates
+        table = measure(templates, notes)
     except ValueError as exc:
         if not any(t.v_zero_kms is not None for t in templates):
+            for note in notes:
+                ctx.flag(note)
             raise
+        dropped = [
+            replace(t, v_zero_kms=None, meta={**t.meta, "zero_point": "dropped"}) for t in templates
+        ]
+        retried: list[str] = []
+        try:
+            table = measure(dropped, retried)
+        except ValueError:
+            for note in notes:
+                ctx.flag(note)
+            raise exc from None
         ctx.flag(
             "template zero points dropped, so the velocities stay differential (one gamma "
             f"per component in the orbit fit): {exc}"
         )
+        for note in retried:
+            ctx.flag(note)
         previous = ctx.zero_points or {}
         ctx.zero_points = {
             **previous,
             "adopted": False,
             "refused": [*previous.get("refused", []), str(exc)],
         }
-        templates = [
-            replace(t, v_zero_kms=None, meta={**t.meta, "zero_point": "dropped"}) for t in templates
-        ]
-        return measure(templates), templates
+        return table, dropped
+    for note in notes:
+        ctx.flag(note)
+    return table, templates
 
 
 def _orbit(ctx: _Context, fit: Fit, table):
@@ -4366,7 +4417,18 @@ def _orbit(ctx: _Context, fit: Fit, table):
                 f"a periodogram ({peak}; {len(candidates)} candidates from the periodogram "
                 "searches, the orbit fit decided)"
             )
-            orbit, _, _ = _orbit_over_candidates(ctx, table, candidates, circular=settings.circular)
+            # The candidate fits exchange the two components only where the declared light
+            # fractions allow it, by the rule of the Keplerian route and the bootstrap
+            # (D65). On 54 simulated 95/5 tables of 40 epochs, with the faint column noise at
+            # a third of the epochs, an exchange at any ratio interchanged 1 to 15 epochs of
+            # 19 tables at the injected period and put K1 (30 km/s injected) as high as
+            # 45 km/s, against at most 34 km/s with the exchange skipped.
+            exchange = table.n_components != 2 or _exchange_allowed(
+                ctx, [s.light for s in fit.dis.stars], where="in the orbit's candidate fits"
+            )
+            orbit, _, _ = _orbit_over_candidates(
+                ctx, table, candidates, circular=settings.circular, exchange=exchange
+            )
     except (ValueError, RuntimeError, np.linalg.LinAlgError) as exc:
         ctx.flag(f"orbit from the table failed: {type(exc).__name__}: {exc}")
         return None, None
@@ -4412,9 +4474,14 @@ def _sample(ctx: _Context, fit: Fit, match):
 # -- assessment -------------------------------------------------------------------
 
 
-def _assess_fit(ctx: _Context, fit: Fit) -> None:
-    z = fit.z_rms
-    if abs(z - 1.0) > 0.2:
+def _assess_fit(ctx: _Context, fit: Fit, *, z_rms: float | None = None) -> None:
+    """Flag what the fit leaves in doubt: the noise model, the smoothness, the scans.
+
+    ``z_rms`` is :attr:`albireo.Fit.z_rms` where the caller has it. A value that is not
+    finite is not flagged here, since :func:`_refuse_diverged` stops the star on it.
+    """
+    z = float(fit.z_rms if z_rms is None else z_rms)
+    if math.isfinite(z) and abs(z - 1.0) > 0.2:
         ctx.flag(
             f"residual z-score rms {z:.3f}: the noise model does not describe these data "
             "(read docs/benchmarks.md before adding a jitter term)"
@@ -4429,13 +4496,11 @@ def _assess_fit(ctx: _Context, fit: Fit) -> None:
                 "the data, is setting it"
             )
     scan = fit.phase_scan
-    if scan is not None:
-        values = np.sort(np.asarray(scan.values))[::-1]
-        if values.size > 1 and values[0] - values[1] < 1.0:
-            ctx.flag(
-                "conjunction scan: the best two phases are within 1 nat; the orbit may be "
-                "the component-swapped mirror"
-            )
+    if scan is not None and _mirror_within(scan.values, 1.0):
+        ctx.flag(
+            "conjunction scan: the best phase and the best one at least a quarter period "
+            "from it are within 1 nat; the orbit may be the component-swapped mirror"
+        )
     amplitude_scan = fit.k_scan
     if amplitude_scan is not None and amplitude_scan.gain > 0.0:
         moved = []
@@ -4453,7 +4518,29 @@ def _assess_fit(ctx: _Context, fit: Fit) -> None:
             )
 
 
-def _refuse_diverged(ctx: _Context, fit: Fit) -> None:
+def _mirror_within(values, nats: float) -> bool:
+    """Whether a phase scan has a rival mode within ``nats`` of its best trial.
+
+    The trials of :meth:`albireo.Disentangler._scan_phase` are equally spaced over one
+    period, so the scan is circular. The rival is the best trial at least a quarter of the
+    trials away from the best one on that circle. This includes the antipode, where the
+    component-swapped mirror lies, its neighbours, where a mirror between two trials or an
+    eccentric mirror lies, and excludes the trials adjacent to the best, which belong to
+    the same mode. Trials whose value is not finite are left out.
+    """
+    values = np.asarray(values, dtype=float).reshape(-1)
+    n = values.size
+    finite = np.where(np.isfinite(values), values, -np.inf)
+    if n < 2 or not np.isfinite(finite).any():
+        return False
+    best = int(np.argmax(finite))
+    distance = np.abs(np.arange(n) - best)
+    distance = np.minimum(distance, n - distance)
+    far = finite[distance >= max(1, n // 4)]
+    return bool(far.size and np.isfinite(far.max()) and finite[best] - far.max() < nats)
+
+
+def _refuse_diverged(ctx: _Context, fit: Fit, *, z_rms: float | None = None) -> None:
     """Stop the star when the disentangling diverged, before anything is measured from it.
 
     The residual z-score rms separates a fit from a failure of the optimizer. It is near 1
@@ -4463,14 +4550,22 @@ def _refuse_diverged(ctx: _Context, fit: Fit) -> None:
     semi-amplitudes were constrained by their priors alone. Everything downstream (labels,
     templates, epoch velocities) is measured against those spectra, so every later product
     would be computed from a failed fit and reported as a measurement. The ceiling is
-    ``z_rms_max``.
+    ``z_rms_max``. A value that is not finite (no residual z-score is finite, as for
+    component spectra that are not) stops the star as well. ``z_rms`` is
+    :attr:`albireo.Fit.z_rms` where the caller has it.
     """
-    z = float(fit.z_rms)
-    if not z > float(ctx.settings.z_rms_max):
+    z = float(fit.z_rms if z_rms is None else z_rms)
+    if math.isfinite(z) and z <= float(ctx.settings.z_rms_max):
         return
+    stated = (
+        f"residual z-score rms {z:.1f}, above the z_rms_max ceiling of "
+        f"{float(ctx.settings.z_rms_max):g}"
+        if math.isfinite(z)
+        else f"no finite residual z-score (rms {z}), so the fit cannot be compared with the "
+        f"z_rms_max ceiling of {float(ctx.settings.z_rms_max):g}"
+    )
     message = (
-        f"the disentangling diverged: residual z-score rms {z:.1f}, above the z_rms_max "
-        f"ceiling of {float(ctx.settings.z_rms_max):g} (a healthy fit sits near 1). The fit "
+        f"the disentangling diverged: {stated} (a healthy fit sits near 1). The fit "
         "is not usable, so the label and velocity stages were not run: velocities measured "
         "against these components would carry no measurement. Check the noise model first "
         "(the declared uncertainties, and noise_correlation where the spectra were "
@@ -4639,14 +4734,19 @@ def _noise_words(dis: Disentangler) -> str:
     )
 
 
-def _describe_fit(fit: Fit) -> dict[str, Any]:
+def _describe_fit(fit: Fit, *, z_rms: float | None = None) -> dict[str, Any]:
+    """The ``disentangling`` block of ``result.json``.
+
+    ``z_rms`` is :attr:`albireo.Fit.z_rms` where the caller has it, since each evaluation
+    solves the marginal again.
+    """
     out: dict[str, Any] = {
         "mode": fit.mode,
         "potential": float(fit.result.potential),
         "grad_norm": float(fit.result.grad_norm),
         "num_steps": int(fit.result.num_steps),
         "converged": bool(fit.result.converged),
-        "z_rms": float(fit.z_rms),
+        "z_rms": float(fit.z_rms if z_rms is None else z_rms),
         "hyper": {n: dict(v) for n, v in fit.hyper.items()},
     }
     if fit.phase_scan is not None:
@@ -4690,8 +4790,6 @@ def _describe_fit(fit: Fit) -> dict[str, Any]:
                 "k": {s.name: float(fit.star(s.name)["k"]) for s in fit.dis.stars},
             }
         )
-    velocities = np.asarray(fit.velocities())
-    out["velocities"] = {s.name: velocities[i].tolist() for i, s in enumerate(fit.dis.stars)}
     return out
 
 
@@ -4785,7 +4883,7 @@ def _describe_table(table) -> dict[str, Any]:
         "blended": table.blended.tolist(),
         "absolute": {n: bool(table.absolute[i]) for i, n in enumerate(table.names)},
         "absolute_all": bool(all(table.absolute)),
-        "reduced_chi2_median": float(np.nanmedian(table.reduced_chi2)),
+        "reduced_chi2_median": _finite_median(table.reduced_chi2),
         "r_squared_median": _finite_median(table.r_squared),
         "wilson_slope": None if table.wilson() is None else float(table.wilson()[0]),
         "noise_correlation": table.settings.get("noise_correlation"),
@@ -4838,12 +4936,12 @@ def _describe_posterior(posterior) -> dict[str, Any]:
 
 
 def _wrap_period(diff: float, period: float) -> float:
-    """``diff`` reduced to ``(-period/2, period/2]``: a conjunction is defined modulo P."""
+    """``diff`` reduced to ``[-period/2, period/2)``: a conjunction is defined modulo P."""
     return float((diff + 0.5 * period) % period - 0.5 * period)
 
 
 def _wrap_angle(diff: float) -> float:
-    """``diff`` in radians reduced to ``(-pi, pi]``."""
+    """``diff`` in radians reduced to ``[-pi, pi)``."""
     return float((diff + math.pi) % (2.0 * math.pi) - math.pi)
 
 
@@ -4865,14 +4963,17 @@ def _truth_spectra(truth: Mapping[str, Any], fit: Fit) -> np.ndarray | None:
     return np.stack(rows)
 
 
-def _compare_spectra(fit: Fit, truth_spectra: np.ndarray, windows) -> dict[str, Any]:
+def _compare_spectra(
+    fit: Fit, truth_spectra: np.ndarray, windows, *, spectra_and_std=None
+) -> dict[str, Any]:
     """Fidelity of the disentangled components against the injected ones.
 
     The comparison is restricted to the pixels the data cover (the grid has margins the
     data never constrain) and, per component, to what the star contributes. It gives the
     root-mean-square difference, the correlation, the standardized difference against the
     reported band (``pull_rms``, near 1 when the band is calibrated), and the
-    equivalent-width ratio in each window.
+    equivalent-width ratio in each window. ``spectra_and_std`` returns the fit's spectra
+    and band (:meth:`albireo.Fit._spectra_and_std`) where the caller shares one solve.
     """
     grid = fit.dis.grid
     wave = grid.wave
@@ -4881,7 +4982,7 @@ def _compare_spectra(fit: Fit, truth_spectra: np.ndarray, windows) -> dict[str, 
     covered = (wave >= data_lo) & (wave <= data_hi)
     names = [s.name for s in fit.dis.stars]
     rows = [fit.dis.component_names.index(n) for n in names]
-    spectra, std = fit._spectra_and_std()
+    spectra, std = (spectra_and_std or fit._spectra_and_std)()
     d_hat, std = spectra[rows], std[rows]
     d_true = truth_spectra[: len(names)]
     step = np.gradient(wave)
@@ -4942,7 +5043,17 @@ def _exchange_rms(v_fit, v_true, good, absolute) -> tuple[float, float]:
 
 
 def _exchanged_truth(truth: Mapping[str, Any], names: Sequence[str]) -> dict[str, Any]:
-    """The truth block with its two components in the other order."""
+    """The truth block with its two components in the other order.
+
+    The orbital elements of a fit refer to its first component (:class:`albireo.RVOrbit`).
+    With the injected secondary first, the argument of periastron is the injected one plus
+    pi, and the conjunction is the other one, ``nu + omega = -pi/2`` of the injected
+    primary, half a period away on a circular orbit. ``omega`` and ``t_conj`` are moved
+    accordingly. ``t_conj`` needs the period, and on an eccentric orbit also ``omega``;
+    without them it is left as it is.
+    """
+    from albireo.kepler import _t_peri_from_t_conj_numpy
+
     out = dict(truth)
     for key in ("k", "light_fractions"):
         if key in out:
@@ -4952,10 +5063,32 @@ def _exchanged_truth(truth: Mapping[str, Any], names: Sequence[str]) -> dict[str
             out[key] = np.asarray(out[key])[::-1]
     if isinstance(out.get("labels"), Mapping) and all(n in out["labels"] for n in names):
         out["labels"] = {names[0]: out["labels"][names[1]], names[1]: out["labels"][names[0]]}
+    ecc = float(truth.get("ecc", 0.0))
+    if "t_conj" in truth and "period" in truth and ("omega" in truth or ecc == 0.0):
+        # The time of periastron is common to the two components. The other conjunction is
+        # found from it with the argument of periastron advanced by pi.
+        omega = float(truth.get("omega", 0.0))
+        period = float(truth["period"])
+        t_peri = _t_peri_from_t_conj_numpy(
+            float(truth["t_conj"]), period=period, ecc=ecc, omega=omega
+        )
+        out["t_conj"] = t_peri - _t_peri_from_t_conj_numpy(
+            0.0, period=period, ecc=ecc, omega=omega + math.pi
+        )
+    if "omega" in truth:
+        out["omega"] = float(truth["omega"]) + math.pi
     return out
 
 
-def _compare_truth(ctx: _Context, fit: Fit, table, orbit, match) -> tuple[str, dict[str, Any]]:
+def _compare_truth(
+    ctx: _Context, fit: Fit, table, orbit, match, *, spectra_and_std=None
+) -> tuple[str, dict[str, Any]]:
+    """The results against the injected truth of a simulated star: the text and the block.
+
+    Where the pair was recovered in the other order, the truth is compared in that order
+    (:func:`_exchanged_truth`) and ``components_exchanged`` is set. ``spectra_and_std`` is
+    passed to :func:`_compare_spectra`.
+    """
     truth = dict(ctx.star.truth or {})
     names = [s.name for s in fit.dis.stars]
     lines = ["Against the injected truth:"]
@@ -5172,7 +5305,9 @@ def _compare_truth(ctx: _Context, fit: Fit, table, orbit, match) -> tuple[str, d
             )
     truth_spectra = _truth_spectra(truth, fit)
     if truth_spectra is not None:
-        out["spectra"] = _compare_spectra(fit, truth_spectra, truth.get("windows"))
+        out["spectra"] = _compare_spectra(
+            fit, truth_spectra, truth.get("windows"), spectra_and_std=spectra_and_std
+        )
         lines.append(
             "  component spectra (rms of fit minus truth over the covered band, correlation, "
             "pull rms against the band): "
@@ -5191,7 +5326,29 @@ def _files_block(files: Mapping[str, str]) -> str:
     return "Files:\n" + "\n".join(f"  {k:<14s} {v}" for k, v in sorted(files.items()))
 
 
-def _write_products(ctx: _Context, fit: Fit, table, orbit, match, posterior) -> None:
+def _write_spectra_fits(path: Path, fit: Fit, spectra, std) -> Path:
+    """:meth:`albireo.Fit.write_spectra` with the spectra and band already solved for.
+
+    The file is the one the method writes, from the same arrays and with the same
+    provenance cards; the method would solve the marginal and its selected inverse again.
+    """
+    from albireo.io import write_spectra
+
+    return write_spectra(
+        path,
+        fit.dis.grid,
+        spectra,
+        std,
+        light_fractions=[s.light for s in fit.dis.stars],
+        prior=fit.dis.smoothness_prior,
+        meta={"COMPNAME": ",".join(fit.dis.component_names)},
+    )
+
+
+def _write_products(
+    ctx: _Context, fit: Fit, table, orbit, match, posterior, *, spectra_and_std=None
+) -> None:
+    """Write the star's products. ``spectra_and_std`` is as in :func:`_compare_spectra`."""
     from albireo.results import save_fit, write_ascii
 
     directory, files = ctx.directory, ctx.files
@@ -5200,7 +5357,7 @@ def _write_products(ctx: _Context, fit: Fit, table, orbit, match, posterior) -> 
         table.write(directory / "velocities.rv", header=_velocity_header(ctx, table))
     )
     files["velocities_csv"] = os.fspath(_write_velocity_csv(directory / "velocities.csv", table))
-    spectra, std = fit._spectra_and_std()
+    spectra, std = (spectra_and_std or fit._spectra_and_std)()
     for i, name in enumerate(fit.dis.component_names):
         path = write_ascii(
             directory / f"spectrum_{_safe_name(name)}.txt",
@@ -5213,7 +5370,9 @@ def _write_products(ctx: _Context, fit: Fit, table, orbit, match, posterior) -> 
         files[f"spectrum_{name}"] = os.fspath(path)
     if importlib.util.find_spec("astropy") is not None:
         try:
-            files["spectra_fits"] = os.fspath(fit.write_spectra(directory / "spectra.fits"))
+            files["spectra_fits"] = os.fspath(
+                _write_spectra_fits(directory / "spectra.fits", fit, spectra, std)
+            )
         except Exception as exc:
             ctx.flag(f"spectra.fits not written: {type(exc).__name__}: {exc}")
     files["fit"] = os.fspath(save_fit(fit.result, directory / "fit.npz"))
@@ -5346,7 +5505,24 @@ def _write_velocity_csv(path: Path, table) -> Path:
     return path
 
 
-def _write_plots(ctx: _Context, fit: Fit, table, orbit, templates, posterior) -> None:
+def _write_plots(
+    ctx: _Context,
+    fit: Fit,
+    table,
+    orbit,
+    templates,
+    posterior,
+    *,
+    truth: Mapping[str, Any] | None = None,
+    spectra_and_std=None,
+) -> None:
+    """Write the star's figures; a figure that fails is flagged and the others are written.
+
+    ``truth`` is the injected truth in the order the results were compared in
+    (:func:`_compare_truth`), the star's own by default. ``spectra_and_std`` is as in
+    :func:`_compare_spectra`. Every figure a failed one opened is closed, so that an
+    in-process batch does not accumulate them.
+    """
     if importlib.util.find_spec("matplotlib") is None:
         ctx.flag("plots skipped: matplotlib is not installed (pip install 'albireo[plots]')")
         return
@@ -5359,9 +5535,11 @@ def _write_plots(ctx: _Context, fit: Fit, table, orbit, templates, posterior) ->
     from albireo import plotting
 
     directory, files = ctx.directory, ctx.files
-    truth = dict(ctx.star.truth or {})
+    truth = dict(ctx.star.truth or {}) if truth is None else dict(truth)
+    shared = spectra_and_std or fit._spectra_and_std
 
     def save(name: str, make) -> None:
+        opened = set(plt.get_fignums())
         try:
             fig = make()
             if fig is None:  # nothing to draw (an unmeasured table, for instance)
@@ -5372,23 +5550,20 @@ def _write_plots(ctx: _Context, fit: Fit, table, orbit, templates, posterior) ->
             files[f"plot_{name}"] = os.fspath(path)
         except Exception as exc:
             ctx.flag(f"figure {name} not written: {type(exc).__name__}: {exc}")
+        finally:
+            # The figure, and any other that a plot function opened before it failed.
+            for number in set(plt.get_fignums()) - opened:
+                plt.close(number)
 
     grid = fit.dis.grid
-    truth_spectra = None
-    if "components" in truth and "grid" in truth:
-        source = truth["grid"]
-        truth_spectra = np.stack(
-            [
-                np.interp(grid.wave, np.asarray(source.wave), np.asarray(c), left=0.0, right=0.0)
-                for c in truth["components"]
-            ]
-        )
+    truth_spectra = _truth_spectra(truth, fit)
+    if truth_spectra is not None:
         n_extra = len(fit.dis.component_names) - truth_spectra.shape[0]
         if n_extra > 0:
             truth_spectra = np.vstack([truth_spectra, np.zeros((n_extra, grid.n))])
 
     def spectra_figure():
-        spectra, std = fit._spectra_and_std()
+        spectra, std = shared()
         fig, _ = plotting.plot_spectra(
             grid,
             spectra,
@@ -5402,7 +5577,7 @@ def _write_plots(ctx: _Context, fit: Fit, table, orbit, templates, posterior) ->
 
     def residual_figure():
         fig, _ = plotting.plot_residual_zscores(
-            fit.dis.model.problem_at(fit.theta), fit.marginal().d_hat, bjd=fit.dis.dataset.bjd
+            fit.dis.model.problem_at(fit.theta), shared()[0], bjd=fit.dis.dataset.bjd
         )
         fig.suptitle(f"{ctx.star.name}: whitened residuals")
         return fig
@@ -5481,15 +5656,22 @@ _WORKER_CONFIG: PipelineConfig | None = None
 
 
 def _thread_environment(n_jobs: int) -> dict[str, str]:
-    """Environment variables capping each worker's threads at ``cpu_count // n_jobs``.
+    """Environment variables capping each worker's BLAS and OpenMP threads.
 
-    XLA's CPU backend and every BLAS size their thread pools to the whole machine, so N
-    workers would run N x cores threads between them. The cap is a precaution against
-    that oversubscription, not a measured gain: on the recorded benchmark eight capped and
-    eight uncapped workers finished the same batch in 54.1 and 54.7 s
-    (``docs/benchmarks.md``, "The pipeline in worker processes"; D58). It has no measured
-    cost there, and oversubscription has been observed in BLAS-heavy stages (the 32-thread
-    OpenBLAS of the D50 record).
+    Every BLAS sizes its thread pool to the whole machine, so N workers would run N x
+    cores threads between them. ``OMP_NUM_THREADS``, ``OPENBLAS_NUM_THREADS`` and
+    ``MKL_NUM_THREADS`` cap each worker's at ``cpu_count // n_jobs``. XLA's own CPU thread
+    pool is not capped: no ``XLA_FLAGS`` entry sizes it. The bare token
+    ``intra_op_parallelism_threads=N`` set here before was a TensorFlow session option
+    that XLA's flag parser ignores, and the dashed form aborts the process as an unknown
+    flag. ``--xla_cpu_multi_thread_eigen=false`` is set unless the variable already names
+    that flag. It runs XLA's Eigen kernels on one thread, and a JAX 0.11 process had the
+    same number of threads with and without it. The caps are a precaution against
+    oversubscription, not a measured gain. The recorded comparison of eight workers, 54.1 s
+    against 54.7 s (``docs/benchmarks.md``, "The pipeline in worker processes"; D58),
+    varied the Eigen flag alone: the BLAS and OpenMP caps were set in both runs, and XLA's
+    pool was capped in neither. Oversubscription has been observed in BLAS-heavy stages
+    (the 32-thread OpenBLAS of the D50 record).
     """
     cores = os.cpu_count() or 1
     threads = max(1, cores // max(1, n_jobs))
@@ -5500,10 +5682,8 @@ def _thread_environment(n_jobs: int) -> dict[str, str]:
         "MPLBACKEND": "Agg",
     }
     flags = os.environ.get("XLA_FLAGS", "")
-    if "intra_op_parallelism_threads" not in flags:
-        env["XLA_FLAGS"] = (
-            f"{flags} --xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads={threads}"
-        ).strip()
+    if "xla_cpu_multi_thread_eigen" not in flags:
+        env["XLA_FLAGS"] = f"{flags} --xla_cpu_multi_thread_eigen=false".strip()
     return env
 
 
@@ -5533,6 +5713,25 @@ def _star_task(star: StarConfig, directory: str, progress: bool) -> StarResult:
     return _run_star_guarded(
         star, _WORKER_CONFIG, Path(directory), progress=progress, keep_live=False
     )
+
+
+def _release_compiled_programs() -> None:
+    """Release the programs JAX compiled for the stars run so far (:func:`jax.clear_caches`).
+
+    Outside ``jit`` JAX compiles an operation once per array shape and keeps the program
+    for the life of the process, and the stars of a batch differ in their shapes. On an
+    in-process batch of five simulated stars of 7 to 11 epochs (labels off, fast mode), the
+    resident memory after each star rose from 1.95 to 3.94 GB with the stars' live objects
+    released, and stayed between 0.61 and 0.69 GB with this call after each star. The next
+    star compiles its programs again: the toy stars, whose time is mostly compilation,
+    took 40 to 47 s instead of 26 to 34 s. The recompilation was not measured on real
+    data, where an APF and a PEPSI star of the blind test took 1,870 and 1,411 s. Every
+    product of the five stars was identical bit for bit. The call clears every cache of
+    JAX in the process, those of other code included.
+    """
+    import jax
+
+    jax.clear_caches()
 
 
 def _resolve_jobs(jobs: int | str | None, n_stars: int) -> int:
@@ -5567,9 +5766,10 @@ def run_pipeline(
         Worker processes. ``1`` (default) runs in this process and keeps the live objects
         on each :class:`StarResult` (see ``keep_live``). ``"auto"`` or ``0`` uses
         ``cpu_count // 4``. Any larger number runs that many stars at a time, each with its
-        threads capped so the workers do not oversubscribe the machine.
+        BLAS and OpenMP threads capped so the workers do not oversubscribe the machine.
     stars
-        Run only these names.
+        Run only these names. Each star's directory is the one a run of the whole batch
+        gives it, so a selection writes where the full batch would.
     progress
         Print one line per stage per star.
     keep_live
@@ -5577,9 +5777,11 @@ def run_pipeline(
         (default). They include the :class:`~albireo.Fit` with its compiled model and the
         label match with its sufficient statistics, tens of MB per star on a short window
         and up to about a GB on an echelle star, so a batch that keeps them holds every
-        star's at once. ``False`` releases them after each star, and the memory of the
-        batch is then that of one star. The ``albireo`` command passes ``False``. Workers
-        never return live objects.
+        star's at once. ``False`` releases them after each star, and also the programs
+        JAX compiled for it, which JAX otherwise keeps for the life of the process
+        (:func:`_release_compiled_programs`); the memory of the batch is then that of one
+        star, at the cost of compiling again for the next star. The ``albireo`` command
+        passes ``False``. Workers never return live objects.
 
     Returns
     -------
@@ -5599,17 +5801,23 @@ def run_pipeline(
     the workers overlap only the serial part of each star (compilation, the Python-side
     scans, the orbit fit, the writing). On the development desktop (16 cores, eight
     simulated stars) four workers finished the batch 2.0x faster than one process and
-    eight 2.5x. Capping each worker's XLA and BLAS threads at ``cpu_count // jobs`` made
-    no measurable difference on that benchmark (``docs/benchmarks.md``). A worker
-    returns a plain-data :class:`StarResult`. The live objects (the :class:`~albireo.Fit`,
-    the velocity table, the label match) are kept only on an in-process run with
+    eight 2.5x. Each worker's BLAS and OpenMP threads are capped at ``cpu_count // jobs``.
+    XLA's own thread pool is not capped (:func:`_thread_environment`). The effect of the
+    caps has not been measured.
+
+    An interruption of the parent cancels the stars still queued and is raised once the
+    stars already running have returned, which a Ctrl-C at the console also interrupts.
+    Without the cancellation the pool would run every queued star first. A worker returns
+    a plain-data :class:`StarResult`. The live objects (the :class:`~albireo.Fit`, the
+    velocity table, the label match) are kept only on an in-process run with
     ``keep_live``, since they hold compiled JAX programs that cannot be pickled.
     """
     if isinstance(config, str | os.PathLike):
         config = load_config(config)
     elif isinstance(config, Mapping):
         config = config_from_dict(config)
-    selected = list(config.stars)
+    batch = list(config.stars)
+    selected = list(batch)
     if stars is not None:
         wanted = list(stars)
         unknown = sorted(set(wanted) - {s.name for s in selected})
@@ -5627,7 +5835,9 @@ def run_pipeline(
     (directory / "run.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     n_jobs = _resolve_jobs(jobs, len(selected))
-    subdirs = _star_directories(directory, selected)
+    # The directories are assigned over the whole batch, so that a selection of stars
+    # writes each where the full batch would and never into another star's directory.
+    subdirs = _star_directories(directory, batch)
     t0 = time.perf_counter()
     results: dict[str, StarResult] = {}
     if progress:
@@ -5636,10 +5846,12 @@ def run_pipeline(
             flush=True,
         )
     if n_jobs == 1:
-        for star in selected:
+        for i, star in enumerate(selected):
             results[star.name] = _run_star_guarded(
                 star, config, subdirs[star.name], progress=progress, keep_live=keep_live
             )
+            if not keep_live and i + 1 < len(selected):
+                _release_compiled_programs()
     else:
         env = _thread_environment(n_jobs)
         shared = config.without_stars()
@@ -5657,18 +5869,25 @@ def run_pipeline(
                 pool.submit(_star_task, star, os.fspath(subdirs[star.name]), progress): star.name
                 for star in selected
             }
-            for future in as_completed(futures):
-                name = futures[future]
-                try:
-                    results[name] = future.result()
-                except Exception as exc:
-                    results[name] = StarResult(
-                        name=name,
-                        status="failed",
-                        directory=os.fspath(subdirs[name]),
-                        error=f"{type(exc).__name__}: {exc}",
-                        traceback=traceback.format_exc(),
-                    )
+            try:
+                for future in as_completed(futures):
+                    name = futures[future]
+                    try:
+                        results[name] = future.result()
+                    except Exception as exc:
+                        results[name] = StarResult(
+                            name=name,
+                            status="failed",
+                            directory=os.fspath(subdirs[name]),
+                            error=f"{type(exc).__name__}: {exc}",
+                            traceback=traceback.format_exc(),
+                        )
+            except BaseException:
+                # The exit of the pool waits for every submitted star. On an interruption
+                # (KeyboardInterrupt) the stars still queued are cancelled first, so that
+                # the exit waits only for the stars already running.
+                pool.shutdown(wait=False, cancel_futures=True)
+                raise
         results = {star.name: results[star.name] for star in selected}
     run = PipelineRun(
         results=results, directory=directory, seconds=time.perf_counter() - t0, jobs=n_jobs
@@ -5680,15 +5899,21 @@ def run_pipeline(
 
 
 def _star_directories(directory: Path, stars: Sequence[StarConfig]) -> dict[str, Path]:
-    taken: dict[str, str] = {}
+    """One sub-directory of ``directory`` per star, in declaration order.
+
+    The name is the star's (:func:`_safe_name`), with a suffix ``_2``, ``_3``, ... where an
+    earlier star took it. Names are compared without regard to case, because ``Alpha`` and
+    ``alpha`` are one directory on the case-insensitive filesystems of Windows and macOS.
+    """
+    taken: set[str] = set()
     out = {}
     for star in stars:
         base = _safe_name(star.name)
         candidate, k = base, 1
-        while candidate in taken.values():
+        while candidate.casefold() in taken:
             k += 1
             candidate = f"{base}_{k}"
-        taken[star.name] = candidate
+        taken.add(candidate.casefold())
         out[star.name] = directory / candidate
     return out
 

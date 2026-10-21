@@ -141,7 +141,14 @@ def _cmd_run(args) -> int:
         print(f"{path}: {exc}", file=sys.stderr)
         return 1
     config = _apply_run_options(config, args)
-    # The command reads only the written products, so no star's live objects are kept.
+    if args.stars:
+        names = [s.name for s in config.stars]
+        unknown = sorted(set(args.stars) - set(names))
+        if unknown:
+            print(f"{path}: unknown star(s) {unknown}; the batch has {names}", file=sys.stderr)
+            return 1
+    # The command reads only the written products, so no star's live objects are kept, and
+    # the programs compiled for one star are released before the next.
     run = run_pipeline(
         config,
         jobs=_jobs(args.jobs),

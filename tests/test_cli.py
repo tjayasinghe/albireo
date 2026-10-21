@@ -39,6 +39,17 @@ def test_run_reports_a_missing_or_broken_configuration(tmp_path, capsys):
     assert "at least one component" in capsys.readouterr().err
 
 
+def test_run_names_a_star_the_configuration_does_not_have(tmp_path, capsys):
+    """A mistyped ``--stars`` name is a one-line error and exit status 1, not a traceback."""
+    path = tmp_path / "albireo.toml"
+    assert cli.main(["init", str(path)]) == 0
+    capsys.readouterr()
+    assert cli.main(["run", str(path), "--stars", "AI Phe", "AI Phx", "--quiet"]) == 1
+    err = capsys.readouterr().err
+    assert "unknown star(s) ['AI Phx']" in err and "the batch has ['AI Phe']" in err
+    assert not (tmp_path / "albireo_results").exists(), "nothing ran"
+
+
 def _write_fits_epochs(dataset, directory):
     """Each epoch as an IRAF-style image with the facts the reader needs in its header."""
     fits = pytest.importorskip("astropy.io.fits")

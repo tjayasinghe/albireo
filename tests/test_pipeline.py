@@ -27,6 +27,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import sys
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -295,9 +296,17 @@ def test_bad_toml_is_reported_as_a_value_error(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+# The solves of the marginal at the MAP that the pipeline itself asks of the fit in the
+# ``quick_run`` fixture, by kind. Those made inside the ``Fit`` methods it calls (its
+# summary, the label fit) are not counted.
+_SOLVES = {"z_rms": 0, "spectra_and_std": 0, "write_spectra": 0}
+
+
 @pytest.fixture(scope="module")
 def quick_run(toy, library, tmp_path_factory):
     """One fast in-process run with the label stage on: the products fixture."""
+    from albireo.facade import Fit
+
     dataset, truth, grid = toy
     star = _star(dataset, truth, grid)
     config = PipelineConfig(
@@ -307,7 +316,20 @@ def quick_run(toy, library, tmp_path_factory):
         mh=(-0.9, 0.4),
         analysis=Analysis(fast=True, v_zero_range=40.0, plots=HAS_MPL),
     )
-    return run_star(star, config, progress=False)
+
+    def counted(kind, method):
+        def call(self, *args, **kwargs):
+            if sys._getframe(1).f_globals.get("__name__") == "albireo.pipeline":
+                _SOLVES[kind] += 1
+            return method(self, *args, **kwargs)
+
+        return call
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(Fit, "z_rms", property(counted("z_rms", Fit.z_rms.fget)))
+        patch.setattr(Fit, "_spectra_and_std", counted("spectra_and_std", Fit._spectra_and_std))
+        patch.setattr(Fit, "write_spectra", counted("write_spectra", Fit.write_spectra))
+        return run_star(star, config, progress=False)
 
 
 def test_a_run_writes_every_product(quick_run):
@@ -455,6 +477,22 @@ def test_the_written_spectra_can_be_read_back(quick_run):
     np.testing.assert_allclose(wave, fit.dis.grid.wave)
     np.testing.assert_allclose(flux, 1.0 + fit.spectra()[0], atol=1e-5)
     assert np.all(err > 0)
+
+
+def test_the_report_and_the_products_share_one_solve_of_the_marginal(quick_run, tmp_path):
+    """The z-score rms and the spectra with their band are solved for once per star.
+
+    Each evaluation solves the marginal at the MAP again, and the band adds the selected
+    inverse, which at 36,085 model pixels reaches 5.1 GB. Before, the report, the truth
+    comparison, the products and the figures asked for them three to five times. The FITS
+    file written from the shared solve is the one :meth:`albireo.Fit.write_spectra` writes.
+    """
+    assert _SOLVES == {"z_rms": 1, "spectra_and_std": 1, "write_spectra": 0}
+    if importlib.util.find_spec("astropy") is None:
+        return
+    fit = quick_run.live["fit"]
+    direct = fit.write_spectra(tmp_path / "direct.fits")
+    assert Path(quick_run.files["spectra_fits"]).read_bytes() == direct.read_bytes()
 
 
 def test_a_batch_records_a_failure_without_stopping(toy, library, tmp_path, monkeypatch):
@@ -1565,11 +1603,68 @@ def test_the_known_period_and_declared_velocity_routes_never_gate_or_leave_epoch
     assert orbit is stub_orbit and "periodogram" in source
     assert seen["candidates"] == [{"swap_invariant": True}]
     assert seen["searches"]["leave_one_out"] is None
-    assert seen["fits"] == [{"circular": False}]
+    # Equal light fractions: the exchange is allowed (the light rule of D65).
+    assert seen["fits"] == [{"circular": False, "exchange": True}]
 
     seen["fits"].clear()
     assert _table_orbit(ctx, table, star, Analysis()) is stub_orbit
     assert seen["fits"] == [{"circular": False}]
+
+
+def test_the_free_velocity_route_exchanges_the_components_only_where_they_are_alike(
+    toy, tmp_path, monkeypatch
+):
+    """The orbit fitted after a free-velocity disentangling follows the light rule of D65.
+
+    A 95/5 pair whose faint column is noise at a third of the epochs: interchanged at any
+    light ratio, 15 of the 40 epochs were exchanged and K1 came out at 45 km/s against the
+    30 injected. The Keplerian route and the bootstrap skip the exchange at such a ratio.
+    """
+    import albireo.pipeline as pipeline_module
+    from albireo.pipeline import _orbit
+    from albireo.todcor import VelocityTable
+
+    rng = np.random.default_rng(3)
+    orbit = OrbitParams(period=6.31, t_peri=2.0, ecc=0.15, omega=0.7, k=(30.0, 60.0))
+    n = 40
+    bjd = np.sort(rng.uniform(0.0, 120.0, n))
+    velocity = orbit.component_velocities(bjd)
+    velocity = velocity + np.stack([rng.normal(0.0, 0.5, n), rng.normal(0.0, 0.5, n)])
+    noise = rng.random(n) < 0.35
+    velocity[1, noise] = rng.uniform(-120.0, 120.0, noise.sum())
+    sigma = np.full((2, n), 0.5)
+    table = VelocityTable(
+        names=("A", "B"),
+        bjd=bjd,
+        instrument=("TOY",) * n,
+        velocity=velocity,
+        sigma=sigma,
+        sigma_ivar=sigma,
+        covariance=np.tile(np.diag([0.25, 0.25]), (n, 1, 1)),
+        light=np.repeat([[0.95], [0.05]], n, axis=1),
+        light_mode="global median",
+        chi2=np.full(n, 1000.0),
+        chi2_null=np.full(n, 1e5),
+        n_pixels=np.full(n, 1000),
+        delta_chi2=np.full((2, n), 1e4),
+        blended=np.zeros(n, dtype=bool),
+        at_edge=np.zeros((2, n), dtype=bool),
+        refined=np.ones(n, dtype=bool),
+        absolute=(True, True),
+        frame="barycentric",
+        settings={"n_parameters": 3},
+    )
+    # The period search is not what is tested: the candidates are the injected period.
+    monkeypatch.setattr(
+        pipeline_module,
+        "_period_candidates",
+        lambda t, **kwargs: ([6.31], {"single": None}),
+    )
+    dataset, truth, grid = toy
+    ctx = _context(_star(dataset, truth, grid, name="faint"), tmp_path / "faint")
+    fitted, _ = _orbit(ctx, _StubFit(("A", "B"), mode="free", lights=(0.95, 0.05)), table)
+    assert fitted.k[0] == pytest.approx(30.0, abs=1.0)
+    assert any("in the orbit's candidate fits was skipped" in f for f in ctx.flags), ctx.flags
 
 
 def test_the_bootstrap_flags_a_table_on_few_nights_and_honours_the_exchange_rule(
@@ -2441,6 +2536,47 @@ def test_zero_points_no_search_window_can_hold_are_dropped_and_the_epochs_measur
     assert not other.flags and other.zero_points is None
 
 
+def test_a_failure_the_zero_points_did_not_cause_leaves_them_in_the_record(toy, tmp_path):
+    """A failure that the measurement without zero points repeats is raised as it was.
+
+    Dropping the zero points is the remedy for a search window that cannot hold every
+    component. A failure of another kind (too few pixels, an LSF the correlation refuses)
+    recurs without them, and the record then keeps the adopted zero points, with no flag
+    naming them as dropped.
+    """
+    from albireo.pipeline import _measure_epoch_velocities
+
+    dataset, truth, grid = toy
+    star = _star(dataset, truth, grid, name="unrelated")
+    ctx = _context(star, tmp_path / "unrelated")
+    adopted = {
+        "source": "label match",
+        "adopted": True,
+        "v_zero_kms": {"A": -60.0, "B": 35.0},
+        "refused": [],
+    }
+    ctx.zero_points = dict(adopted)
+    pinned = [
+        replace(t, v_zero_kms=z)
+        for t, z in zip(_StubFit(("A", "B")).templates(), (-60.0, 35.0), strict=True)
+    ]
+
+    class _Fit:
+        def __init__(self):
+            self.calls = []
+
+        def measure_velocities(self, *, templates, light):
+            self.calls.append([t.v_zero_kms for t in templates])
+            raise ValueError("epoch 3: 12 usable pixels, fewer than the correlation needs")
+
+    fit = _Fit()
+    with pytest.raises(ValueError, match="12 usable pixels"):
+        _measure_epoch_velocities(ctx, fit, pinned, [0.62, 0.38])
+    assert fit.calls == [[-60.0, 35.0], [None, None]]
+    assert not ctx.flags, ctx.flags
+    assert ctx.zero_points == adopted
+
+
 def test_the_declared_fractions_are_held_only_while_the_smoothness_stayed_near_its_start(
     toy, tmp_path
 ):
@@ -2581,6 +2717,44 @@ def test_the_table_as_measured_is_kept_where_the_orbit_exchanged_an_epoch(
     assert not (ctx.directory / "velocities_unexchanged.rv").exists()
 
 
+@pytest.mark.skipif(not HAS_MPL, reason="the figures need matplotlib")
+def test_the_figures_show_the_truth_in_the_order_it_was_compared_in(toy, tmp_path, monkeypatch):
+    """A pair recovered in the other order is drawn against the injected star it moves like.
+
+    The truth block compares each component with that star (``components_exchanged``).
+    Before, the velocity figure overlaid the truth in the declared order, each component
+    on the other star's injected curve.
+    """
+    import matplotlib.pyplot as plt
+
+    import albireo.pipeline as pipeline_module
+    from albireo import plotting
+    from albireo.pipeline import _run_stages
+
+    dataset, truth, grid = toy
+    measured = _velocity_table()
+    seen = {}
+
+    def velocity_figure(table, *, orbit=None, truth=None):
+        seen["truth"] = truth
+        return plt.subplots()
+
+    star = replace(
+        _star(dataset, truth, grid, name="exchanged"),
+        truth={"velocities": measured.velocity[::-1].copy()},
+    )
+    ctx = _context(star, tmp_path / "exchanged", Analysis(plots=True))
+    fit = _StubFit(("A", "B"), lights=(0.5, 0.5), taus=(400.0, 400.0), table=measured)
+    monkeypatch.setattr(pipeline_module, "_declare", lambda *args, **kwargs: fit.dis)
+    monkeypatch.setattr(pipeline_module, "_write_products", lambda *args, **kwargs: None)
+    monkeypatch.setattr(pipeline_module, "_orbit", lambda *args, **kwargs: (None, None))
+    monkeypatch.setattr(plotting, "plot_velocity_table", velocity_figure)
+    report, _text, _live = _run_stages(ctx)
+    assert report["truth"]["components_exchanged"] is True
+    np.testing.assert_array_equal(seen["truth"], measured.velocity)
+    assert "plot_velocities" in ctx.files
+
+
 def test_the_bootstrap_table_the_period_search_ran_on_is_kept_beside_the_delivered_one(
     toy, tmp_path
 ):
@@ -2686,6 +2860,26 @@ def test_a_failed_velocity_table_is_marked_and_no_orbit_is_fitted(toy, tmp_path)
     # A table with no usable epoch fails on that count instead.
     empty = _velocity_table(chi2=1000.0, chi2_null=2000.0, blended=True)
     assert _describe_table(empty)["failure"] == "no usable epoch of 6"
+
+
+def test_a_column_with_no_finite_entry_is_described_without_a_warning():
+    """A failed correlation leaves columns of nan, whose median is nan and not a warning.
+
+    The batch records every warning of a star in its report and summary, so an
+    ``All-NaN slice`` warning from the description of a failed table would appear there.
+    """
+    import warnings
+
+    from albireo.pipeline import _describe_table
+
+    unmeasured = _velocity_table(chi2=np.nan, chi2_null=np.nan)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        described = _describe_table(unmeasured)
+    assert np.isnan(described["reduced_chi2_median"])
+    assert _describe_table(_velocity_table())["reduced_chi2_median"] == pytest.approx(
+        1000.0 / (1000.0 - 3.0)
+    )
 
 
 def test_an_unmeasured_epoch_in_a_declared_table_is_refused(toy, tmp_path):
