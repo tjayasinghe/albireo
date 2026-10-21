@@ -5350,3 +5350,78 @@ blueshift and gravitational redshift are common to every route. The closed loop 
 `tests/test_label_smoothing.py` tests the smoothing alone: with epochs at 7 km/s and a library
 at R = 15,000 the labels and frame offsets agree with those of the native comparison with
 the intrinsic library to 3 K, 0.003 dex and 0.03 km/s.
+
+## The optimization pass of 2026-10-21
+
+An audit of every module of the package (D76) listed defects and the costs of compilation,
+memory and repeated work, which were then removed. This section records the measured
+effect on a fit and on the fast test suite, and the changes that were measured and not
+made because they alter recorded results.
+
+### The quickstart fit before and after
+
+`scripts/compile_bench.py out.json --laplace` was run in a fresh process on 3605cc6 (the
+code before the pass) and then on the code after it, one after the other on the otherwise
+idle desktop (18 GB free, 3% CPU at the start). The declaration is that of
+`docs/quickstart.md` on the packaged example, 300 L-BFGS steps. Compilations are XLA
+backend compilations; memory is the resident set after each stage and the process's peak
+working set so far.
+
+| Stage | Wall-clock time [s] | Compilations | Compilation time [s] | Resident set [GB] | Peak working set [GB] |
+|---|---|---|---|---|---|
+| first `fit()` | 79.6 → 62.6 | 685 → 99 | 15.8 → 3.0 | 1.91 → 0.57 | 2.12 → 0.77 |
+| second `fit()`, same declaration | 75.4 → 65.6 | 38 → 1 | 8.6 → 1.6 | 2.06 → 0.59 | 2.26 → 0.84 |
+| `summary()` | 0.6 → 1.6 | 12 → 86 | 0.5 → 1.3 | 2.10 → 0.71 | 2.26 → 0.84 |
+| `laplace_check()` | 15.3 → 3.8 | 516 → 18 | 10.5 → 1.9 | 2.70 → 0.83 | 3.06 → 1.27 |
+
+The best fit is identical bit for bit: potential -28052.559579827797, gradient norm
+382.87787057846987, 300 steps, and every parameter equal. The Laplace check is valid in both,
+and its eigenvalues and the diagonal of its covariance differ by at most 1.6e-14 and
+1.7e-14 relative, because the Hessian is now compiled (CHANGELOG.md, [Unreleased]).
+`summary()` compiles the eager evaluation of the problem at the best fit, which the eager
+initialization of the optimizer used to compile as a side effect; the total over the four
+stages is 204 compilations instead of 1,251.
+
+Compilation is now 3 s of the 62.6 s of a first fit, and the 300 L-BFGS steps take the
+rest. The cost of an evaluation of the marginal likelihood and its gradient is unchanged:
+every change that would reduce it alters the last bits of the result (below).
+
+### The fast test suite
+
+`pytest --no-slow --no-network`, one module per process, three processes drawing from one
+queue with the largest test file first, on the desktop with other jobs light: 380 s after
+the pass against 450 s before, for 1,731 tests against 1,404. The 61 modules that both
+versions have take 1,047 s of process time against 1,324 s; the 12 new modules, which hold
+regression tests of the defects fixed, take 91 s. The modules whose time changed most:
+
+| Module | Tests | Process time [s] |
+|---|---|---|
+| `test_pipeline.py` | 64 → 72 | 258 → 139 |
+| `test_forecast.py` | 40 → 56 | 113 → 51 |
+| `test_assembly.py` | 43 → 50 | 102 → 74 |
+| `test_cli.py` | 6 → 7 | 34 → 15 |
+| `test_jitter.py` | 13 → 13 | 40 → 22 |
+| `test_facade.py` | 73 → 98 | 35 → 22 |
+| `test_plotting.py` | 24 → 28 | 32 → 22 |
+| `test_library.py` | 76 → 90 | 8 → 31 |
+
+Most of `test_library.py`'s increase was one new test that waited out a 20 s timeout on
+every run; it now releases the held download when the queued ones are cancelled. The slow
+tests (`-m "slow and not network"`) pass on the code after the pass: 68 tests, 859 s of
+wall-clock time in three processes.
+
+### Measured and not made
+
+These changes were measured during the pass, on the shared desktop under load, and left
+out because each changes recorded results, in the last bits or more. Each needs a
+decision and a re-run of the records it touches.
+
+| Change | Measured effect | Why it was not made |
+|---|---|---|
+| Stop L-BFGS when the potential no longer falls | on the quickstart, after step 200 the potential fell by 4.9e-7 nats in 55% of the loop's time, and 39 steps used the line search's cap of 20 evaluations | changes the step counts and printed digits of every fit; in D63 (4) a fit's largest gain in K came after 95% of the potential's fall |
+| The barycentric term of the velocity budget in the grid margin only, for stellar components on topocentric data | half-bandwidth 127 to about 111 px on the quickstart, about 25% of the Cholesky cost | changes the block size and so the last bits of every such fit; a decision against D46 and the bandwidth guard |
+| One fused sum in the first kernel application of the stationary pre-pass (`assembly`) | evaluation 14 to 23% faster, velocity gradient 2 to 8% faster, LSF-width gradient 14% slower | LSF-width and AR(1) gradients differ by about 1e-13 relative |
+| Semi-amplitude sweeps in fixed chunks of the batch size | one compilation per model instead of one per trial count (1 to 2 s each) | trial values differ by up to 5.8e-11 nats; the selected trial was unchanged in the six sweeps compared |
+| The sweep's memory estimate counted per component | the present rule under-sizes memory by about 1.3 for two stars and up to 2.7 with telluric and nebular components | changes the batch widths, and so the last bits, of large sweeps |
+| `find_period` normal matrices by `matmul` | 10 to 1 ms per chunk, about 40% of `find_period(n_harmonics=2)` | last bits of the periodogram; near-tied peaks may reorder |
+| TODCOR's default coarse step from the line width instead of the quadrature excess | at 25,000 px, 3.15 to 1.56 s and 0.95 to 0.66 GB with templates as sharp as the instrument | the Gaia RVS configuration's stride changes from 2 to 3, so D69 to D71 would not reproduce bit for bit |

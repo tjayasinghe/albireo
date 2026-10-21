@@ -614,22 +614,26 @@ This file records what changed. The reasons are recorded elsewhere:
 
 ### Changed
 
-- **Compilation, memory and wall-clock time.** Each item states whether its outputs are
-  identical bit for bit to those of the previous code. Times were measured on a shared
-  32-thread desktop and give the size of each change.
+- **Compilation, memory and wall-clock time.** On the packaged example with the quickstart
+  declaration, a first `Disentangler.fit()` compiles 99 programs instead of 685 and takes
+  62.6 s instead of 79.6 s, `Fit.laplace_check()` compiles 18 instead of 516 and takes
+  3.8 s instead of 15.3 s, and the process peaks at 1.27 GB instead of 3.06 GB; the best
+  fit is identical bit for bit (`docs/benchmarks.md`, "The optimization pass of
+  2026-10-21"). The fast test suite, 1,731 tests instead of 1,404, runs in 380 s instead of
+  450 s in three processes. Each item below states whether its outputs are identical bit for bit to
+  those of the previous code. Times were measured on a shared 32-thread desktop and give
+  the size of each change.
   - *`run_map` (bit-identical).* The start is computed from the supports of an abstract
     trace of the model, as numpyro's `initialize_model` computes it, without its eager
     evaluation of the model (2.3 to 12.6 s per model before, under 0.1 s after). The L-BFGS
     step is compiled once per call; weakly typed starts compiled it again at the second and
     third steps. The constrained values of the result and of every `callback` call come from
     `postprocess_model`, the model without its marginal likelihood, which
-    `MarginalOrbitModel.model` provides (0.4 to 0.6 s per call before, 0.001 s after). A
-    first `Disentangler.fit()` of the quickstart declaration compiled 128 programs instead
-    of 685 and peaked at 0.92 GB instead of 2.16 GB.
+    `MarginalOrbitModel.model` provides (0.4 to 0.6 s per call before, 0.001 s after).
   - *The Laplace approximation (last bits).* `laplace_check` and `laplace_inverse_mass`
     compile the potential, its gradient and its Hessian, still reverse over reverse (D28),
-    into one program. `Fit.laplace_check()` takes 5.3 s and 1.18 GB instead of 18.2 s and
-    3.0 GB. The covariance differs from the eager one by 1.7e-14 of its largest entry at the
+    into one program, which evaluates the rows of the Hessian one at a time. The
+    covariance differs from the eager one by 1.7e-14 of its largest entry at the
     quickstart best fit, by up to 6e-12 on small test models and by 1.7e-11 in a label fit,
     and `Fit.velocity_errors()`, the label errors, `Posterior.plug_in_widening` and the NUTS
     mass matrix change with it. NUTS chains from the new mass matrix therefore differ from
@@ -655,9 +659,14 @@ This file records what changed. The reasons are recorded elsewhere:
     38 s per component at 13,454 pixels). Its compiled programs are kept for the most recent
     argument signature only: a repeated fit at 965 pixels compiles 4 programs in 0.8 s
     instead of 12 in 3.5 s.
-  - *TODCOR (bit-identical).* With `light="global"` the held pass reuses the convolved
-    templates and inner products of the free pass (ten epochs of 25,000 pixels in 0.54 s
-    instead of 1.00 s), and a new template-grid length no longer compiles five programs.
+  - *TODCOR and template fits (bit-identical).* With `light="global"` the held pass reuses
+    the convolved templates and inner products of the free pass (ten epochs of 25,000
+    pixels in 0.54 s instead of 1.00 s), and a new template-grid length no longer compiles
+    five programs. TODCOR epochs, template fits and library projections build their rebin
+    operator in NumPy, which removes three compilations per new epoch length, and
+    `fit_templates` pads its template stacks to a multiple of 1024 pixels as `todcor` does:
+    a template fit on a new grid length of the test binary compiles 5 programs instead of
+    11 to 13.
   - *`sensitivity_forecast` (last bits in `p_eff`).* The subspace iteration no longer
     compiles on every call, the prior is factored once instead of three times, and `p_eff`
     comes from the Takahashi sweep of the pointwise band, within 1.2e-13 relative of the
@@ -672,7 +681,10 @@ This file records what changed. The reasons are recorded elsewhere:
     `crossval_library` grows by 0.016 MB per model pixel instead of 0.44 MB, with the last
     bit of a single held-out node free to change. A draw of the F class of the eclipsing
     population takes 6.1 to 6.5 s instead of 15.1 to 15.9 s, `apf.extract` 0.30 s instead of
-    0.50 s per exposure, and `read_dataset` cuts each file to the region as it reads it.
+    0.50 s per exposure, and `read_dataset` and the pipeline's reader cut each file to the
+    region as they read it, so that one full-band file is held at a time.
+    `run_benchmark` no longer keeps every star's live objects for the whole batch; it reads
+    only the products on disk.
 - **`run_pipeline(keep_live=..., release_compiled=...)`.** In one process (`jobs = 1`),
   `keep_live=False` releases each star's live objects after the star, and
   `release_compiled`, by default `not keep_live`, calls `jax.clear_caches()` before the next
@@ -1130,6 +1142,69 @@ This file records what changed. The reasons are recorded elsewhere:
 
 ### Fixed
 
+- **The windows of a nebular component at a nonzero velocity.** `Nebular(v_kms=u)` shifts
+  the component by `u` (`nebular_v_kms` of `build_problem`), so its spectrum holds the lines
+  at rest, but the `Disentangler` built the confining windows at `u`, `u` away from the
+  lines. Beyond the 300 km/s half-width a window missed its line. On a simulated SB2 with a
+  nebula at +400 km/s the emission went into the stars and both semi-amplitudes ran to the
+  lower bounds of their ranges (-65% and -63%), against 1% with the windows at rest. The
+  windows are now built at rest. Declarations with `v_kms = 0`, the default and that of
+  every recorded run and of `examples/04_nebular.py`, build the same windows. A declaration
+  that followed the BLOeM tutorial with a nonzero `v_kms` now has its windows centred on the
+  lines, and its fit changes. The docstrings of `nebular_windows`, `build_problem` and
+  `Nebular`, `docs/math.md` and the BLOeM tutorial, which stated that the shift and the
+  windows take the same velocity, now define the windows' velocity as that of the lines in
+  the component's spectrum, the nebula's velocity minus `nebular_v_kms`.
+- **The `Disentangler`'s conjunction scan, ranges and renormalization.** The phase scan took
+  the first NaN trial as its maximum, which could then start the fit; such trials now rank
+  below every finite one, and `Disentangler.fit` raises an error when no trial is finite.
+  A vector `Between` semi-amplitude range below zero was bounded per star by the magnitude
+  of its upper end (40 km/s for `Between(-120, -40)`), and is now bounded by
+  `max(|lo|, |hi|)`, as `Between.upper` takes it; ranges above zero keep their bounds.
+  `Fit.renormalize_epochs` applied a generator `exclude` to the first epoch only and turned
+  a reversed range into one warning per epoch; the ranges are now read once and a malformed
+  range raises `ValueError` before any epoch is corrected.
+- **Zero points and failures in the pipeline's velocity stage.** The stage dropped the
+  template zero points and correlated again on any `ValueError`; it now does so only where
+  the default search window that the zero points leave is empty (a `ValueError` subclass
+  raised by the `Disentangler`), and raises any other failure at once. Where no epoch has
+  the weighted pixels the free pass of `light="global"` needs, the pipeline reports the
+  correlation's own reason instead of templates that do not describe the components. A
+  `Fixed` noise correlation was recorded as fitted in `result.json` and the log; its value
+  is now recorded per instrument.
+- **BLOeM stars when the multiplicity table cannot be read.** The pipeline resolves BLOeM
+  stars without the class table, which it does not read. `albireo fetch` reads the class
+  table once per command; if it is empty, renamed or unreachable, the stars are printed as
+  unclassified and are not failed.
+- **Benchmark result paths, cadence and figures.** The benchmark read the result of a star
+  whose name differs from another's only in case from the other star's directory; it now
+  finds each directory with the pipeline's own assignment. DR3 transit counts of the
+  scanning-law cadence were placed over DR4's 66 months and are now placed over DR3's 34;
+  the DR4 epochs are unchanged, and a DR3 scanning-law benchmark resumed in an existing
+  directory keeps its earlier results, since the resume key does not record the span. The
+  Teff panel of the summary figure now compares component A with the star it was matched to
+  where the pair was recovered in the other order, and velocity panels of equal periods are
+  ordered by name.
+- **XLA thread settings of the survey's worker processes.** The bare
+  `intra_op_parallelism_threads=1` token, which XLA ignores, is removed, and the caller's
+  `XLA_FLAGS` are kept, as for the pipeline's workers.
+- **Band assembly and null models at a declared prior bandwidth.** `band_block_tridiagonal`
+  raises a `ValueError` for a half-bandwidth below the prior's declared one, including
+  through an explicit `sensitivity_forecast(half_bandwidth=...)`, instead of assembling a
+  truncated prior in which a negative slot index wrapped to the main diagonal; no internal
+  caller reaches this case. The null model of `k2_scan` and the prior that
+  `MarginalOrbitModel` rebuilds from fitted `(tau, eta)` keep the declared prior's
+  half-bandwidth, as `calibrate.detection_limit` does; with the default prior the results
+  are unchanged.
+- **Concurrent writers of one library or BOSZ shard.** `save_library` and the shard
+  download of `fetch_library` wrote through a fixed `<name>.part`, so two processes
+  finishing together could collide on the rename. Each write now goes to a temporary name
+  of its own beside the destination and is moved into place with `os.replace`. A process
+  stopped during a write leaves its temporary file, which no later run removes.
+- **Messages and annotations.** A declaration that `fit_templates` rejects now names the
+  star and the label (`logg of 'B': Known(4.3, 0.0): sigma must be positive`), and the
+  annotation of `simulate_dataset` accepts an array for `epoch_snr`, as the function
+  already did.
 - **`Problem.half_bandwidth_bound` with AR(1) noise.** The bound left out
   `Problem.ar_bandwidth_extra`, so a jitted marginal with
   `half_bandwidth=Problem.half_bandwidth_bound(v)` could assemble an incomplete band and
