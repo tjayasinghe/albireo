@@ -231,6 +231,21 @@ def test_the_zero_point_and_the_width_can_be_declared(files):
         apf.extract(exposure, files["solution"], zero_point="none", lsf="header")
 
 
+def test_each_order_is_normalised_once(files, monkeypatch):
+    """Rows 49-60 are normalised for the telluric lines and merged; 71 envelope fits were
+    made per exposure where 59 orders are used."""
+    calls = []
+    envelope = apf._envelope
+
+    def counted(counts, bad):
+        calls.append(1)
+        return envelope(counts, bad)
+
+    monkeypatch.setattr(apf, "_envelope", counted)
+    apf.extract(apf.read_apf_exposure(files["drifted"]), files["solution"])
+    assert len(calls) == len(set(range(3, 61)) | set(range(49, 62)))
+
+
 def test_the_rows_and_a_declared_width_are_checked(files):
     exposure = apf.read_apf_exposure(files["drifted"])
     declared = {"zero_point": "none", "lsf": 5.0}
