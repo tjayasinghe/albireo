@@ -5,9 +5,11 @@ oracles.
 
 The linear algebra is checked against dense NumPy on a small problem: the
 log-determinants, the pointwise band, the effective parameter count (which the module
-gets from one directional derivative of ``log det`` rather than a trace estimator), and
-the worst-determined modes (which it gets from subspace iteration on the banded factor).
-Each has a two-line dense equivalent, so each can be verified directly.
+gets from the selected inverse contracted against the data term rather than from a trace
+estimator, and which is also checked against the directional derivative of ``log det``
+in the noise scale), and the worst-determined modes (which it gets from subspace
+iteration on the banded factor). Each has a two-line dense equivalent, so each can be
+verified directly.
 
 The posterior covariance of the component spectra does not depend on the observed
 fluxes. This is tested by overwriting every flux with random values and requiring a
@@ -23,13 +25,22 @@ import pytest
 import albireo as ab
 from albireo.assembly import band_block_tridiagonal
 from albireo.data import Dataset, EpochData
-from albireo.forecast import _default_scales, _separation_diagnostics, sensitivity_forecast
-from albireo.forward import build_problem
+from albireo.forecast import (
+    _data_diagonal,
+    _default_scales,
+    _effective_parameters,
+    _prior_blocks,
+    _selected_inverse_diag_and_trace,
+    _separation_diagnostics,
+    _top_eigenpairs,
+    sensitivity_forecast,
+)
+from albireo.forward import build_problem, with_ar1, with_jitter
 from albireo.grids import LogGrid
 from albireo.priors import SmoothnessPrior
 from albireo.simulate import InstrumentSpec, OrbitParams, simulate_dataset
 from albireo.simulate import synthetic_deviation_spectrum as synth
-from albireo.solver import dense_from_block_tridiagonal
+from albireo.solver import block_cholesky, dense_from_block_tridiagonal, selected_inverse_diag
 
 ORBIT = OrbitParams(period=6.0, t_peri=0.0, ecc=0.0, omega=0.0, k=(40.0, 60.0))
 LIGHT = (0.6, 0.4)
@@ -147,11 +158,62 @@ def test_component_std_matches_dense(grid, dataset, prior):
 
 
 def test_p_eff_matches_dense_trace(grid, dataset, prior):
-    """``p_eff`` comes from d(log det)/d(log noise scale); the oracle is the trace itself."""
+    """``p_eff`` comes from the banded selected inverse; the oracle is the dense trace."""
     fc = forecast(grid, dataset, prior, n_modes=0)
     sigma, lam_p, lam = dense_posterior(grid, dataset, prior)
     assert fc.p_eff == pytest.approx(float(np.trace(sigma @ (lam - lam_p))), rel=1e-8)
     assert 0.0 < fc.p_eff < fc.n_linear
+
+
+def test_p_eff_trace_matches_the_noise_scale_derivative(grid, dataset, prior):
+    """The trace from the Takahashi sweep equals ``-1/2 d log det / d log alpha``.
+
+    The two routes share no code after the assembly: one contracts the selected inverse
+    against ``Lambda - Lambda_p``, the other differentiates the log-determinant through
+    a second assembly and factorization. Per-epoch jitter and AR(1) noise test that the
+    data term the sweep subtracts is the whole term the noise scale multiplies.
+    """
+    alpha = np.array([1.0, 1.5, 0.8, 2.0])
+    fc = forecast(grid, dataset, prior, n_modes=0, jitter=alpha, ar1_phi=0.6)
+    problem = build_problem(
+        grid,
+        dataset,
+        velocities=ORBIT.component_velocities(dataset.bjd),
+        light_fractions=LIGHT,
+        lsf_sigma_v=LSF,
+    )
+    problem = with_ar1(with_jitter(problem, alpha), np.full(dataset.n_epochs, 0.6))
+    b_nat = max(problem.natural_half_bandwidth, prior.half_bandwidth)
+    want = _effective_parameters(problem, prior, alpha, b_nat, None)
+    assert fc.p_eff == pytest.approx(want, rel=1e-10)
+
+
+def test_sweep_and_mode_iteration_reuse_their_programs(grid, dataset, prior, compilations):
+    """The fused sweep's diagonal is the solver's, and repeated calls compile nothing.
+
+    Both run once or more per forecast. Their loop bodies are module-level functions, so
+    a second call with the same shapes reuses the compiled programs.
+    """
+    problem = build_problem(
+        grid,
+        dataset,
+        velocities=ORBIT.component_velocities(dataset.bjd),
+        light_fractions=LIGHT,
+        lsf_sigma_v=LSF,
+    )
+    b_nat = max(problem.natural_half_bandwidth, prior.half_bandwidth)
+    precision = band_block_tridiagonal(problem, prior, b_nat, None)
+    chol = block_cholesky(precision)
+    blocks = _prior_blocks(prior, grid.n, 2, b_nat, precision.block_size)
+    variance, _ = _selected_inverse_diag_and_trace(chol, precision, blocks)
+    assert np.array_equal(np.asarray(variance), np.asarray(selected_inverse_diag(chol)))
+    assert compilations(lambda: _selected_inverse_diag_and_trace(chol, precision, blocks)) == 0
+
+    keep = np.ones(chol.n, dtype=bool)
+    first = _top_eigenpairs(chol, 2, keep, iterations=10, seed=0)
+    assert compilations(lambda: _top_eigenpairs(chol, 2, keep, iterations=10, seed=0)) == 0
+    again = _top_eigenpairs(chol, 2, keep, iterations=10, seed=0)
+    assert np.array_equal(first[0], again[0]) and np.array_equal(first[1], again[1])
 
 
 def test_modes_match_dense_submatrix(grid, dataset, prior):
@@ -379,9 +441,27 @@ def test_region_window_narrows_the_summary(grid, dataset, prior):
 
 
 def test_region_floor_zero_keeps_every_touched_pixel(grid, dataset, prior):
+    """A floor of 0 keeps every weighted coordinate and none that no epoch reaches.
+
+    The untouched coordinates of the grid margin have a data weight of exactly 0, and a
+    floor of 0 must not readmit them: they are constrained by the prior alone, and the
+    worst mode would then be the margin's.
+    """
     cut = forecast(grid, dataset, prior, n_modes=0)
     everything = forecast(grid, dataset, prior, n_modes=0, region_floor=0.0)
     assert everything.n_covered > cut.n_covered
+    problem = build_problem(
+        grid,
+        dataset,
+        velocities=ORBIT.component_velocities(dataset.bjd),
+        light_fractions=LIGHT,
+        lsf_sigma_v=LSF,
+    )
+    b_nat = max(problem.natural_half_bandwidth, prior.half_bandwidth)
+    precision = band_block_tridiagonal(problem, prior, b_nat, None)
+    touched = _data_diagonal(precision, prior, grid.n, 2) > 0.0
+    assert not touched.all(), "the fixture's grid must have an untouched margin"
+    assert np.array_equal(everything.region, touched)
 
 
 def test_region_disjoint_from_the_data_raises(grid, dataset, prior):
@@ -426,6 +506,34 @@ def test_plan_epochs_from_an_instrument_spec():
     assert np.all(plan[0].ivar == 2500.0)
     (custom,) = ab.plan_epochs(spec, bjd=[0.0], snr=10.0)
     assert np.all(custom.ivar == 100.0)
+
+
+def test_plan_epochs_keep_the_lsf_width(grid, dataset, prior):
+    """A planned epoch records the template's LSF width, so PER_EPOCH designs can be forecast.
+
+    An instrument declared ``PER_EPOCH`` reads the width from every epoch, so a design
+    mixing real and planned epochs needs the planned ones to carry it.
+    """
+    assert dataset[0].lsf_sigma_kms == 8.25
+    plan = ab.plan_epochs(dataset[0], bjd=[1.4, 3.6])
+    assert [ep.lsf_sigma_kms for ep in plan] == [8.25, 8.25]
+    spec = InstrumentSpec(
+        wave=np.linspace(4500.0, 4510.0, 128), sigma_v_lsf=np.float32(5.0), snr=50.0
+    )
+    assert ab.plan_epochs(spec, bjd=[0.0])[0].lsf_sigma_kms == 5.0
+    anchored = InstrumentSpec(
+        wave=spec.wave, sigma_v_lsf=(5.0, 6.0), snr=50.0, lsf_anchors_angstrom=(4500.0, 4510.0)
+    )
+    assert ab.plan_epochs(anchored, bjd=[0.0])[0].lsf_sigma_kms is None
+
+    design = Dataset([*dataset, *plan], frame=dataset.frame)
+    have = range(dataset.n_epochs)
+    per_epoch = forecast(
+        grid, design, prior, n_modes=0, baseline=have, lsf_sigma_v={"A": ab.PER_EPOCH}
+    )
+    scalar = forecast(grid, design, prior, n_modes=0, baseline=have)
+    assert per_epoch.logdet_posterior == scalar.logdet_posterior
+    assert per_epoch.baseline.logdet_posterior == scalar.baseline.logdet_posterior
 
 
 def test_plan_epochs_rejects_nonsense(dataset):
@@ -491,6 +599,12 @@ def test_more_than_two_stars_skips_the_idealized_diagnostic(grid, dataset):
         ({"baseline": [0, 9]}, r"baseline indices must lie"),
         ({"baseline": [0, 1, 2, 3]}, "nothing planned"),
         ({"feature_scales_kms": [50.0, 10.0]}, "strictly ascending"),
+        ({"jitter": 0.0}, "jitter must be finite and positive"),
+        ({"jitter": np.nan}, "jitter must be finite and positive"),
+        ({"jitter": [1.0, 1.0, np.nan, 1.0]}, "jitter must be finite and positive"),
+        ({"ar1_phi": 1.5}, r"ar1_phi must lie in \(-1, 1\)"),
+        ({"ar1_phi": [0.2, 0.2, -1.0, 0.2]}, r"ar1_phi must lie in \(-1, 1\)"),
+        ({"ar1_phi": np.nan}, r"ar1_phi must lie in \(-1, 1\)"),
     ],
 )
 def test_validation(grid, dataset, prior, kwargs, match):

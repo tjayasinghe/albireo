@@ -25,8 +25,9 @@ the low-frequency degeneracy that ``docs/math.md`` §5.1 derives asymptotically,
 eigenvector is the spectral pattern the design cannot constrain. The constrained degrees
 of freedom ``p_eff = tr[(Lambda_p + A^T W A)^{-1} A^T W A]`` count how many of the
 ``n_comp * n_pix`` spectral parameters the data determine rather than the prior. This is
-the ``p_eff`` that :func:`albireo.forward.with_jitter` profiles against, obtained exactly
-as a directional derivative of ``log det`` in the noise scale.
+the ``p_eff`` that :func:`albireo.forward.with_jitter` profiles against. It is obtained
+exactly, with no stochastic estimator, by contracting the blocks of ``Sigma`` that the
+Takahashi sweep for the pointwise band produces against the data term ``A^T W A``.
 
 For ranking whole designs, :attr:`SensitivityForecast.information_nats` is the expected
 information gain ``0.5 (log det Lambda_post - log det Lambda_prior)``, the Bayesian
@@ -62,8 +63,12 @@ from dataclasses import dataclass, replace
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jax.scipy.linalg import solve_triangular
 
 from albireo.assembly import (
+    _add_prior_band,
+    _band_offsets,
+    _pack_band,
     _prior_diagonals,
     band_block_tridiagonal,
     prior_block_tridiagonal,
@@ -106,10 +111,15 @@ def plan_epochs(
     ----------
     template
         Either an existing :class:`~albireo.data.EpochData`, to plan more epochs like one
-        already in hand (its wavelength grid, inverse variances, mask, instrument key and
-        wavelength medium are reused), or an :class:`albireo.simulate.InstrumentSpec`
-        for an instrument with no data yet (its ``wave`` and ``snr`` become the grid and
-        a uniform ``ivar = snr**2``).
+        already in hand (its wavelength grid, inverse variances, mask, instrument key,
+        wavelength medium and recorded LSF width ``lsf_sigma_kms`` are reused), or an
+        :class:`albireo.simulate.InstrumentSpec` for an instrument with no data yet (its
+        ``wave`` and ``snr`` become the grid and a uniform ``ivar = snr**2``, and a scalar
+        ``sigma_v_lsf`` is recorded as ``lsf_sigma_kms``, as
+        :func:`albireo.simulate.simulate_dataset` records it). The recorded width is what
+        an instrument declared with a per-epoch LSF
+        (:data:`albireo.forward.PER_EPOCH`) reads, so planned epochs can be forecast with
+        that declaration.
     bjd
         Planned mid-exposure times, ``(n_new,)`` BJD_TDB. These set the orbital phases,
         hence the shifts, hence the covariance.
@@ -151,11 +161,15 @@ def plan_epochs(
         ivar = np.full(wave.size, float(snr) ** 2)
         mask = None
         base_instrument, base_medium = "default", None
+        # An anchored (per-wavelength) LSF has no single width to record.
+        width = np.asarray(template.sigma_v_lsf, dtype=np.float64)
+        lsf = float(width) if width.ndim == 0 else None
     elif isinstance(template, EpochData):
         wave = template.wave
         ivar = template.ivar if snr is None else np.where(template.ivar > 0.0, float(snr) ** 2, 0.0)
         mask = template.mask
         base_instrument, base_medium = template.instrument, template.medium
+        lsf = template.lsf_sigma_kms
     else:
         raise ValueError(
             "template must be an EpochData (plan more of what you already have) or an "
@@ -181,6 +195,7 @@ def plan_epochs(
             instrument=base_instrument if instrument is None else str(instrument),
             mask=mask,
             medium=base_medium if medium is None else medium,
+            lsf_sigma_kms=lsf,
         )
         for t, v in zip(times, vb, strict=True)
     )
@@ -189,6 +204,30 @@ def plan_epochs(
 # ---------------------------------------------------------------------------
 # Linear-algebra pieces
 # ---------------------------------------------------------------------------
+
+
+def _apply_sigma(chol: BlockCholesky, keep, v):
+    """``P Sigma P`` applied to each row of ``v`` ``(m, n_pad)``, with ``P = diag(keep)``."""
+    return jnp.where(keep, jax.vmap(solve, in_axes=(None, 0))(chol, v), 0.0)
+
+
+# The subspace iteration and the products after it run on every forecast, four times per
+# call with a baseline. Defined at module level, they are traced and compiled once per
+# array shape. A closure built inside the call is a new function object each time, which
+# JAX traces and compiles again, keeping every program it compiled.
+_apply_sigma_jit = jax.jit(_apply_sigma)
+
+
+def _orthonormal_rows(v):
+    """Orthonormal basis of the row space of ``v`` (Householder QR), as rows."""
+    q, _ = jnp.linalg.qr(v.T)
+    return q.T
+
+
+def _subspace_step(_, carry):
+    """One subspace-iteration step ``V <- orth(P Sigma P V)``, with explicit arguments."""
+    chol, keep, v = carry
+    return chol, keep, _orthonormal_rows(_apply_sigma(chol, keep, v))
 
 
 def _top_eigenpairs(
@@ -235,24 +274,18 @@ def _top_eigenpairs(
     n_modes = int(min(n_modes, n_keep))
     m = int(min(n_keep, n_modes + oversample))
 
-    def sigma(v):  # (m, n_pad) rows -> P Sigma P applied to each row
-        return jnp.where(keep, jax.vmap(lambda x: solve(chol, x))(v), 0.0)
-
-    def orth(v):
-        q, _ = jnp.linalg.qr(v.T)
-        return q.T
-
-    v0 = orth(jnp.where(keep, jax.random.normal(jax.random.PRNGKey(int(seed)), (m, n_pad)), 0.0))
-    v = jax.lax.fori_loop(0, int(iterations), lambda _, vv: orth(sigma(vv)), v0)
+    key = jax.random.PRNGKey(int(seed))
+    v0 = _orthonormal_rows(jnp.where(keep, jax.random.normal(key, (m, n_pad)), 0.0))
+    _, _, v = jax.lax.fori_loop(0, int(iterations), _subspace_step, (chol, keep, v0))
 
     # Rayleigh-Ritz on the converged subspace: T = V Sigma V^T with V's rows orthonormal.
-    sv = sigma(v)
+    sv = _apply_sigma_jit(chol, keep, v)
     t = v @ sv.T
     vals, u = jnp.linalg.eigh(0.5 * (t + t.T))
     order = jnp.argsort(vals)[::-1][:n_modes]
     vals = vals[order]
     vecs = u[:, order].T @ v
-    resid = sigma(vecs) - vals[:, None] * vecs
+    resid = _apply_sigma_jit(chol, keep, vecs) - vals[:, None] * vecs
     rel = jnp.max(jnp.linalg.norm(resid, axis=1) / jnp.maximum(jnp.abs(vals), 1e-300))
     # The sign of an eigenvector is arbitrary; fix it so repeated runs and plots agree.
     lead = jnp.take_along_axis(vecs, jnp.argmax(jnp.abs(vecs), axis=1)[:, None], axis=1)
@@ -274,48 +307,136 @@ def _effective_parameters(problem, prior, alpha, b_nat, block_size) -> float:
     (``docs/math.md`` §5.5). One derivative of the log-determinant gives the effective
     parameter count with no stochastic trace estimator and no selected inverse.
     :func:`albireo.forward.with_jitter` implements exactly this one-parameter family,
-    and the assembly is differentiable through it.
+    and the assembly is differentiable through it. ``with_jitter`` sets the factor
+    rather than compounding it, so ``alpha`` must be the factor ``problem`` carries.
 
     ``t`` and the log-determinant are both scalars, so forward and reverse mode return
     the same number. Reverse mode is used because the accumulation step of the band
     assembly has a ``custom_vjp`` (D49; reverse mode otherwise rebuilds the whole band
     tensor), and ``custom_vjp`` rejects ``jax.jvp`` (the same trade-off as D28 at
-    ``_solve_stage``). The cost is acceptable: this function runs once per forecast, and
-    the rule it enables runs once per leapfrog step.
+    ``_solve_stage``).
+
+    :func:`sensitivity_forecast` does not call this function. It takes the same trace
+    from the Takahashi sweep it already runs for the pointwise band
+    (:func:`_selected_inverse_diag_and_trace`), which needs no second assembly, no
+    second factorization and no reverse pass, and agrees with this route to rounding.
+    This route needs only a problem and a prior, which suits a caller that has not
+    factored the precision, and serves as the reference in the tests.
     """
-
-    def logdet_at(t):
-        scaled = with_jitter(problem, alpha * jnp.exp(t))
-        return logdet(block_cholesky(band_block_tridiagonal(scaled, prior, b_nat, block_size)))
-
-    return -0.5 * float(jax.grad(logdet_at)(jnp.asarray(0.0)))
+    return -0.5 * float(
+        jax.grad(_logdet_at_noise_scale)(jnp.asarray(0.0), problem, prior, alpha, b_nat, block_size)
+    )
 
 
-def _prior_std(prior: SmoothnessPrior, n_pix: int, n_comp: int) -> np.ndarray:
+def _logdet_at_noise_scale(t, problem, prior, alpha, b_nat, block_size):
+    """``log det(Lambda_p + e^{-2t} A^T W A)``, differentiated by :func:`_effective_parameters`."""
+    scaled = with_jitter(problem, alpha * jnp.exp(t))
+    return logdet(block_cholesky(band_block_tridiagonal(scaled, prior, b_nat, block_size)))
+
+
+def _takahashi_trace_step(carry, inputs):
+    """One backward step of the Takahashi sweep, accumulating ``tr[Sigma (Lambda - Lambda_p)]``.
+
+    The diagonal block is formed with the association of
+    :func:`albireo.solver.selected_inverse_diag`, ``(W^T S_{k+1}) W``, so the emitted
+    diagonal is the same. ``W^T S_{k+1}`` is ``-Sigma_{k,k+1}``, the transpose of the
+    subdiagonal block, so the off-diagonal part of the trace needs no further product.
+    """
+    s_next, acc = carry
+    lk, llk, dk, pk, ek, qk = inputs
+    inv_lk = solve_triangular(lk, jnp.eye(lk.shape[0], dtype=lk.dtype), lower=True)
+    w = llk @ inv_lk
+    ws = w.T @ s_next
+    s_k = inv_lk.T @ inv_lk + ws @ w
+    # Lambda and Sigma are symmetric and lower[k] stores both off-diagonal blocks, hence
+    # the factor 2 (as in albireo.solver.selected_inverse_cotangent).
+    acc = acc + jnp.sum(s_k * (dk - pk)) - 2.0 * jnp.sum(ws * (ek - qk).T)
+    return (s_k, acc), jnp.diagonal(s_k)
+
+
+def _selected_inverse_diag_and_trace(chol: BlockCholesky, precision, prior_blocks):
+    """``diag(Sigma)`` and ``p_eff = tr[Sigma A^T W A]`` from one Takahashi sweep.
+
+    ``Sigma = (L L^T)^{-1}`` with ``L`` the factor of ``precision``, and ``A^T W A`` is
+    ``precision`` minus ``prior_blocks``, the prior precision in the same block layout.
+    Both matrices are block tridiagonal, so the trace contracts the diagonal and first
+    subdiagonal blocks of ``Sigma``, which the sweep for the diagonal produces one block
+    at a time (``docs/math.md`` §5.5). Each block is consumed at the step that forms it,
+    so the selected inverse is never stored. The difference is formed per block, which
+    avoids the cancellation of ``n - tr[Sigma Lambda_p]`` when the data determine
+    little. The pad block is the identity in both matrices and contributes exactly 0.
+
+    The diagonal equals :func:`albireo.solver.selected_inverse_diag` bit for bit. The
+    trace agrees with the directional derivative of :func:`_effective_parameters` to
+    rounding.
+    """
+    eye = jnp.eye(chol.block_size)
+    inv_last = solve_triangular(chol.diag[-1], eye, lower=True)
+    s_last = inv_last.T @ inv_last
+    acc_last = jnp.sum(s_last * (precision.diag[-1] - prior_blocks.diag[-1]))
+    if chol.num_blocks == 1:
+        return jnp.diagonal(s_last)[: chol.n], acc_last
+    (_, acc), diags = jax.lax.scan(
+        _takahashi_trace_step,
+        (s_last, acc_last),
+        (
+            chol.diag[:-1],
+            chol.lower,
+            precision.diag[:-1],
+            prior_blocks.diag[:-1],
+            precision.lower,
+            prior_blocks.lower,
+        ),
+        reverse=True,
+    )
+    return jnp.concatenate([diags.reshape(-1), jnp.diagonal(s_last)])[: chol.n], acc
+
+
+def _prior_blocks(prior: SmoothnessPrior, n_pix: int, n_comp: int, b_nat: int, block_size: int):
+    """The prior precision in the layout :func:`albireo.assembly.band_block_tridiagonal` uses.
+
+    The band is built at the same stacked bandwidth as the posterior precision and
+    packed at its block size, so the prior entries occupy the same positions and are the
+    same floats as the ones the assembly added. ``precision - prior_blocks`` is then the
+    data term, to the rounding of one addition, at every entry.
+    """
+    p = n_comp * int(b_nat) + n_comp - 1
+    _, n_k = _band_offsets(p, n_comp)
+    band = _add_prior_band(jnp.zeros((n_pix, n_comp, n_k, n_comp)), prior, n_pix, p, n_comp)
+    return _pack_band(band, n_pix, n_comp, p, int(block_size))
+
+
+def _prior_factor(prior: SmoothnessPrior, n_pix: int, n_comp: int) -> BlockCholesky:
+    """Block Cholesky factor of ``Lambda_p`` at block size 64.
+
+    ``Lambda_p`` is block diagonal over components and pentadiagonal within each, so a
+    small block size suffices. :func:`sensitivity_forecast` factors it once per call and
+    derives both prior-only references from the one factor.
+    """
+    return block_cholesky(prior_block_tridiagonal(prior, n_pix, n_comp, max(2 * n_comp, 64)))
+
+
+def _prior_std(chol: BlockCholesky, n_pix: int, n_comp: int) -> np.ndarray:
     """Pointwise sigma under the prior alone, the reference for a design that determines nothing.
 
-    ``Lambda_p`` is block diagonal over components and pentadiagonal within each, so
-    the computation is cheap. Every posterior number is quoted against this reference:
-    a band with the prior's width is determined by the prior and not by the design (D42).
+    ``chol`` is the factor from :func:`_prior_factor`. Every posterior number is quoted
+    against this reference: a band with the prior's width is determined by the prior and
+    not by the design (D42).
     """
-    chol = block_cholesky(prior_block_tridiagonal(prior, n_pix, n_comp, max(2 * n_comp, 64)))
     return np.asarray(jnp.sqrt(selected_inverse_diag(chol))).reshape(n_pix, n_comp).T
 
 
-def _prior_mode_std(
-    prior: SmoothnessPrior, n_pix: int, n_comp: int, n_modes: int, keep, **modes_kw
-) -> np.ndarray:
+def _prior_mode_std(chol: BlockCholesky, n_modes: int, keep, **modes_kw) -> np.ndarray:
     """Worst-determined modes under the prior alone, on the same subspace.
 
     These are quoted next to the posterior modes, so the eigenproblem must be the same
     with the data term removed: same coordinates, same restriction. Comparing a
     posterior mode over the observed pixels against a prior mode over the whole grid
-    would make every design appear to improve on the prior.
+    would make every design appear to improve on the prior. ``chol`` is the factor from
+    :func:`_prior_factor`.
     """
     if n_modes <= 0:
         return np.zeros(0)
-    block = max(2 * n_comp, 64)
-    chol = block_cholesky(prior_block_tridiagonal(prior, n_pix, n_comp, block))
     vals, _, _ = _top_eigenpairs(chol, n_modes, keep, **modes_kw)
     return np.sqrt(np.maximum(vals, 0.0))
 
@@ -358,13 +479,15 @@ def _auto_region(data_diag: np.ndarray, floor: float) -> np.ndarray:
     effect. The median is taken per component because of the ``ell_2**2`` scaling noted
     in :func:`_data_diagonal`. A global median would remove a faint companion entirely.
 
-    The floor is a convention, so it is exposed as a named argument.
+    The floor is a convention, so it is exposed as a named argument. A floor of 0 keeps
+    every coordinate with nonzero weight and still excludes those no epoch reaches,
+    whose weight is exactly 0 (:func:`_data_diagonal`).
     """
     out = np.zeros(data_diag.shape, dtype=bool)
     for i, row in enumerate(data_diag):
         touched = row > 0.0
         if touched.any():
-            out[i] = row >= float(floor) * np.median(row[touched])
+            out[i] = touched & (row >= float(floor) * np.median(row[touched]))
     return out
 
 
@@ -427,10 +550,10 @@ def _separation_diagnostics(delta_pix: np.ndarray, grid: LogGrid, scales_kms, th
     repeatedly, which maximizes the variance, but ``|g|`` then returns to ``J`` at a
     comb of scales. In ``examples/08_forecast.py`` (a 13.7 d circular SB2, eight epochs
     in hand and twelve to plan; ``docs/math.md`` §5.5), twelve more at ``P/2`` keep the
-    RMS differential velocity at 117.8 km/s and leave the design blind over 58% of the
-    sampled scale range. The same twelve spread over phase lower the RMS to 99.3 km/s
-    and the blind fraction to 33%. The exact calculation ranks the second design higher,
-    by 375 nats against 243.
+    standard deviation of the differential velocity at 117.8 km/s and leave the design
+    blind over 58% of the sampled scale range. The same twelve spread over phase lower
+    it to 99.3 km/s and the blind fraction to 33%. The exact calculation ranks the second
+    design higher, by 375 nats against 243.
     """
     j = delta_pix.size
     scales = np.asarray(scales_kms, dtype=np.float64)
@@ -473,6 +596,11 @@ class SensitivityForecast:
     ``baseline`` of ``None``, computed through the identical code path on a subset of
     the identical inputs, so that a comparison between two designs never involves two
     different assembly routes.
+
+    ``rms_delta_kms`` is the standard deviation of the differential velocity over
+    the epochs, ``Var_j(Delta)^(1/2)`` of ``docs/math.md`` §5.1, taken about its
+    mean. It is a root-mean-square only for a design whose mean differential
+    velocity is zero. The name is kept for compatibility.
     """
 
     grid: LogGrid
@@ -488,7 +616,7 @@ class SensitivityForecast:
     mode_vectors: np.ndarray  # (n_modes, n_comp, n_pix) the modes themselves
     prior_mode_std: np.ndarray  # (n_modes,) the same under the prior alone
     mode_residual: float  # largest relative Rayleigh residual over the modes
-    rms_delta_kms: float  # RMS differential velocity over epochs (nan unless 2 stellar)
+    rms_delta_kms: float  # sd of the differential velocity over epochs (nan unless 2 stellar)
     feature_scale_kms: np.ndarray  # scale axis of the idealized diagnostic
     separation_penalty: np.ndarray  # sqrt[(J + |g|) / (J - |g|)] on that axis
     blind_fraction: float  # fraction of that axis above `penalty_threshold`
@@ -613,7 +741,7 @@ class SensitivityForecast:
 
         if np.isfinite(self.rms_delta_kms):
             lines.append(
-                "  differential velocity spread (RMS over epochs): "
+                "  differential velocity spread (standard deviation over epochs): "
                 + pair(getattr(base, "rms_delta_kms", np.nan), self.rms_delta_kms, ".1f")
                 + " km/s"
             )
@@ -638,9 +766,10 @@ class SensitivityForecast:
                 lines.append(ladder(self.mode_std, "this design"))
             lines.append(ladder(self.prior_mode_std, "prior alone"))
             lines.append(
-                f"    the leading mode sits at {self.worst_mode_gain:.2f}x the prior: for two "
-                "components that is the k=0 exchange, which is degenerate for every design "
-                "(math.md 5.1). Designs differ in how fast the rest of the ladder falls."
+                f"    prior sigma / posterior sigma of the leading mode: "
+                f"{self.worst_mode_gain:.2f}. For two components that mode is the k=0 "
+                "exchange, which is degenerate for every design (math.md 5.1). Designs "
+                "differ in how fast the rest of the ladder falls."
             )
         med, base_med = self.median_std, None if base is None else base.median_std
         prior_med = self.prior_median_std
@@ -922,11 +1051,15 @@ def sensitivity_forecast(
     alpha = np.broadcast_to(
         np.atleast_1d(np.asarray(1.0 if jitter is None else jitter, dtype=np.float64)), (n_ep,)
     )
-    if np.any(alpha <= 0.0):
-        raise ValueError("jitter must be positive")
+    if not np.all(np.isfinite(alpha) & (alpha > 0.0)):
+        raise ValueError("jitter must be finite and positive")
     phi = None
     if ar1_phi is not None:
         phi = np.broadcast_to(np.atleast_1d(np.asarray(ar1_phi, dtype=np.float64)), (n_ep,))
+        # with_ar1 clips |phi| to 0.999 for optimizer excursions; a forecast given a
+        # value outside (-1, 1) would silently describe a different design.
+        if not np.all(np.abs(phi) < 1.0):
+            raise ValueError(f"ar1_phi must lie in (-1, 1); got {ar1_phi}")
 
     scales = (
         _default_scales(grid, n_scales)
@@ -938,18 +1071,20 @@ def sensitivity_forecast(
 
     labels = tuple([f"star {i + 1}" for i in range(n_stellar)] + list(extra))
     modes_kw = {"iterations": mode_iterations, "seed": mode_seed}
-    prior_std = _prior_std(prior, grid.n, n_comp)
+    logdet_prior = float(prior_logdet(prior, grid.n))
 
-    def forecast(indices: tuple[int, ...], mask=None) -> SensitivityForecast:
+    def forecast(indices: tuple[int, ...], reference=None) -> SensitivityForecast:
         """One design, from the shared inputs restricted to ``indices``.
 
         The design and its baseline are both computed here (same construction, same
         assembly, same summaries), so the comparison never mixes two code paths.
 
-        ``mask`` is the coordinate subspace over which the mode and median summaries
-        are taken. It is derived from the full design and passed to the baseline, so the
-        two are compared on the same coordinates. The baseline's own region would be
-        strictly smaller (fewer epochs reach fewer pixels).
+        ``reference`` is ``(mask, prior_std, prior_mode_std)`` from the design's call,
+        passed to the baseline. ``mask`` is the coordinate subspace over which the mode
+        and median summaries are taken, so the two are compared on the same
+        coordinates. The baseline's own region would be strictly smaller (fewer epochs
+        reach fewer pixels). The prior-only references depend on the prior and that
+        subspace alone, so they are computed once, from one factorization of the prior.
         """
         idx = list(indices)
         subset = Dataset(tuple(dataset[i] for i in idx), frame=dataset.frame)
@@ -978,9 +1113,12 @@ def sensitivity_forecast(
         )
         precision = band_block_tridiagonal(problem, prior, b_nat, block_size)
         chol = block_cholesky(precision)
-        std = np.asarray(jnp.sqrt(selected_inverse_diag(chol))).reshape(grid.n, n_comp).T
+        variance, trace = _selected_inverse_diag_and_trace(
+            chol, precision, _prior_blocks(prior, grid.n, n_comp, b_nat, precision.block_size)
+        )
+        std = np.asarray(jnp.sqrt(variance)).reshape(grid.n, n_comp).T
 
-        if mask is None:
+        if reference is None:
             covered = _auto_region(_data_diagonal(precision, prior, grid.n, n_comp), region_floor)
             mask = _resolve_region(region, covered, grid)
             if not mask.any():
@@ -990,18 +1128,24 @@ def sensitivity_forecast(
                     "grid overlaps the data and that region= names wavelengths the "
                     "epochs cover."
                 )
+        else:
+            mask, prior_std, prior_mode_std = reference
+        del precision
         keep = mask.T.reshape(-1)  # interleaved, index q * n_comp + i
 
         if n_modes > 0:
             vals, vecs, resid = _top_eigenpairs(chol, n_modes, keep, **modes_kw)
             mode_std = np.sqrt(np.maximum(vals, 0.0))
             mode_vectors = vecs.reshape(vals.size, grid.n, n_comp).transpose(0, 2, 1)
-            prior_mode_std = _prior_mode_std(prior, grid.n, n_comp, n_modes, keep, **modes_kw)
         else:
             mode_std = np.zeros(0)
             mode_vectors = np.zeros((0, n_comp, grid.n))
-            prior_mode_std = np.zeros(0)
             resid = 0.0
+        if reference is None:
+            prior_chol = _prior_factor(prior, grid.n, n_comp)
+            prior_std = _prior_std(prior_chol, grid.n, n_comp)
+            prior_mode_std = _prior_mode_std(prior_chol, n_modes, keep, **modes_kw)
+            del prior_chol
 
         if n_stellar == 2:
             # Delta is a difference of log-shifts, so it is exactly the shift of the
@@ -1026,8 +1170,8 @@ def sensitivity_forecast(
             prior_std=prior_std,
             region=mask,
             logdet_posterior=float(logdet(chol)),
-            logdet_prior=float(prior_logdet(prior, grid.n)),
-            p_eff=_effective_parameters(problem, prior, jnp.asarray(alpha[idx]), b_nat, block_size),
+            logdet_prior=logdet_prior,
+            p_eff=float(trace),
             mode_std=mode_std,
             mode_vectors=mode_vectors,
             prior_mode_std=prior_mode_std,
@@ -1042,4 +1186,5 @@ def sensitivity_forecast(
     design = forecast(tuple(range(n_ep)))
     if have is None:
         return design
-    return replace(design, baseline=forecast(have, mask=design.region))
+    reference = (design.region, design.prior_std, design.prior_mode_std)
+    return replace(design, baseline=forecast(have, reference=reference))
