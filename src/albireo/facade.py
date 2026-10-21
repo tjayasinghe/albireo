@@ -1869,6 +1869,7 @@ class Disentangler:
             mode="keplerian" if self.orbit is not None else "velocity",
             priors_used=priors,
             k_scan=amplitude_scan,
+            max_steps=max_steps,
         )
 
     def _warn_if_the_period_prior_is_a_search(self) -> None:
@@ -2503,8 +2504,11 @@ class PhaseScan:
 
     @property
     def contrast(self) -> float:
-        """Marginal log-likelihood difference in nats between the best and worst phase."""
-        return float(np.max(self.values) - np.min(self.values))
+        """Marginal log-likelihood difference in nats between the best and worst phase.
+
+        Only finite trials enter (a failed solve is ``-inf``); NaN when there are none.
+        """
+        return _finite_range(self.values)
 
 
 @dataclass(frozen=True)
@@ -2569,9 +2573,11 @@ class SemiAmplitudeScan:
 
     @property
     def contrast(self) -> float:
-        """Marginal log-likelihood difference in nats between the best and worst trial."""
-        finite = self.values[np.isfinite(self.values)]
-        return float(np.max(finite) - np.min(finite))
+        """Marginal log-likelihood difference in nats between the best and worst trial.
+
+        Only finite trials enter (a failed solve is ``-inf``); NaN when there are none.
+        """
+        return _finite_range(self.values)
 
 
 def _default_v_range(fitted: np.ndarray, templates, margin: float = 40.0):
@@ -2703,6 +2709,10 @@ class Fit:
         :meth:`smoothed`, one entry per smoothed instrument: the instrument, its widths
         before and after, and the diagnostics of the convolution
         (:func:`albireo.preprocess.smooth_epoch`).
+    max_steps
+        The L-BFGS iteration cap the fit was run with, or ``None`` where it was not
+        recorded. :meth:`summary` uses it to distinguish a fit stopped at the cap from one
+        stopped by its progress callback.
     """
 
     dis: Disentangler
@@ -2713,6 +2723,7 @@ class Fit:
     priors_used: dict = field(default_factory=dict, repr=False)
     k_scan: SemiAmplitudeScan | None = None
     smoothing: tuple | None = None
+    max_steps: int | None = None
 
     @property
     def params(self) -> dict:
@@ -2721,9 +2732,15 @@ class Fit:
 
     @property
     def theta(self) -> dict:
-        """Site values together with any fixed sites, as the forward model takes them."""
+        """Site values together with any fixed sites, as the forward model takes them.
+
+        A free velocity table replaces the orbit, and the model rejects Keplerian sites
+        alongside it, so in ``"velocity"`` mode the orbital sites that the declaration
+        fixed are left out.
+        """
         theta = {k: jnp.asarray(v) for k, v in self.result.params.items()}
-        theta.update({k: jnp.asarray(v) for k, v in self.dis.fixed.items()})
+        fixed = self.dis.fixed if self.mode == "keplerian" else _without_orbit(self.dis.fixed)
+        theta.update({k: jnp.asarray(v) for k, v in fixed.items()})
         return theta
 
     def star(self, name: str) -> dict:
@@ -2746,13 +2763,12 @@ class Fit:
         KeyError
             If ``name`` is not a star of this declaration.
         """
-        names = [s.name for s in self.dis.stars]
-        if name not in names:
-            raise KeyError(f"no star called {name!r}; this fit has {names}")
-        index = names.index(name)
+        index = _star_index(self.dis, name)
         out = {"name": name, "light": self.dis.stars[index].light, **self.hyper[name]}
         if self.mode == "keplerian":
-            out["k"] = float(np.atleast_1d(np.asarray(self.params["k"], dtype=float))[index])
+            # theta rather than params: a semi-amplitude the declaration fixed is a
+            # constant of the model, which the optimizer does not return.
+            out["k"] = float(np.atleast_1d(np.asarray(self.theta["k"], dtype=float))[index])
         else:
             out["velocity"] = np.asarray(self.velocities()[index])
         return out
@@ -2819,8 +2835,7 @@ class Fit:
         # The covariance must come from the model this fit was run against, with the same
         # sampled sites in the same order, or the projection reads the wrong block. The
         # priors are stored on the Fit for this reason.
-        keplerian = {"period", "t_conj", "secosw", "sesinw", "k"}
-        fixed = {k: v for k, v in self.dis.fixed.items() if k not in keplerian}
+        fixed = _without_orbit(self.dis.fixed)
         model = self.dis.model.model(self.priors_used, fixed=fixed or None)
         check = laplace_check(model, self.result.params, model_args=(self.dis.model.problem,))
         if not check.valid:
@@ -2913,7 +2928,12 @@ class Fit:
         # The convergence flag is an absolute threshold on a potential whose scale grows
         # with the number of good pixels, so on real data it is routinely False at a good
         # optimum. The outcome is reported without a pass/fail label.
-        stopped = "converged" if self.result.converged else "stopped at the step cap"
+        if self.result.converged:
+            stopped = "converged"
+        elif self.max_steps is not None and self.result.num_steps < self.max_steps:
+            stopped = "stopped by the progress callback"
+        else:
+            stopped = "stopped at the step cap"
         what = "orbit" if self.mode == "keplerian" else "free velocity table"
         lines = [
             f"Best fit (maximum a posteriori) of the {what}, {self.result.num_steps} steps "
@@ -3075,11 +3095,23 @@ class Fit:
         """
         fixed = self._fixed_hyper() if hold_weights else dict(self.dis.fixed)
         priors = {k: v for k, v in self.dis.priors.items() if k not in fixed}
+        period = None
         if self.phase_scan is not None:
+            period = self.phase_scan.period
+        elif (
+            self.dis.orbit is not None
+            and self.dis.orbit.t_conj == "scan"
+            and isinstance(self.priors_used.get("t_conj"), dist.Uniform)
+        ):
+            # A fit returned by smoothed() has no scan record, but it keeps the window its
+            # parameters were fitted under. The declaration's window starts at the first
+            # epoch, and a fitted conjunction before it has no unconstrained coordinate.
+            window = self.priors_used["t_conj"]
+            period = float(np.asarray(window.high)) - float(np.asarray(window.low))
+        if period is not None:
             # The prior is one period wide, centred on the fitted conjunction (the MAP may be
             # half a period from the phase scan's best when the semi-amplitude scan moved it).
             centre = float(np.asarray(self.result.params["t_conj"], dtype=float))
-            period = self.phase_scan.period
             priors["t_conj"] = dist.Uniform(centre - 0.5 * period, centre + 0.5 * period)
         model = self.dis.model.model(priors, fixed=fixed)
         start = {k: v for k, v in self.result.params.items() if k in priors}
@@ -3241,18 +3273,24 @@ class Fit:
         sigma = sigma_kms if sigma_kms is not None else self.dis.velocity_budget.total / 2.0
         priors = {"velocity": dist.Normal(0.0, float(sigma)).expand(list(start.shape)).to_event(2)}
         init = {"velocity": jnp.asarray(start)}
-        # Every site that is not part of the orbit is kept unchanged: the smoothness
-        # hyperparameters, and the per-epoch nebular amplitudes where the declaration has a
-        # nebular component. Dropping the latter would hold the component static at
-        # amplitude 1 without reporting it.
-        for site in ("log_tau", "log_eta", "log_nebular_amp"):
-            if site in self.dis.priors:
-                priors[site] = self.dis.priors[site]
-                init[site] = self.dis.init[site]
+        # Every sampled site that is not part of the orbit is kept unchanged, with its
+        # declared prior and start: the smoothness hyperparameters, the per-epoch nebular
+        # amplitudes where the declaration has a nebular component, and a fitted noise
+        # correlation. Dropping the amplitudes would hold the component static at
+        # amplitude 1, and dropping the correlation would fit the table under the diagonal
+        # noise model, in either case without reporting it.
+        for site, prior in _without_orbit(self.dis.priors).items():
+            priors[site] = prior
+            init[site] = self.dis.init[site]
         return priors, init
 
     def free_velocities(
-        self, *, sigma_kms: float | None = None, max_steps: int = 300, progress=None
+        self,
+        *,
+        sigma_kms: float | None = None,
+        max_steps: int = 300,
+        progress=None,
+        tol: float = 1e-2,
     ) -> Fit:
         """Refit with one free velocity per component per epoch, warm-started from this fit.
 
@@ -3262,7 +3300,9 @@ class Fit:
 
         The method is defined on :class:`Fit` because a cold start was measured 122,000
         nats worse than the warm-started solution. Warm-starting is the only mode shown to
-        succeed.
+        succeed. The velocities start at this fit's Keplerian. The other sampled sites
+        (the smoothness hyperparameters, nebular amplitudes, a fitted noise correlation)
+        keep their declared priors and start at the declaration's starting values.
 
         This is the entry point when a Keplerian fit exists and the table is wanted as a
         model check. For an unsolved system, where the table yields the period,
@@ -3278,26 +3318,48 @@ class Fit:
             L-BFGS iteration cap.
         progress
             ``callback(step, potential, grad_norm, params)``.
+        tol
+            Gradient-norm threshold of :func:`albireo.run_map`. Unlike that of
+            :meth:`Disentangler.fit`, it is not scaled to the number of good pixels.
 
         Returns
         -------
         Fit
-            A fit in ``"velocity"`` mode.
+            A fit in ``"velocity"`` mode, on the same epochs as this fit (smoothed ones
+            included, with :attr:`smoothing` carried over).
+
+        Raises
+        ------
+        ValueError
+            If this fit is in ``"velocity"`` mode, which has no Keplerian to start from.
         """
+        if self.mode != "keplerian":
+            raise ValueError(
+                "free_velocities() starts the table from this fit's Keplerian, and this fit "
+                "is already a free velocity table. Call it on the Keplerian fit."
+            )
         priors, init = self._velocity_priors(sigma_kms)
         # Whatever the declaration fixed about the orbit no longer applies, and the model
         # rejects Keplerian sites alongside a velocity table, so they are dropped.
-        keplerian = {"period", "t_conj", "secosw", "sesinw", "k"}
-        fixed = {k: v for k, v in self.dis.fixed.items() if k not in keplerian}
+        fixed = _without_orbit(self.dis.fixed)
         result = run_map(
             self.dis.model.model(priors, fixed=fixed or None),
             init=init,
             max_steps=max_steps,
+            tol=tol,
             callback=progress,
             model_args=(self.dis.model.problem,),
         )
         hyper = _hyper_of(result.params, self.dis.component_names)
-        return Fit(dis=self.dis, result=result, hyper=hyper, mode="velocity", priors_used=priors)
+        return Fit(
+            dis=self.dis,
+            result=result,
+            hyper=hyper,
+            mode="velocity",
+            priors_used=priors,
+            smoothing=self.smoothing,
+            max_steps=max_steps,
+        )
 
     def keplerian_residuals(self, keplerian: Fit) -> np.ndarray:
         """This table's velocities minus those of a Keplerian fit, the model check.
@@ -3447,14 +3509,7 @@ class Fit:
             _quadrature_width,
         )
 
-        medium = self.dis.dataset[0].medium
-        if medium is None:
-            raise ValueError(
-                "this dataset does not declare whether its wavelengths are air or vacuum, "
-                "so it cannot be matched against a synthetic grid: the two differ by ~83 "
-                "km/s. Set medium= on the epochs (albireo.air_to_vacuum and "
-                "albireo.vacuum_to_air convert)."
-            )
+        medium = _declared_medium(self.dis.dataset)
         if resolving_power is not None and not (
             np.isfinite(float(resolving_power)) and float(resolving_power) > 0.0
         ):
@@ -3796,14 +3851,7 @@ class Fit:
                 f"declare labels for every star ({names}); the dilution model fits the "
                 "components jointly, so a partial declaration is not well posed."
             )
-        medium = self.dis.dataset[0].medium
-        if medium is None:
-            raise ValueError(
-                "this dataset does not declare whether its wavelengths are air or vacuum, "
-                "so it cannot be matched against a synthetic grid: the two differ by ~83 "
-                "km/s. Set medium= on the epochs (albireo.air_to_vacuum and "
-                "albireo.vacuum_to_air convert)."
-            )
+        medium = _declared_medium(self.dis.dataset)
         ordered = {name: stars[name] for name in names}
         compare = kwargs.setdefault("compare", "epochs")
         if smoothing is not None and compare != "epochs":
@@ -3866,6 +3914,13 @@ class Fit:
         of that width separates the two) and takes the low-frequency part of the
         light-weighted composite, which the data determine. The composite is unchanged,
         because the light fractions sum to one. Telluric and nebular rows are unchanged.
+
+        The Gaussian is applied in model pixels, with ``scale_angstrom`` converted at the
+        median wavelength step of the grid. The grid is uniform in log wavelength, so the
+        width is ``scale_angstrom`` at the grid's middle wavelength ``lambda_m`` (the
+        geometric mean of its ends) and ``scale_angstrom * lambda / lambda_m`` elsewhere: a
+        constant width in velocity. On a grid from 3700 to 6900 A, a scale of 12 A is
+        8.8 A at the blue end and 16.4 A at the red end.
         """
         from scipy.ndimage import gaussian_filter1d
 
@@ -3933,7 +3988,10 @@ class Fit:
             The knot spacing of the corrections, and the width of the low-frequency part
             the stars share in the model [A]. It must be well below the scale of the
             normalization errors and well above the width of the lines. On PEPSI spectra
-            with a ripple of 40-80 A, 12 A removed it and 30 A did not.
+            with a ripple of 40-80 A, 12 A removed it and 30 A did not. The knots are
+            spaced in Angstrom; the width of the shared part is this value at the middle
+            wavelength of the model grid and is constant in velocity, so it scales with
+            wavelength across a wide grid.
         passes
             Number of passes. The corrections of the second pass are typically a tenth of
             the first's.
@@ -4026,19 +4084,8 @@ class Fit:
         **kwargs
             Passed to :func:`albireo.write_spectra`.
         """
-        from albireo.io import write_spectra
-
         spectra, std = self._spectra_and_std()
-        return write_spectra(
-            path,
-            self.dis.grid,
-            spectra,
-            std,
-            light_fractions=[s.light for s in self.dis.stars],
-            prior=self.dis.smoothness_prior,
-            meta={"COMPNAME": ",".join(self.dis.component_names)},
-            **kwargs,
-        )
+        return _write_spectra(self.dis, path, spectra, std, **kwargs)
 
     def templates(self, *, pixels_per_sigma: float = 3.0) -> list:
         """The stellar components of this fit as :class:`albireo.todcor.Template` objects.
@@ -4055,13 +4102,14 @@ class Fit:
         are intrinsic (``sigma_kms=0``): the fit solved for the spectra under the declared
         LSF, which :meth:`measure_velocities` applies again per instrument.
 
-        The fit's grid samples the native pixel at about two points. This is adequate for
-        the solver but too coarse for a correlation template: the pixel-locking ripple of
-        the linear shift operator is ``~0.1 / sigma_px^2`` pixels (``docs/math.md``
-        §10.3). The components are linearly upsampled by an integer factor onto a grid
-        with at least ``pixels_per_sigma`` pixels per narrowest declared LSF sigma. The
-        smoothness prior has band-limited them well above that scale, so the upsampling
-        adds no information and removes the ripple.
+        The default model grid has one point per native pixel of the most finely sampled
+        epoch. This is adequate for the solver but can be too coarse for a correlation
+        template: the pixel-locking ripple of the linear shift operator is
+        ``~0.1 / sigma_px^2`` pixels (``docs/math.md`` §10.3). The components are
+        linearly upsampled by an integer factor onto a grid with at least
+        ``pixels_per_sigma`` pixels per narrowest declared LSF sigma. The smoothness prior
+        has band-limited them well above that scale, so the upsampling adds no information
+        and removes the ripple.
 
         Parameters
         ----------
@@ -4232,21 +4280,26 @@ class Posterior:
         dict
             ``name``, ``light``, the posterior mean ``k`` and standard deviation ``k_std``
             in km/s, and ``k_hdi``, the 95% highest-density interval: the narrowest
-            interval that contains 95% of the draws.
+            interval that contains 95% of the draws. A semi-amplitude the declaration fixed
+            is not sampled, and is reported at its value with ``k_std`` 0.
 
         Raises
         ------
         KeyError
             If ``name`` is not a star of this declaration.
         """
-        names = [s.name for s in self.dis.stars]
-        if name not in names:
-            raise KeyError(f"no star called {name!r}; this fit has {names}")
-        k = np.asarray(self.samples["k"])[:, names.index(name)]
+        index = _star_index(self.dis, name)
+        out = {"name": name, "light": self.dis.stars[index].light}
+        samples = self.samples
+        if "k" not in samples:
+            value = float(np.atleast_1d(np.asarray(self.dis.fixed["k"], dtype=float))[index])
+            return {**out, "k": value, "k_std": 0.0, "k_hdi": (value, value)}
+        # One star's k is a scalar site, whose draws have no component axis.
+        draws = np.asarray(samples["k"])
+        k = draws.reshape(draws.shape[0], -1)[:, index]
         low, high = hpdi(k, prob=0.95)
         return {
-            "name": name,
-            "light": self.dis.stars[names.index(name)].light,
+            **out,
             "k": float(np.mean(k)),
             "k_std": float(np.std(k)),
             "k_hdi": (float(low), float(high)),
@@ -4330,9 +4383,10 @@ class Posterior:
             rows.append(("ecc", grouped.get("ecc", secosw**2 + sesinw**2), 4))
             rows.append(("omega [rad]", _about_circular_mean(omega), 4))
         if "k" in grouped:
+            # One star's k is a scalar site, whose draws have no component axis.
+            k = grouped["k"].reshape(n_chains, n_draws, -1)
             rows += [
-                (f"K({star.name}) [km/s]", grouped["k"][..., i], 3)
-                for i, star in enumerate(self.dis.stars)
+                (f"K({star.name}) [km/s]", k[..., i], 3) for i, star in enumerate(self.dis.stars)
             ]
         lines += [_posterior_row(label, values, digits) for label, values, digits in rows]
         for site in ("ecc", "omega"):
@@ -4405,27 +4459,68 @@ class Posterior:
         **kwargs
             Passed to :func:`albireo.write_spectra`.
         """
-        from albireo.io import write_spectra
-
         draws = self.spectra(num_draws=num_draws, seed=seed)
-        return write_spectra(
-            path,
-            self.dis.grid,
-            draws.mean(axis=0),
-            draws.std(axis=0),
-            light_fractions=[s.light for s in self.dis.stars],
-            prior=self.dis.smoothness_prior,
-            meta={"COMPNAME": ",".join(self.dis.component_names)},
-            **kwargs,
-        )
+        return _write_spectra(self.dis, path, draws.mean(axis=0), draws.std(axis=0), **kwargs)
 
 
 # -- helpers ------------------------------------------------------------------
 
 # Deterministic sites of `MarginalOrbitModel.model`: recorded with the draws, not sampled.
 _DERIVED_SITES = frozenset({"ecc", "omega", "ecc_out", "omega_out", "velocity_rel", "nebular_amp"})
-# Sampled sites that `Posterior.summary` reports as rows of their own.
-_ROW_SITES = frozenset({"period", "t_conj", "secosw", "sesinw", "k"})
+# The sites of the Keplerian. A free velocity table replaces them, and the model rejects
+# them alongside it (`MarginalOrbitModel._theta_problem`).
+_KEPLERIAN_SITES = frozenset({"period", "t_conj", "secosw", "sesinw", "k"})
+# Sampled sites that `Posterior.summary` reports as rows of their own: the Keplerian's.
+_ROW_SITES = _KEPLERIAN_SITES
+
+
+def _without_orbit(sites: Mapping) -> dict:
+    """``sites`` without the Keplerian ones, for a model with a free velocity table."""
+    return {name: value for name, value in sites.items() if name not in _KEPLERIAN_SITES}
+
+
+def _star_index(dis: Disentangler, name: str) -> int:
+    """The model row of the star called ``name``; ``KeyError`` naming the stars otherwise."""
+    names = [s.name for s in dis.stars]
+    if name not in names:
+        raise KeyError(f"no star called {name!r}; this fit has {names}")
+    return names.index(name)
+
+
+def _declared_medium(dataset: Dataset) -> str:
+    """The wavelength medium of ``dataset``, which a comparison with a synthetic grid needs."""
+    medium = dataset[0].medium
+    if medium is None:
+        raise ValueError(
+            "this dataset does not declare whether its wavelengths are air or vacuum, "
+            "so it cannot be matched against a synthetic grid: the two differ by ~83 "
+            "km/s. Set medium= on the epochs (albireo.air_to_vacuum and "
+            "albireo.vacuum_to_air convert)."
+        )
+    return medium
+
+
+def _write_spectra(dis: Disentangler, path, spectra, std, **kwargs):
+    """Write ``spectra`` and ``std`` with the grid, lights, prior and names of ``dis``."""
+    from albireo.io import write_spectra
+
+    return write_spectra(
+        path,
+        dis.grid,
+        spectra,
+        std,
+        light_fractions=[s.light for s in dis.stars],
+        prior=dis.smoothness_prior,
+        meta={"COMPNAME": ",".join(dis.component_names)},
+        **kwargs,
+    )
+
+
+def _finite_range(values) -> float:
+    """The largest minus the smallest finite entry of ``values``; NaN if none is finite."""
+    values = np.asarray(values, dtype=float)
+    finite = values[np.isfinite(values)]
+    return float(np.max(finite) - np.min(finite)) if finite.size else math.nan
 
 
 def _chain_diagnostics(values: np.ndarray) -> tuple[float, float]:
@@ -4466,10 +4561,11 @@ def _percent(fraction: float) -> str:
 
 
 def _about_circular_mean(angle: np.ndarray) -> np.ndarray:
-    """Angles in radians, wrapped into ``(-pi, pi]`` about their circular mean.
+    """Angles in radians, wrapped into ``(m - pi, m + pi]`` about their circular mean ``m``.
 
     The mean, standard deviation and interval of an angle are then those of a draw set
-    that does not straddle the branch cut of ``arctan2``.
+    that does not straddle the branch cut of ``arctan2``: a set centred near ``pi`` keeps
+    values above ``pi`` rather than wrapping them to near ``-pi``.
     """
     centre = math.atan2(float(np.mean(np.sin(angle))), float(np.mean(np.cos(angle))))
     return centre + np.angle(np.exp(1j * (angle - centre)))
@@ -4640,7 +4736,3 @@ def _ecc_sites(orbit: Orbit, ecc_max: float, suffix: str = "") -> list[tuple[str
             (f"sesinw{suffix}", Between(-limit, limit, start * math.sin(omega))),
         ]
     raise TypeError(f"orbit.ecc must be Fixed or Between; got {type(ecc).__name__}")
-
-
-def _keplerian_velocities(theta, dis):  # pragma: no cover - convenience alias
-    return np.asarray(orbit_velocities(theta, dis.dataset.bjd, ecc_max=dis.ecc_max))

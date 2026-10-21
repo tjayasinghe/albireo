@@ -771,17 +771,25 @@ def test_an_eta_held_at_its_bound_is_reported(dataset):
     assert "bound 5)" in report and "fell" not in report
 
 
-def _fit_at_injected(dis, truth, trace, *, converged=False):
-    """A fit at the injected orbit whose optimizer record is the given potential trace."""
-    import jax.numpy as jnp
-
-    from albireo.inference import MAPResult
-
-    t_conj = float(
+def _injected_t_conj(truth):
+    return float(
         ab.t_conj_from_t_peri(
             truth["t_peri"], period=truth["period"], ecc=truth["ecc"], omega=truth["omega"]
         )
     )
+
+
+def _fit_at_injected(dis, truth, trace, *, converged=False, drop=(), t_conj=None, **fields):
+    """A fit at the injected orbit whose optimizer record is the given potential trace.
+
+    ``drop`` removes sites from the optimizer's parameters (a site the declaration fixes is
+    not among them), and ``fields`` are passed to :class:`Fit`.
+    """
+    import jax.numpy as jnp
+
+    from albireo.inference import MAPResult
+
+    t_conj = _injected_t_conj(truth) if t_conj is None else t_conj
     root = np.sqrt(truth["ecc"])
     params = {
         "period": jnp.asarray(truth["period"]),
@@ -792,6 +800,7 @@ def _fit_at_injected(dis, truth, trace, *, converged=False):
         "log_tau": jnp.log(jnp.array([600.0, 1100.0])),
         "log_eta": jnp.log(jnp.array([10.0, 3.0])),
     }
+    params = {site: value for site, value in params.items() if site not in drop}
     trace = tuple(float(v) for v in trace)
     result = MAPResult(
         params=params,
@@ -802,7 +811,7 @@ def _fit_at_injected(dis, truth, trace, *, converged=False):
         num_steps=len(trace),
         potential_trace=trace,
     )
-    return ab.Fit(dis=dis, result=result, hyper=_hyper(10.0, 3.0))
+    return ab.Fit(dis=dis, result=result, hyper=_hyper(10.0, 3.0), **fields)
 
 
 @pytest.mark.slow
@@ -831,11 +840,18 @@ def test_the_summary_reports_how_far_the_potential_fell_at_the_step_cap(dataset,
     falling = _fit_at_injected(dis, truth, np.linspace(100.0, 40.0, 30)).summary()
     assert "! the potential fell by 20.7 nats over the last 10 steps" in falling
     assert "laplace_check()" in falling
+    assert "30 steps (stopped at the step cap)" in falling
     flat = _fit_at_injected(dis, truth, [100.0] * 20 + [99.999] * 10).summary()
     assert "the potential changed by 0.001 nats over the last 10 steps" in flat
     assert "! the potential" not in flat
     done = _fit_at_injected(dis, truth, np.linspace(100.0, 40.0, 30), converged=True).summary()
     assert "the potential" not in done
+    # A fit stopped by its progress callback before the cap is not said to be at the cap.
+    trace = np.linspace(100.0, 40.0, 30)
+    capped = _fit_at_injected(dis, truth, trace, max_steps=30).summary()
+    assert "30 steps (stopped at the step cap)" in capped
+    stopped = _fit_at_injected(dis, truth, trace, max_steps=300).summary()
+    assert "30 steps (stopped by the progress callback)" in stopped
 
 
 # -- the posterior report -----------------------------------------------------
@@ -1509,3 +1525,170 @@ def test_the_amplitude_profile_keeps_the_sites_of_the_scans(dataset, monkeypatch
         )
     # Trials keep the scaled light at or below 0.98: five at 0.62, six at 0.38.
     assert len(seen) == 5 + 6
+
+
+# -- the accessors of a fit and the free velocity table -------------------------------
+
+
+def _stub_the_optimizer(monkeypatch):
+    """Replace `run_map` with one that returns its start and records its arguments."""
+    from albireo.inference import MAPResult
+
+    facade = importlib.import_module("albireo.facade")
+    seen = {}
+
+    def run_map(model, *, init, max_steps, tol=1e-2, **kwargs):
+        seen.update(max_steps=max_steps, tol=tol)
+        return MAPResult(
+            params=dict(init),
+            unconstrained={},
+            potential=0.0,
+            grad_norm=1.0,
+            converged=False,
+            num_steps=max_steps,
+        )
+
+    monkeypatch.setattr(facade, "run_map", run_map)
+    return seen
+
+
+def test_a_free_velocity_table_of_a_circular_orbit_can_be_solved(dataset, truth, monkeypatch):
+    """The table's theta took the declaration's fixed (secosw, sesinw) back in, and the
+    model rejects Keplerian sites alongside a velocity table, so every solve raised."""
+    _stub_the_optimizer(monkeypatch)
+    dis = _dis(dataset, orbit=_orbit(ecc=ab.Fixed(0.0)))
+    assert {"secosw", "sesinw"} <= set(dis.fixed)
+    table = _fit_at_injected(dis, truth, [100.0] * 5).free_velocities(max_steps=2)
+    assert table.mode == "velocity" and not {"secosw", "sesinw"} & set(table.theta)
+    assert table.spectra().shape == (2, dis.grid.n)
+    assert "free velocity table" in table.summary()
+    with pytest.raises(ValueError, match="already a free velocity table"):
+        table.free_velocities(max_steps=1)
+
+
+def test_a_fitted_noise_correlation_is_kept_by_the_free_velocity_table(dataset, truth, monkeypatch):
+    """The table copied only the smoothness and nebular sites, and was fitted under the
+    diagonal noise model without notice."""
+    _stub_the_optimizer(monkeypatch)
+    dis = _dis(dataset, noise_correlation=ab.Between(-0.9, 0.9))
+    table = _fit_at_injected(dis, truth, [100.0] * 5).free_velocities(max_steps=2)
+    assert table.priors_used["ar1_phi"] is dis.priors["ar1_phi"]
+    assert set(table.priors_used) == {"velocity", "log_tau", "log_eta", "ar1_phi"}
+    correlation = table.noise_correlation()
+    assert set(correlation) == {"DEMO"} and np.isfinite(correlation["DEMO"])
+
+
+@pytest.mark.slow
+def test_a_free_velocity_table_is_fitted_with_fixed_orbital_sites_and_a_fitted_correlation(
+    dataset, truth
+):
+    """The two defects above, through the optimizer and the correlated model."""
+    dis = _dis(dataset, orbit=_orbit(ecc=ab.Fixed(0.0)), noise_correlation=ab.Between(-0.9, 0.9))
+    table = _fit_at_injected(dis, truth, [100.0] * 5).free_velocities(max_steps=2)
+    assert "ar1_phi" in table.params and np.isfinite(table.noise_correlation()["DEMO"])
+    assert table.spectra().shape == (2, dis.grid.n)
+    assert "free velocity table" in table.summary()
+
+
+def test_the_free_velocity_table_keeps_the_smoothing_and_the_step_cap(dataset, truth, monkeypatch):
+    seen = _stub_the_optimizer(monkeypatch)
+    smoothed = _fit_at_injected(_dis(dataset), truth, [100.0] * 5).smoothed({"DEMO": 9.0})
+    table = smoothed.free_velocities(max_steps=7, tol=0.5)
+    assert seen == {"max_steps": 7, "tol": 0.5}
+    assert table.smoothing == smoothed.smoothing and table.max_steps == 7
+
+
+def test_a_fixed_semi_amplitude_is_reported_by_the_fit_and_the_posterior(dataset, truth):
+    """A fixed k is a constant of the model, which neither the optimizer nor the sampler
+    returns, and star() read it from them."""
+    dis = _dis(dataset, orbit=_orbit(k=ab.Fixed([42.0, 63.0])))
+    fit = _fit_at_injected(dis, truth, [100.0] * 5, drop=("k",))
+    assert "k" not in fit.params
+    assert fit.star("secondary")["k"] == 63.0
+    assert "K(primary)    42.000 km/s" in fit.summary()
+    draws = {k: v for k, v in _orbit_draws(np.random.default_rng(7)).items() if k != "k"}
+    post = ab.Posterior(dis=dis, mcmc=_Draws(draws), map=fit)
+    row = post.star("primary")
+    assert row["k"] == 42.0 and row["k_std"] == 0.0 and row["k_hdi"] == (42.0, 42.0)
+    assert "K(primary)" not in post.summary()
+
+
+def test_the_posterior_of_one_star_is_reported(dataset):
+    """One star's k is a scalar site, and its draws have no component axis."""
+    single = _dis(
+        dataset, components=[ab.Star("only", light=1.0)], orbit=_orbit(k=ab.Between(10.0, 90.0))
+    )
+    draws = _orbit_draws(np.random.default_rng(8))
+    draws["k"] = draws["k"][..., 0]
+    post = ab.Posterior(dis=single, mcmc=_Draws(draws), map=None)
+    row = post.star("only")
+    assert abs(row["k"] - 42.0) < 0.05 and 0.0 < row["k_std"] < 0.1
+    mean, _sd, low, high, rhat, ess = _row(post.summary(), "K(only) [km/s]")
+    assert abs(float(mean) - 42.0) < 0.05 and abs(float(rhat) - 1.0) < 0.05
+    assert float(low.strip("[,")) < 42.0 < float(high.strip("]")) and float(ess) > 100.0
+
+
+def test_a_smoothed_fit_keeps_the_conjunction_window_it_was_fitted_under(
+    dataset, truth, monkeypatch
+):
+    """A smoothed fit has no scan record, and its Laplace and NUTS window fell back to the
+    declaration's, which starts at the first epoch: a fitted conjunction before it had no
+    unconstrained coordinate."""
+    import numpyro.distributions as dist
+
+    from albireo.facade import PhaseScan
+
+    dis = _dis(dataset)
+    period = float(truth["period"])
+    first = float(np.min(dataset.bjd))
+    t_conj = _injected_t_conj(truth)
+    t_conj += np.floor((first - t_conj) / period) * period  # the last conjunction before
+    assert t_conj < first
+    scan = PhaseScan(period=period, trials=np.array([t_conj]), values=np.array([0.0]), best=t_conj)
+    window = dist.Uniform(t_conj - 0.5 * period, t_conj + 0.5 * period)
+    fit = _fit_at_injected(
+        dis,
+        truth,
+        [100.0] * 5,
+        t_conj=t_conj,
+        phase_scan=scan,
+        priors_used={**dis.priors, "t_conj": window},
+    )
+    seen = []
+
+    def model(self, priors, *, fixed=None):
+        seen.append(priors["t_conj"])
+
+    monkeypatch.setattr(ab.MarginalOrbitModel, "model", model)
+    fit._orbit_model()
+    smoothed = fit.smoothed({"DEMO": 9.0})
+    assert smoothed.phase_scan is None
+    smoothed._orbit_model()
+    held, kept = seen
+    assert float(kept.low) < t_conj < float(kept.high)
+    np.testing.assert_allclose(
+        [float(kept.low), float(kept.high)], [float(held.low), float(held.high)], atol=1e-9
+    )
+
+
+def test_a_scan_with_a_failed_trial_keeps_a_finite_contrast():
+    """A failed solve is -inf, and one such trial made the phase contrast infinite."""
+    from dataclasses import replace
+
+    from albireo.facade import PhaseScan, SemiAmplitudeScan
+
+    values = np.array([-10.0, -3.0, -np.inf, -7.0])
+    phase = PhaseScan(period=6.0, trials=np.arange(4.0), values=values, best=1.0)
+    assert phase.contrast == 7.0
+    assert np.isnan(replace(phase, values=np.full(4, -np.inf)).contrast)
+    amplitude = SemiAmplitudeScan(
+        k=np.ones((2, 2)),
+        t_conj=np.ones(2),
+        values=np.full(2, -np.inf),
+        best=np.ones(2),
+        best_t_conj=1.0,
+        best_value=-np.inf,
+        start=np.ones(2),
+        start_value=-np.inf,
+    )
+    assert np.isnan(amplitude.contrast)
