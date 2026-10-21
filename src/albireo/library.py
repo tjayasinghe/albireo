@@ -45,6 +45,7 @@ import gzip
 import hashlib
 import itertools
 import json
+import os
 import urllib.error
 import weakref
 from collections import OrderedDict
@@ -58,6 +59,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from albireo.archive import _part_path
 from albireo.examples import _download_with_retries, _sha256, cache_dir
 from albireo.grids import LogGrid, air_to_vacuum, vacuum_to_air
 from albireo.operators import rebin_operator
@@ -1546,23 +1548,30 @@ def save_library(library: SpectralLibrary, path) -> Path:
     ~1e-4 in normalized flux while float32 resolves ~1e-7, so the stored precision does not
     limit the result, and the file is much smaller. Every array is numeric or text, so the
     file is read without unpickling.
+
+    The file is written to a temporary name beside ``path`` that is unique to the call and
+    renamed onto ``path`` when complete, so that two processes writing one library (pipeline
+    workers building the same cache entry) do not write or rename one temporary file.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".part")
-    np.savez_compressed(
-        tmp,
-        label_names=np.asarray(library.label_names, dtype=np.str_),
-        nodes=library.nodes,
-        normalized=library.normalized.astype(np.float32),
-        log_continuum=library.log_continuum.astype(np.float32),
-        wave=library.wave,
-        medium=np.asarray(library.medium),
-        meta=np.asarray(json.dumps(library.meta, default=str)),
-    )
-    # numpy appends .npz to a name that lacks it; locate the file it wrote.
-    written = tmp if tmp.is_file() else tmp.with_name(tmp.name + ".npz")
-    written.replace(path)
+    tmp = _part_path(path)
+    try:
+        # Written through a handle: given a name without the .npz suffix, numpy appends one.
+        with tmp.open("wb") as handle:
+            np.savez_compressed(
+                handle,
+                label_names=np.asarray(library.label_names, dtype=np.str_),
+                nodes=library.nodes,
+                normalized=library.normalized.astype(np.float32),
+                log_continuum=library.log_continuum.astype(np.float32),
+                wave=library.wave,
+                medium=np.asarray(library.medium),
+                meta=np.asarray(json.dumps(library.meta, default=str)),
+            )
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
     return path
 
 
@@ -1695,13 +1704,27 @@ def _raw_dir() -> Path:
 
 
 def _fetch_shard(url: str, destination: Path) -> Path:
-    """Download one file unless it is already present, atomically."""
+    """Download one file unless it is already present, atomically.
+
+    The download goes to a temporary name unique to the call and is renamed onto
+    ``destination`` when complete, so that two processes fetching one shard do not rename
+    one temporary file. Where the rename is refused because another process holds the
+    file it has put in place open (Windows), that file is kept: only a complete download
+    is renamed onto ``destination``.
+    """
     if destination.is_file() and destination.stat().st_size > 0:
         return destination
     destination.parent.mkdir(parents=True, exist_ok=True)
-    tmp = destination.with_name(destination.name + ".part")
-    _download_with_retries(url, tmp)
-    tmp.replace(destination)
+    tmp = _part_path(destination)
+    try:
+        _download_with_retries(url, tmp)
+        try:
+            os.replace(tmp, destination)
+        except PermissionError:
+            if not (destination.is_file() and destination.stat().st_size > 0):
+                raise
+    finally:
+        tmp.unlink(missing_ok=True)
     return destination
 
 

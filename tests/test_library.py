@@ -1346,6 +1346,59 @@ def test_a_single_valued_axis_is_constant_rather_than_nan():
     np.testing.assert_allclose(out, 0.9)
 
 
+def test_two_writers_of_one_shard_do_not_share_a_temporary_file(tmp_path, monkeypatch):
+    """A second process that completes a shard while the first is between its download
+    and its rename leaves the first one's file alone.
+
+    Both wrote ``<name>.part`` and renamed it. The second rename moved the first writer's
+    file into place, and the first writer's own rename then raised FileNotFoundError. Here
+    the second writer runs inside the first one's download.
+    """
+    destination = tmp_path / "shard.gz"
+    targets: list[Path] = []
+
+    def download(url, target, attempts=4):
+        targets.append(target)
+        target.write_bytes(b"shard %d" % len(targets))
+        if len(targets) == 1:
+            lib_mod._fetch_shard(url, destination)
+
+    monkeypatch.setattr(lib_mod, "_download_with_retries", download)
+    assert lib_mod._fetch_shard("https://example.invalid/shard.gz", destination) == destination
+    assert targets[0] != targets[1]
+    assert destination.read_bytes() in (b"shard 1", b"shard 2")
+    assert [p.name for p in tmp_path.iterdir()] == ["shard.gz"]
+
+
+def test_two_writers_of_one_library_do_not_share_a_temporary_file(tmp_path, monkeypatch):
+    """A second process that saves the same library while the first is writing it leaves
+    the first one's file alone, as for a shard."""
+    wave = np.linspace(4500.0, 4600.0, 16)
+    lib = SpectralLibrary(
+        label_names=("teff", "logg"),
+        nodes=np.asarray([(6000.0, 4.0), (6250.0, 4.0), (6000.0, 4.5), (6250.0, 4.5)]),
+        normalized=np.full((4, wave.size), 0.9),
+        log_continuum=np.zeros((4, wave.size)),
+        wave=wave,
+        medium="vacuum",
+    )
+    path = tmp_path / "shared.npz"
+    savez = np.savez_compressed
+    writes = []
+
+    def interleaved(file, *args, **kwargs):
+        writes.append(file)
+        savez(file, *args, **kwargs)
+        if len(writes) == 1:
+            lib_mod.save_library(lib, path)
+
+    monkeypatch.setattr(lib_mod.np, "savez_compressed", interleaved)
+    assert lib_mod.save_library(lib, path) == path
+    assert len(writes) == 2
+    np.testing.assert_array_equal(lib_mod.load_library(path).nodes, lib.nodes)
+    assert [p.name for p in tmp_path.iterdir()] == ["shared.npz"]
+
+
 def test_saving_and_loading_round_trips(tmp_path):
     wave = np.linspace(4500.0, 4600.0, 64)
     rng = np.random.default_rng(3)
