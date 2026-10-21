@@ -188,14 +188,15 @@ def test_fetch_prints_a_stars_entry_from_a_stubbed_archive(tmp_path, monkeypatch
         ra_deg=12.0,
         dec_deg=-73.0,
         spectral_type="B0 V",
-        binary_class="SB2",
+        binary_class=None,
     )
     monkeypatch.setattr(archive, "resolve_bloem", lambda name, **kw: target)
+    monkeypatch.setattr(archive, "_binary_classes", lambda timeout: {"1-037": "SB2"})
     monkeypatch.setattr(archive, "bloem_spectra", lambda star, **kw: ["r1", "r2"])
     monkeypatch.setattr(archive, "download", lambda records, outdir, **kw: ["OK", "OK"])
     assert cli.main(["fetch", "1-037", "--out", str(tmp_path)]) == 0
     out = capsys.readouterr().out
-    assert "2 of 2 epochs" in out
+    assert "SB2): 2 of 2 epochs" in out
     assert "[[stars]]" in out and 'name = "BLOeM 1-037"' in out and 'period = "search"' in out
 
 

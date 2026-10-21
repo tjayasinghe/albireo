@@ -189,16 +189,14 @@ def _cmd_fetch(args) -> int:
     out = Path(args.out)
     entries = []
     status = 0
+    # The binary class is printed only. It is read from the multiplicity table apart from
+    # the identifier query, once for the command, so that a failure of the identifier
+    # query fails its target alone, and an empty, renamed or unreachable class table
+    # leaves the stars unclassified without failing them.
+    classes: dict[str, str] | None = None
     for target in args.targets:
         try:
-            try:
-                star = archive.resolve_bloem(target)
-            except RuntimeError as exc:
-                # The class is printed only. An empty or renamed class table, or a failed
-                # query for it, leaves the star unclassified. A failure of the identifier
-                # query recurs here and is reported for the target.
-                star = archive.resolve_bloem(target, with_classification=False)
-                print(f"{target}: binary class not available ({exc})", file=sys.stderr)
+            star = archive.resolve_bloem(target, with_classification=False)
             records = archive.bloem_spectra(star, public_only=True)
         except Exception as exc:
             print(f"{target}: {type(exc).__name__}: {exc}", file=sys.stderr)
@@ -208,12 +206,22 @@ def _cmd_fetch(args) -> int:
             print(f"{target}: no public spectra", file=sys.stderr)
             status = 1
             continue
+        if classes is None:
+            try:
+                classes = archive._binary_classes(180.0)
+            except (RuntimeError, OSError, ValueError) as exc:
+                classes = {}
+                print(
+                    f"binary class not available ({exc}); the stars are printed unclassified",
+                    file=sys.stderr,
+                )
+        binary_class = classes.get(star.bloem_id)
         directory = out / f"bloem-{star.bloem_id}"
         statuses = archive.download(records, directory)
         failed = [s for s in statuses if s.startswith("FAIL")]
         print(
             f"BLOeM {star.bloem_id} (Gaia DR3 {star.gaia_dr3}, {star.spectral_type or '?'}, "
-            f"{star.binary_class or 'unclassified'}): {len(records) - len(failed)} of "
+            f"{binary_class or 'unclassified'}): {len(records) - len(failed)} of "
             f"{len(records)} epochs in {directory}"
         )
         if failed:
