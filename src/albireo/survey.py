@@ -50,6 +50,7 @@ import os
 import platform
 import time
 import traceback
+import warnings
 import zlib
 from collections.abc import Sequence
 from pathlib import Path
@@ -773,12 +774,16 @@ def _best_by_ephemeris(table, system: BinarySystem, recorded: bool, *, exchanged
 
 def _nanmedian(values) -> float:
     """The median of the values that are not ``nan``; ``nan``, without a warning, where
-    there is none."""
-    values = np.asarray(values, dtype=np.float64)
-    if np.isnan(values).all():
-        return math.nan
-    with np.errstate(invalid="ignore"):
-        return float(np.nanmedian(values))
+    there is none.
+
+    The value is that of :func:`numpy.nanmedian`, the ``nan`` of an empty or all-``nan``
+    column included, so the bytes of a column and the checksum of a run do not depend on
+    the warning being silenced.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        with np.errstate(invalid="ignore"):
+            return float(np.nanmedian(values))
 
 
 def _better_order(table, v_true: np.ndarray) -> bool:

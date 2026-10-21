@@ -115,11 +115,20 @@ def test_the_configuration_validates_and_round_trips():
 
 
 def test_the_median_of_a_column_without_values_is_nan_without_a_warning():
+    columns = ([np.nan, np.nan], -np.full(3, np.nan), np.zeros(0), [1.0, np.nan, 3.0, 4.0])
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        assert math.isnan(survey._nanmedian([np.nan, np.nan]))
-        assert math.isnan(survey._nanmedian(np.zeros(0)))
-    assert survey._nanmedian([1.0, np.nan, 3.0, 4.0]) == 3.0
+        medians = [survey._nanmedian(column) for column in columns]
+    assert all(math.isnan(median) for median in medians[:3]) and medians[3] == 3.0
+    # The value is that of numpy, the sign of a nan included, which the checksum of a run
+    # sees: numpy returns the last nan of an all-nan column and 0/0 for an empty one.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        with np.errstate(invalid="ignore"):
+            expected = [float(np.nanmedian(column)) for column in columns]
+    for median, value in zip(medians, expected, strict=True):
+        assert np.float64(median).tobytes() == np.float64(value).tobytes()
+    assert np.signbit(medians[1]) and not np.signbit(medians[0])
 
 
 def test_the_three_declarations(libraries, systems):
@@ -273,6 +282,64 @@ def test_a_fitted_declaration_reuses_what_its_base_measured(libraries, monkeypat
         for name, value in both["system"].items():
             if np.ndim(value) and not name.startswith(("t_", "f_")):
                 np.testing.assert_array_equal(value[row], one["system"][name][0], err_msg=name)
+
+
+def _assert_same_row(out, row, reference, reference_row):
+    """Every column of row ``row`` of ``out`` but the wall-clock times has the bytes of row
+    ``reference_row`` of ``reference``."""
+    for part in ("epochs", "system"):
+        for name, value in out[part].items():
+            if name.startswith("t_"):
+                continue
+            expected = reference[part][name]
+            if part == "system" and not np.ndim(value):
+                assert np.float64(value).tobytes() == np.float64(expected).tobytes(), name
+                continue
+            many = part == "system" or np.ndim(value) == 2
+            got = np.asarray(value[row] if many else value)
+            want = np.asarray(expected[reference_row] if many else expected)
+            np.testing.assert_array_equal(got, want, err_msg=name)
+            assert got.tobytes() == want.tobytes(), name
+
+
+def test_a_fitted_declaration_whose_fit_succeeds_leaves_its_base_unchanged(libraries, monkeypatch):
+    """A fitted declaration measures the transits in eclipse and the first template alone
+    with its fitted templates, and the declaration its fit starts from still measures them
+    with the declared ones: each row is that of a run of its declaration alone."""
+    system = _system("eclipsed", 21, period=1.3, incl=math.radians(89.9), n_transits=40)
+    correlate = survey._correlate
+    pairs = []
+
+    def counted(*args, **kwargs):
+        pairs.append(tuple(args[1]))
+        return correlate(*args, **kwargs)
+
+    monkeypatch.setattr(survey, "_correlate", counted)
+    alone = {}
+    for name in ("classified", "classified-fitted"):
+        alone[name] = run_system(system, dataclasses.replace(CONFIG, declarations=(name,)))
+        assert [len(pair) for pair in pairs] == [2, 2, 1]
+        pairs.clear()
+    assert alone["classified"]["system"]["n_in_eclipse"] > 0
+    assert alone["classified-fitted"]["system"]["f_ok"][0] == 1.0
+    names = ("classified-fitted", "classified")
+    both = run_system(system, dataclasses.replace(CONFIG, declarations=names))
+    # The table out of eclipse with the declared templates is measured once; the transits
+    # in eclipse and the first template alone once with each pair of templates.
+    assert [len(pair) for pair in pairs] == [2, 2, 1, 2, 1]
+    declared, fitted = pairs[0], pairs[1]
+    assert all(a is not b for a, b in zip(declared, fitted, strict=True))
+    assert pairs[2][0] is fitted[0]
+    assert all(a is b for a, b in zip(pairs[3], declared, strict=True))
+    assert pairs[4][0] is declared[0]
+    assert both["system"]["f_ok"][0] == 1.0 and np.isnan(both["system"]["f_ok"][1])
+    _assert_same_row(both, 0, alone["classified-fitted"], 0)
+    _assert_same_row(both, 1, alone["classified"], 0)
+    # The two rows differ where the templates do, so the comparison can tell them apart.
+    in_eclipse = both["epochs"]["in_eclipse"].astype(bool)
+    for name, where in (("v1", in_eclipse), ("vs", ~in_eclipse)):
+        first, second = (both["epochs"][name][row][where] for row in (0, 1))
+        assert not np.array_equal(first, second, equal_nan=True), name
 
 
 def test_a_fitted_declaration_can_fit_the_emission_of_the_activity_variant(libraries, systems):
