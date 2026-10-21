@@ -318,6 +318,15 @@ pixel of the model grid, so their values depend on its pixel size; the fitted sp
 band (Figure 3) are the quantities to inspect.
 When albireo samples the orbit (Section 8) it holds the weights at these values. This is a
 plug-in approximation: the orbital uncertainties do not include the uncertainty of the weights.
+`fit.sample()` therefore also takes the Laplace approximation of Section 8 with the weights
+free, and `post.summary()` reports how much that widens the standard deviations of the
+sampled parameters. For the example it is at most 0.011%: the weights are uncertain by 13 and
+14% (τ) and 19 and 26% (η) at one standard deviation, but no orbital parameter correlates with
+a weight by more than 0.011
+([benchmarks](benchmarks.md#the-plug-in-of-the-regularization-weights-measured-2026-10-20)).
+Freeing the weights would widen the bands of the spectra by a median of 5.5 and 9.1%, almost
+entirely through the constant level of each component, which the data do not determine
+(Section 10).
 
 ## 8. Uncertainties on the orbit
 
@@ -423,6 +432,8 @@ NUTS posterior: 2 chain(s) x 500 draws of 6 parameters (k, period, secosw, sesin
 
   The regularization weights were held at their ML-II values, so these intervals
   do not include their uncertainty (a plug-in approximation, not a marginalization).
+  In the Laplace approximation at the best fit, freeing the weights would widen the
+  standard deviations of the sampled parameters by at most 0.011% (t_conj).
 ```
 
 The header counts six parameters because `k` holds the two semi-amplitudes; `secosw` and
@@ -645,7 +656,7 @@ The source of each module is in
 | Hyperparameter | A parameter of a prior; here the regularization weights $`\tau_i`$ and $`\eta_i`$. | `log_tau`, `log_eta` |
 | Hyperprior | The broad log-normal prior on each weight, `Smoothness(tau0, eta0, sigma)`. | |
 | ML-II, empirical Bayes | Setting the hyperparameters by maximizing the marginal likelihood. | `fit.summary()` |
-| Plug-in approximation | Holding the hyperparameters at their fitted values while sampling; their uncertainty is not propagated. | `post.summary()` |
+| Plug-in approximation | Holding the hyperparameters at their fitted values while sampling; their uncertainty is not propagated. The report states how much freeing them would widen each standard deviation in the Laplace approximation. | `post.summary()` |
 | MAP | The maximum of the posterior: the best fit, including the priors. | `dis.fit()` |
 | $`-\ln`$ posterior | The quantity the optimizer minimizes, up to a constant. numpyro, the library albireo uses for optimization and sampling, maps bounded parameters onto the whole real line first (unconstrained coordinates); the optimum there differs from the optimum in the original coordinates by the Jacobian of that mapping, which is negligible when the posterior is narrow compared with the declared range. | `fit.summary()` |
 | Laplace approximation | A Gaussian approximation of the posterior at the MAP, with covariance from the inverse curvature (Hessian); the analogue of a least-squares covariance matrix. | `fit.sample()`, `fit.velocity_errors()` |

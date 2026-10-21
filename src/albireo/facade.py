@@ -2892,9 +2892,13 @@ class Fit:
             "log_eta": jnp.asarray(np.log([self.hyper[n]["eta"] for n in names])),
         }
 
-    def _orbit_model(self):
-        """``(model, start)``: the orbital posterior with the ML-II weights held, at the MAP."""
-        fixed = self._fixed_hyper()
+    def _orbit_model(self, *, hold_weights: bool = True):
+        """``(model, start)``: the orbital posterior with the ML-II weights held, at the MAP.
+
+        With ``hold_weights=False`` the weights keep their hyperpriors, as in the best fit,
+        and are sites of the model (:meth:`_plug_in_widening`).
+        """
+        fixed = self._fixed_hyper() if hold_weights else dict(self.dis.fixed)
         priors = {k: v for k, v in self.dis.priors.items() if k not in fixed}
         if self.phase_scan is not None:
             # The prior is one period wide, centred on the fitted conjunction (the MAP may be
@@ -2957,7 +2961,10 @@ class Fit:
         takes the Laplace covariance at the MAP as the starting mass matrix, and samples.
 
         Fixing the hyperparameters is a plug-in approximation: the orbital credible
-        intervals do not include smoothness uncertainty. Marginalizing over them instead
+        intervals do not include smoothness uncertainty. The method also takes the Laplace
+        approximation with the weights free, at the cost of one more Hessian, and
+        :attr:`Posterior.plug_in_widening` gives how much that widens the standard deviation
+        of each sampled parameter. Marginalizing over the weights in the sampling instead
         means leaving them in the priors dictionary of :meth:`Disentangler.expert`, at a
         higher sampling cost. ``docs/method.md`` describes the stages (best fit, Laplace
         approximation, NUTS) and the convergence diagnostics that
@@ -3000,6 +3007,7 @@ class Fit:
                 stacklevel=2,
             )
         mass = check.covariance
+        widening, note = self._plug_in_widening(check)
         mcmc = run_nuts(
             nuts_model,
             rng_key=jax.random.PRNGKey(int(seed)),
@@ -3012,7 +3020,43 @@ class Fit:
             progress_bar=progress_bar,
             model_args=(self.dis.model.problem,),
         )
-        return Posterior(dis=self.dis, mcmc=mcmc, map=self)
+        return Posterior(
+            dis=self.dis, mcmc=mcmc, map=self, plug_in_widening=widening, plug_in_note=note
+        )
+
+    def _plug_in_widening(self, held: LaplaceCheck) -> tuple[dict[str, float] | None, str]:
+        """How much freeing the ML-II weights widens each Laplace standard deviation.
+
+        The best fit is joint over the orbit and the regularization weights, so the Hessian
+        of the potential there can be taken with the weights held, as for the mass matrix of
+        :meth:`sample` (``held``), or with the weights free under their hyperpriors. The
+        orbital block of the free covariance is the Laplace approximation marginalized over
+        the weights, and the held covariance is the plug-in. The ratio of their standard
+        deviations is taken in numpyro's unconstrained coordinates, which transform each
+        site entry by entry, so to first order it is the ratio for the site itself. It is at
+        least 1, since conditioning on the weights cannot widen a Gaussian.
+
+        Returns
+        -------
+        tuple
+            ``(factors, note)``: the ratio for each coordinate of ``held``, keyed by its
+            label, and an empty note; or ``None`` and the reason it was not computed.
+        """
+        if held.n_floored:
+            return None, "the Hessian with the weights held is not positive definite"
+        model, start = self._orbit_model(hold_weights=False)
+        if not {"log_tau", "log_eta"} & set(start):
+            return None, "the regularization weights are not sites of this model"
+        free = laplace_check(model, start, model_args=(self.dis.model.problem,), probe=False)
+        if free.n_floored:
+            return None, "the Hessian with the weights free is not positive definite"
+        index = {label: i for i, label in enumerate(free.labels)}
+        sd_free = np.sqrt(np.diag(free.covariance))
+        sd_held = np.sqrt(np.diag(held.covariance))
+        factors = {
+            label: float(sd_free[index[label]] / sd_held[i]) for i, label in enumerate(held.labels)
+        }
+        return factors, ""
 
     def _velocity_priors(self, sigma_kms: float | None = None):
         """``(priors, init)`` for the free-velocity mode, warm-started from this fit."""
@@ -3978,11 +4022,22 @@ class Posterior:
     map
         The :class:`Fit` whose MAP provided the starting point and the ML-II
         hyperparameters.
+    plug_in_widening
+        The factor by which freeing the regularization weights widens the Laplace standard
+        deviation of each sampled coordinate at the best fit, keyed as
+        :attr:`LaplaceCheck.labels` (``"k[1]"``, ``"period"``). It is the part of the
+        uncertainty that holding the weights leaves out, in the Laplace approximation, and
+        :meth:`summary` reports its largest value. ``None`` where :meth:`Fit.sample` did not
+        compute it, with the reason in ``plug_in_note``.
+    plug_in_note
+        Why ``plug_in_widening`` was not computed; empty otherwise.
     """
 
     dis: Disentangler
     mcmc: Any
     map: Fit
+    plug_in_widening: dict[str, float] | None = None
+    plug_in_note: str = ""
 
     @property
     def samples(self) -> dict:
@@ -4062,7 +4117,9 @@ class Posterior:
         classic estimators of :mod:`numpyro.diagnostics`, not the rank-normalized ones.
         ``ecc`` and ``omega`` are derived from the sampled ``secosw`` and ``sesinw``.
         Sampled sites without a row of their own (a noise correlation, nebular amplitudes)
-        are summarized by their largest R-hat and smallest ESS.
+        are summarized by their largest R-hat and smallest ESS. The paragraph on the plug-in
+        approximation gives the largest widening of a standard deviation that freeing the
+        regularization weights gives in the Laplace approximation (:attr:`plug_in_widening`).
 
         Returns
         -------
@@ -4125,9 +4182,24 @@ class Posterior:
             "",
             "  The regularization weights were held at their ML-II values, so these intervals",
             "  do not include their uncertainty (a plug-in approximation, not a marginalization).",
-            "",
-            self.dis.assumptions(),
         ]
+        if self.plug_in_widening:
+            label, factor = max(self.plug_in_widening.items(), key=lambda item: item[1])
+            if label.startswith("k[") and label.endswith("]"):
+                label = f"K({self.dis.stars[int(label[2:-1])].name})"
+            sentence = (
+                "In the Laplace approximation at the best fit, freeing the weights would widen "
+                "the standard deviations of the sampled parameters by at most "
+                f"{_percent(factor - 1.0)} ({label})."
+            )
+        elif self.plug_in_note:
+            sentence = (
+                f"The widening from freeing the weights was not computed: {self.plug_in_note}."
+            )
+        else:
+            sentence = ""
+        lines += textwrap.wrap(sentence, width=88, initial_indent="  ", subsequent_indent="  ")
+        lines += ["", self.dis.assumptions()]
         return "\n".join(lines)
 
     def to_inference_data(self, **kwargs):
@@ -4206,6 +4278,16 @@ def _posterior_row(label: str, values: np.ndarray, digits: int) -> str:
         f"  {label:<24s}{np.mean(flat):13.{digits}f}{np.std(flat):11.{digits}f}   "
         f"{interval:<27s}{rhat_text:>6s}{ess_text:>7s}"
     )
+
+
+def _percent(fraction: float) -> str:
+    """A non-negative fraction as a percentage with two significant digits."""
+    value = 100.0 * max(float(fraction), 0.0)
+    if value >= 10.0:
+        return f"{value:.0f}%"
+    if value >= 0.001:
+        return f"{value:.2g}%"
+    return "less than 0.001%"
 
 
 def _about_circular_mean(angle: np.ndarray) -> np.ndarray:

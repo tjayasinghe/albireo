@@ -199,10 +199,11 @@ fig.set_layout_engine("constrained")""",
 
 The component spectra are marginalized analytically, so NUTS samples only the orbital
 sites. `fit.sample()` freezes the regularization weights at their ML-II values, a plug-in
-approximation that the summary records. It uses the Laplace covariance at the MAP as the
-mass matrix, so warmup only tunes the step size. Two chains run sequentially on a CPU. The
-summary gives each parameter's mean, standard deviation and 95% highest-density interval,
-with the split R-hat and the effective sample size as convergence diagnostics.""",
+approximation that the summary records, with how much freeing the weights would widen the
+standard deviations in the Laplace approximation. It uses the Laplace covariance at the MAP
+as the mass matrix, so warmup only tunes the step size. Two chains run sequentially on a
+CPU. The summary gives each parameter's mean, standard deviation and 95% highest-density
+interval, with the split R-hat and the effective sample size as convergence diagnostics.""",
     ),
     (
         PY,

@@ -178,7 +178,8 @@ posterior: central-interval coverage is within 1.5σ of nominal (slightly over-c
 90%), |z| is never above 2.05 across 144 site-checks, and the truth-rank distributions
 are consistent with uniform. The underestimate of uncertainty from the empirical-Bayes
 plug-in, the known cost of fixing hyperparameters at ML-II (math.md §7.3), is not
-detectable at this sample size.
+detectable at this sample size. (It was measured directly on 2026-10-20,
+[below](#the-plug-in-of-the-regularization-weights-measured-2026-10-20).)
 
 For point recovery across the prior, the median worst-of-(K₁, K₂) error is 0.74% and the
 maximum 5.0%. The tail cases are draws with wide posteriors (K₂ ≈ 5–7 km/s at e ≈ 0.8,
@@ -190,6 +191,58 @@ injections show none. The Laplace mass matrix remains adequate across the whole 
 median 6.6 leapfrogs per transition, maximum 36. The strict MAP `converged` flag
 (grad-norm < 10⁻²) was set in only 5/24. The tolerance is conservative, and MAP point
 quality (K's to <1% typical) is unaffected.
+
+### The plug-in of the regularization weights, measured (2026-10-20)
+
+`Fit.sample` holds the curvature and continuum weights of each component at their ML-II
+values, so the orbital intervals do not include the uncertainty of the weights. The
+omission was measured on the packaged example with the quickstart declaration, at the best
+fit of `dis.fit()`, which is joint over the orbit and the four weights. The Hessian of the
+potential there was taken with the weights held, as for the mass matrix of `Fit.sample`, and
+with the weights free under their hyperpriors. The orbital block of the free covariance is
+the Laplace approximation marginalized over the weights, and the held covariance is the
+plug-in. The held covariance equals the conditional of the free one to 9 × 10⁻¹⁴. The
+harness is `scripts/plug_in_bench.py`.
+
+| sampled coordinate | free / held standard deviation | largest correlation with a weight |
+|---|---|---|
+| K₁ | 1.00007 | 0.010 |
+| K₂ | 1.00001 | 0.004 |
+| P | 1.00003 | 0.006 |
+| √e cos ω | 1.00005 | 0.009 |
+| √e sin ω | 1.00001 | 0.004 |
+| T_conj | 1.00011 | 0.011 |
+
+The ratios are taken in numpyro's unconstrained coordinates, which transform each site entry
+by entry, so to first order they are the ratios for the parameters. The weights are
+determined to standard deviations of 0.12 and 0.13 in ln τ and 0.18 and 0.23 in ln η, but no
+orbital coordinate correlates with a weight by more than 0.011, so freeing them widens no
+orbital standard deviation by more than 0.011 per cent. The coverage study above could not
+have detected an effect of this size.
+
+For the spectra, the four weights were drawn 64 times from their Laplace covariance at the
+best orbit, and the spectra were solved at each draw. Inside the data range, the band
+marginalized over the weights (the square root of the mean conditional variance plus the
+variance of the conditional means) is wider than the band at the ML-II weights by a median of
+5.5 per cent for the primary and 9.1 per cent for the secondary, by about the same in line
+cores and in the continuum, and by at most 7.0 and 10.1 per cent. Almost all of the
+difference is a constant offset of each component, in opposite directions: over the draws the
+constant moves by 0.0055 and 0.0089 rms, a slope by 0.0002 and 0.0003, and the rest by
+0.0006, against bands of 0.017 and 0.020. The light-weighted sum ℓ₁d₁ + ℓ₂d₂ moves by
+0.0004. Without the constant and the slope, the band changes by less than 1 per cent. The
+constant is the k = 0 mode of each component, which constant-light data do not determine and
+the continuum weight η sets ([above](#nullspace-degeneracy-analysis-empirical)), so on this
+example the plug-in narrows the bands only along that mode.
+
+This is one simulated example, at S/N 80, with the posterior of the weights approximated as
+a Gaussian in ln τ and ln η rather than sampled. Where the data constrain the weights less,
+the widening can be larger: on spectra whose continuum normalization differs between
+epochs, ML-II can lower η by orders of magnitude (`Smoothness(eta_min=...)`). `Fit.sample`
+therefore computes the free Hessian at every best fit; on this example it took 18 s of the
+1,002 s of `fit.sample()` in the same run, with other jobs running on the machine.
+`Posterior.summary` states the largest widening
+and its parameter, and `Posterior.plug_in_widening` holds the ratio for every sampled
+coordinate.
 
 ## Realism: tellurics, SB3, per-epoch light, LSF widths, K₂ scan (2026-08-11)
 

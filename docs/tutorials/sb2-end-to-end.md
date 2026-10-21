@@ -170,7 +170,10 @@ posterior is the reported result.
 `fixed=` supplies the ML-II values as constants instead of sampling them. Leaving the
 hyperparameters in `priors` samples them. The orbital uncertainties then include the
 hyperparameter uncertainty, and the chain costs noticeably more. Empirical Bayes is the default
-because its plug-in optimism is a few percent in coverage, which is documented.
+because what it leaves out is small where it was measured: on the packaged example, freeing the
+weights widens the Laplace standard deviations of the orbit by at most 0.011%
+([benchmarks](../benchmarks.md#the-plug-in-of-the-regularization-weights-measured-2026-10-20)).
+`Posterior.summary()` of the `Disentangler` interface reports this widening for every fit.
 
 ```python
     inverse_mass = ab.laplace_inverse_mass(nuts_model, map_fit.params)

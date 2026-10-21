@@ -681,6 +681,13 @@ def test_sampling_freezes_the_hyperparameters_and_says_so(dataset, truth):
     assert np.isclose(post.star("secondary")["k"], truth["k"][1], atol=0.5)
     assert "plug-in approximation" in post.summary()
     assert "Assumed, not measured" in post.summary()
+    widening = post.plug_in_widening
+    assert widening is not None, post.plug_in_note
+    assert set(widening) == {"k[0]", "k[1]", "period", "secosw", "sesinw", "t_conj"}
+    # Conditioning on the weights cannot widen a Gaussian, and on this example the orbit and
+    # the weights are nearly uncorrelated (docs/benchmarks.md, 2026-10-20).
+    assert min(widening.values()) >= 1.0 - 1e-9 and max(widening.values()) < 1.01
+    assert "freeing the weights would widen" in post.summary()
 
 
 # -- the continuum weight and the stationarity of the best fit -----------------
@@ -938,6 +945,62 @@ def test_too_few_draws_for_the_diagnostics_are_reported_as_undefined(dataset):
     draws = _orbit_draws(np.random.default_rng(4), n_chains=1, n_draws=3)
     text = ab.Posterior(dis=_dis(dataset), mcmc=_Draws(draws), map=None).summary()
     assert _row(text, "K(primary) [km/s]")[-2:] == ["n/a", "n/a"]
+
+
+def test_the_report_states_how_much_freeing_the_weights_would_widen_it(dataset):
+    """The largest widening is printed with its coordinate, or why it was not computed."""
+    draws = _orbit_draws(np.random.default_rng(5))
+    widening = {"k[0]": 1.00009, "k[1]": 1.031, "period": 1.00003, "t_conj": 1.0001}
+    text = ab.Posterior(
+        dis=_dis(dataset), mcmc=_Draws(draws), map=None, plug_in_widening=widening
+    ).summary()
+    assert "freeing the weights would widen the standard deviations of the sampled parameters" in (
+        " ".join(text.split())
+    )
+    assert "by at most 3.1% (K(secondary))." in " ".join(text.split())
+    noted = ab.Posterior(
+        dis=_dis(dataset),
+        mcmc=_Draws(draws),
+        map=None,
+        plug_in_note="the Hessian with the weights free is not positive definite",
+    ).summary()
+    assert (
+        "The widening from freeing the weights was not computed: the Hessian with the weights "
+        "free is not positive definite." in " ".join(noted.split())
+    )
+    bare = ab.Posterior(dis=_dis(dataset), mcmc=_Draws(draws), map=None).summary()
+    assert "freeing the weights" not in bare
+
+
+def test_widening_percentages_keep_two_significant_digits():
+    from albireo.facade import _percent
+
+    assert _percent(0.000110) == "0.011%"
+    assert _percent(0.031) == "3.1%"
+    assert _percent(0.5) == "50%"
+    assert _percent(1.2) == "120%"
+    assert _percent(-1e-12) == "less than 0.001%"
+
+
+def test_no_widening_comes_from_a_held_hessian_that_is_not_positive_definite(dataset, truth):
+    """The free Hessian is not computed when the held one already fails."""
+    from albireo.inference import LaplaceCheck
+
+    fit = _fit_at_injected(_dis(dataset), truth, [100.0] * 5)
+    n = 6
+    held = LaplaceCheck(
+        covariance=np.eye(n),
+        labels=("k[0]", "k[1]", "period", "secosw", "sesinw", "t_conj"),
+        gradient=np.zeros(n),
+        newton_step=np.zeros(n),
+        step_sigma=np.zeros(n),
+        eigenvalues=np.array([-1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
+        eigenvectors=np.eye(n),
+        floor=1e-10,
+    )
+    factors, note = fit._plug_in_widening(held)
+    assert factors is None
+    assert note == "the Hessian with the weights held is not positive definite"
 
 
 # -- declaring measured velocities instead of an orbit ------------------------

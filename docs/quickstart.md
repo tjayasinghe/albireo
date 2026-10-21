@@ -135,6 +135,8 @@ NUTS posterior: 2 chain(s) x 500 draws of 6 parameters (k, period, secosw, sesin
 
   The regularization weights were held at their ML-II values, so these intervals
   do not include their uncertainty (a plug-in approximation, not a marginalization).
+  In the Laplace approximation at the best fit, freeing the weights would widen the
+  standard deviations of the sampled parameters by at most 0.011% (t_conj).
 
 Assumed, not measured:
   light fractions    primary=0.62  secondary=0.38

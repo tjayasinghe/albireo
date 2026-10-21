@@ -32,6 +32,20 @@ This file records what changed. The reasons are recorded elsewhere:
 
 ### Added
 
+- **The widening that holding the regularization weights leaves out, in every posterior
+  report.** `Fit.sample()` holds the curvature and continuum weights at their ML-II values,
+  a plug-in approximation. It now also takes the Laplace approximation at the best fit with
+  the weights free under their hyperpriors, one more Hessian, and
+  `Posterior.plug_in_widening` gives the ratio of the free to the held standard deviation
+  of each sampled coordinate; `Posterior.summary()` states the largest. On the packaged
+  example it is 1.00011, for the time of conjunction, because no orbital coordinate
+  correlates with a weight by more than 0.011. Marginalizing the spectra over the weights
+  widens their bands by 5.5 and 9.1 per cent, almost entirely as a constant offset of each
+  component, the k = 0 mode that constant-light data do not determine.
+  `scripts/plug_in_bench.py` measures both; the record is in `docs/benchmarks.md`, "The
+  plug-in of the regularization weights, measured (2026-10-20)". The statement of the
+  end-to-end tutorial that the plug-in costs "a few percent in coverage", which no
+  measurement supported, is replaced by this measurement.
 - **Labels and absolute velocities from epochs sharper than the library.** The epoch
   comparison of the label fit raises where the library is at or below an instrument's
   resolving power, because a library spectrum cannot be sharpened, and no fetched library
