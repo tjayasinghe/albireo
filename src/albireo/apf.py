@@ -58,6 +58,7 @@ continuum on the merged spectrum).
 from __future__ import annotations
 
 import math
+import operator
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -389,9 +390,21 @@ def _line_mask(wave: np.ndarray, centres: Sequence[float], halfwidth_kms: float)
 def _checked_rows(rows: Iterable[int]) -> list[int]:
     """The rows in increasing order without repeats.
 
-    Raises ``ValueError`` if there are none or one lies outside 0-78.
+    Raises ``ValueError`` if there are none, one is not an integer, or one lies outside 0-78.
+    A float or a bool is not accepted as a row, even with an integral value.
     """
-    checked = sorted({int(row) for row in rows})
+    unique: set[int] = set()
+    for row in rows:
+        try:
+            if isinstance(row, (bool, np.bool_)):
+                raise TypeError
+            unique.add(operator.index(row))
+        except TypeError:
+            raise ValueError(
+                f"rows must be integers between 0 and {_N_ROWS - 1} (row 0 is the bluest "
+                f"order); got {row!r}"
+            ) from None
+    checked = sorted(unique)
     if not checked:
         raise ValueError(f"rows is empty: give at least one row between 0 and {_N_ROWS - 1}")
     if checked[0] < 0 or checked[-1] >= _N_ROWS:
@@ -437,7 +450,8 @@ def build_blaze(
     Raises
     ------
     ValueError
-        If ``rows`` is empty or holds a row outside 0-78, or no order could be modelled.
+        If ``rows`` is empty or holds a row that is not an integer between 0 and 78, or no
+        order could be modelled.
     """
     from scipy.interpolate import UnivariateSpline
 
@@ -638,8 +652,9 @@ def extract(
     ------
     ValueError
         If the exposure was taken through the iodine cell and ``iodine="error"``, the
-        telluric zero point cannot be measured, ``rows`` is empty or holds a row outside
-        0-78, or a supplied shift or FWHM is not finite (the FWHM also not positive).
+        telluric zero point cannot be measured, ``rows`` is empty or holds a row that is
+        not an integer between 0 and 78, or a supplied shift or FWHM is not finite (the
+        FWHM also not positive).
     """
     if iodine not in ("error", "mask", "ignore"):
         raise ValueError(f"iodine must be 'error', 'mask' or 'ignore'; got {iodine!r}")
@@ -971,7 +986,7 @@ def refine_wavelengths(
     ------
     ValueError
         If too few chunks correlate to fit the correction, or ``rows`` is empty or holds a
-        row outside 0-78.
+        row that is not an integer between 0 and 78.
     """
     from numpy.polynomial import chebyshev as cheb
 

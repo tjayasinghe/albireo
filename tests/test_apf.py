@@ -253,12 +253,16 @@ def test_the_rows_and_a_declared_width_are_checked(files):
     # Rows in echelle-order sequence, or repeated, are merged as rows 50-52. In an earlier
     # version (52, 51, 50) returned only part of the spectrum, and repeated rows gave a wrong
     # spectrum or raised LinAlgError.
-    for rows in ((52, 51, 50), (50, 51, 51, 52, 50)):
+    for rows in ((52, 51, 50), (50, 51, 51, 52, 50), np.arange(52, 49, -1)):
         other = apf.extract(exposure, SOLUTION, rows=rows, **declared)
         np.testing.assert_array_equal(other.wave, forward.wave)
         np.testing.assert_array_equal(other.flux, forward.flux)
     for rows in ((), (-1,), (30, 79)):
         with pytest.raises(ValueError, match="rows"):
+            apf.extract(exposure, SOLUTION, rows=rows, **declared)
+    # A row is an integer: a float or a bool is refused, not truncated to a row number.
+    for rows in ((50.7,), (50, 51.0), (True,), np.array([50.0, 51.0])):
+        with pytest.raises(ValueError, match="rows must be integers"):
             apf.extract(exposure, SOLUTION, rows=rows, **declared)
     with pytest.raises(ValueError, match="rows"):
         apf.build_blaze([exposure], SOLUTION, rows=(78, 79))

@@ -636,8 +636,9 @@ def continuum_correction(
     Raises
     ------
     ValueError
-        If the arrays differ in shape, a parameter or an excluded range is out of range,
-        or too few pixels remain to fit a spline with at least one interior knot.
+        If the arrays differ in shape, a parameter is out of range, an excluded range does
+        not have ``lo < hi``, or too few pixels remain to fit a spline with at least one
+        interior knot.
     """
     from scipy.interpolate import LSQUnivariateSpline
 

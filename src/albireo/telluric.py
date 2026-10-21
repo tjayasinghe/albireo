@@ -319,8 +319,8 @@ def telluric_shift(
     summed over regions and the highest peak is taken. Each region is then refined to its
     own peak within 6 km/s of it, and the regions are averaged with weights ``r**4``, so
     that a region with weak or blended telluric lines contributes little. A region whose
-    highest correlation within those 6 km/s lies on the edge of the window has its peak
-    outside it and is left out.
+    highest correlation within those 6 km/s lies on the edge of the window is left out,
+    because its own peak may lie outside the window.
 
     Parameters
     ----------
@@ -385,8 +385,9 @@ def telluric_shift(
     found_regions: dict[str, tuple[float, float]] = {}
     for name, r in curves.items():
         j = int(idx[int(np.argmax(r[idx]))])
-        # A maximum on the edge of the window is not a peak: the region's own peak lies
+        # A maximum on the edge of the window is left out: the region's own peak may lie
         # outside it, and a parabola through a monotonic slope extrapolates without bound.
+        # It also drops a peak that lies less than half a lag step inside the edge.
         if idx[0] < j < idx[-1] and r[j] > min_correlation:
             v = float(lags[j] + _parabola_peak(r, j) * _STEP_KMS)
             found_regions[name] = (v, float(r[j]))
