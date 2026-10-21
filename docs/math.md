@@ -1005,7 +1005,7 @@ mode would describe only the grid margin.
 
 **Constrained degrees of freedom.** $`p_{\rm eff} = \mathrm{tr}[\boldsymbol\Sigma\,
 \mathbf{A}^\top\mathbf{W}\mathbf{A}]`$, the same quantity §3.2a profiles the jitter against.
-It comes from one directional derivative rather than a stochastic trace estimator: scaling
+It equals one directional derivative, so no stochastic trace estimator is needed. Scaling
 every epoch's noise by $`\alpha \to \alpha e^{t}`$ sends $`\mathbf{A}^\top\mathbf{W}\mathbf{A}
 \to e^{-2t}\mathbf{A}^\top\mathbf{W}\mathbf{A}`$ and leaves $`\boldsymbol\Lambda_p`$ unchanged, so
 
@@ -1018,9 +1018,10 @@ every epoch's noise by $`\alpha \to \alpha e^{t}`$ sends $`\mathbf{A}^\top\mathb
 $`\mathbf{A}^\top\mathbf{W}\mathbf{A}`$ are block tridiagonal, so the trace needs only the
 diagonal and first subdiagonal blocks of $`\boldsymbol\Sigma`$, which the Takahashi sweep for
 the pointwise band forms one at a time. Each block is contracted with the corresponding
-block of $`\tilde{\boldsymbol\Lambda} - \boldsymbol\Lambda_p`$ as it is formed, and the prior's
-blocks are rebuilt there from its three nonzero diagonals. This needs no second assembly or
-factorization, and agrees with the derivative to about $`10^{-13}`$ relative.
+block of $`\tilde{\boldsymbol\Lambda} - \boldsymbol\Lambda_p`$ as it is formed. The prior is
+pentadiagonal within each component, and its blocks are rebuilt there from its main, first
+and second diagonals. This needs no second assembly or factorization, and agrees with the
+derivative to better than $`10^{-12}`$ relative on the tested configurations.
 
 For ranking whole designs the scalar is the expected information gain. For a linear-Gaussian
 model the prior-predictive expectation of $`\mathrm{KL}(p(d|y)\,\|\,p(d))`$ is exactly

@@ -31,11 +31,12 @@ public OB library. Along an axis of unequal steps the cubic takes the tangent at
 from the parabola through the node and its two neighbours, which equals the Catmull-Rom
 tangent where the steps are equal, so it stays exact on linear data
 ([§9.3](../math.md#93-interpolation-of-the-spectral-grid)). The cubic reproduces a node
-bit-for-bit, because at a node the weights are exactly 1 and 0. The simplex path reproduces one to rounding, because its weights are
-an affine transform of the point. Its error is machine epsilon times the spread of the
-spectra across the simplex, at the ulp level for a library whose neighbouring nodes are
-alike. Either error is far below what the data can distinguish, so the warm-start node scan
-in [`albireo.match`](match.md) and the continuous fit can be compared directly.
+bit-for-bit, because at a node the weights are exactly 1 and 0. The simplex path
+reproduces one to rounding, because its weights are an affine transform of the point. Its
+error is machine epsilon times the spread of the spectra across the simplex, at the ulp
+level for a library whose neighbouring nodes are alike. Either error is far below what the
+data can distinguish, so the warm-start node scan in [`albireo.match`](match.md) and the
+continuous fit can be compared directly.
 
 The two methods are not equivalent for the fit that follows. The simplex interpolant is
 piecewise linear, and on a lattice with a piece removed the triangulation is arbitrary, so

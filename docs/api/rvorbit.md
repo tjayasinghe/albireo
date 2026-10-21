@@ -122,11 +122,11 @@ took 269 s and reached a peak working set of 5061 MB. With both compiled once th
 **Selection of velocities.** A velocity enters the search and the fit where its own
 component was measured: a finite velocity and a positive finite error, off that component's
 search edge, at an epoch that is not blended. A zero error, which gave the velocity an
-infinite weight in the search, excludes it. The relative velocity needs both components. A component
-searched alone (`components=[name]`), or fitted jointly with the others, keeps every epoch
-at which it was measured, whatever the state of the others there. Neither function
-intersects this test with `VelocityTable.good`, which requires every component to be
-measured. Before D65 both did, so the search on the primary alone, which exists for a
+infinite weight in the search, excludes it. The relative velocity needs both components. A
+component searched alone (`components=[name]`), or fitted jointly with the others, keeps
+every epoch at which it was measured, whatever the state of the others there. Neither
+function intersects this test with `VelocityTable.good`, which requires every component to
+be measured. Before D65 both did, so the search on the primary alone, which exists for a
 companion the templates could not follow, lost the epochs at which that companion was at
 the search edge. `find_period` returns the epochs its series used under `used`.
 
@@ -152,8 +152,8 @@ weighted standard deviation was tested in its place and rejected. Sampled evenly
 is 0.34 to 0.51 of $`K`$ at $`e = 0.9`$, and it changed the chi-square ranking on six
 benchmark tables whose components were all usable. The only bound the fit places on a
 semi-amplitude is zero, and the start is held at or above 1e-3 km/s. A starting `k` that is
-not finite, or that does not broadcast to one value per fitted component, raises an error. So do a
-starting eccentricity of zero without `circular=True`, since the origin of
+not finite, or that does not broadcast to one value per fitted component, raises an error.
+So do a starting eccentricity of zero without `circular=True`, since the origin of
 $`(\sqrt{e} \cos \omega, \sqrt{e} \sin \omega)`$ is singular, and a start outside the bounds
 of ±0.95 on either of those coordinates.
 

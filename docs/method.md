@@ -444,9 +444,10 @@ $`K_2 = 63.0`$ km/s). R-hat is within 0.002 of 1, and the effective sample size 
 1000 draws for every parameter, which happens when successive NUTS draws are anticorrelated.
 The summary was recorded before 2026-10-21, when the Hessian behind the mass matrix came to
 be evaluated in one compiled program; the mass matrix differs from the earlier one in the
-last bits, and a rerun can differ from these numbers within the Monte Carlo error. One realization does not test the calibration of the intervals. An injection
-study of the [benchmark record](benchmarks.md#injectioncoverage-study), with 24 binaries drawn
-from the priors, finds the central 68% and 90% intervals of every orbital element to contain
+last bits, and a rerun can differ from these numbers within the Monte Carlo error. One
+realization does not test the calibration of the intervals. An injection study of the
+[benchmark record](benchmarks.md#injectioncoverage-study), with 24 binaries drawn from the
+priors, finds the central 68% and 90% intervals of every orbital element to contain
 the injected values in 54 to 75% and 92 to 96% of cases, consistent with nominal coverage at
 that sample size; the effect of the plug-in approximation was not detectable there.
 

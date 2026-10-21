@@ -162,9 +162,9 @@ instrument kernel on either side.
 `LabelMatch.summary()` begins with the caveats, which are part of the result. Every number
 is quoted against a null: the chi-square against a fit with no template and against the best
 raw grid node (with a shared [M/H], the best pair of nodes on one metallicity slice, which
-the model can represent), each label's posterior width against its prior width, and the formal error
-against the spread of the draws. A Teff–log g correlation near 0.98 with both free is
-expected and is labelled as expected. The remedy is to fix log g from the eclipsing
+the model can represent), each label's posterior width against its prior width, and the
+formal error against the spread of the draws. A Teff–log g correlation near 0.98 with both
+free is expected and is labelled as expected. The remedy is to fix log g from the eclipsing
 solution, not to disregard the correlation.
 
 The theory is in [§9](../math.md#9-stellar-labels-from-disentangled-components).

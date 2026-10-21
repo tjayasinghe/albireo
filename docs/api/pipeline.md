@@ -39,13 +39,14 @@ There are three routes to the orbit:
 | `period = "search"` | a first velocity table is measured with library templates at the declared starting labels. Four periodograms propose candidate periods, a Keplerian is fitted from each, and the chi-square ranks them. The best few are compared by the disentangling's marginal likelihood, and the chosen orbit warm-starts the disentangling |
 | `velocities = "file"` | the free per-epoch table is fitted from measured velocities, and the period is obtained from the table afterwards. A non-numeric entry raises an error naming the epoch and the component, because the free fit has one velocity site per component per epoch and none for an unmeasured epoch. Such an epoch must be measured or removed from the dataset |
 
-**Checks of the declaration.** A configuration is checked when it is read, and
-`PipelineConfig` raises an error that names the star for a value that a stage would
-reject: a reversed `region`, `k_min` above `k_max`, semi-amplitude priors of different
-kinds within one star (a range, a held value, a Gaussian; a component without `k` takes the
-range `[k_min, k_max]`), a held eccentricity outside [0, 1), `light = "measure"` with
-declared `velocities`, an empty `{lo, hi}` range, or a `{value, sigma}` prior whose sigma is
-not positive and finite. A declared eccentricity above the bound that the disentangling is
+**Checks of the declaration.** A configuration is checked when it is read. `PipelineConfig`
+raises an error for a value that a stage would reject, and names the star where the value
+is a per-star setting: a `region` whose lower bound is not below its upper bound, a `k_min`
+that is not positive or not below `k_max`, semi-amplitude priors of different kinds within
+one star (a range, a held value, a Gaussian; a component without `k` takes the range
+`[k_min, k_max]`), a held eccentricity outside [0, 1), `light = "measure"` with declared
+`velocities`, an empty `{lo, hi}` range, or a `{value, sigma}` prior whose sigma is not
+positive and finite. A declared eccentricity above the bound that the disentangling is
 given (`ecc_max`) fails the star before its data are read, and the message names the
 setting to change.
 
@@ -499,9 +500,10 @@ does not stop the others. The measurements are in
 
 The live objects (the `Fit`, the velocity table, the label match) are retained only on an
 in-process run (`jobs=1`), since they hold compiled JAX programs that cannot be sent through
-a pipe, and only with `keep_live=True`, the default of `run_pipeline`. They take tens of MB
-per star on a short window and up to about a GB on an echelle star, and a batch that keeps
-them holds every star's at once. `keep_live=False`, which `albireo run` and `albireo demo`
+a pipe, and only with `keep_live=True`, the default of `run_pipeline`. They held 33 MB of
+JAX arrays per star on simulated stars of 12 epochs of 1,450 pixels with the label stage.
+Their size grows with the number of pixels, and a batch that keeps them holds every star's
+at once. `keep_live=False`, which `albireo run` and `albireo demo`
 pass, releases them after each star. `release_compiled`, by default the opposite of
 `keep_live`, also releases the programs that JAX compiled for the star before the next one,
 through `jax.clear_caches()`, which clears every JAX cache of the process, those of other

@@ -156,9 +156,10 @@ native.errors("laplace")   # the number to quote it beside
 The draws must be joint. Independent per-component draws would omit the exchange modes, the
 low-*k* directions that transfer flux between the two stars, and propagating those modes is
 the purpose of the refit. Every draw is refitted from the best fit of `native`, so that the
-spread is that of the draws and not the distance of a short refit from the optimum. After the refit, `summary()` prints both errors and the ratio
-between them. `refit_draws` rejects an epoch-comparison fit, whose spread would come from
-draws of the epoch noise, which is not implemented.
+spread is that of the draws and not the distance of a short refit from the optimum. After
+the refit, `summary()` prints both errors and the ratio between them. `refit_draws` rejects
+an epoch-comparison fit, whose spread would come from draws of the epoch noise, which is
+not implemented.
 
 ## Working example
 

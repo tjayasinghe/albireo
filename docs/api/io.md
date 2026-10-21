@@ -82,7 +82,8 @@ with a warning.
 
 A `DATE-OBS` that holds only a date is combined with the first of `TIME-OBS`, `UTSTART`,
 `UT-START` and `UT` that gives the time as `hh:mm:ss`. Where none does, or the time is not
-valid, an error asks for `bjd=`; read as midnight, the epoch could be up to 24 hours wrong.
+valid, the reader raises an error, and `bjd=` must then give the time. Read as midnight,
+the epoch could be up to 24 hours wrong.
 The pre-1999 form `DD/MM/YY` is read as 19YY. Site coordinates may be numbers or
 sexagesimal strings and are read as east-positive degrees, so a header that writes a
 west-positive longitude needs `bjd=` and `v_bary=`. An elevation that cannot be read is taken

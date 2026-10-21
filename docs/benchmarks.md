@@ -1564,8 +1564,9 @@ Two qualifications apply:
 * `test_run_map_closure_and_argument_paths_agree` (float tolerance, different graphs) and
   `test_laplace_closure_and_argument_paths_agree` compare the two paths. The Laplace
   comparison was exact while the Hessian was evaluated operation by operation. Since
-  2026-10-21 both paths compile it, as two different graphs, and they agree to rounding:
-  1.1e-12 at most on entries of order 1e-5.
+  2026-10-21 both paths compile it, as two different graphs, and they agree to about 1e-7
+  relative (1.1e-12 at most on entries of order 1e-5), the rounding of two compiled graphs
+  amplified by the inversion.
 * The NUTS acceptance test now runs through `jit_model_args=True` by default, so it also
   regression-tests the traced sample loop.
 
@@ -2310,7 +2311,7 @@ whole-tensor temporaries.
 ### Removal of the forward-mode path
 
 `custom_vjp` does not support `jax.jvp`, and `forecast._effective_parameters` was the only
-place in albireo that used forward mode. The forecast obtains `p_eff = tr[Sigma A^T W A]`
+place in albireo that used forward mode. The forecast obtained `p_eff = tr[Sigma A^T W A]`
 from one directional derivative of `log det` in the noise scale, because `with_jitter` is
 already that one-parameter family. The full suite showed eleven failures in
 `test_forecast.py` and two in `test_plotting.py`, all `TypeError: can't apply forward-mode
@@ -2338,9 +2339,11 @@ tested, through reverse-over-reverse.
 Since 2026-10-21 `sensitivity_forecast` does not take this derivative. It contracts the
 diagonal and first subdiagonal blocks of `Sigma`, which the Takahashi sweep for the pointwise
 band forms one at a time, against those of `A^T W A`. The two routes agree to 1.2e-13
-relative on the designs of `examples/08_forecast.py`, and to 3e-13 on the configurations of
-the tests, which include jitter, AR(1) noise and a telluric component. `forecast._effective_parameters`, the route above, is kept as the
-reference of the tests and for `scripts/aiphe_k1k2_map.py`.
+relative on the designs of `examples/08_forecast.py`, and to within 7.4e-13 on eight
+configurations of the test fixture, among them jitter with AR(1) noise, a telluric
+component, one stellar component and `half_bandwidth=40`. `forecast._effective_parameters`,
+the route above, is kept as the reference of the tests and for
+`scripts/aiphe_k1k2_map.py`.
 
 ### Rejected optimizations
 
@@ -2619,10 +2622,12 @@ same array and the reduced chi-square is 0.909 at every noise scale. The null ch
 change as expected: the nearest-node null is 7.6e3 / 3.8e4 / 1.5e5 and the no-template null
 1.7e5 / 1.1e6 / 4.2e6, both in units of the decreasing sigma. The nearest-node null was then
 the sum of each star's best node, which with a shared [M/H] can combine nodes on different
-metallicity slices. Since 2026-10-21 it is the best scan candidate, a pair on one slice. On
-the example's own configuration that raises the null from 10,810 to 12,070. The three
-values above were not regenerated; the no-template null and the chi-square are not
-affected.
+metallicity slices. Since 2026-10-21 it is the best scan candidate, a pair on one slice.
+With `scripts/label_bench.py` on the current scan this raises the null by 5.6, 11.6 and
+13.7 percent at the three signal-to-noise levels. The recorded values were not
+regenerated. The earlier rule on the current code gives 3.4e3 / 1.1e4 / 3.7e4, so the
+recorded values also predate later changes of the scan. The no-template null and the
+chi-square are not affected by this change.
 
 ### Wall clock
 
@@ -3098,16 +3103,17 @@ Research notes cited by file name in this section are in the repository under
 `internal/research/2026-09-09-gaia-rvs-benchmark/`.
 
 **Systems recovered in the other order (note of 2026-10-21).** Two defects of the
-comparison with the injected values, fixed on 2026-10-21, affect the tables of this section through the runs whose
-components came out in the other order (the row "components recovered in the other order",
-up to 26 percent of the orbit and blind tiers). The orbital elements were not exchanged
-with the components, so the conjunction of such a run was compared with the other star's,
-an error of 0.39 to 0.5 of a phase. `benchmark.collect` divided the semi-amplitude
-difference of each component of such a run by the injected semi-amplitude of the star it
-was not compared with, so each relative error was off by a factor of about q or 1/q. The rows "abs(d t_conj) [phase]",
-"abs(dK1 / K1)", "abs(dK2 / K2)" and "K1 and K2 within 5%" include these errors and were
-not recomputed. The pulls of the semi-amplitudes and the velocities, and the other rows, are
-not affected.
+comparison with the injected values, fixed on 2026-10-21, affect the tables of this section
+through the runs whose components came out in the other order (the row "components
+recovered in the other order", up to 26 percent of the orbit and blind tiers). The orbital
+elements were not exchanged with the components, so the conjunction of such a run was
+compared with the other star's. The error is half a phase on a circular orbit, and 0.2 to
+0.5 of a phase on the eccentric orbits of these populations, depending on e and ω.
+`benchmark.collect` divided the semi-amplitude difference of each component of such a run
+by the injected semi-amplitude of the star it was not compared with, so each relative error
+was off by a factor of about q or 1/q. The rows "abs(d t_conj) [phase]", "abs(dK1 / K1)",
+"abs(dK2 / K2)" and "K1 and K2 within 5%" include these errors and were not recomputed.
+The pulls of the semi-amplitudes and the velocities, and the other rows, are not affected.
 
 **Simulation.** Each system's two components are BOSZ 2024 spectra (`bosz2024-fgk-rvs`,
 R = 20,000) at the labels the dwarf sequence gives for the masses, rotationally broadened,
@@ -3756,9 +3762,11 @@ unconstraining transform is infinite. With the window centred on the start of th
 star converges to within 0.2 and 0.1 km/s of the injected values. The blind run of the
 553-day pair had failed at the same window check and was run again with the zero points
 dropped. Since 2026-10-21 the final phase scan runs whenever either scan pass moved the
-start, so this run and any other of this and the later runs that took the same path would
-start the fit elsewhere on a rerun. They were not rerun, and the size of the effect is not
-known.
+start. On a rerun, the fit of the orbit-tier run of the 3.99-day twins, and of any later
+run that took the same path, therefore starts from the conjunction of the final phase scan,
+which can differ from that of the semi-amplitude scan. On the packaged example declared
+with light fractions 0.3 and 0.7, which takes this path, the fit is identical bit for bit.
+These runs were not rerun, and the size of the effect is not known.
 
 | quantity | oracle (19) | eclipsing (2) | orbit (19) | blind (19) |
 |---|---|---|---|---|
@@ -5307,7 +5315,8 @@ chi-squares by 22. Route (a) on PEPSI with the registered FGK box, whose [M/H] a
 velocities 0.011 km/s apart, while the primary's Teff differed by 410 K and its [M/H] by
 0.43 dex. Since 2026-10-21 a uniform label prior that extends beyond a box library is
 narrowed to the box with a warning, and the epoch comparison bounds every label of a box
-library by the box, so the same declaration would now stop at -1.0.
+library by the box, so the same declaration would now be bounded at [M/H] = -1.0, with a
+warning where the declared prior is uniform.
 
 ### Cost
 
@@ -5319,9 +5328,10 @@ grid it passed 11 GB within half a minute and was stopped when the machine, whic
 running other jobs, ran out of memory. The label stage then evaluated every node of the
 library on the model grid at once, so its memory grew with both. Since 2026-10-20 the node
 scan evaluates the nodes in blocks of 32, and on simulated cases of 18,739 and 36,085
-pixels with the 455-node box the stage peaks at 4.1 and 5.3 GB of commit (`CHANGELOG.md`). `fit_templates` took 15 s (PEPSI) and 230 s
-(APF). The R = 50,000 boxes are 1371 MB (FGK) and 1140 MB (hot) to download; the
-original-resolution files are 12.5 MB per node, about 5.7 GB for the FGK box.
+pixels with the 455-node box the stage peaks at 4.1 and 5.3 GB of commit (`CHANGELOG.md`).
+`fit_templates` took 15 s (PEPSI) and 230 s (APF). The R = 50,000 boxes are 1371 MB (FGK)
+and 1140 MB (hot) to download; the original-resolution files are 12.5 MB per node, about
+5.7 GB for the FGK box.
 
 ### The pipeline's own stages
 
