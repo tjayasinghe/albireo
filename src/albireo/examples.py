@@ -279,7 +279,8 @@ def _fetch(example: _Example, progress: bool) -> Path:
             os.replace(tmp, path)
         except PermissionError:
             # On Windows a file that another process holds open cannot be replaced. That
-            # process downloaded and verified the same file, so its copy is kept.
+            # process downloaded the same file, checked against the same digest where one
+            # is recorded, so its copy is kept.
             if not path.is_file():
                 raise
     finally:
