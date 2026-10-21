@@ -59,10 +59,13 @@ Stages per epoch (all exact, all differentiable in shifts, lights, kernel and we
    tensor as carry (buffer reuse). The body is rematerialized in reverse mode, since
    recomputing one epoch's band is much cheaper than storing 50 of them.
 
-The bandwidth contract is inherited from probing: entries beyond the static
-half-bandwidth ``p`` are dropped (out of contract; the inference model enforces the
-velocity bound), and ``marginal_loglikelihood(validate=True)`` checks the assembled
-matrix against the matrix-free operator.
+The bandwidth contract is inherited from probing: every entry must lie within the static
+half-bandwidth ``p``, and the inference model enforces the velocity bound that
+guarantees it. Out of contract the result is undefined, not merely truncated. Entries
+beyond ``p`` are dropped, and the start of an epoch's block whose window crosses the
+band edge is clamped, so the in-band entries of that epoch are written to wrong
+positions. ``marginal_loglikelihood(validate=True)`` checks the assembled matrix against
+the matrix-free operator.
 """
 
 from __future__ import annotations
@@ -446,7 +449,8 @@ def _epoch_band_scan(
             + (f" + AR(1) step {group.ar_step}" if correlated else "")
             + f", kernel radius {r}) even at zero "
             "relative shift, and in general that plus the maximum relative shift in pixels "
-            "; use Problem.half_bandwidth_bound."
+            "; use Problem.half_bandwidth_bound, with ar1=True when the problem carries "
+            "AR(1) noise."
         )
 
     weights: tuple[jax.Array, ...]

@@ -156,14 +156,17 @@ class MarginalResult:
     d_hat
         ``(n_comp, n_pix)`` posterior-mean deviation spectra.
     precision
-        The interleaved, padded posterior precision ``Lt`` in block storage.
+        The interleaved, padded posterior precision ``Lt`` in block storage. ``None``
+        for a result read back by :func:`albireo.results.load_fit` from a file saved
+        without ``precision=True``. Such a result carries the saved pointwise standard
+        deviation as an extra attribute ``d_std`` when the file holds one.
     n_components, n_pixels
         Dimensions of ``d_hat``.
     """
 
     log_likelihood: jax.Array
     d_hat: jax.Array  # (n_comp, n_pix) posterior-mean deviation spectra
-    precision: BlockTridiagonal  # the (interleaved, padded) posterior precision
+    precision: BlockTridiagonal | None  # the (interleaved, padded) posterior precision
     n_components: int
     n_pixels: int
 
@@ -186,6 +189,15 @@ class MarginalResult:
             back by :func:`albireo.results.load_fit` from a file saved without
             ``precision=True``.
         """
+        return block_cholesky(self._require_precision())
+
+    @property
+    def n_padded(self) -> int:
+        """Stored dimension ``K * B`` of :attr:`precision` (raises as :attr:`chol` does)."""
+        precision = self._require_precision()
+        return precision.num_blocks * precision.block_size
+
+    def _require_precision(self) -> BlockTridiagonal:
         if self.precision is None:
             raise ValueError(
                 "this MarginalResult carries no posterior precision, so it cannot be "
@@ -194,11 +206,7 @@ class MarginalResult:
                 "The posterior mean is in .d_hat and, if it was saved, the pointwise "
                 "standard deviation is in .d_std; re-run the fit to draw new spectra."
             )
-        return block_cholesky(self.precision)
-
-    @property
-    def n_padded(self) -> int:
-        return self.precision.num_blocks * self.precision.block_size
+        return self.precision
 
     def tree_flatten(self):
         return (self.log_likelihood, self.d_hat, self.precision), (
@@ -246,10 +254,13 @@ def marginal_loglikelihood(
     half_bandwidth
         Static override for the per-component half-bandwidth ``b_natural``. Required
         under ``jax.jit`` with traced shifts, where :attr:`Problem.natural_half_bandwidth`
-        cannot be computed; use :meth:`Problem.half_bandwidth_bound`. Assembly with any
-        value at or above the true bandwidth is exact, so an overestimate costs time but
-        not accuracy. An underestimate corrupts the result without raising an error; see
-        ``validate``.
+        cannot be computed; use :meth:`Problem.half_bandwidth_bound`, with ``ar1=True``
+        when :func:`albireo.forward.with_ar1` is applied to the problem (the AR(1) chain
+        widens the band by :attr:`Problem.ar_bandwidth_extra`). Assembly with any value
+        at or above the true bandwidth is exact, so an overestimate costs time but not
+        accuracy. An underestimate corrupts the result without raising an error: entries
+        beyond the band are dropped and, near the band edge, others are written to the
+        wrong positions. See ``validate``.
     validate
         If True, verify that the assembled matrix reproduces the matrix-free operator on
         a random vector, guarding against a bandwidth underestimate and any assembly
@@ -331,13 +342,17 @@ def marginal_loglikelihood(
         got = bt.matvec(v_pad)[:n]
         want = full_matvec(v)
         err = jnp.max(jnp.abs(got - want)) / (1.0 + jnp.max(jnp.abs(want)))
-        assert float(err) < 1e-10, (
-            f"assembled matrix disagrees with the matrix-free operator (rel err "
-            f"{float(err):.2e}) using assembly={assembly!r}. Most likely an "
-            "underestimated half_bandwidth (use Problem.half_bandwidth_bound); "
-            "otherwise an assembly defect: note that the operator is symmetric, so "
-            "checking the assembled matrix against its own transpose separates the two."
-        )
+        # An explicit raise rather than an assert statement, which `python -O` removes.
+        # The negated comparison also rejects a nan error.
+        if not float(err) < 1e-10:
+            raise AssertionError(
+                f"assembled matrix disagrees with the matrix-free operator (rel err "
+                f"{float(err):.2e}) using assembly={assembly!r}. Most likely an "
+                "underestimated half_bandwidth (use Problem.half_bandwidth_bound, with "
+                "ar1=True when the problem carries AR(1) noise); otherwise an assembly "
+                "defect: note that the operator is symmetric, so checking the assembled "
+                "matrix against its own transpose separates the two."
+            )
 
     b_vec = _pack(rhs(problem), n_comp, n_pix)
     b_pad = jnp.pad(b_vec, (0, bt.num_blocks * bt.block_size - n))
@@ -386,8 +401,10 @@ def draw_spectra(result: MarginalResult, key, num_draws: int):
         ``(num_draws, n_comp, n_pix)`` deviation spectra.
     """
     n = result.n_components * result.n_pixels
-    z = jax.random.normal(key, (num_draws, result.n_padded))
-    chol = result.chol  # factorize once, not once per draw
+    # Factorize once, not once per draw. Reading the factor first also gives a result
+    # without a precision (one read back by load_fit) its explanatory ValueError.
+    chol = result.chol
+    z = jax.random.normal(key, (num_draws, chol.num_blocks * chol.block_size))
     x = jax.vmap(lambda zz: sample_standard(chol, zz))(z)[:, :n]
     return jax.vmap(lambda v: _unpack(v, result.n_components, result.n_pixels))(x) + result.d_hat
 

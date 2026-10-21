@@ -9,6 +9,7 @@ elementary operators with the production code.
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 import albireo as ab
 import albireo.likelihood as likelihood
@@ -427,3 +428,80 @@ def test_low_frequency_degeneracy_matches_theory():
     assert 0.65 < np.median(ratio) < 1.55, np.median(ratio)
     # the scaling signature: low-k separation variance is strongly inflated
     assert measured[0] / measured[-5] > 4.0
+
+
+# ---------------------------------------------------------------------------
+# Error paths: a result without a precision, and validate under python -O
+# ---------------------------------------------------------------------------
+
+
+def test_a_result_without_precision_explains_itself_in_draws_and_n_padded():
+    """A result read back without its precision raises the explanatory ValueError.
+
+    ``draw_spectra`` read ``result.n_padded`` before the factor, so a precision-free result
+    (what ``albireo.results.load_fit`` returns by default) failed with an AttributeError on
+    ``None`` instead of the message that says where the saved values are.
+    """
+    _, _, problem, prior = small_problem()
+    res = marginal_loglikelihood(problem, prior)
+    bare = likelihood.MarginalResult(
+        log_likelihood=res.log_likelihood,
+        d_hat=res.d_hat,
+        precision=None,
+        n_components=res.n_components,
+        n_pixels=res.n_pixels,
+    )
+    with pytest.raises(ValueError, match="precision=True"):
+        draw_spectra(bare, jax.random.PRNGKey(0), 2)
+    with pytest.raises(ValueError, match="precision=True"):
+        _ = bare.n_padded
+    # With the precision, the draws keep their shape and their random stream.
+    draws = draw_spectra(res, jax.random.PRNGKey(0), 2)
+    assert draws.shape == (2, *res.d_hat.shape)
+
+
+_VALIDATE_UNDER_O = """
+import numpy as np
+import albireo as ab
+from albireo.forward import build_problem
+from albireo.likelihood import marginal_loglikelihood
+from albireo.priors import SmoothnessPrior
+from albireo.simulate import InstrumentSpec, simulate_dataset, synthetic_deviation_spectrum
+
+grid = ab.LogGrid.from_wavelength_range(5000.0, 5003.0, dv_kms=3.0)
+vel = np.array([[9.0, -12.0], [-14.0, 18.0]])
+comps = [synthetic_deviation_spectrum(grid, n_lines=6, seed=s, margin=0.15) for s in (1, 2)]
+ds, _ = simulate_dataset(
+    grid, comps, bjd=np.arange(2.0), velocities=vel, light_fractions=[0.6, 0.4],
+    instruments={"A": InstrumentSpec(wave=np.arange(5000.5, 5002.4, 0.055),
+                                     sigma_v_lsf=4.0, snr=50.0)},
+    seed=9,
+)
+problem = build_problem(grid, ds, velocities=vel, light_fractions=[0.6, 0.4],
+                        lsf_sigma_v={"A": 4.0})
+prior = SmoothnessPrior(tau=[2.0, 0.7], eta=[1e-3, 2e-3])
+try:
+    # Probing with a bandwidth far below the operator's aliases band entries.
+    marginal_loglikelihood(problem, prior, half_bandwidth=1, assembly="probe", validate=True)
+except AssertionError as exc:
+    print("raised:", str(exc)[:40])
+else:
+    print("returned")
+"""
+
+
+def test_validate_raises_under_optimized_python():
+    """``validate=True`` must raise also under ``python -O``, which strips assert statements."""
+    import os
+    import subprocess
+    import sys
+
+    out = subprocess.run(
+        [sys.executable, "-O", "-c", _VALIDATE_UNDER_O],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONOPTIMIZE": "1"},
+        timeout=600,
+    )
+    assert out.returncode == 0, out.stderr[-2000:]
+    assert "raised: assembled matrix disagrees" in out.stdout, out.stdout + out.stderr[-2000:]

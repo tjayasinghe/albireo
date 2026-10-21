@@ -412,7 +412,7 @@ class Problem:
         base = int(np.ceil(self.max_relative_shift)) + 1 + 2 * self.kernel_radius + support
         return base + (self.ar_bandwidth_extra if self.correlated else 0)
 
-    def half_bandwidth_bound(self, v_rel_max_kms: float) -> int:
+    def half_bandwidth_bound(self, v_rel_max_kms: float, *, ar1: bool = False) -> int:
         """Static upper bound on :attr:`natural_half_bandwidth` given a velocity bound.
 
         ``v_rel_max_kms`` must bound the largest relative radial velocity between any
@@ -428,10 +428,17 @@ class Problem:
         ``half_bandwidth`` inside ``jax.jit`` with traced velocities. The ``+ 1`` pixel
         of slack in the bandwidth formula also absorbs the (< 1e-5 relative at
         1000 km/s) curvature of the relativistic velocity-to-shift mapping.
+
+        The AR(1) noise coupling widens the band by :attr:`ar_bandwidth_extra`. The bound
+        includes it when the problem is already correlated, or when ``ar1`` is True. The
+        latter is required when the bound is taken on the diagonal problem and
+        :func:`with_ar1` is applied afterwards, for instance inside the jitted function.
+        :class:`albireo.inference.MarginalOrbitModel` adds the extra itself.
         """
         shift = abs(float(self.grid.velocity_to_pixels(float(v_rel_max_kms))))
         support = max(g.row_support for g in self.groups)
-        return int(np.ceil(shift)) + 1 + 2 * self.kernel_radius + support
+        base = int(np.ceil(shift)) + 1 + 2 * self.kernel_radius + support
+        return base + (self.ar_bandwidth_extra if (ar1 or self.correlated) else 0)
 
 
 def _warn_if_row_support_is_an_artifact(instrument, wave_native, per_row, row_support):

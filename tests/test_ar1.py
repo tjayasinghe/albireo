@@ -188,6 +188,38 @@ def test_band_assembly_matches_probe_and_is_the_default():
     assert correlated.natural_half_bandwidth >= problem.natural_half_bandwidth
 
 
+def test_half_bandwidth_bound_covers_the_ar1_extra():
+    """The documented jit recipe, ``half_bandwidth=Problem.half_bandwidth_bound(v)``.
+
+    The bound omitted :attr:`Problem.ar_bandwidth_extra`. With enough cosmic-ray gaps the
+    AR(1) chain then needs more than the bound's one pixel of slack, the band misses
+    entries, and the jitted marginal returned -inf without an error. The bound now
+    includes the extra on a correlated problem, and with ``ar1=True`` on the diagonal
+    problem that ``with_ar1`` is applied to inside the traced function.
+    """
+    _, _, problem, prior = small_problem(cosmic_fraction=0.15)
+    phi = jnp.asarray([0.4, -0.3, 0.55])
+    correlated = with_ar1(problem, phi)
+    v_rel = 30.0  # bounds |v_1 - v_2| over the three epochs of SMALL_VEL
+    assert problem.ar_bandwidth_extra > 1  # the case the slack pixel does not absorb
+    assert problem.half_bandwidth_bound(v_rel) < correlated.natural_half_bandwidth
+    bound = problem.half_bandwidth_bound(v_rel, ar1=True)
+    assert bound >= correlated.natural_half_bandwidth
+    assert correlated.half_bandwidth_bound(v_rel) == bound
+
+    want = float(marginal_loglikelihood(correlated, prior).log_likelihood)
+
+    @jax.jit
+    def loglike(pb, phi_):
+        return marginal_loglikelihood(
+            with_ar1(pb, phi_), prior, half_bandwidth=bound
+        ).log_likelihood
+
+    got = float(loglike(problem, phi))
+    assert np.isfinite(got)
+    np.testing.assert_allclose(got, want, rtol=1e-10)
+
+
 def test_correlated_band_epoch_chunk_invariance():
     """The batched G pre-pass must handle the link weights as the hoisted one does.
 
