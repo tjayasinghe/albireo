@@ -260,6 +260,7 @@ accurate, because 70% of the light constrains it.
 If the window is widened to Hδ or Hγ, add the component and confine it:
 
 ```python
+v_neb = 150.0                           # km/s, the systemic recession of the SMC
 dis = ab.Disentangler(
     ds,
     components=[ab.Star("A", light=0.6), ab.Star("B", light=0.4), ab.Nebular(v_kms=v_neb)],
@@ -271,16 +272,20 @@ dis = ab.Disentangler(
 ```
 
 The prior confines the component to the nebular line windows. At the expert level that is
-`ab.nebular_windows(wave_range=(grid.wave[0], grid.wave[-1]), v_kms=v_neb)` passed to
-`ab.window_profile`, and the `Disentangler` interface assembles it. The confinement affects
+`ab.nebular_windows(wave_range=(grid.wave[0], grid.wave[-1]))`, built at rest because the
+model shifts the component by `nebular_v_kms=v_neb`, passed to `ab.window_profile`, and the
+`Disentangler` interface assembles it. The confinement affects
 the orbit. The same fit with the nebular component left free across the whole grid gives K₂
 at +2.6% instead of −0.29%, because the extra freedom absorbs stellar signal at wavelengths
 where a nebula has no lines. This is the kind of failure the component is meant to prevent.
 
 The component has two conventions that the data do not determine: the amplitude scale (the
-geometric mean is fixed to 1) and `v_kms`, which sets the placement of the line windows and
-must match the value passed to `nebular_windows`. For the SMC that is the systemic
-recession, not zero.
+geometric mean is fixed to 1) and `v_kms`, the shift that carries the component's lines,
+held at rest inside their windows, onto the observed ones. It must agree with the nebula's
+velocity to well within the 300 km/s half-width of a window, so for the SMC it is the
+systemic recession, about 150 km/s, not zero. Before 2026-10-21 the `Disentangler` built the
+windows at `v_kms` instead of at rest, `v_kms` away from the lines; a declaration with a
+nonzero `v_kms` gives a different fit since.
 
 !!! note "The wavelength scale must be declared"
     A nebular line list is a set of absolute wavelengths, and the offset between air and

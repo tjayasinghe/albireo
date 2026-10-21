@@ -1011,9 +1011,10 @@ def sensitivity_forecast(
         pair costs a factor of two). A convention.
     block_size, half_bandwidth
         Solver block size, and a static per-component half-bandwidth override. The
-        default is the exact bandwidth the design's own shifts need
+        default is the larger of the exact bandwidth the design's own shifts need
         (:attr:`albireo.forward.Problem.natural_half_bandwidth`), which is appropriate
-        for a non-traced computation.
+        for a non-traced computation, and ``prior.half_bandwidth``. An explicit value
+        below ``prior.half_bandwidth`` raises a ``ValueError``.
 
     Returns
     -------

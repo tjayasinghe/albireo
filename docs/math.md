@@ -235,7 +235,10 @@ data.
    the reparameterization $`d \to \mathbf{T}(\delta)d`$, so $`v_\mathrm{neb}`$ is not identified,
    for the same reason $`\gamma`$ is not (§5.3). It is kept as a parameter only because it
    sets the position of the component's lines on the model grid, which matters when the
-   prior confines the component to windows (§2): the windows and the shift must agree.
+   prior confines the component to windows (§2): the windows must lie where the
+   component's spectrum holds the lines, at the nebula's velocity minus the shift. The
+   `Disentangler` shifts the component by the declared velocity and builds the windows at
+   rest.
 
 The effect of omitting the component has been measured. The closed-loop test of
 `tests/test_nebular.py` uses an SB2 with $`K = (58, 41)`$ km/s whose H$`\beta`$ absorption contains
@@ -951,7 +954,7 @@ prior. $`K_i`$, $`e`$, $`\omega`$, $`P_{\rm orb}`$, $`T_{\rm p}`$ are unaffected
 | telluric constant vs. common stellar constant | exact up to edges | ridge anchors ($`\eta`$) on both | measured in the telluric closed loop: the two offsets cancel in the sum to $`\lesssim 10^{-3}`$; report both |
 | LSF width vs. intrinsic line widths | near-exact per instrument | cross-instrument spectrum sharing | absolute widths need a reference instrument anchor (tight prior); only relative widths are data-identified (benchmarks.md) |
 | nebular amplitude scale vs. nebular spectrum | exact ($`a_j \to c\,a_j`$, $`d \to d/c`$) | nothing; it is a convention | geometric mean fixed to 1 by centering `log_nebular_amp` (§1.3) |
-| nebular velocity vs. common shift of its spectrum | exact up to edges (the §5.3 argument, one component at a time) | nothing on barycentric data | `nebular_v_kms` is a placement choice; it must agree with the prior's line windows and is not a measurement |
+| nebular velocity vs. common shift of its spectrum | exact up to edges (the §5.3 argument, one component at a time) | nothing on barycentric data | `nebular_v_kms` is a placement choice, not a measurement; the component's spectrum holds the lines at the nebula's velocity minus `nebular_v_kms`, and the prior's line windows are built there |
 
 **Telluric constant exchange:** with $`\sum_i \ell_i = 1`$ and a telluric component of light
 fraction 1, adding a constant $`a`$ to the telluric deviation while subtracting $`a`$ from
