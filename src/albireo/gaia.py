@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
+import os
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -612,9 +613,10 @@ def rvs_transit_count(
 def rvs_transit_times(
     n_transits: int,
     *,
-    start_bjd: float = _DR4_START_BJD,
-    span_days: float = _DR4_SPAN_DAYS,
+    start_bjd: float | None = None,
+    span_days: float | None = None,
     transits_per_period: float = _TRANSITS_PER_VISIBILITY_PERIOD,
+    release: str = "dr4",
     seed: int = 0,
 ) -> np.ndarray:
     """Transit times with the structure of the Gaia scanning law, without its phase.
@@ -631,21 +633,26 @@ def rvs_transit_times(
     The function draws that structure: ``n_transits / transits_per_period`` visibility
     periods placed uniformly at random over the span and at least four days apart, each
     with one, two or three transits on the 106.5-minute / 4.23-hour ladder, with the
-    total adjusted to exactly ``n_transits``. It is an approximation: the phase of the
-    scanning law is not reproduced, so the epochs are correct statistically but not
-    individually, and the latitude dependence enters only through the count
-    (:func:`rvs_transit_count`). Real transit times for a sky position come from the Gaia
-    Observation Forecast Tool through :func:`gost_transits` and
-    :func:`rvs_transit_times_from_gost`.
+    total adjusted to exactly ``n_transits``. The number of transits in a period matches
+    ``transits_per_period`` in the mean only: at the default 1.48, one, two and three
+    transits occur in 57.6, 36.8 and 5.6 per cent of the periods before the adjustment.
+    It is an approximation: the phase of the scanning law is not reproduced, so the
+    epochs are correct statistically but not individually, and the latitude dependence
+    enters only through the count (:func:`rvs_transit_count`). Real transit times for a
+    sky position come from the Gaia Observation Forecast Tool through
+    :func:`gost_transits` and :func:`rvs_transit_times_from_gost`.
 
     Parameters
     ----------
     n_transits
         Number of transits to place.
     start_bjd, span_days
-        The window; the defaults are the DR4 span (:data:`RVS_SPANS`).
+        The window. Default: the data span of ``release`` (:data:`RVS_SPANS`).
     transits_per_period
         Mean number of transits per visibility period.
+    release
+        ``"dr3"`` or ``"dr4"``: the release whose data span is the default window. A
+        count drawn for DR3 (:func:`rvs_transit_count`) belongs to its 34 months.
     seed
         Seed.
 
@@ -659,6 +666,11 @@ def rvs_transit_times(
         raise ValueError("n_transits must be positive")
     if not transits_per_period >= 1.0:
         raise ValueError("transits_per_period must be at least 1")
+    if release not in RVS_SPANS:
+        raise ValueError(f"release must be one of {sorted(RVS_SPANS)}; got {release!r}")
+    release_start, release_span = RVS_SPANS[release]
+    start_bjd = release_start if start_bjd is None else start_bjd
+    span_days = release_span if span_days is None else span_days
     rng = np.random.default_rng(seed)
     n_periods = max(1, round(n / transits_per_period))
     free = float(span_days) - _VISIBILITY_GAP_DAYS * (n_periods - 1)
@@ -670,19 +682,22 @@ def rvs_transit_times(
     # the span shortened by the gaps, then shift each one by the gaps before it.
     starts = np.sort(rng.uniform(0.0, free, size=n_periods))
     starts = starts + _VISIBILITY_GAP_DAYS * np.arange(n_periods)
-    # One, two or three transits per period, mean transits_per_period; the ladder is the
-    # first field of view, the second 106.5 minutes later, the first again one spin later.
+    # One, two or three transits per period on the ladder: the first field of view, the
+    # second 106.5 minutes later, the first again one spin later. A second transit occurs
+    # with probability p_second, and a third with probability p_third, independently of
+    # the second (the product of the last two comparisons). The mean count is
+    # 1 + p_second + p_third, which equals transits_per_period up to 2.2; above that the
+    # adjustment below supplies the rest.
     excess = float(transits_per_period) - 1.0
-    p_three = max(0.0, min(excess / 2.0, 0.2))
-    p_two = max(0.0, min(excess - 2.0 * p_three, 1.0 - p_three))
+    p_third = max(0.0, min(excess / 2.0, 0.2))
+    p_second = max(0.0, min(excess - 2.0 * p_third, 1.0 - p_third)) + p_third
     ladder = np.array([0.0, _GAIA_FOV_GAP_DAYS, _GAIA_SPIN_DAYS])
     counts = (
         1
-        + (rng.uniform(size=n_periods) < p_two + p_three)
-        + (rng.uniform(size=n_periods) < p_three / max(p_two + p_three, 1e-12))
-        * (rng.uniform(size=n_periods) < p_two + p_three)
-    )
-    counts = np.minimum(counts.astype(int), 3)
+        + (rng.uniform(size=n_periods) < p_second)
+        + (rng.uniform(size=n_periods) < p_third / max(p_second, 1e-12))
+        * (rng.uniform(size=n_periods) < p_second)
+    ).astype(int)
     # Adjust to the exact total: add to or remove from randomly chosen periods.
     while counts.sum() < n:
         k = rng.integers(0, n_periods)
@@ -827,7 +842,12 @@ def _gost_query(ra_deg, dec_deg, t_min_mjd, t_max_mjd, max_records) -> str:
 
 
 def _gost_cache_name(ra_deg, dec_deg, t_min_mjd, t_max_mjd, max_records) -> str:
-    """The cache file name of one query, built from every parameter that changes the response."""
+    """The cache file name of one query, built from every parameter of the query.
+
+    The numbers are written to four decimals: 1e-4 degree (0.36 arcsec, a few milliseconds
+    of crossing time at the scan rate) and 1e-4 day (8.6 s) in the window. The query itself
+    carries six, so two queries that agree to four decimals share one file.
+    """
 
     def number(value, sign: str = "") -> str:
         if value is None:
@@ -935,6 +955,13 @@ def _parse_gost(payload: bytes, *, ra_deg: float, dec_deg: float, source: str) -
     bjd = mjd + _MJD_TO_JD
     fov = _votable_fov(names, rows)
     ccd_row = _votable_column(names, rows, _GOST_ROW_COLUMNS)
+    if ccd_row is not None and not np.all(np.isfinite(ccd_row)):
+        # An integer cast would turn the empty cell into a row no RVS transit has.
+        raise ValueError(
+            f"the CCD row is empty in {int(np.sum(~np.isfinite(ccd_row)))} of "
+            f"{ccd_row.size} rows; give every transit its row or leave the column out, "
+            "and the row is then drawn"
+        )
     scan = _votable_column(names, rows, _GOST_SCAN_COLUMNS)
     if scan is not None:
         for key in _GOST_SCAN_COLUMNS:
@@ -967,8 +994,11 @@ def gost_transits(
 
     One GET against :data:`GOST_ENDPOINT` with :mod:`urllib`, parsed with
     :mod:`xml.etree`, cached raw under ``cache_dir() / "gost"`` under a name built from
-    every parameter that changes the response. The cache is read before the network, so a
-    repeated position is fetched once.
+    every parameter of the query, with the position and the window to four decimals. The
+    cache is read before the network, so a repeated position is fetched once. A cached
+    file that cannot be parsed, such as one truncated by an interrupted write of an
+    earlier version, is fetched again and replaced. The file is written under its name
+    only when it is complete.
 
     The forecast uses the routine nominal scanning law, not the attitude as flown. The
     manual (§7) states that GOST "will compute the transit crossing the FoVs based on the
@@ -1010,8 +1040,8 @@ def gost_transits(
     Raises
     ------
     RuntimeError
-        If the request fails and nothing is cached; the message names the endpoint and the
-        cache path the response would have been written to.
+        If the request fails and nothing readable is cached; the message names the
+        endpoint and the cache path the response would have been written to.
 
     Examples
     --------
@@ -1022,11 +1052,22 @@ def gost_transits(
     url = _gost_query(ra_deg, dec_deg, t_min_mjd, t_max_mjd, max_records)
     name = _gost_cache_name(ra_deg, dec_deg, t_min_mjd, t_max_mjd, max_records)
     path = Path(cache_dir()) / "gost" / name
+    unreadable = None
     if cache and path.is_file():
-        return _parse_gost(path.read_bytes(), ra_deg=ra_deg, dec_deg=dec_deg, source=url)
+        try:
+            return _parse_gost(path.read_bytes(), ra_deg=ra_deg, dec_deg=dec_deg, source=url)
+        except ValueError as error:
+            # A truncated or foreign file: fetched again below and replaced.
+            unreadable = error
     try:
         payload = _fetch_gost(url, timeout=timeout)
     except (urllib.error.URLError, OSError, TimeoutError) as error:
+        if unreadable is not None:
+            raise RuntimeError(
+                f"the cached response {path} cannot be read ({unreadable}), and the Gaia "
+                f"Observation Forecast Tool at {GOST_ENDPOINT} could not be reached "
+                f"({error}). Delete the file, or replace it with a complete response."
+            ) from error
         raise RuntimeError(
             f"could not reach the Gaia Observation Forecast Tool at {GOST_ENDPOINT} ({error}), "
             f"and nothing is cached at {path}. Fetch the position once with a network "
@@ -1036,9 +1077,23 @@ def gost_transits(
     # read back on every later call.
     transits = _parse_gost(payload, ra_deg=ra_deg, dec_deg=dec_deg, source=url)
     if cache:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(payload)
+        _write_atomically(path, payload)
     return transits
+
+
+def _write_atomically(path: Path, payload: bytes) -> None:
+    """Write ``payload`` to ``path`` through a temporary file in the same directory.
+
+    The file appears under its name only when it is complete, so an interrupted write
+    leaves no truncated file for a later call to read.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    partial = path.with_name(f"{path.name}.{os.getpid()}.part")
+    try:
+        partial.write_bytes(payload)
+        os.replace(partial, path)
+    finally:
+        partial.unlink(missing_ok=True)
 
 
 def _fetch_gost(url: str, *, timeout: float) -> bytes:
@@ -1174,7 +1229,8 @@ def deliver(dataset: Dataset, product: RVSProduct, *, lsf_sigma_kms=None):
     ----------
     dataset
         Epochs on the detector grid, e.g. from :func:`albireo.simulate.simulate_dataset`
-        with :func:`rvs_detector_grid` as the instrument grid. The frame is kept.
+        with :func:`rvs_detector_grid` as the instrument grid, on the vacuum scale or with
+        no declared medium. The frame is kept.
     product
         The delivered grid.
     lsf_sigma_kms
@@ -1186,6 +1242,12 @@ def deliver(dataset: Dataset, product: RVSProduct, *, lsf_sigma_kms=None):
     (Dataset, DeliveryRecord)
         The delivered epochs, on the vacuum scale with ``product.instrument`` as their
         key, and the record.
+
+    Raises
+    ------
+    ValueError
+        If an epoch is declared on the air scale. The product grids are vacuum
+        wavelengths, and an air-scale epoch would be read about 80 km/s off.
     """
     if lsf_sigma_kms is None:
         declared = np.full(dataset.n_epochs, rvs_lsf_sigma_kms())
@@ -1197,6 +1259,11 @@ def deliver(dataset: Dataset, product: RVSProduct, *, lsf_sigma_kms=None):
     epochs, sigmas, lag1s, covered = [], [], [], []
     ratios = []
     for j, epoch in enumerate(dataset):
+        if epoch.medium == "air":
+            raise ValueError(
+                f"epoch {j} is on the air wavelength scale, and the RVS products are on the "
+                "vacuum scale; convert it with albireo.air_to_vacuum before delivery"
+            )
         wave_in = np.asarray(epoch.wave, dtype=np.float64)
         flux_in = np.array(epoch.flux, dtype=np.float64)
         ivar_in = np.asarray(epoch.effective_ivar, dtype=np.float64)
@@ -1400,7 +1467,10 @@ class RVSTruth:
         The detector-level :class:`~albireo.simulate.SimulationTruth` (components,
         velocities, light fractions, noiseless detector fluxes, noise sigma).
     detector
-        The detector-grid epochs before delivery, with their independent noise.
+        The detector-grid epochs before delivery, with their independent noise. Each
+        declares the line-spread width its lines have (``lsf_sigma_kms``), the full
+        width at its resolving power rather than the quadrature width applied to the
+        library.
     delivery
         The :class:`DeliveryRecord`.
     snr
@@ -1578,11 +1648,18 @@ def simulate_rvs_dataset(
         )
     # One detector instrument per distinct resolving power: the simulator keys the
     # line-spread kernel on the instrument, and every transit shares the detector grid.
+    # The key carries R rounded to an integer, or R in full when two distinct values round
+    # to the same integer.
     instruments: dict[str, InstrumentSpec] = {}
+    key_of: dict[float, str] = {}
     epoch_instruments = []
     for j in range(n_ep):
-        key = f"{product.instrument}-detector-R{round(float(r_ep[j]))}"
-        if key not in instruments:
+        r = float(r_ep[j])
+        if r not in key_of:
+            key = f"{product.instrument}-detector-R{round(r)}"
+            if key in instruments:
+                key = f"{product.instrument}-detector-R{r!r}"
+            key_of[r] = key
             instruments[key] = InstrumentSpec(
                 wave=detector_wave,
                 sigma_v_lsf=float(sigma_apply[j]),
@@ -1590,7 +1667,7 @@ def simulate_rvs_dataset(
                 shot_noise=shot_noise,
                 snr_window=product.snr_window,
             )
-        epoch_instruments.append(key)
+        epoch_instruments.append(key_of[r])
     detector, simulation = simulate_dataset(
         grid,
         components,
@@ -1606,6 +1683,15 @@ def simulate_rvs_dataset(
         response_order=response_order,
         response_amplitude=response_amplitude,
         seed=seed,
+    )
+    # simulate_dataset records the kernel it applied, the quadrature width; the lines of a
+    # detector epoch have the full width at its resolving power.
+    detector = Dataset(
+        epochs=tuple(
+            dataclasses.replace(epoch, lsf_sigma_kms=float(sigma_true[j]))
+            for j, epoch in enumerate(detector)
+        ),
+        frame=detector.frame,
     )
     declared = sigma_true if declare_lsf == "truth" else np.full(n_ep, rvs_lsf_sigma_kms())
     delivered, record = deliver(detector, product, lsf_sigma_kms=declared)

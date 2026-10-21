@@ -10,6 +10,7 @@ through the disentangler.
 
 from __future__ import annotations
 
+import dataclasses
 import urllib.error
 from pathlib import Path
 
@@ -175,6 +176,29 @@ def test_transit_times_come_in_visibility_periods_on_the_ladder():
     assert rvs_transit_times(7, seed=0, transits_per_period=1.0).shape == (7,)
 
 
+def test_transit_times_take_the_span_of_the_release():
+    """A DR3 count is placed in DR3's 34 months; the default is the DR4 span."""
+    dr3_start, dr3_span = RVS_SPANS["dr3"]
+    dr3 = rvs_transit_times(18, release="dr3", seed=4)
+    assert dr3.min() >= dr3_start and dr3.max() <= dr3_start + dr3_span + 1.0
+    np.testing.assert_array_equal(
+        dr3, rvs_transit_times(18, start_bjd=dr3_start, span_days=dr3_span, seed=4)
+    )
+    dr4_start, dr4_span = RVS_SPANS["dr4"]
+    np.testing.assert_array_equal(
+        rvs_transit_times(18, seed=4),
+        rvs_transit_times(18, start_bjd=dr4_start, span_days=dr4_span, seed=4),
+    )
+    np.testing.assert_array_equal(
+        rvs_transit_times(18, seed=4), rvs_transit_times(18, release="dr4", seed=4)
+    )
+    # An explicit window is kept whatever the release.
+    window = rvs_transit_times(5, start_bjd=2458000.0, span_days=100.0, release="dr3", seed=4)
+    assert window.min() >= 2458000.0 and window.max() <= 2458101.0
+    with pytest.raises(ValueError, match="release"):
+        rvs_transit_times(5, release="dr5")
+
+
 def test_transit_counts_follow_the_archive_distribution():
     dr3 = rvs_transit_count(20000, release="dr3", seed=0)
     assert dr3.min() >= 2
@@ -273,6 +297,68 @@ def test_gost_reads_its_cache_before_the_network_and_says_where_it_looked(
         gost_transits(10.0, -30.0, **GOST_QUERY)
     assert GOST_ENDPOINT in str(error.value)
     assert "objvissap_ra10_dec-30_t56800-60800_n10000.vot" in str(error.value)
+
+
+def test_an_unreadable_cache_file_is_fetched_again_or_named(offline_gost, tmp_path, monkeypatch):
+    """A truncated cache file is replaced from the network, or named when offline."""
+    cached = tmp_path / "gost" / "objvissap_ra45_dec+20_t56800-60800_n10000.vot"
+    cached.parent.mkdir(parents=True)
+    cached.write_bytes(GOST_FIXTURE.read_bytes()[:4000])  # an interrupted write
+    transits = gost_transits(45.0, 20.0, **GOST_QUERY)
+    assert len(transits) == 142 and len(offline_gost) == 1
+    assert cached.read_bytes() == GOST_FIXTURE.read_bytes()
+    assert sorted(p.name for p in cached.parent.iterdir()) == [cached.name]  # no partial file
+
+    def refuse(url, *, timeout):
+        raise urllib.error.URLError("no route to host")
+
+    cached.write_bytes(GOST_FIXTURE.read_bytes()[:4000])
+    monkeypatch.setattr(gaia_module, "_fetch_gost", refuse)
+    with pytest.raises(RuntimeError, match="cannot be read") as error:
+        gost_transits(45.0, 20.0, **GOST_QUERY)
+    assert str(cached) in str(error.value)
+
+
+def test_an_interrupted_cache_write_leaves_no_file_under_the_name(
+    offline_gost, tmp_path, monkeypatch
+):
+    write_bytes = Path.write_bytes
+
+    def interrupted(self, data):
+        write_bytes(self, data[: len(data) // 2])
+        raise OSError("disk full")
+
+    with monkeypatch.context() as patch, pytest.raises(OSError, match="disk full"):
+        patch.setattr(Path, "write_bytes", interrupted)
+        gost_transits(45.0, 20.0, **GOST_QUERY)
+    assert list((tmp_path / "gost").iterdir()) == []
+
+
+def test_an_empty_ccd_row_is_refused_rather_than_cast():
+    """A row column with an empty cell is an error, as an unreadable field of view is."""
+
+    def table(rows: str) -> bytes:
+        return (
+            '<?xml version="1.0"?><VOTABLE xmlns="http://www.ivoa.net/xml/VOTable/v1.3">'
+            '<RESOURCE type="results"><TABLE><FIELD name="t_start" datatype="double"/>'
+            '<FIELD name="t_stop" datatype="double"/><FIELD name="ccd_row" datatype="int"/>'
+            f"<DATA><TABLEDATA>{rows}</TABLEDATA></DATA></TABLE></RESOURCE></VOTABLE>"
+        ).encode()
+
+    full = table(
+        "<TR><TD>57000.0</TD><TD>57000.001</TD><TD>4</TD></TR>"
+        "<TR><TD>57001.0</TD><TD>57001.001</TD><TD>6</TD></TR>"
+        "<TR><TD>57002.0</TD><TD>57002.001</TD><TD>5</TD></TR>"
+    )
+    parsed = gaia_module._parse_gost(full, ra_deg=0.0, dec_deg=0.0, source="test")
+    np.testing.assert_array_equal(parsed.ccd_row, [4, 6, 5])
+    gap = table(
+        "<TR><TD>57000.0</TD><TD>57000.001</TD><TD>4</TD></TR>"
+        "<TR><TD>57001.0</TD><TD>57001.001</TD><TD></TD></TR>"
+        "<TR><TD>57002.0</TD><TD>57002.001</TD><TD>5</TD></TR>"
+    )
+    with pytest.raises(ValueError, match="CCD row is empty in 1 of 3 rows"):
+        gaia_module._parse_gost(gap, ra_deg=0.0, dec_deg=0.0, source="test")
 
 
 def test_gost_transits_validates_what_it_is_given():
@@ -678,6 +764,18 @@ def test_delivery_masks_what_reads_a_masked_detector_pixel():
     assert np.all(delivered[0].ivar[~reads_it & inside] > 0.0)
 
 
+def test_delivery_refuses_air_wavelengths():
+    """The product grids are vacuum; an air-scale epoch would be read about 80 km/s off."""
+    detector = _flat_detector_dataset(2, 0.05)
+    for medium in (None, "vacuum"):
+        epochs = [dataclasses.replace(e, medium=medium) for e in detector]
+        delivered, _ = deliver(ab.Dataset(epochs, frame="barycentric"), RVS_DR4_EPOCH)
+        assert all(e.medium == "vacuum" for e in delivered)
+    air = [dataclasses.replace(e, medium="air") for e in detector]
+    with pytest.raises(ValueError, match="epoch 0 is on the air wavelength scale"):
+        deliver(ab.Dataset(air, frame="barycentric"), RVS_DR4_EPOCH)
+
+
 # ---------------------------------------------------------------------------
 # the one-call simulator
 # ---------------------------------------------------------------------------
@@ -795,6 +893,35 @@ def test_per_transit_resolving_powers_are_applied_but_the_nominal_one_is_declare
     np.testing.assert_allclose(declared.lsf_sigma_kms, truth.lsf_sigma_kms)
     # The same seed and the same resolving powers give the same noise draw.
     np.testing.assert_array_equal(declared[0].flux, dataset[0].flux)
+
+
+def test_each_resolving_power_has_its_kernel_and_the_detector_declares_its_width():
+    """Distinct R that round to one integer are not merged, and a detector epoch declares
+    the full width of its lines, not the quadrature width applied to the library."""
+    grid = rvs_model_grid(150.0, dv_kms=3.0)
+    components = _toy_components(grid)
+    r = np.array([11_500.2, 11_500.4, 12_000.0, 11_500.2])
+    _, truth = simulate_rvs_dataset(
+        components,
+        grid,
+        bjd=uniform_phase_times(4.0, 4),
+        light_fractions=NOTEBOOK_LIGHT,
+        orbit=NOTEBOOK_ORBIT,
+        snr=50.0,
+        resolving_power=r,
+        library_resolving_power=20_000.0,
+        seed=2,
+    )
+    instruments = [e.instrument for e in truth.detector]
+    assert len(set(instruments)) == 3
+    assert instruments[0] == instruments[3] != instruments[1]
+    assert instruments[2] == "RVS-detector-R12000"
+    np.testing.assert_allclose(
+        [e.lsf_sigma_kms for e in truth.detector], [rvs_lsf_sigma_kms(x) for x in r]
+    )
+    np.testing.assert_allclose(
+        truth.quadrature_sigma_kms, [quadrature_sigma_kms(2e4, x) for x in r]
+    )
 
 
 def test_per_epoch_snr_is_honoured():
