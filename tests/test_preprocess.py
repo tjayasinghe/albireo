@@ -303,6 +303,30 @@ def test_share_wavelength_grid_preserves_flux_sample_identity():
     assert np.array_equal(aligned[1].flux, b.flux[: b.n_pixels - 3])
 
 
+def test_share_wavelength_grid_aligns_log_uniform_grids():
+    """On a log-uniform lattice the step grows along the array. An offset in units of the
+    median step placed an epoch that starts 80 pixels later 6 pixels wrong, and the call
+    raised, as for genuinely different solutions."""
+    c_kms = 299_792.458
+    lattice = 4000.0 * np.exp(np.arange(45_000) / c_kms)  # 1 km/s pixels, 4000-4648 A
+    starts, stops = (40, 0, 120, 5), (44_000, 43_900, 45_000, 44_500)
+    epochs = [
+        EpochData(
+            wave=lattice[a:b] * (1.0 + 1e-4 * k / c_kms),
+            flux=np.arange(a, b, dtype=float),  # each sample's index on the lattice
+            ivar=np.ones(b - a),
+            bjd=2453000.0 + k,
+        )
+        for k, (a, b) in enumerate(zip(starts, stops, strict=True))
+    ]
+    aligned = share_wavelength_grid(epochs)
+    assert all(e.wave is aligned[0].wave for e in aligned)
+    for e in aligned:
+        np.testing.assert_array_equal(e.flux, aligned[0].flux)
+    assert aligned[0].flux[0] == 120.0 and aligned[0].flux[-1] == 43_899.0
+    np.testing.assert_array_equal(aligned[0].wave, lattice[120:43_900])
+
+
 def test_share_wavelength_grid_refuses_genuinely_different_grids():
     a = _epoch(n=500, lo=4000.0, hi=4600.0)
     b = _epoch(n=500, lo=4000.5, hi=4600.5)  # half an Angstrom = many pixels of mismatch

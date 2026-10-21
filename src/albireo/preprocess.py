@@ -978,6 +978,26 @@ def mask_flux_gaps(epoch: EpochData, *, min_run: int = 8, warn: bool = True) -> 
     return _replace(epoch, ivar=ivar)
 
 
+def _lattice_offset(wave: np.ndarray, reference: np.ndarray, step: float | None) -> int:
+    """The index on ``reference``'s lattice of ``wave[0]``, rounded to a whole pixel.
+
+    With ``step`` given this is ``round((wave[0] - reference[0]) / step)``. Otherwise it is
+    the fractional index of ``wave[0]`` among the reference wavelengths, or minus that of
+    ``reference[0]`` among ``wave`` when the epoch starts first, which follows a lattice
+    whose step changes along it (a log-uniform grid). An epoch that does not reach the
+    reference gets an offset that leaves no overlap.
+    """
+    if step is not None:
+        return round((wave[0] - reference[0]) / step)
+    if wave[0] >= reference[0]:
+        if wave[0] > reference[-1]:
+            return int(reference.size)
+        return round(float(np.interp(wave[0], reference, np.arange(reference.size))))
+    if reference[0] > wave[-1]:
+        return -int(wave.size)
+    return -round(float(np.interp(reference[0], wave, np.arange(wave.size))))
+
+
 def share_wavelength_grid(
     epochs: Sequence[EpochData], *, atol_kms: float = 0.05, step: float | None = None
 ) -> list[EpochData]:
@@ -997,10 +1017,15 @@ def share_wavelength_grid(
     ``atol_kms``. Epochs are trimmed to their common overlap, so the shared array is exact
     for all of them.
 
-    Alignment is by index, ``round((wave[0] - reference[0]) / step)``, not by value
-    comparison. A search for the nearest wavelength at a window edge can be off by one native
-    pixel, and one FEROS pixel is 1.4 km/s, a radial-velocity error far larger than the
-    sub-pixel mismatch being corrected.
+    Alignment is by index, not by value comparison: the first sample of each epoch is placed
+    on the reference epoch's lattice (the first epoch of its instrument) at its fractional
+    pixel index, rounded, and every later sample follows by its own index. With ``step``
+    given the index is ``round((wave[0] - reference[0]) / step)``. A search for the nearest
+    wavelength at a window edge can be off by one native pixel, and one FEROS pixel is
+    1.4 km/s, a radial-velocity error far larger than the sub-pixel mismatch being
+    corrected. The fractional index follows a lattice whose step changes along it, such as
+    a log-uniform grid, on which a single median step misplaces an epoch that starts
+    several pixels later.
 
     Parameters
     ----------
@@ -1011,8 +1036,8 @@ def share_wavelength_grid(
         Largest wavelength relabelling tolerated, as a velocity. Default 0.05 km/s
         (about 1/50 of a FEROS pixel and 1/50 of its LSF sigma). Raises if exceeded.
     step : float, optional
-        Wavelength step of the common grid. Default: the median step of the first epoch
-        of each instrument. Only used for the index alignment.
+        Wavelength step of the common grid, for a lattice of constant step. Default: the
+        reference epoch's own wavelengths. Only used for the index alignment.
 
     Returns
     -------
@@ -1050,12 +1075,12 @@ def share_wavelength_grid(
 
     for instrument, members in by_instrument.items():
         ref = epochs[members[0]]
-        dlam = float(step) if step is not None else float(np.median(np.diff(ref.wave)))
-        if not dlam > 0:
+        dlam = None if step is None else float(step)
+        if dlam is not None and not dlam > 0:
             raise ValueError(f"instrument {instrument!r}: non-positive wavelength step {dlam}")
 
         # Offset of each epoch's first sample from the reference lattice, in whole pixels.
-        offsets = [round((epochs[k].wave[0] - ref.wave[0]) / dlam) for k in members]
+        offsets = [_lattice_offset(epochs[k].wave, ref.wave, dlam) for k in members]
         # Common index window on the reference lattice: [start, stop).
         start = max(offsets)
         stop = min(off + epochs[k].n_pixels for off, k in zip(offsets, members, strict=True))
