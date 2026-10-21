@@ -104,6 +104,17 @@ class InstrumentSpec:
     snr_window: tuple[float, float] | None = None
 
 
+def _scalar_lsf_width(spec: InstrumentSpec) -> float | None:
+    """The instrument's LSF width [km/s] when it is a single number, otherwise None.
+
+    A width read from a table arrives as a NumPy scalar or a 0-d array, which a test for
+    a Python ``int`` or ``float`` would reject. A sequence of per-anchor widths has no
+    single value and gives None.
+    """
+    width = np.asarray(spec.sigma_v_lsf, dtype=np.float64)
+    return float(width) if width.ndim == 0 else None
+
+
 @dataclasses.dataclass(frozen=True)
 class OrbitParams:
     """Keplerian orbit for the simulator; components 2, 4, ... use ``omega + pi``.
@@ -259,8 +270,13 @@ def synthetic_nebular_spectrum(
         10 km/s at 10⁴ K including turbulence; the observed width is set by the
         instrument, which the simulator applies downstream.
     v_kms
-        Velocity of the nebula in the model grid's frame; must match the
-        ``nebular_v_kms`` the fit is built with.
+        Velocity of the lines on the model grid [km/s]: they are placed at
+        ``lambda * (1 + v_kms / c)``. :func:`simulate_dataset` and
+        :func:`albireo.forward.build_problem` shift the nebular component by their own
+        ``nebular_v_kms``, so the two velocities add. For a nebula at velocity ``u``,
+        pass ``u`` as ``nebular_v_kms`` and leave this at 0, the rest-frame component
+        that a fit with ``nebular_v_kms = u`` recovers. Passing ``u`` to both places the
+        lines at ``2u`` in the data.
     margin
         Fraction of the grid kept clear at each edge.
     seed
@@ -279,8 +295,8 @@ def synthetic_nebular_spectrum(
     from albireo.grids import C_KMS
     from albireo.priors import NEBULAR_LINES
 
-    if lines is None:
-        lines = list(NEBULAR_LINES.values())
+    # Read once: an iterator would be exhausted by the loop and then counted as empty.
+    lines = [float(x) for x in (NEBULAR_LINES.values() if lines is None else lines)]
     rng = np.random.default_rng(seed)
     px = np.arange(grid.n, dtype=np.float64)
     lo, hi = margin * grid.n, (1.0 - margin) * grid.n
@@ -288,7 +304,7 @@ def synthetic_nebular_spectrum(
     sigma_px = float(sigma_v_kms) / grid.dv_kms
     d = np.zeros(grid.n)
     used = 0
-    for lam in sorted(float(x) for x in lines):
+    for lam in sorted(lines):
         lam_obs = lam * (1.0 + float(v_kms) / C_KMS)
         if not (wave[0] <= lam_obs <= wave[-1]):
             continue
@@ -299,7 +315,7 @@ def synthetic_nebular_spectrum(
         used += 1
     if used == 0:
         raise ValueError(
-            f"none of the {len(list(lines))} nebular lines fall inside the model grid "
+            f"none of the {len(lines)} nebular lines fall inside the model grid "
             f"({wave[0]:.2f}-{wave[-1]:.2f} A) with a {margin:.0%} edge margin"
         )
     return d
@@ -391,7 +407,11 @@ def simulate_dataset(
         :func:`albireo.forward.with_nebular_amplitudes`).
     nebular_v_kms
         Velocity of the nebula [km/s] in the model grid's frame, matching
-        :func:`albireo.forward.build_problem`.
+        :func:`albireo.forward.build_problem`. The nebular spectrum is shifted by this
+        velocity, so its lines should be at rest on the model grid
+        (:func:`synthetic_nebular_spectrum` with ``v_kms=0``). A spectrum built with a
+        nonzero ``v_kms`` is shifted again, and its lines appear at the sum of the two
+        velocities.
     response_order, response_amplitude
         Per-epoch multiplicative Chebyshev response ``1 + sum_{m<=order} c_m T_m`` with
         ``c_m ~ N(0, response_amplitude^2)``. Amplitude 0 disables it (r = 1).
@@ -434,7 +454,9 @@ def simulate_dataset(
     for c in components:
         if c.shape != (grid.n,):
             raise ValueError(f"each component must have shape ({grid.n},); got {c.shape}")
-    bjd = np.asarray(bjd, dtype=np.float64)
+    bjd = np.atleast_1d(np.asarray(bjd, dtype=np.float64))
+    if bjd.ndim != 1:
+        raise ValueError(f"bjd must be a 1-D array of epoch times; got shape {bjd.shape}")
     n_ep = bjd.size
 
     if (orbit is None) == (velocities is None):
@@ -463,11 +485,20 @@ def simulate_dataset(
     epoch_instruments = tuple(epoch_instruments)
     if len(epoch_instruments) != n_ep:
         raise ValueError("epoch_instruments must have one entry per epoch")
+    unknown = sorted(set(epoch_instruments) - set(instruments))
+    if unknown:
+        raise ValueError(
+            f"epoch_instruments names {unknown}, which instruments does not define "
+            f"(defined: {sorted(instruments)})"
+        )
+    if not -1.0 < ar1_phi < 1.0:
+        raise ValueError(f"ar1_phi must lie in (-1, 1); got {ar1_phi}")
+    snr_per_epoch = None
     if epoch_snr is not None:
-        epoch_snr = np.asarray(epoch_snr, dtype=np.float64)
-        if epoch_snr.shape != (n_ep,):
-            raise ValueError(f"epoch_snr must have shape ({n_ep},); got {epoch_snr.shape}")
-        if not np.all(np.isfinite(epoch_snr) & (epoch_snr > 0.0)):
+        snr_per_epoch = np.asarray(epoch_snr, dtype=np.float64)
+        if snr_per_epoch.shape != (n_ep,):
+            raise ValueError(f"epoch_snr must have shape ({n_ep},); got {snr_per_epoch.shape}")
+        if not np.all(np.isfinite(snr_per_epoch) & (snr_per_epoch > 0.0)):
             raise ValueError("epoch_snr must be finite and positive")
 
     # Per-instrument static operators, built once.
@@ -492,13 +523,14 @@ def simulate_dataset(
                 )
             )
         else:
-            if not isinstance(spec.sigma_v_lsf, (int, float)):
+            width = _scalar_lsf_width(spec)
+            if width is None:
                 raise ValueError(
                     f"instrument {name!r}: per-anchor LSF widths need lsf_anchors_angstrom"
                 )
             if spec.lsf_h3 is not None:
                 raise ValueError(f"instrument {name!r}: lsf_h3 needs lsf_anchors_angstrom")
-            kernels[name] = gaussian_kernel(spec.sigma_v_lsf / grid.dv_kms)
+            kernels[name] = gaussian_kernel(width / grid.dv_kms)
 
     if telluric is not None:
         telluric = np.asarray(telluric, dtype=np.float64)
@@ -563,20 +595,11 @@ def simulate_dataset(
         noiseless = chebyshev_response(wave_native, coeffs) * flux_native
         noiseless_fluxes.append(noiseless)
 
-        snr_j = float(spec.snr) if epoch_snr is None else float(epoch_snr[j])
+        snr_j = float(spec.snr) if snr_per_epoch is None else float(snr_per_epoch[j])
         sigma = _noise_sigma(spec, wave_native, noiseless, snr_j)
-        if ar1_phi != 0.0:
-            if not -1.0 < ar1_phi < 1.0:
-                raise ValueError(f"ar1_phi must lie in (-1, 1); got {ar1_phi}")
-            eps = rng.normal(0.0, 1.0, size=n_native)
-            noise = np.empty(n_native)
-            noise[0] = eps[0]  # stationary start: marginal sd 1 everywhere
-            innov = np.sqrt(1.0 - ar1_phi**2)
-            for i in range(1, n_native):
-                noise[i] = ar1_phi * noise[i - 1] + innov * eps[i]
-            flux = noiseless + sigma * noise
-        else:
-            flux = noiseless + rng.normal(0.0, sigma, size=n_native)
+        # White noise is the phi = 0 case: sigma times the same standard normal draws
+        # that rng.normal(0, sigma) takes, so the stream and the values are unchanged.
+        flux = noiseless + sigma * _ar1_noise(rng, n_native, ar1_phi)
         sigma_arr = np.broadcast_to(np.asarray(sigma, dtype=np.float64), (n_native,)).copy()
         noise_sigmas.append(sigma_arr)
         ivar = 1.0 / sigma_arr**2
@@ -604,9 +627,7 @@ def simulate_dataset(
                 # A scalar width is recorded on the epoch, as a reader would record the
                 # header's resolving power. An anchored (per-wavelength) LSF has no
                 # single width to record.
-                lsf_sigma_kms=(
-                    float(spec.sigma_v_lsf) if isinstance(spec.sigma_v_lsf, (int, float)) else None
-                ),
+                lsf_sigma_kms=_scalar_lsf_width(spec),
             )
         )
 
@@ -671,15 +692,22 @@ def _model_applier():
 
 
 def _ar1_noise(rng, n: int, phi: float) -> np.ndarray:
-    """Stationary AR(1) process with unit marginal standard deviation."""
+    """Stationary AR(1) process with unit marginal standard deviation.
+
+    ``x_0 = e_0`` and ``x_i = phi x_{i-1} + sqrt(1 - phi^2) e_i`` with ``n`` standard
+    normal draws ``e``. The start makes the marginal standard deviation 1 at every pixel.
+    The recursion is evaluated by :func:`scipy.signal.lfilter` rather than a Python loop
+    over pixels. ``phi = 0`` returns the draws themselves.
+    """
     eps = rng.normal(0.0, 1.0, size=n)
     if phi == 0.0:
         return eps
+    from scipy.signal import lfilter  # scipy ships with jax; kept local
+
     out = np.empty(n)
     out[0] = eps[0]
     innov = np.sqrt(1.0 - phi**2)
-    for i in range(1, n):
-        out[i] = phi * out[i - 1] + innov * eps[i]
+    out[1:] = lfilter([innov], [1.0, -phi], eps[1:], zi=[phi * eps[0]])[0]
     return out
 
 
@@ -813,9 +841,17 @@ def synthetic_library(
 
     Each node is a set of Gaussian absorption lines at fixed wavelengths whose depths
     depend on the labels. Each label drives lines of its own, so the map from labels to
-    spectrum is invertible (see :func:`_library_line_depths`). Each node also has a
-    continuum that falls with Teff across the window. That wavelength dependence makes a
-    light ratio measurable.
+    spectrum is invertible (see :func:`_library_line_depths`). Each node also has a log
+    continuum ``30 + 4 ln(Teff / 5000 K)`` minus a slope in wavelength that is the same
+    at every node, so the continuum level scales as ``Teff^4`` and the continuum ratio of
+    two nodes does not depend on wavelength. A light ratio is therefore constant across
+    the window, and any information on it comes from the line depths.
+
+    The arrays of the returned library are read-only, as those of a library read by
+    :func:`albireo.library.load_library` are, so that
+    :meth:`~albireo.library.SpectralLibrary.resampled_to` and
+    :func:`albireo.library.library_interpolator` keep their results for it and
+    :func:`library_component` does not rebuild them on every call.
 
     Parameters
     ----------
@@ -882,11 +918,16 @@ def synthetic_library(
                 nodes.append((float(t), float(g), float(m)))
                 normalized.append(flux)
                 continua.append(log_continuum)
+    node_array = np.asarray(nodes, dtype=np.float64)
+    normalized_array = np.asarray(normalized, dtype=np.float64)
+    continuum_array = np.asarray(continua, dtype=np.float64)
+    for array in (node_array, normalized_array, continuum_array, wave):
+        array.flags.writeable = False
     return SpectralLibrary(
         label_names=("teff", "logg", "mh"),
-        nodes=np.asarray(nodes),
-        normalized=np.asarray(normalized),
-        log_continuum=np.asarray(continua),
+        nodes=node_array,
+        normalized=normalized_array,
+        log_continuum=continuum_array,
         wave=wave,
         medium=medium,
         meta={

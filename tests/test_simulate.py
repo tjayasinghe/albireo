@@ -290,3 +290,65 @@ def test_validation_errors():
             light_fractions=[1.0],
             instruments={"A": make_instrument()},
         )
+    with pytest.raises(ValueError, match=r"epoch_instruments names \['B'\]"):
+        simulate_basic(epoch_instruments=["A", "B", "A", "A", "A", "A"])
+    with pytest.raises(ValueError, match=r"ar1_phi must lie in \(-1, 1\)"):
+        simulate_basic(ar1_phi=1.0)
+    with pytest.raises(ValueError, match="1-D array of epoch times"):
+        simulate_basic(bjd=np.zeros((2, 3)))
+
+
+@pytest.mark.parametrize("width", [np.float32(4.0), np.int64(4), np.asarray(4.0)])
+def test_a_numpy_scalar_lsf_width_is_one_width(width):
+    """A width read from a table (a NumPy scalar or a 0-d array) is a stationary LSF.
+
+    It must give the same epochs as the Python float, and be recorded on each epoch.
+    """
+    reference, _ = simulate_basic()
+    ds, _ = simulate_basic(instruments={"A": make_instrument(sigma_v=width)})
+    assert ds[0].lsf_sigma_kms == 4.0
+    np.testing.assert_array_equal(ds[0].flux, reference[0].flux)
+
+
+def test_a_single_epoch_time_may_be_a_scalar():
+    ds, truth = simulate_basic(bjd=1.5, v_bary=np.zeros(1))
+    assert ds.n_epochs == 1
+    assert ds[0].bjd == 1.5
+    assert truth.velocities.shape == (2, 1)
+
+
+def test_ar1_noise_is_the_recursion():
+    """The AR(1) draw is ``x_i = phi x_(i-1) + sqrt(1 - phi^2) e_i`` with ``x_0 = e_0``.
+
+    The recursion runs in scipy.signal.lfilter. Its direct form forms the same product
+    ``phi * x_(i-1)`` and the same sum as the loop, so on x86-64 builds, which do not
+    contract the multiply-add, the draws are equal bit for bit and a simulation keeps
+    its recorded values.
+    """
+    from albireo.simulate import _ar1_noise
+
+    n = 4000
+    for phi in (0.3, -0.7, 0.95, 0.999):
+        for seed in range(3):
+            eps = np.random.default_rng(seed).normal(0.0, 1.0, n)
+            want = np.empty(n)
+            want[0] = eps[0]
+            innov = np.sqrt(1.0 - phi**2)
+            for i in range(1, n):
+                want[i] = phi * want[i - 1] + innov * eps[i]
+            np.testing.assert_array_equal(_ar1_noise(np.random.default_rng(seed), n, phi), want)
+    white = _ar1_noise(np.random.default_rng(4), 50, 0.0)
+    np.testing.assert_array_equal(white, np.random.default_rng(4).normal(0.0, 1.0, 50))
+
+
+def test_synthetic_library_is_read_only_so_its_projections_are_kept():
+    """The toy library behaves as a loaded one: resampling and interpolators are reused."""
+    from albireo.library import library_interpolator
+    from albireo.simulate import synthetic_library
+
+    library = synthetic_library(teff=(4500.0, 5000.0), logg=(4.0, 4.5), mh=(0.0, 0.25))
+    assert library._is_immutable()
+    grid = ab.LogGrid.from_wavelength_range(5160.0, 5240.0, dv_kms=3.0)
+    resampled = library.resampled_to(grid, medium="air")
+    assert library.resampled_to(grid, medium="air") is resampled
+    assert library_interpolator(resampled) is library_interpolator(resampled)

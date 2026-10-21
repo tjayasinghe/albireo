@@ -190,6 +190,53 @@ def test_nebular_velocity_shifts_the_component_on_the_model_grid():
     np.testing.assert_allclose(delta, float(GRID.velocity_to_pixels(150.0)))
 
 
+def _observed_nebular_velocity(*, v_kms: float, nebular_v_kms: float) -> float:
+    """Velocity [km/s] of the simulated H-beta emission line in a noiseless epoch."""
+    nebular = synthetic_nebular_spectrum(
+        GRID, lines=[HBETA], amplitude_range=(0.5, 0.5), v_kms=v_kms, seed=3
+    )
+    ds, _ = simulate_dataset(
+        GRID,
+        [np.zeros(GRID.n)],
+        bjd=np.zeros(1),
+        instruments={"inst": _instrument(snr=1e9)},
+        light_fractions=[1.0],
+        velocities=np.zeros((1, 1)),
+        v_bary=np.zeros(1),
+        frame="barycentric",
+        nebular=nebular,
+        nebular_v_kms=nebular_v_kms,
+        seed=0,
+    )
+    (epoch,) = ds
+    excess = epoch.flux - 1.0
+    velocity = ab.C_KMS * np.log(epoch.wave / HBETA)
+    peak = velocity[int(np.argmax(excess))]
+    near = np.abs(velocity - peak) < 30.0
+    return float(np.sum(velocity[near] * excess[near]) / np.sum(excess[near]))
+
+
+def test_the_simulated_nebula_moves_by_nebular_v_kms_alone():
+    """A rest-frame nebular spectrum shifted by ``nebular_v_kms`` is observed at that velocity.
+
+    The simulator, like ``build_problem``, shifts the nebular component by
+    ``nebular_v_kms``. The spectrum it is given should therefore hold its lines at rest. A
+    spectrum built with ``v_kms`` equal to the same velocity is shifted twice, and the
+    line is observed at the sum, which is the convention ``synthetic_nebular_spectrum``
+    documents.
+    """
+    u = 150.0
+    assert _observed_nebular_velocity(v_kms=0.0, nebular_v_kms=u) == pytest.approx(u, abs=2.0)
+    assert _observed_nebular_velocity(v_kms=u, nebular_v_kms=0.0) == pytest.approx(u, abs=2.0)
+    assert _observed_nebular_velocity(v_kms=u, nebular_v_kms=u) == pytest.approx(2 * u, abs=2.0)
+
+
+def test_nebular_line_count_survives_an_iterator():
+    """The error names the number of lines given, even when they arrive as an iterator."""
+    with pytest.raises(ValueError, match="none of the 2 nebular lines"):
+        synthetic_nebular_spectrum(GRID, lines=(lam for lam in (3000.0, 9000.0)))
+
+
 @pytest.mark.parametrize("frame", ["barycentric", "topocentric"])
 def test_theta_swaps_reproduce_a_fresh_build(frame):
     """``with_velocities`` / ``with_light_fractions`` leave the nebular column unchanged."""

@@ -78,7 +78,7 @@ from albireo.data import Dataset, EpochData
 from albireo.forward import build_problem, with_ar1, with_jitter
 from albireo.grids import LogGrid
 from albireo.priors import SmoothnessPrior
-from albireo.simulate import InstrumentSpec, OrbitParams
+from albireo.simulate import InstrumentSpec, OrbitParams, _scalar_lsf_width
 from albireo.solver import BlockCholesky, block_cholesky, logdet, selected_inverse_diag, solve
 
 __all__ = ["SensitivityForecast", "plan_epochs", "sensitivity_forecast"]
@@ -162,8 +162,7 @@ def plan_epochs(
         mask = None
         base_instrument, base_medium = "default", None
         # An anchored (per-wavelength) LSF has no single width to record.
-        width = np.asarray(template.sigma_v_lsf, dtype=np.float64)
-        lsf = float(width) if width.ndim == 0 else None
+        lsf = _scalar_lsf_width(template)
     elif isinstance(template, EpochData):
         wave = template.wave
         ivar = template.ivar if snr is None else np.where(template.ivar > 0.0, float(snr) ** 2, 0.0)
