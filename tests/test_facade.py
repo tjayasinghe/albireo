@@ -619,6 +619,8 @@ def test_the_semi_amplitude_scan_finds_the_basin_the_start_missed(dataset, truth
     init["t_conj"] = phase.best
     scan = scanner._scan_semi_amplitudes(init)
     assert scan is not None and scan.gain > 0.0 and scan.dv_kms == scanner.grid.dv_kms
+    # The sweeps of the scan all have one trial count, so one compiled program serves them.
+    assert scanner.model._sweep_jit._cache_size() == 1
     for best, k_true in zip(scan.best, truth["k"], strict=True):
         assert max(best / k_true, k_true / best) < 1.3, (scan.best, truth["k"])
     fit = dis.fit(max_steps=150)
@@ -1427,3 +1429,80 @@ def test_smoothness_starts_must_be_positive(dataset):
     with pytest.raises(ValueError, match=r"within \[-1, 1\]"):
         _dis(dataset, noise_correlation=ab.Between(-1.5, 0.9))
     assert "ar1_phi" in _dis(dataset, noise_correlation=ab.Between(-1.0, 1.0)).priors
+
+
+# -- the compiled programs of the scans ------------------------------------------------
+
+
+def test_the_scan_batch_is_sixteen_unless_a_batch_would_exceed_its_memory_budget(dataset):
+    """52 bytes per band entry and component, measured from XLA's buffer assignment."""
+    from albireo.facade import Disentangler
+
+    assert _dis(dataset)._scan_declaration()._scan_batch() == 16
+
+    def batch(n_components, n_pixels, half_bandwidth):
+        problem = SimpleNamespace(n_components=n_components, grid=SimpleNamespace(n=n_pixels))
+        model = SimpleNamespace(problem=problem, half_bandwidth=half_bandwidth)
+        return Disentangler._scan_batch(SimpleNamespace(model=model))
+
+    # A coarse echelle grid of 4,309 pixels at half-bandwidth 156 needs 140 MB per trial.
+    assert batch(2, 4309, 156) == 7
+    assert batch(3, 4309, 156) == 3
+    assert batch(2, 1000, 50) == 16
+    assert batch(2, 200_000, 400) == 1
+
+
+def test_every_sweep_of_the_scan_has_one_size(dataset, monkeypatch):
+    """A sweep is compiled per trial count; chunks of one size share one program."""
+    dis = _dis(dataset)
+    scanner = dis._scan_declaration()
+    model = scanner.model
+    sizes = []
+
+    def sweep(theta, trials, *, batch_size=None, problem=None):
+        k = np.asarray(trials["k"], dtype=float)
+        sizes.append((k.shape[0], batch_size))
+        # A value that identifies each trial, so the reassembly can be checked.
+        return -np.abs(k[:, 0] - 40.0) - np.abs(k[:, 1] - 60.0) - np.asarray(trials["t_conj"])
+
+    def single(theta):
+        k = np.asarray(theta["k"], dtype=float)
+        return -abs(k[0] - 40.0) - abs(k[1] - 60.0) - float(np.asarray(theta["t_conj"]))
+
+    monkeypatch.setattr(model, "log_likelihood_sweep", sweep)
+    monkeypatch.setattr(model, "log_likelihood", single)
+    scan = scanner._scan_semi_amplitudes(dict(dis.init))
+    assert scan is not None and len(sizes) > 1
+    assert {size for size, _ in sizes} == {16} and {b for _, b in sizes} == {16}
+    # Each recorded value is that of its own trial: the padding was trimmed in order.
+    expected = -np.abs(scan.k[:, 0] - 40.0) - np.abs(scan.k[:, 1] - 60.0) - np.asarray(scan.t_conj)
+    np.testing.assert_array_equal(scan.values, expected)
+
+
+def test_the_amplitude_profile_keeps_the_sites_of_the_scans(dataset, monkeypatch):
+    """Scaling the light added a site, and the marginal was compiled again for it. The
+    invariance L(c l, tau, eta) = L(l, tau / c^2, eta / c^2) gives the same profile with
+    the hyperparameters of the star moved instead."""
+    dis = _dis(dataset)
+    scanner = dis._scan_declaration()
+    seen = []
+    target = {0: 0.25, 1: 2.0}  # the profile maximum of each star, in c
+
+    def log_likelihood(theta):
+        seen.append(theta)
+        shift = np.asarray(theta["log_tau"]) - np.asarray(dis.init["log_tau"])
+        c = np.exp(-0.5 * shift)
+        return -sum(abs(np.log(c[j] / target[j])) for j in target)
+
+    monkeypatch.setattr(scanner.model, "log_likelihood", log_likelihood)
+    profile = scanner._profile_prior_amplitudes(dict(dis.init))
+    assert profile == pytest.approx(target)
+    keys = set(scanner._theta_at(dict(dis.init)))
+    assert all(set(theta) == keys for theta in seen)
+    for theta in seen:
+        np.testing.assert_allclose(
+            np.asarray(theta["log_eta"]) - np.asarray(dis.init["log_eta"]),
+            np.asarray(theta["log_tau"]) - np.asarray(dis.init["log_tau"]),
+        )
+    # Trials keep the scaled light at or below 0.98: five at 0.62, six at 0.38.
+    assert len(seen) == 5 + 6

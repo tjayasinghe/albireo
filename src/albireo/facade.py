@@ -46,6 +46,7 @@ from albireo.data import Dataset
 from albireo.forward import PER_EPOCH, data_residual_zscores, declared_lsf_widths
 from albireo.grids import C_KMS, LogGrid
 from albireo.inference import (
+    _SWEEP_BATCH_BYTES,
     LaplaceCheck,
     MarginalOrbitModel,
     keplerian_residuals,
@@ -91,6 +92,15 @@ _V_BARY_MAX = 30.0
 # double count. Slack also has a cost: the solver bandwidth grows with the budget and the
 # solve cost grows with the bandwidth.
 _BUDGET_SLACK = 1.05
+# Trials per compiled batch of the semi-amplitude scan (D62), and the bytes one trial of
+# the scan's sweep holds per component for each entry of the (n, half_bandwidth) band,
+# with n the number of components times the grid size. XLA's buffer assignment of the
+# compiled sweep gave 100-108 bytes per band entry at two components and 147-164 at three
+# (a 1,809-pixel coarse grid at half-bandwidth 156), so the constant is about a factor of
+# the component count above the 48 of albireo.inference._sweep_batch_default. It sizes
+# the batch on large problems only: below about 1 GiB per batch the scan keeps 16.
+_SCAN_BATCH = 16
+_SCAN_BYTES_PER_BAND_ENTRY = 52
 # Headroom factor for the free table of a `velocities=` declaration. It is a convention,
 # not a measurement: the declared velocities are a starting point, and the fit must be able
 # to move without reaching the bandwidth guard. It is reported as its own budget term.
@@ -1904,14 +1914,21 @@ class Disentangler:
         was 43 nats higher in the coarse scan, and at the same orbit the declared
         amplitude was 150 nats below the profile maximum.
 
-        For each star in turn the light in ``theta`` is scaled by ``c`` over a geometric
-        grid from ``1/span`` to ``span`` at ``ratio`` between neighbours (the scaled
-        fraction kept below 0.98), with the other stars and every other site at their
-        ``init`` values. The ``c`` with the highest marginal log-likelihood is returned.
-        This takes nine evaluations per star through the compiled marginal.
+        For each star in turn the light-equivalent amplitude is scaled by ``c`` over a
+        geometric grid from ``1/span`` to ``span`` at ``ratio`` between neighbours (the
+        scaled fraction ``c`` times the declared light kept below 0.98), with the other
+        stars and every other site at their ``init`` values. The ``c`` with the highest
+        marginal log-likelihood is returned. Through the invariance the scaling is applied
+        to the star's ``log_tau`` and ``log_eta``, each lowered by ``2 ln c``, rather than
+        to its light: ``theta`` then keeps the sites of the scans, and the marginal
+        compiled for them is reused. The two forms agree to about 1e-10 nats. A star takes
+        one evaluation per trial, nine at most: five at a light of 0.62 and six at 0.38
+        with the defaults.
         """
         theta = self._theta_at(init)
         lights = np.array([s.light for s in self.stars], dtype=float)
+        log_tau = np.array(theta["log_tau"], dtype=float)
+        log_eta = np.array(theta["log_eta"], dtype=float)
         n = max(3, math.ceil(2.0 * math.log(span) / math.log(ratio)) + 1)
         grid = np.geomspace(1.0 / span, span, n)
         grid = np.unique(np.concatenate([grid, [1.0]]))
@@ -1920,11 +1937,12 @@ class Disentangler:
             trials = grid[grid * lights[j] <= 0.98]
             values = []
             for c in trials:
-                scaled = lights.copy()
-                scaled[j] = c * lights[j]
-                values.append(
-                    float(self.model.log_likelihood({**theta, "light": jnp.asarray(scaled)}))
-                )
+                # Star j is model row j (ordered_components puts the stars first).
+                tau_c, eta_c = log_tau.copy(), log_eta.copy()
+                tau_c[j] -= 2.0 * math.log(c)
+                eta_c[j] -= 2.0 * math.log(c)
+                at = {**theta, "log_tau": jnp.asarray(tau_c), "log_eta": jnp.asarray(eta_c)}
+                values.append(float(self.model.log_likelihood(at)))
             values = np.asarray(values)
             if not np.isfinite(values).any():
                 out[j] = 1.0
@@ -1979,6 +1997,23 @@ class Disentangler:
         semi-amplitudes and the phase affordable.
         """
         return replace(self, dv_kms=2.0 * float(self.grid.dv_kms))
+
+    def _scan_batch(self) -> int:
+        """Trials per compiled batch of the semi-amplitude scan: 16, or fewer above 1 GiB.
+
+        One trial of the sweep holds about ``_SCAN_BYTES_PER_BAND_ENTRY`` bytes for each
+        entry of the ``(n, half_bandwidth)`` band per component, with ``n`` the number of
+        components times the grid size (measured from XLA's buffer assignment). The batch
+        is cut so that its temporaries stay within the sweep budget of
+        :mod:`albireo.inference`. On a problem of a few thousand model pixels it is 16, the
+        size the scan has always used; on a coarse grid of 4,309 pixels at half-bandwidth
+        156 it is 7.
+        """
+        problem = self.model.problem
+        n_components = int(problem.n_components)
+        band = n_components * int(problem.grid.n) * max(int(self.model.half_bandwidth), 1)
+        per_trial = _SCAN_BYTES_PER_BAND_ENTRY * n_components * band
+        return max(1, min(_SCAN_BATCH, _SWEEP_BATCH_BYTES // per_trial))
 
     def _has_ranged_k(self) -> bool:
         if self.orbit is None:
@@ -2056,12 +2091,26 @@ class Disentangler:
         theta = self._theta_at(init)
         theta["t_conj"] = jnp.asarray(t_conj)
         history: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
+        batch = self._scan_batch()
 
         def evaluate(k_trials, t_trials):
-            # Batches of sixteen keep the compiled sweep small. There are hundreds of trials.
-            sweep = {"k": jnp.asarray(k_trials), "t_conj": jnp.asarray(t_trials)}
-            values = self.model.log_likelihood_sweep(theta, sweep, batch_size=16)
-            return np.asarray(values, dtype=float)
+            # The trials go through the compiled sweep in chunks of exactly `batch`, the
+            # last one padded with copies of its final trial. A sweep is compiled once per
+            # trial count, and the calls below have five different counts; with one chunk
+            # size, one program serves the whole scan.
+            k_trials = np.asarray(k_trials, dtype=float)
+            t_trials = np.asarray(t_trials, dtype=float)
+            values = np.empty(t_trials.size)
+            for lo in range(0, t_trials.size, batch):
+                k_part, t_part = k_trials[lo : lo + batch], t_trials[lo : lo + batch]
+                m = t_part.size
+                if m < batch:
+                    k_part = np.concatenate([k_part, np.repeat(k_part[-1:], batch - m, axis=0)])
+                    t_part = np.concatenate([t_part, np.repeat(t_part[-1:], batch - m)])
+                sweep = {"k": jnp.asarray(k_part), "t_conj": jnp.asarray(t_part)}
+                part = self.model.log_likelihood_sweep(theta, sweep, batch_size=batch)
+                values[lo : lo + m] = np.asarray(part, dtype=float)[:m]
+            return values
 
         def value_at(k, t):
             at = {**theta, "k": jnp.asarray(k), "t_conj": jnp.asarray(float(t))}
