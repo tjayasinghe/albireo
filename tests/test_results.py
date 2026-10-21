@@ -8,6 +8,8 @@ the deviation ``d`` instead would produce a wrong file without an error.
 
 from __future__ import annotations
 
+import dataclasses
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -86,6 +88,31 @@ def test_map_result_round_trips(map_result, tmp_path):
         np.testing.assert_allclose(loaded.unconstrained[name], value)
 
 
+def test_map_result_keeps_its_potential_trace(map_result, tmp_path):
+    """The trace is the convergence diagnostic that potential_fall reads."""
+    traced = dataclasses.replace(
+        map_result, potential_trace=tuple(-1200.0 - 30.0 * np.sqrt(np.arange(30.0)))
+    )
+    loaded = load_fit(save_fit(traced, tmp_path / "traced.npz"))
+
+    assert loaded.potential_trace == traced.potential_trace
+    assert loaded.potential_fall() == traced.potential_fall()
+    # A file without the trace, as written before it was saved, still loads.
+    assert load_fit(save_fit(map_result, tmp_path / "plain.npz")).potential_trace == ()
+
+
+def test_save_fit_appends_the_suffix_rather_than_replacing_one(map_result, k2_result, tmp_path):
+    """with_suffix wrote "AI_Phe.map" and "AI_Phe.k2" to the same AI_Phe.npz."""
+    first = save_fit(map_result, tmp_path / "AI_Phe.map")
+    second = save_fit(k2_result, tmp_path / "AI_Phe.k2")
+
+    assert (first.name, second.name) == ("AI_Phe.map.npz", "AI_Phe.k2.npz")
+    assert type(load_fit(first)) is MAPResult
+    assert type(load_fit(second)) is K2ScanResult
+    assert save_fit(map_result, tmp_path / "run_v1.2").name == "run_v1.2.npz"
+    assert save_fit(map_result, tmp_path / "done.npz").name == "done.npz"
+
+
 def test_k2_result_round_trips_without_its_model(k2_result, tmp_path):
     loaded = load_fit(save_fit(k2_result, tmp_path / "scan.npz"))
 
@@ -122,6 +149,18 @@ def test_a_precision_free_result_explains_itself_rather_than_crashing(marginal_r
     # inside the block Cholesky on a None.
     with pytest.raises(ValueError, match="precision=True"):
         _ = loaded.chol
+
+
+def test_a_loaded_marginal_result_can_be_saved_again(marginal_result, tmp_path):
+    """save_fit(load_fit(path)) raised, because the default save recomputed the band."""
+    loaded = load_fit(save_fit(marginal_result, tmp_path / "marginal.npz"))
+    again = load_fit(save_fit(loaded, tmp_path / "again.npz"))
+
+    np.testing.assert_array_equal(again.d_hat, loaded.d_hat)
+    np.testing.assert_array_equal(again.d_std, loaded.d_std)
+    assert again.precision is None
+    with pytest.raises(ValueError, match="precision=True cannot"):
+        save_fit(loaded, tmp_path / "full.npz", precision=True)
 
 
 def test_marginal_result_can_keep_its_precision(marginal_result, tmp_path):
@@ -221,6 +260,26 @@ def test_to_inference_data_ignores_wrongly_sized_component_names(toy_mcmc):
     assert list(idata.posterior["k"].coords["component"].values) == ["K_1", "K_2"]
 
 
+def test_to_inference_data_falls_back_when_arviz_cannot_read_the_run(toy_mcmc, monkeypatch):
+    """The fallback called arviz 0.x's from_dict keywords, which arviz 1.x rejects.
+
+    It also read the sample statistics from a key numpyro never stores, so the divergences
+    were dropped under either version.
+    """
+    az = pytest.importorskip("arviz")
+
+    def refuse(*args, **kwargs):
+        raise TypeError("cannot inspect the model arguments")
+
+    monkeypatch.setattr(az, "from_numpyro", refuse)
+    with pytest.warns(RuntimeWarning, match="cannot inspect the model arguments"):
+        idata = ab.to_inference_data(toy_mcmc)
+
+    assert list(idata.posterior["k"].coords["component"].values) == ["K_1", "K_2"]
+    assert idata.posterior["period"].shape == (1, 100)
+    assert idata.sample_stats["diverging"].shape == (1, 100)
+
+
 def test_inference_data_round_trips_through_netcdf(toy_mcmc, tmp_path):
     az = pytest.importorskip("arviz")
     pytest.importorskip("h5netcdf")
@@ -263,6 +322,18 @@ def test_write_ascii_splits_components_and_keeps_errors(small_grid, tmp_path):
 def test_write_ascii_rejects_a_mismatched_grid(small_grid, tmp_path):
     with pytest.raises(ValueError, match="pixels but the grid has"):
         write_ascii(tmp_path / "bad.txt", small_grid, np.zeros(small_grid.n + 5))
+
+
+def test_write_ascii_writes_one_requested_component_to_the_path_given(small_grid, tmp_path):
+    d = np.stack([np.zeros(small_grid.n), np.full(small_grid.n, -0.2)])
+    path = write_ascii(tmp_path / "second.txt", small_grid, d, component=1)
+
+    assert path == tmp_path / "second.txt"
+    np.testing.assert_allclose(np.loadtxt(path)[:, 1], 0.8, rtol=1e-9)
+    # A negative index selected a component from the end but labelled it "component 0".
+    for bad in (-1, 2):
+        with pytest.raises(ValueError, match=r"component must be in \[0, 2\)"):
+            write_ascii(tmp_path / "bad.txt", small_grid, d, component=bad)
 
 
 def test_write_spectra_fits_round_trips(small_grid, tmp_path):

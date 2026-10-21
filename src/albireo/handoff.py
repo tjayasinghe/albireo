@@ -40,6 +40,8 @@ from pathlib import Path
 
 import numpy as np
 
+from albireo.results import _component_paths
+
 __all__ = [
     "export_draws",
     "write_gssp",
@@ -53,8 +55,8 @@ __all__ = [
 _ISPEC_ERR_FLOOR = 1e-8
 
 
-def _components(d_hat, std, component):
-    """Normalize (d_hat, std) to 2-D and pick the components to write."""
+def _components(d_hat, std):
+    """Normalize ``d_hat`` and ``std`` to 2-D, checking that their shapes agree."""
     d_hat = np.atleast_2d(np.asarray(d_hat, dtype=float))
     if std is None:
         std_arr = None
@@ -62,16 +64,7 @@ def _components(d_hat, std, component):
         std_arr = np.atleast_2d(np.asarray(std, dtype=float))
         if std_arr.shape != d_hat.shape:
             raise ValueError(f"std has shape {std_arr.shape}, expected {d_hat.shape}")
-    indices = range(d_hat.shape[0]) if component is None else [component]
-    return d_hat, std_arr, list(indices)
-
-
-def _paths(path, indices, n_comp):
-    """One path per component, with ``_1``, ``_2`` … inserted when there is more than one."""
-    path = Path(path)
-    if len(indices) == 1 and n_comp == 1:
-        return [path]
-    return [path.with_name(f"{path.stem}_{i + 1}{path.suffix}") for i in indices]
+    return d_hat, std_arr
 
 
 def _linear_grid(wave, step_angstrom):
@@ -106,7 +99,8 @@ def write_gssp(path, grid, d_hat, *, component=None, step_angstrom=None, dilute=
         Deviation spectra, shape ``(n_comp, n_pix)`` or ``(n_pix,)``. Written as flux
         ``1 + d``, the normalized component spectrum.
     component
-        Write only this component (0-based).
+        Write only this component (0-based), to ``path`` unchanged, as
+        :func:`albireo.results.write_ascii` does.
     step_angstrom
         Wavelength step of the written grid. Defaults to the median spacing of ``grid``. The
         written grid is always equidistant: GSSP infers the step of its synthetic spectra
@@ -138,16 +132,17 @@ def write_gssp(path, grid, d_hat, *, component=None, step_angstrom=None, dilute=
     ----------
     Tkachenko, A. 2015, A&A, 581, A129
     """
-    d_hat, _, indices = _components(d_hat, None, component)
+    d_hat, _ = _components(d_hat, None)
     wave = np.asarray(grid.wave, dtype=float)
     if d_hat.shape[-1] != wave.size:
         raise ValueError(
             f"d_hat has {d_hat.shape[-1]} pixels but the grid has {wave.size}; "
             "they must be the spectra and the grid from the same fit."
         )
+    targets = _component_paths(path, d_hat.shape[0], component)
     out_wave = _linear_grid(wave, step_angstrom)
     written = []
-    for target, i in zip(_paths(path, indices, d_hat.shape[0]), indices, strict=True):
+    for i, target in targets:
         flux = np.interp(out_wave, wave, 1.0 + d_hat[i])
         # No header: GSSP's reader takes two numeric columns and nothing else.
         np.savetxt(target, np.column_stack([out_wave, flux]), fmt="%.8f %.8f")
@@ -173,7 +168,7 @@ def write_ispec(path, grid, d_hat, std=None, *, component=None, err_floor=_ISPEC
         written at ``err_floor``: the column is not optional, and a two-column file is read
         by an undocumented legacy parser instead of being rejected.
     component
-        Write only this component (0-based).
+        Write only this component (0-based), to ``path`` unchanged.
     err_floor
         Smallest error written. iSpec discards pixels with ``err <= 0`` instead of
         down-weighting them, so a zero posterior standard deviation would silently remove
@@ -203,7 +198,7 @@ def write_ispec(path, grid, d_hat, std=None, *, component=None, err_floor=_ISPEC
     ----------
     Blanco-Cuaresma, S. et al. 2014, A&A, 569, A111
     """
-    d_hat, std_arr, indices = _components(d_hat, std, component)
+    d_hat, std_arr = _components(d_hat, std)
     wave_nm = np.asarray(grid.wave, dtype=float) / 10.0
     if d_hat.shape[-1] != wave_nm.size:
         raise ValueError(
@@ -211,7 +206,7 @@ def write_ispec(path, grid, d_hat, std=None, *, component=None, err_floor=_ISPEC
             "they must be the spectra and the grid from the same fit."
         )
     written = []
-    for target, i in zip(_paths(path, indices, d_hat.shape[0]), indices, strict=True):
+    for i, target in _component_paths(path, d_hat.shape[0], component):
         flux = 1.0 + d_hat[i]
         if std_arr is None:
             err = np.full_like(flux, err_floor)
@@ -253,7 +248,11 @@ def export_draws(directory, grid, draws, *, format="gssp", prefix="draw", **kwar
     prefix
         Filename stem. Files are ``{prefix}_{draw:04d}_{component}.{ext}``.
     **kwargs
-        Passed to the underlying writer.
+        Passed to the underlying writer. ``std`` (``format="ispec"`` only) is the pointwise
+        standard deviation of the components, shape ``(n_comp, n_pix)`` as returned by
+        :func:`albireo.likelihood.spectra_std`, and row ``i`` is written as the error
+        column of component ``i`` in every draw. A 1-D ``std`` is accepted for a single
+        component only.
 
     Returns
     -------
@@ -314,14 +313,34 @@ def export_draws(directory, grid, draws, *, format="gssp", prefix="draw", **kwar
             f"draws must have shape (n_draws, n_comp, n_pix), got {draws.shape}; "
             "pass the array from albireo.likelihood.draw_spectra unchanged"
         )
+    n_comp, n_pix = draws.shape[1:]
+
+    # Each component is written by its own call with a 1-D spectrum, so a per-component
+    # std is split by row here rather than passed whole to every call.
+    per_component_std: list[np.ndarray | None] = [None] * n_comp
+    std = kwargs.pop("std", None)
+    if std is not None:
+        if format != "ispec":
+            raise TypeError("std is written only by format='ispec'; GSSP reads no error column")
+        std_arr = np.asarray(std, dtype=float)
+        if std_arr.ndim == 1 and n_comp == 1:
+            std_arr = std_arr[None, :]
+        if std_arr.shape != (n_comp, n_pix):
+            raise ValueError(
+                f"std has shape {std_arr.shape}, expected ({n_comp}, {n_pix}): one row per "
+                "component, as albireo.likelihood.spectra_std returns"
+            )
+        per_component_std = [row for row in std_arr]
+
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
 
     out: list[list[Path]] = []
     for k, draw in enumerate(draws):
         per_draw = []
-        for i in range(draw.shape[0]):
+        for i in range(n_comp):
             target = directory / f"{prefix}_{k:04d}_{i + 1}{suffix}"
-            per_draw.append(Path(writer(target, grid, draw[i], component=None, **kwargs)))
+            extra = {} if per_component_std[i] is None else {"std": per_component_std[i]}
+            per_draw.append(Path(writer(target, grid, draw[i], component=None, **extra, **kwargs)))
         out.append(per_draw)
     return out

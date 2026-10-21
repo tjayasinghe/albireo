@@ -25,6 +25,8 @@ spectrum draws.
 from __future__ import annotations
 
 import json
+import operator
+import warnings
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -100,12 +102,16 @@ def save_fit(result, path, *, precision: bool = False, compress: bool = True) ->
     Returns
     -------
     pathlib.Path
-        The path written, with the ``.npz`` suffix applied if it was missing.
+        The path written. ``.npz`` is appended to a name that does not end in it, so
+        ``"AI_Phe.map"`` is written as ``AI_Phe.map.npz``.
 
     Raises
     ------
     TypeError
         If ``result`` is not one of the supported result types.
+    ValueError
+        If ``precision=True`` for a :class:`~albireo.likelihood.MarginalResult` that has
+        no precision, i.e. one read by :func:`load_fit` from a file saved without it.
 
     Notes
     -----
@@ -117,7 +123,9 @@ def save_fit(result, path, *, precision: bool = False, compress: bool = True) ->
     """
     path = Path(path)
     if path.suffix != ".npz":
-        path = path.with_suffix(".npz")
+        # Appended rather than substituted: with_suffix would write "AI_Phe.map" and
+        # "AI_Phe.k2" to the same AI_Phe.npz.
+        path = path.with_name(path.name + ".npz")
 
     kind = type(result).__name__
     writer = _SAVERS.get(kind)
@@ -206,6 +214,9 @@ def _save_map(result, header, arrays, **_):
     header["unconstrained"] = sorted(result.unconstrained)
     arrays.update(_flatten_mapping("params", result.params))
     arrays.update(_flatten_mapping("unconstrained", result.unconstrained))
+    # The per-step potential, read by MAPResult.potential_fall. Optional on read, so that a
+    # file written before the trace was saved still loads.
+    arrays["potential_trace"] = np.asarray(result.potential_trace, dtype=np.float64)
 
 
 def _load_map(header, arrays):
@@ -215,6 +226,7 @@ def _load_map(header, arrays):
         params=_unflatten_mapping("params", arrays),
         unconstrained=_unflatten_mapping("unconstrained", arrays),
         **header["scalars"],
+        potential_trace=tuple(float(v) for v in arrays.get("potential_trace", ())),
     )
 
 
@@ -275,7 +287,20 @@ def _save_marginal(result, header, arrays, *, precision: bool = False):
     arrays["log_likelihood"] = _as_numpy(result.log_likelihood)
     arrays["d_hat"] = _as_numpy(result.d_hat)
 
-    if precision:
+    if result.precision is None:
+        # A result read back by load_fit from a file saved without its precision. The
+        # pointwise standard deviation it carries is stored again; nothing can recompute it.
+        if precision:
+            raise ValueError(
+                "this MarginalResult carries no posterior precision (it was read from a "
+                "file saved without precision=True), so precision=True cannot store one. "
+                "Save it with precision=False, or re-run the fit."
+            )
+        header["has_precision"] = False
+        d_std = getattr(result, "d_std", None)
+        if d_std is not None:
+            arrays["d_std"] = _as_numpy(d_std)
+    elif precision:
         arrays["precision_diag"] = _as_numpy(result.precision.diag)
         arrays["precision_lower"] = _as_numpy(result.precision.lower)
         header["precision_n"] = int(result.precision.n)
@@ -359,6 +384,12 @@ def to_inference_data(mcmc, *, coords=None, dims=None, component_names=None):
     object
         The inference-data container built by the installed arviz.
 
+    Warns
+    -----
+    RuntimeWarning
+        If ``arviz.from_numpyro`` fails. The container then holds the posterior and the
+        sample statistics only.
+
     Notes
     -----
     albireo's likelihood enters the numpyro model as a :func:`numpyro.factor` rather than
@@ -389,21 +420,44 @@ def to_inference_data(mcmc, *, coords=None, dims=None, component_names=None):
 
     try:
         return az.from_numpyro(mcmc, coords=coords, dims=dims, log_likelihood=False)
-    except Exception:
+    except Exception as exc:
         # `run_nuts` passes the Problem pytree as a traced model argument, and arviz
         # inspects model args to collect constant data. If that inspection fails on the
-        # pytree, fall back to the posterior, which is the group the caller needs.
-        posterior = mcmc.get_samples(group_by_chain=True)
-        stats = {
-            name: np.asarray(value)
-            for name, value in getattr(mcmc, "_states", {}).get("adapt_state", {}).items()
-        }
-        return az.from_dict(
-            posterior={k: np.asarray(v) for k, v in posterior.items()},
-            sample_stats=stats or None,
-            coords=coords,
-            dims=dims,
+        # pytree, fall back to the posterior, which is the group the caller needs, and the
+        # sample statistics numpyro collected (divergences and tree sizes).
+        warnings.warn(
+            f"arviz.from_numpyro failed ({type(exc).__name__}: {exc}); the posterior and "
+            "sample statistics are converted without the model's constant data.",
+            RuntimeWarning,
+            stacklevel=2,
         )
+        return _from_dict_fallback(az, mcmc, coords, dims)
+
+
+# arviz's names for numpyro's sample statistics, as in its own from_numpyro.
+_ARVIZ_STAT_NAMES = {"num_steps": "n_steps", "accept_prob": "acceptance_rate"}
+
+
+def _from_dict_fallback(az, mcmc, coords, dims):
+    """The posterior and sample statistics of ``mcmc`` through ``arviz.from_dict``.
+
+    arviz 1.x takes one nested mapping of groups (``from_dict(data, ...)``) and arviz 0.x
+    one keyword per group; the signature decides which form is used.
+    """
+    import inspect
+
+    posterior = {k: np.asarray(v) for k, v in mcmc.get_samples(group_by_chain=True).items()}
+    stats = {
+        _ARVIZ_STAT_NAMES.get(name, name): np.asarray(value)
+        for name, value in mcmc.get_extra_fields(group_by_chain=True).items()
+        if not isinstance(value, dict | tuple)
+    }
+    if "data" in inspect.signature(az.from_dict).parameters:
+        groups = {"posterior": posterior}
+        if stats:
+            groups["sample_stats"] = stats
+        return az.from_dict(groups, coords=coords, dims=dims)
+    return az.from_dict(posterior=posterior, sample_stats=stats or None, coords=coords, dims=dims)
 
 
 # ---------------------------------------------------------------------------
@@ -432,7 +486,7 @@ def write_ascii(path, grid, d_hat, std=None, *, component: int | None = None, he
         Matching pointwise standard deviations, e.g. from
         :func:`albireo.likelihood.spectra_std`.
     component
-        Write only this component (0-based).
+        Write only this component (0-based), to ``path`` unchanged.
     header
         Extra text prepended to the comment header.
 
@@ -444,8 +498,9 @@ def write_ascii(path, grid, d_hat, std=None, *, component: int | None = None, he
     Raises
     ------
     ValueError
-        If the pixel count of ``d_hat`` does not match ``grid``, or if ``std`` does not
-        have the same shape as ``d_hat``.
+        If the pixel count of ``d_hat`` does not match ``grid``, if ``std`` does not
+        have the same shape as ``d_hat``, or if ``component`` is not in
+        ``[0, n_comp)``.
 
     Notes
     -----
@@ -466,12 +521,9 @@ def write_ascii(path, grid, d_hat, std=None, *, component: int | None = None, he
     if std_arr is not None and std_arr.shape != d_hat.shape:
         raise ValueError(f"std has shape {std_arr.shape}, expected {d_hat.shape}")
 
-    indices = range(d_hat.shape[0]) if component is None else [component]
-    path = Path(path)
+    targets = _component_paths(path, d_hat.shape[0], component)
     written = []
-    multiple = len(list(indices)) > 1
-    for i in indices:
-        out = path if not multiple else path.with_name(f"{path.stem}_{i + 1}{path.suffix}")
+    for i, out in targets:
         columns = [wave, 1.0 + d_hat[i]]
         names = "wavelength flux"
         if std_arr is not None:
@@ -482,4 +534,31 @@ def write_ascii(path, grid, d_hat, std=None, *, component: int | None = None, he
         out.parent.mkdir(parents=True, exist_ok=True)
         np.savetxt(out, np.column_stack(columns), header=text, fmt="%.10g")
         written.append(out)
-    return written[0] if not multiple else written
+    return written[0] if len(written) == 1 else written
+
+
+def _component_paths(path, n_comp: int, component) -> list[tuple[int, Path]]:
+    """The components a writer writes, each with its output path.
+
+    Shared by :func:`write_ascii` and the writers in :mod:`albireo.handoff`. With
+    ``component=None`` every component is written, with ``_1``, ``_2``, ... inserted
+    before the suffix when there is more than one. A single requested component is written
+    to ``path`` unchanged.
+
+    Raises
+    ------
+    ValueError
+        If ``component`` is not in ``[0, n_comp)``. A negative index would select a
+        component from the end but name the file and the header after ``index + 1``.
+    """
+    path = Path(path)
+    if component is None:
+        if n_comp == 1:
+            return [(0, path)]
+        return [(i, path.with_name(f"{path.stem}_{i + 1}{path.suffix}")) for i in range(n_comp)]
+    index = operator.index(component)
+    if not 0 <= index < n_comp:
+        raise ValueError(
+            f"component must be in [0, {n_comp}) for {n_comp} component(s), got {component}"
+        )
+    return [(index, path)]

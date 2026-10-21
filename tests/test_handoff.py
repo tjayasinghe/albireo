@@ -193,6 +193,44 @@ def test_export_draws_resamples_every_draw_onto_the_same_grid(tmp_path):
         np.testing.assert_array_equal(w, waves[0])
 
 
+def test_export_draws_writes_each_components_own_error(tmp_path):
+    """The natural call passes spectra_std's (n_comp, n_pix) array, which raised before."""
+    rng = np.random.default_rng(4)
+    draws = rng.normal(0.0, 0.02, (2, 2, GRID.n))
+    std = np.stack([np.full(GRID.n, 0.003), np.full(GRID.n, 0.007)])
+    out = export_draws(tmp_path, GRID, draws, format="ispec", std=std)
+
+    for per_draw in out:
+        for i, path in enumerate(per_draw):
+            err = [float(ln.split("\t")[2]) for ln in path.read_text().splitlines()[1:]]
+            np.testing.assert_allclose(err, std[i, 0], rtol=1e-6)
+
+
+def test_export_draws_refuses_a_std_that_is_not_per_component(tmp_path):
+    """A 1-D std for two components would be written as the error of both."""
+    draws = np.zeros((1, 2, GRID.n))
+    with pytest.raises(ValueError, match="one row per component"):
+        export_draws(tmp_path, GRID, draws, format="ispec", std=np.full(GRID.n, 0.01))
+    # One component may take a 1-D std.
+    (paths,) = export_draws(tmp_path, GRID, draws[:, :1], format="ispec", std=np.full(GRID.n, 0.01))
+    assert float(paths[0].read_text().splitlines()[1].split("\t")[2]) == pytest.approx(0.01)
+    with pytest.raises(TypeError, match="ispec"):
+        export_draws(tmp_path, GRID, draws, format="gssp", std=np.zeros((2, GRID.n)))
+
+
+def test_one_requested_component_is_written_to_the_path_given(tmp_path):
+    """As in albireo.results.write_ascii, which the pipeline relies on for its file names."""
+    d = _spectra()
+    gssp = write_gssp(tmp_path / "second.dat", GRID, d, component=1)
+    ispec = write_ispec(tmp_path / "second.txt", GRID, d, component=1)
+
+    assert (gssp, ispec) == (tmp_path / "second.dat", tmp_path / "second.txt")
+    flux = [float(ln.split("\t")[1]) for ln in ispec.read_text().splitlines()[1:]]
+    np.testing.assert_allclose(flux, 1.0 + d[1], atol=1e-9)
+    with pytest.raises(ValueError, match="component must be in"):
+        write_gssp(tmp_path / "bad.dat", GRID, d, component=-1)
+
+
 def test_export_draws_rejects_the_wrong_shape(tmp_path):
     with pytest.raises(ValueError, match="n_draws, n_comp, n_pix"):
         export_draws(tmp_path, GRID, np.zeros((2, GRID.n)))
