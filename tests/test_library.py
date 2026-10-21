@@ -222,6 +222,24 @@ def test_resampled_to_projects_onto_the_model_grid(library):
         library.resampled_to(ab.LogGrid.from_wavelength_range(5000.0, 5400.0, 8.0), medium="air")
 
 
+def test_resampled_to_refuses_a_grid_whose_end_pixels_overhang_the_library(library):
+    """A model pixel the library covers in part would be scaled by its coverage.
+
+    The first pixel of this grid is centred just above the library's first wavelength and
+    is wider than a library pixel, so part of it lies below the library. Taken as covered,
+    its normalized flux would be a false line of depth 1 - coverage and its continuum too
+    low.
+    """
+    grid = ab.LogGrid.from_wavelength_range(float(WAVE[0]) + 0.01, 5200.0, dv_kms=8.0)
+    coverage = np.asarray(rebin_operator(library.wave, np.asarray(grid.wave)).coverage)
+    assert coverage[0] < 0.9 and np.all(coverage[1:] > 1.0 - 1e-10)
+    with pytest.raises(ValueError, match="cannot cover"):
+        library.resampled_to(grid, medium="air")
+    # A grid whose end pixels lie inside the library to their outer edges is projected.
+    inside = ab.LogGrid.from_wavelength_range(float(WAVE[0]) + 0.2, 5200.0, dv_kms=8.0)
+    assert library.resampled_to(inside, medium="air").n_pix == inside.n
+
+
 def test_resampled_to_converts_medium_before_rebinning(library):
     grid = ab.LogGrid.from_wavelength_range(5175.0, 5225.0, dv_kms=6.0)
     vacuum = library.resampled_to(grid, medium="vacuum")
@@ -254,6 +272,18 @@ def test_resampled_to_is_the_rebin_operator_applied_to_every_node(library):
         for name in ("normalized", "log_continuum"):
             expected = np.asarray(jax.vmap(operator)(jnp.asarray(getattr(library, name))))
             np.testing.assert_allclose(getattr(projected, name), expected, rtol=1e-13, atol=0)
+        # The projection runs over blocks of nodes (140 here, so the last block is short),
+        # and gives what one sparse product over every node gives, bit for bit.
+        from scipy.sparse import csr_matrix
+
+        matrix = csr_matrix(
+            (np.asarray(operator.vals), (np.asarray(operator.rows), np.asarray(operator.cols))),
+            shape=(operator.n_out, operator.n_in),
+        )
+        for name in ("normalized", "log_continuum"):
+            whole = (matrix @ getattr(library, name).T).T
+            assert np.array_equal(getattr(projected, name), whole)
+        assert projected.normalized.flags.c_contiguous
         assert not projected.normalized.flags.writeable
         assert not projected.log_continuum.flags.writeable
         assert not projected.wave.flags.writeable
@@ -276,6 +306,8 @@ def test_a_read_only_library_is_resampled_once_per_grid(library):
     # the result is read-only, so its interpolator is built once per method
     assert library_interpolator(first) is library_interpolator(first)
     assert library_interpolator(first, method="linear") is not library_interpolator(first)
+    # "auto" is the method it selects, and shares that method's interpolator
+    assert library_interpolator(first, method="cubic") is library_interpolator(first)
     # a slice of a read-only library is read-only, and keeps its own results
     window = frozen.sliced(5165.0, 5235.0)
     assert window.resampled_to(grid, medium="air") is window.resampled_to(grid, medium="air")
@@ -458,6 +490,61 @@ def test_cubic_beats_linear_on_the_toy_grid(library):
     assert errors["cubic"] < errors["linear"]
 
 
+def test_the_cubic_on_unequal_steps_is_exact_on_linear_data_and_smooth():
+    """Catmull-Rom's tangent assumes equal steps, and a grid built by hand need not have them.
+
+    PHOENIX steps 100 K and then 200 K in temperature, and BOSZ 100 K below 4000 K. With
+    the equal-step tangent on such an axis the cubic was off by 2.5e-3 on data linear in
+    the label, about ten times BOSZ's cubic error, and its derivative jumped at a node.
+    Along an axis of unequal steps the tangent is that of the parabola through a node and
+    its two neighbours. The oracle is SciPy's cubic Hermite spline given those tangents,
+    and the one-sided secants at the ends that the linearly extrapolated phantom nodes give.
+    """
+    from scipy.interpolate import CubicHermiteSpline
+
+    teff = np.array([4000.0, 4100.0, 4200.0, 4500.0, 5000.0])
+    wave = np.linspace(5000.0, 5010.0, 6)
+    phase = np.linspace(0.0, 1.0, wave.size)
+
+    def built(rule):
+        rows = np.stack([rule(t) for t in teff])
+        return SpectralLibrary(
+            label_names=("teff",),
+            nodes=teff[:, None],
+            normalized=rows,
+            log_continuum=np.log(1.0 + rows),
+            wave=wave,
+            medium="air",
+        )
+
+    linear = built(lambda t: 1.0 - 2e-5 * (t - 4000.0) * (1.0 + phase))
+    interpolator = library_interpolator(linear)
+    assert isinstance(interpolator, BoxInterpolator)
+    for t in (4050.0, 4150.0, 4350.0, 4750.0, 4990.0):
+        got = np.asarray(interpolator(jnp.asarray([t]))[0])
+        np.testing.assert_allclose(got, 1.0 - 2e-5 * (t - 4000.0) * (1.0 + phase), atol=1e-14)
+    assert interpolator.uniform == (False,)
+
+    curved = built(lambda t: 1.0 + 0.1 * np.sin((t - 4000.0) / 300.0 + phase))
+    interpolator = library_interpolator(curved, method="cubic")
+    steps = np.diff(teff)
+    secants = np.diff(curved.normalized, axis=0) / steps[:, None]
+    tangents = np.empty_like(curved.normalized)
+    tangents[0], tangents[-1] = secants[0], secants[-1]
+    tangents[1:-1] = (steps[:-1, None] * secants[1:] + steps[1:, None] * secants[:-1]) / (
+        steps[:-1, None] + steps[1:, None]
+    )
+    oracle = CubicHermiteSpline(teff, curved.normalized, tangents, axis=0)
+    points = np.linspace(4000.0, 5000.0, 41)
+    got = np.asarray(jax.vmap(interpolator)(jnp.asarray(points[:, None]))[0])
+    np.testing.assert_allclose(got, oracle(points), rtol=0, atol=1e-13)
+    # The derivative is continuous across the node where the step changes.
+    slope = jax.jacfwd(lambda t: interpolator(t)[0])
+    below = np.asarray(slope(jnp.asarray([4200.0 - 1e-6])))[:, 0]
+    above = np.asarray(slope(jnp.asarray([4200.0 + 1e-6])))[:, 0]
+    np.testing.assert_allclose(below, above, rtol=1e-6, atol=1e-12)
+
+
 def test_box_interpolator_gradient_matches_finite_differences(library):
     interpolator = library_interpolator(library)
     point = jnp.asarray([4712.0, 3.83, -0.17])
@@ -576,6 +663,21 @@ def test_crossval_handles_scattered_coverage(punched_library):
     assert report["spacing"] == "scattered"
     assert report["n_tested"] > 0
     assert np.isfinite(report["rms"])
+
+
+def test_crossval_evaluates_in_blocks_with_programs_it_keeps(library, compilations):
+    """The held-out nodes are evaluated in blocks of a few, so that the gather of their
+    stencils does not hold the library many times over, by programs that take the
+    interpolator as an argument, so that a second call compiles nothing. Each node gets
+    the spectrum that one batch of every node gives it, bit for bit."""
+    for method in ("linear", "cubic", "simplex"):
+        crossval_library(library, method=method)
+        assert compilations(lambda method=method: crossval_library(library, method=method)) == 0
+        interpolator = library_interpolator(library, method=method)
+        points = library.nodes[::3] + np.array([60.0, 0.11, 0.07])  # 47 points, 3 blocks
+        whole = np.asarray(jax.jit(jax.vmap(interpolator))(jnp.asarray(points))[0])
+        blocks = lib_mod._in_node_blocks(lib_mod._normalized_spectra, interpolator, points)
+        assert np.array_equal(blocks, whole), method
 
 
 def test_crossval_refuses_a_grid_too_small_to_split():
@@ -966,14 +1068,15 @@ def test_the_hot_box_crosses_the_atmosphere_seam_where_its_caveat_says():
 
 
 def test_every_registered_bosz_box_has_uniformly_spaced_axes():
-    """Catmull-Rom assumes equal spacing, so a registered box must supply it.
+    """A registered box has equal steps along every axis, where the cubic is Catmull-Rom.
 
-    ``_axis_weights`` uses the spline in its uniform-parameter form: the tangent at a node
-    is estimated from the two neighbours as if they were equally spaced. Across a change of
-    step that estimate is wrong, and the interpolant loses linear reproduction there. BOSZ's
-    temperature axis changes step twice, 100 K below 4000 K and 500 K above 12,000 K. A
-    registered box is therefore in part a choice of a range over which the step is constant,
-    and this test asserts that choice.
+    ``_axis_weights`` uses the spline in its uniform-parameter form on an axis of equal
+    steps: the tangent at a node is the difference of its two neighbours over twice the
+    step. On unequal steps it takes the tangent of the parabola through the three nodes
+    instead, another interpolant, to which the measured interpolation errors of the
+    registry do not apply. BOSZ's temperature axis changes step twice, 100 K below 4000 K
+    and 500 K above 12,000 K. A registered box is therefore in part a choice of a range
+    over which the step is constant, and this test asserts that choice.
     """
     boxes = [entry for entry in lib_mod._LIBRARIES.values() if entry.source == "bosz2024"]
     assert len(boxes) >= 4
@@ -1075,9 +1178,48 @@ def test_an_interrupted_download_never_becomes_a_cache_entry(offline_registry, m
     assert not list(raw.glob("*.gz")), "a partial transfer was left where a build would use it"
 
 
+def test_a_failed_download_cancels_the_queued_ones(offline_registry, monkeypatch):
+    """An error other than a 404 ends the build without first running every queued
+    download, each of which would retry with a back-off on a network that is down."""
+    import time
+
+    entry, _ = offline_registry
+    many = dataclasses.replace(
+        entry, axes={"teff": [5000.0, 5250.0, 5500.0], "logg": [4.0, 4.5, 5.0], "mh": [0.0, 0.25]}
+    )
+    monkeypatch.setitem(lib_mod._LIBRARIES, "test-grid", many)
+    wave = np.linspace(4000.0, 7000.0, 400)
+    calls: list[str] = []
+
+    def failing(url, destination, attempts=4):
+        calls.append(url)
+        if url.endswith(".txt"):
+            destination.write_text("\n".join(f"{w:.7e}" for w in wave))
+            return
+        time.sleep(0.05)
+        if len(calls) == 2:
+            raise urllib.error.HTTPError(url, 503, "service unavailable", {}, None)
+        destination.write_bytes(_fake_bosz_shard(wave.size, seed=len(calls)))
+
+    monkeypatch.setattr(lib_mod, "_download_with_retries", failing)
+    with pytest.raises(urllib.error.HTTPError):
+        lib_mod.ingest_bosz("test-grid", jobs=1, progress=False)
+    # The wavelength file, the shard that failed, and at most the one in progress, of the
+    # wavelength file and 18 shards.
+    assert len(calls) <= 3
+
+
 def test_a_band_can_be_narrowed_but_not_widened(offline_registry):
     inside = ab.fetch_library("test-grid", wave_range=(5000.0, 6000.0), progress=False)
     assert inside.wave.min() >= 5000.0 and inside.wave.max() <= 6000.0
+    # A narrowed band is read-only like the whole one, so what is derived from it is kept.
+    assert inside._is_immutable()
+    grid = ab.LogGrid.from_wavelength_range(5100.0, 5900.0, dv_kms=40.0)
+    assert inside.resampled_to(grid, medium="air") is inside.resampled_to(grid, medium="air")
+    whole = ab.fetch_library("test-grid", progress=False)
+    keep = (whole.wave >= 5000.0) & (whole.wave <= 6000.0)
+    np.testing.assert_array_equal(inside.normalized, whole.normalized[:, keep])
+    np.testing.assert_array_equal(inside.wave, whole.wave[keep])
 
     with pytest.raises(ValueError, match="was built over"):
         ab.fetch_library("test-grid", wave_range=(3000.0, 9000.0), progress=False)
@@ -1173,6 +1315,57 @@ def test_saving_and_loading_round_trips(tmp_path):
     assert back._is_immutable() and not back.normalized.flags.writeable
     np.testing.assert_array_equal(back.nodes, lib.nodes)
     np.testing.assert_allclose(back.normalized, lib.normalized, rtol=1e-6)
+    with np.load(path, allow_pickle=False) as handle:
+        assert handle["label_names"].dtype.kind == "U"  # text, not a pickled object array
+
+
+class _Unpickled:
+    """An object whose unpickling prints a marker, as a hostile cache file could run code."""
+
+    def __reduce__(self):
+        return (print, ("albireo-test: unpickled",))
+
+
+def _earlier_form(path, label_names):
+    """Rewrite a saved library with its label names in a pickled object array, the form
+    save_library wrote before it stored them as text."""
+    with np.load(path) as handle:
+        contents = {key: handle[key] for key in handle.files if key != "label_names"}
+    names = np.empty(len(label_names), dtype=object)
+    names[:] = list(label_names)
+    np.savez_compressed(path, label_names=names, **contents)
+
+
+def test_a_library_file_is_read_without_unpickling(tmp_path, capsys):
+    """A cache directory can be shared ($ALBIREO_DATA_DIR), and unpickling runs code."""
+    lib = build_library(teff=TEFF[:2], logg=LOGG[:2], mh=MH[:2])
+    path = lib_mod.save_library(lib, tmp_path / "hostile.npz")
+    _earlier_form(path, [_Unpickled(), "logg", "mh"])
+    with pytest.raises(ValueError, match="pickled object array"):
+        lib_mod.load_library(path)
+    assert "albireo-test: unpickled" not in capsys.readouterr().out
+
+
+def test_a_library_in_the_earlier_form_is_read_with_its_label_names(tmp_path, offline_registry):
+    """A file whose label names are a pickled object array is read with the names given,
+    and a cache of the registry in that form is read with the registry's, which the
+    recorded digest of the content covers."""
+    lib = build_library(teff=TEFF[:2], logg=LOGG[:2], mh=MH[:2])
+    path = lib_mod.save_library(lib, tmp_path / "earlier.npz")
+    _earlier_form(path, lib.label_names)
+    with pytest.raises(ValueError, match="label_names="):
+        lib_mod.load_library(path)
+    back = lib_mod.load_library(path, label_names=lib.label_names)
+    assert back.label_names == lib.label_names and back._is_immutable()
+    with pytest.raises(ValueError, match="not the"):
+        lib_mod.load_library(lib_mod.save_library(back, path), label_names=("a", "b", "c"))
+
+    built = ab.fetch_library("test-grid", progress=False)
+    cache = lib_mod._library_cache_path(lib_mod._LIBRARIES["test-grid"])
+    _earlier_form(cache, built.label_names)
+    again = ab.fetch_library("test-grid", progress=False)
+    assert again.label_names == built.label_names
+    assert np.array_equal(again.normalized, built.normalized)
 
 
 @pytest.mark.network

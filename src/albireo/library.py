@@ -43,10 +43,12 @@ from __future__ import annotations
 import datetime as _dt
 import gzip
 import hashlib
+import itertools
 import json
 import urllib.error
 import weakref
 from collections import OrderedDict
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -97,6 +99,9 @@ and 17 MB on a template grid of 2400, so both are kept. The same box on an optic
 # per grid.
 _RESAMPLED: dict[int, OrderedDict] = {}
 _INTERPOLATORS: dict[int, dict[str, Any]] = {}
+
+_PROJECT_BLOCK = 32
+"""Nodes per sparse product in :meth:`SpectralLibrary.resampled_to`."""
 
 
 def _kept(store: dict, library, factory):
@@ -343,7 +348,9 @@ class SpectralLibrary:
         operator (:meth:`albireo.Fit.epoch_statistics`). Left in, it alone would reduce a
         fitted ``(v sin i)^2`` by about 8 km^2/s^2 (``docs/math.md`` §9.2a).
 
-        This moves the model onto the data's grid. The data are never resampled.
+        This moves the model onto the data's grid. The data are never resampled. The library
+        must cover the grid to the outer edges of its end pixels, since a pixel covered in
+        part would be scaled by the fraction covered; a ``ValueError`` is raised otherwise.
 
         The projection is a sparse matrix product in NumPy and SciPy, so its cost does not
         depend on whether a grid of that length has been used before. For a library whose
@@ -360,16 +367,21 @@ class SpectralLibrary:
             return kept[key]
         library = self.in_medium(medium)
         target = np.asarray(grid.wave, dtype=np.float64)
-        if library.wave[0] > target[0] or library.wave[-1] < target[-1]:
+        operator = rebin_operator(library.wave, target)
+        # The operator divides each overlap by the width of the model pixel, so a model pixel
+        # that the library covers in part would come out scaled by its coverage: a false
+        # line in the normalized flux and a continuum too low. The outer edges of the
+        # grid's end pixels, not their centres, must lie inside the library. A pixel that
+        # is covered sums its overlaps to 1 within rounding (1 - 1e-16 measured).
+        if np.any(np.asarray(operator.coverage) < 1.0 - 1e-10):
             raise ValueError(
                 f"library spans [{library.wave[0]:.2f}, {library.wave[-1]:.2f}] Angstrom in "
                 f"{medium} and cannot cover the model grid "
-                f"[{target[0]:.2f}, {target[-1]:.2f}]. Fetch a wider band, or narrow the "
-                "analysis window."
+                f"[{target[0]:.2f}, {target[-1]:.2f}] to the outer edges of its end pixels. "
+                "Fetch a wider band, or narrow the analysis window."
             )
         from scipy.sparse import csr_matrix  # scipy ships with jax; kept local
 
-        operator = rebin_operator(library.wave, target)
         # The operator as a matrix, one row per model pixel. A row sums its entries in the
         # order of the input pixels, as the segment sum of `RebinOperator.__call__` does.
         matrix = csr_matrix(
@@ -378,7 +390,19 @@ class SpectralLibrary:
         )
 
         def project(values: np.ndarray) -> np.ndarray:
-            out = np.ascontiguousarray((matrix @ values.T).T)
+            # In blocks of nodes written into the result. SciPy multiplies a sparse matrix
+            # by a dense block in C order, so one product over every node copied the whole
+            # library to transpose it and copied the transposed result again. Each element
+            # is accumulated over the row's entries in the same order whatever the number of
+            # vectors, so the blocks give the same result bit for bit. A block of one node
+            # would be taken by SciPy's routine for a single vector, so none is formed.
+            n = values.shape[0]
+            bounds = [*range(0, n, _PROJECT_BLOCK), n]
+            if n > 1 and bounds[-1] - bounds[-2] == 1:
+                del bounds[-2]
+            out = np.empty((n, matrix.shape[0]))
+            for start, stop in itertools.pairwise(bounds):
+                out[start:stop] = (matrix @ values[start:stop].T).T
             out.flags.writeable = False
             return out
 
@@ -447,13 +471,26 @@ class SpectralLibrary:
 # ---------------------------------------------------------------------------
 
 
-def _axis_weights(axis: jax.Array, value, cubic: bool):
+def _uniformly_spaced(axis: np.ndarray) -> bool:
+    """Whether the steps of a sorted label axis are equal, to a relative 1e-9."""
+    steps = np.diff(np.asarray(axis, dtype=np.float64))
+    return steps.size < 2 or bool(np.allclose(steps, steps[0], rtol=1e-9, atol=0.0))
+
+
+def _axis_weights(axis: jax.Array, value, cubic: bool, uniform: bool = True):
     """Stencil indices and weights for one label axis.
 
-    Returns ``(idx, w)`` with ``idx`` of length 2 (linear) or 4 (Catmull-Rom). Both
-    reproduce a node exactly: at a node the fractional coordinate is exactly 0 and the
-    weight vector is exactly ``(1, 0, ...)``, so the gather returns the stored spectrum
-    bit for bit. The tests assert that with ``==``.
+    Returns ``(idx, w)`` with ``idx`` of length 2 (linear) or 4 (cubic). Both reproduce a
+    node exactly: at a node the fractional coordinate is exactly 0 and the weight vector
+    is exactly ``(1, 0, ...)``, so the gather returns the stored spectrum bit for bit. The
+    tests assert that with ``==``.
+
+    The cubic is a Hermite cubic in each cell. On an axis of equal steps (``uniform``) it
+    is Catmull-Rom, whose tangent at a node is the difference of its two neighbours over
+    twice the step. On unequal steps that tangent is not exact on linear data, so the
+    tangent there is that of the parabola through the node and its two neighbours
+    (Bessel's tangent), which reduces to Catmull-Rom on equal steps. Both are exact on
+    linear data and continuous in the first derivative at the nodes.
     """
     n = axis.shape[0]
     if n == 1:
@@ -467,12 +504,34 @@ def _axis_weights(axis: jax.Array, value, cubic: bool):
     t = (value - lo) / (hi - lo)
     if not cubic or n < 3:
         return jnp.stack([i, i + 1]), jnp.stack([1.0 - t, t])
-    # Catmull-Rom in its uniform-parameter form: exact at t = 0 and t = 1.
     t2, t3 = t * t, t * t * t
-    w_m1 = -0.5 * t3 + t2 - 0.5 * t
-    w_0 = 1.5 * t3 - 2.5 * t2 + 1.0
-    w_p1 = -1.5 * t3 + 2.0 * t2 + 0.5 * t
-    w_p2 = 0.5 * t3 - 0.5 * t2
+    if uniform:
+        # Catmull-Rom in its uniform-parameter form: exact at t = 0 and t = 1.
+        w_m1 = -0.5 * t3 + t2 - 0.5 * t
+        w_0 = 1.5 * t3 - 2.5 * t2 + 1.0
+        w_p1 = -1.5 * t3 + 2.0 * t2 + 0.5 * t
+        w_p2 = 0.5 * t3 - 0.5 * t2
+    else:
+        # The Hermite basis, with the tangent at each end of the cell in units of the
+        # cell's width. The steps beyond the end nodes are those of the phantom nodes
+        # below, which repeat the end step.
+        h00 = 2.0 * t3 - 3.0 * t2 + 1.0
+        h10 = t3 - 2.0 * t2 + t
+        h01 = -2.0 * t3 + 3.0 * t2
+        h11 = t3 - t2
+        step = hi - lo
+        below = jnp.where(i == 0, step, lo - axis[jnp.maximum(i - 1, 0)])
+        above = jnp.where(i == n - 2, step, axis[jnp.minimum(i + 2, n - 1)] - hi)
+        # Bessel's tangent at the lower node on f(i-1), f(i), f(i+1), and at the upper
+        # node on f(i), f(i+1), f(i+2), each times the width of the cell.
+        low_m1 = -step * step / (below * (below + step))
+        low_p1 = below / (below + step)
+        high_0 = -above / (step + above)
+        high_p2 = step * step / (above * (step + above))
+        w_m1 = h10 * low_m1
+        w_0 = h00 - h10 * (low_m1 + low_p1) + h11 * high_0
+        w_p1 = h01 + h10 * low_p1 - h11 * (high_0 + high_p2)
+        w_p2 = h11 * high_p2
 
     # Edge cells need a phantom node. Clamping it to the end node removes linear
     # reproduction there, and on a grid with only a few values per axis the cubic is then
@@ -506,6 +565,12 @@ class BoxInterpolator:
     require. It has local support, so it cannot ring across a Balmer jump. On BOSZ's spacing
     it halves the interpolation error (Mészáros & Allende Prieto 2013).
 
+    Catmull-Rom assumes equal steps along an axis. ``uniform`` states per axis whether
+    they are equal; along an axis where they are not, the cubic takes the tangent of the
+    parabola through each node and its two neighbours (:func:`_axis_weights`), which keeps
+    it C^1 and exact on linear data. ``None`` declares every axis uniform.
+    :func:`library_interpolator` measures the steps.
+
     Call with a label vector; returns ``(normalized, log_continuum)``, each ``(n_pix,)``.
 
     References
@@ -517,10 +582,14 @@ class BoxInterpolator:
     normalized: jax.Array
     log_continuum: jax.Array
     cubic: bool = True
+    uniform: tuple[bool, ...] | None = None
 
     def __call__(self, labels):
         labels = jnp.atleast_1d(jnp.asarray(labels, dtype=jnp.float64))
-        stencils = [_axis_weights(a, labels[i], self.cubic) for i, a in enumerate(self.axes)]
+        uniform = (True,) * len(self.axes) if self.uniform is None else self.uniform
+        stencils = [
+            _axis_weights(a, labels[i], self.cubic, uniform[i]) for i, a in enumerate(self.axes)
+        ]
         # Gather the stencil alone, 4^k rows (2^k when multilinear), and contract it one axis
         # at a time in label order. Gathering the first axis's stencil across the whole extent
         # of the other axes read 4 x 5 x 7 = 140 rows per evaluation of the BOSZ FGK box
@@ -547,11 +616,18 @@ class BoxInterpolator:
         return jnp.min(jnp.stack(margins))
 
     def tree_flatten(self):
-        return (self.axes, self.normalized, self.log_continuum), self.cubic
+        return (self.axes, self.normalized, self.log_continuum), (self.cubic, self.uniform)
 
     @classmethod
     def tree_unflatten(cls, aux, children):
-        return cls(axes=children[0], normalized=children[1], log_continuum=children[2], cubic=aux)
+        cubic, uniform = aux
+        return cls(
+            axes=children[0],
+            normalized=children[1],
+            log_continuum=children[2],
+            cubic=cubic,
+            uniform=uniform,
+        )
 
 
 # A hull vertex evaluates to a barycentric margin of either sign at the 1e-16 level (measured
@@ -648,10 +724,13 @@ def library_interpolator(
     library
         The grid to interpolate, normally already resampled onto the model grid.
     method
-        ``"auto"`` (default) selects a Catmull-Rom cubic when the nodes form a complete
-        box and barycentric interpolation when they do not. ``"linear"`` forces multilinear
-        on a box, ``"cubic"`` forces the cubic, and ``"simplex"`` forces the scattered path
-        even for a box (to measure what the box structure contributes).
+        ``"auto"`` (default) selects a cubic when the nodes form a complete box and
+        barycentric interpolation when they do not. ``"linear"`` forces multilinear on a
+        box, ``"cubic"`` forces the cubic, and ``"simplex"`` forces the scattered path even
+        for a box (to measure what the box structure contributes). The cubic is
+        Catmull-Rom along an axis of equal steps, and along an axis of unequal steps a
+        Hermite cubic with the tangent of the parabola through each node and its
+        neighbours (:class:`BoxInterpolator`); both are exact on linear data.
 
     Returns
     -------
@@ -660,11 +739,14 @@ def library_interpolator(
         library of at most 96 MB whose arrays are read-only, such as the result of
         :meth:`SpectralLibrary.resampled_to` on a grid of the Gaia RVS band, the
         interpolator is built once per method and the same object is returned afterwards.
+        ``"auto"`` is the method it selects, so it shares that method's interpolator.
     """
     if method not in ("auto", "linear", "cubic", "simplex"):
         raise ValueError(f"method must be auto, linear, cubic or simplex; got {method!r}")
     if not library._is_immutable() or library._flux_bytes() > _KEPT_BYTES:
         return _build_interpolator(library, method)
+    if method == "auto":
+        method = "cubic" if library.axes() is not None else "simplex"
     kept = _kept(_INTERPOLATORS, library, dict)
     if method not in kept:
         kept[method] = _build_interpolator(library, method)
@@ -680,11 +762,20 @@ def _build_interpolator(
     if axes is not None:
         order = np.lexsort(tuple(library.nodes[:, i] for i in reversed(range(len(axes)))))
         shape = tuple(a.size for a in axes)
+        # Every ingest writes the nodes in this order already. Indexing by the identity
+        # would copy each flux array once more before the copy into the device array.
+        in_order = bool(np.array_equal(order, np.arange(order.size)))
+
+        def arranged(values: np.ndarray) -> jax.Array:
+            rows = values if in_order else values[order]
+            return jnp.asarray(rows.reshape(*shape, library.n_pix))
+
         return BoxInterpolator(
             axes=tuple(jnp.asarray(a) for a in axes),
-            normalized=jnp.asarray(library.normalized[order].reshape(*shape, library.n_pix)),
-            log_continuum=jnp.asarray(library.log_continuum[order].reshape(*shape, library.n_pix)),
+            normalized=arranged(library.normalized),
+            log_continuum=arranged(library.log_continuum),
             cubic=method != "linear",
+            uniform=tuple(_uniformly_spaced(a) for a in axes),
         )
 
     if method in ("linear", "cubic"):
@@ -728,6 +819,48 @@ def _build_interpolator(
 # ---------------------------------------------------------------------------
 # Measuring the interpolation error
 # ---------------------------------------------------------------------------
+
+_NODE_BLOCK = 16
+"""Label points per evaluation in :func:`crossval_library`.
+
+Each point of a batch gathers its whole stencil, 4^k spectra of the library, so one batch
+of all the held-out nodes of a box of the BOSZ FGK shape (371) peaked at 0.44 MB per
+pixel, about 9.7 GB on an optical grid of 22,000 pixels. In blocks of 16 the peak grows by
+0.016 MB per pixel, most of it the predicted spectra and their errors (measured on
+synthetic boxes of 500 to 8000 pixels)."""
+
+
+@jax.jit
+def _normalized_spectra(interpolator, points):
+    """The normalized spectra of an interpolator at a batch of label points."""
+    return jax.vmap(lambda point: interpolator(point)[0])(points)
+
+
+@jax.jit
+def _hull_margins(interpolator, points):
+    """The hull margins of an interpolator at a batch of label points."""
+    return jax.vmap(interpolator.hull_margin)(points)
+
+
+def _in_node_blocks(function, interpolator, points) -> np.ndarray:
+    """``function(interpolator, points)`` evaluated over blocks of the label points.
+
+    The interpolator is an argument of the compiled function, not a constant of it, so one
+    program serves every library of the same shapes. The last block is padded with copies
+    of its last point to the length of the others, and the padding is dropped from the
+    result. Each point is evaluated as in one batch of all the points, bit for bit, except
+    a point evaluated alone, which on the barycentric path can differ in the last bit.
+    """
+    points = np.asarray(points, dtype=np.float64)
+    n = points.shape[0]
+    out = []
+    for start in range(0, n, _NODE_BLOCK):
+        block = points[start : start + _NODE_BLOCK]
+        size = block.shape[0]
+        if size < _NODE_BLOCK:
+            block = np.concatenate([block, np.repeat(block[-1:], _NODE_BLOCK - size, axis=0)])
+        out.append(np.asarray(function(interpolator, jnp.asarray(block)))[:size])
+    return np.concatenate(out)
 
 
 def crossval_library(library: SpectralLibrary, *, method: str = "auto", seed: int = 0) -> dict:
@@ -778,18 +911,17 @@ def crossval_library(library: SpectralLibrary, *, method: str = "auto", seed: in
         log_continuum=library.log_continuum[keep],
     )
     interpolator = library_interpolator(reduced, method=method)
-    predict = jax.jit(jax.vmap(interpolator))
 
     test = np.flatnonzero(~keep)
     # Held-out nodes of a lattice are on facets of the reduced hull, at margin zero to
     # rounding. Without the tolerance the triangulation, and so the scipy build, would
     # determine which of them are counted, and n_tested and rms would change with it.
-    margin = np.asarray(jax.jit(jax.vmap(interpolator.hull_margin))(library.nodes[test]))
+    margin = _in_node_blocks(_hull_margins, interpolator, library.nodes[test])
     inside = margin >= -HULL_MARGIN_TOL
     test = test[inside]
     if test.size == 0:
         raise ValueError("every held-out node fell outside the reduced grid; nothing to measure")
-    predicted = np.asarray(predict(library.nodes[test])[0])
+    predicted = _in_node_blocks(_normalized_spectra, interpolator, library.nodes[test])
     error = predicted - library.normalized[test]
     return {
         "n_tested": int(test.size),
@@ -1354,18 +1486,36 @@ def _content_digest(library: SpectralLibrary) -> str:
     preserves it, and two machines that built the same library agree on it whatever their npz
     compression produced. The file cannot be hashed because the digest is recorded inside it.
     """
+    return _arrays_digest(
+        library.label_names,
+        library.medium,
+        {
+            "nodes": library.nodes,
+            "wave": library.wave,
+            "normalized": library.normalized,
+            "log_continuum": library.log_continuum,
+        },
+    )
+
+
+def _arrays_digest(label_names, medium: str, arrays: dict[str, np.ndarray]) -> str:
+    """The digest of :func:`_content_digest` from the label names, the medium and the arrays.
+
+    The fluxes are hashed as float32, the precision :func:`save_library` stores them in, so
+    the arrays as read from a file are hashed without a cast.
+    """
     digest = hashlib.sha256()
-    digest.update("|".join(library.label_names).encode())
-    digest.update(library.medium.encode())
-    for array, dtype in (
-        (library.nodes, np.float64),
-        (library.wave, np.float64),
-        (library.normalized, np.float32),
-        (library.log_continuum, np.float32),
+    digest.update("|".join(label_names).encode())
+    digest.update(medium.encode())
+    for name, dtype in (
+        ("nodes", np.float64),
+        ("wave", np.float64),
+        ("normalized", np.float32),
+        ("log_continuum", np.float32),
     ):
-        contiguous = np.ascontiguousarray(array, dtype=dtype)
+        contiguous = np.ascontiguousarray(arrays[name], dtype=dtype)
         digest.update(str(contiguous.shape).encode())
-        digest.update(contiguous.tobytes())
+        digest.update(contiguous.data)  # the bytes of tobytes(), without the copy
     return digest.hexdigest()
 
 
@@ -1374,14 +1524,15 @@ def save_library(library: SpectralLibrary, path) -> Path:
 
     Fluxes are stored as float32 and restored to float64 on load. Interpolation error is
     ~1e-4 in normalized flux while float32 resolves ~1e-7, so the stored precision does not
-    limit the result, and the file is much smaller.
+    limit the result, and the file is much smaller. Every array is numeric or text, so the
+    file is read without unpickling.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".part")
     np.savez_compressed(
         tmp,
-        label_names=np.asarray(library.label_names, dtype=object),
+        label_names=np.asarray(library.label_names, dtype=np.str_),
         nodes=library.nodes,
         normalized=library.normalized.astype(np.float32),
         log_continuum=library.log_continuum.astype(np.float32),
@@ -1395,25 +1546,69 @@ def save_library(library: SpectralLibrary, path) -> Path:
     return path
 
 
-def load_library(path) -> SpectralLibrary:
-    """Read a library written by :func:`save_library`."""
+def load_library(path, *, label_names: Sequence[str] | None = None) -> SpectralLibrary:
+    """Read a library written by :func:`save_library`.
+
+    The file is read without unpickling, since unpickling a file can execute code and a
+    library cache can be a shared directory (``$ALBIREO_DATA_DIR``).
+
+    Parameters
+    ----------
+    path
+        The ``.npz`` file.
+    label_names
+        The names of the label axes, needed only for a file written by an earlier version
+        of :func:`save_library`, which stored them as a pickled object array that is not
+        read. Where the file's own names are readable they must equal these. Saving the
+        library read this way rewrites the file in the current form.
+
+    Raises
+    ------
+    ValueError
+        If the label names are stored in the earlier form and ``label_names`` is not
+        given, or if they differ from ``label_names``.
+    """
+    return _read_library(path, label_names)[0]
+
+
+def _read_library(
+    path, label_names: Sequence[str] | None = None, *, digest: bool = False
+) -> tuple[SpectralLibrary, str | None]:
+    """The library of :func:`load_library`, and with ``digest`` its :func:`_content_digest`.
+
+    The digest is taken over the arrays as stored, before the fluxes are cast to float64.
+    """
     path = Path(path)
-    with np.load(path, allow_pickle=True) as handle:
-        arrays = {
-            name: handle[name].astype(np.float64)
-            for name in ("nodes", "normalized", "log_continuum", "wave")
-        }
+    with np.load(path, allow_pickle=False) as handle:
+        try:
+            names = tuple(str(name) for name in handle["label_names"])
+        except ValueError:
+            # An object array, which cannot be read without unpickling.
+            if label_names is None:
+                raise ValueError(
+                    f"{path} stores its label names as a pickled object array, the form an "
+                    "earlier version of save_library wrote. It is not unpickled, because "
+                    "unpickling a file can execute code. If the file is trusted, read it with "
+                    "load_library(path, label_names=(...)) and save_library() the result to "
+                    "rewrite it."
+                ) from None
+            names = tuple(str(name) for name in label_names)
+        if label_names is not None and names != tuple(str(name) for name in label_names):
+            raise ValueError(
+                f"{path} has the label names {names}, not the {tuple(label_names)} declared"
+            )
+        stored = {name: handle[name] for name in ("nodes", "normalized", "log_continuum", "wave")}
+        medium = str(handle["medium"])
+        meta = json.loads(str(handle["meta"]))
+    content = _arrays_digest(names, medium, stored) if digest else None
+    arrays = {}
+    for name in ("nodes", "normalized", "log_continuum", "wave"):
+        arrays[name] = stored.pop(name).astype(np.float64)
         # Read-only, so that what is derived from the library can be kept
         # (SpectralLibrary.resampled_to). A changed library is a new one (replace()).
-        for array in arrays.values():
-            array.flags.writeable = False
-        library = SpectralLibrary(
-            label_names=tuple(str(name) for name in handle["label_names"]),
-            medium=str(handle["medium"]),
-            meta=json.loads(str(handle["meta"])),
-            **arrays,
-        )
-    return library
+        arrays[name].flags.writeable = False
+    library = SpectralLibrary(label_names=names, medium=medium, meta=meta, **arrays)
+    return library, content
 
 
 # ---------------------------------------------------------------------------
@@ -1611,17 +1806,24 @@ def ingest_bosz(
     done = 0
     with ThreadPoolExecutor(max_workers=max(1, int(jobs))) as pool:
         futures = {pool.submit(_fetch_shard, url, path): i for i, (url, path) in enumerate(targets)}
-        for future in as_completed(futures):
-            index = futures[future]
-            try:
-                future.result()
-            except urllib.error.HTTPError as exc:
-                if exc.code != 404:
-                    raise
-                missing.append(index)
-            done += 1
-            if progress and (done % 25 == 0 or done == len(targets)):
-                print(f"  {done}/{len(targets)} shards")
+        try:
+            for future in as_completed(futures):
+                index = futures[future]
+                try:
+                    future.result()
+                except urllib.error.HTTPError as exc:
+                    if exc.code != 404:
+                        raise
+                    missing.append(index)
+                done += 1
+                if progress and (done % 25 == 0 or done == len(targets)):
+                    print(f"  {done}/{len(targets)} shards")
+        except BaseException:
+            # Leaving the block waits for the pool, which would first run every queued
+            # download, each with its retries. The queued ones are cancelled; those in
+            # progress finish into .part files, which never become cache entries.
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
 
     plan: dict[int, tuple[int, int, float, str]] = {}
     dropped: list[int] = []
@@ -1818,10 +2020,11 @@ def fetch_library(
     path = _library_cache_path(lib)
 
     if path.is_file():
-        library = load_library(path)
+        # The registry's label names read a cache written before they were stored as text;
+        # the digest below covers them.
+        library, digest = _read_library(path, lib.label_names, digest=True)
         recorded = library.meta.get("content_sha256")
         if recorded:
-            digest = _content_digest(library)
             if digest != recorded:
                 raise RuntimeError(
                     f"cached library {name!r} at {path} hashes to {digest}, but it records "
@@ -1866,12 +2069,22 @@ def _subset(
         raise ValueError(f"{lo}-{hi} Angstrom keeps only {keep.size} samples")
     meta = dict(library.meta)
     meta["wave_range"] = [lo, hi]
+    # The wavelengths increase, so the pixels kept are one run. The copies free the rest of
+    # the band, and they are made read-only, as load_library leaves its arrays, so that the
+    # projections and interpolators of the narrowed library are kept.
+    first, stop = int(keep[0]), int(keep[-1]) + 1
+
+    def copied(array: np.ndarray) -> np.ndarray:
+        out = np.array(array[..., first:stop])
+        out.flags.writeable = False
+        return out
+
     return SpectralLibrary(
         label_names=library.label_names,
         nodes=library.nodes,
-        normalized=library.normalized[:, keep],
-        log_continuum=library.log_continuum[:, keep],
-        wave=library.wave[keep],
+        normalized=copied(library.normalized),
+        log_continuum=copied(library.log_continuum),
+        wave=copied(library.wave),
         medium=library.medium,
         meta=meta,
     )
