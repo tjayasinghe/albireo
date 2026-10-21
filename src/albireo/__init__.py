@@ -232,8 +232,11 @@ from albireo.todcor import (
 
 __version__ = "0.1.0.dev0"
 
-# albireo.io requires astropy, so it is imported on first use rather than at package
-# import, which keeps `albireo.read_dataset(...)` discoverable without the [io] extra.
+# albireo.io and albireo.plotting import their optional dependencies (astropy; matplotlib
+# and arviz) inside their functions, so either module could be imported here. They are
+# imported on first attribute access instead, which keeps two large modules that most
+# analyses do not call out of `import albireo`. A function called without its dependency
+# raises an error that names the missing extra.
 _IO_EXPORTS = frozenset(
     {
         "RawSpectrum",
@@ -245,8 +248,6 @@ _IO_EXPORTS = frozenset(
     }
 )
 
-# albireo.plotting requires matplotlib (and arviz for the corner plot), so it is imported
-# on first use for the same reason, with an error naming the missing extra.
 _PLOT_EXPORTS = frozenset(
     {
         "plot_corner",

@@ -70,13 +70,18 @@ def _as_finite_float(value: object, name: str) -> float:
     return out
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, eq=False)
 class EpochData:
     """One observed spectrum, on its native wavelength grid.
 
     Inputs are coerced (``wave``/``flux``/``ivar`` to 1-D float64 arrays, ``mask`` to bool)
     and validated on construction, so every downstream operator can use an
     :class:`EpochData` without re-checking.
+
+    An input that is already a float64 array is stored without a copy, so an in-place
+    change to the caller's array after construction changes the epoch and bypasses the
+    validation. Equality and hashing are by identity: two epochs built from equal arrays
+    compare unequal, and an epoch can be a dictionary key or a set member.
 
     Parameters
     ----------
@@ -288,9 +293,11 @@ class EpochData:
         return np.where(self.good, self.ivar, 0.0)
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, eq=False)
 class Dataset:
     """A validated collection of epochs plus the frame their wavelengths are in.
+
+    Equality and hashing are by identity, as for :class:`EpochData`.
 
     Parameters
     ----------

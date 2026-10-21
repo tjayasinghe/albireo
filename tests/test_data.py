@@ -171,6 +171,17 @@ def test_good_and_effective_ivar_with_mask():
     np.testing.assert_allclose(epoch.ivar, [100.0, 0.0, 25.0, 49.0])
 
 
+def test_epochs_and_datasets_compare_and_hash_by_identity():
+    """The generated __eq__ compared ndarray fields, so `==`, `in` and hash() raised."""
+    first, second = make_epoch(4), make_epoch(4)
+    assert first == first and first != second
+    assert second in (first, second)
+    assert len({first, second, first}) == 2
+    dataset = Dataset([first, second])
+    assert {dataset: "ok"}[dataset] == "ok"
+    assert dataset != Dataset([first, second])
+
+
 def test_effective_ivar_returns_a_fresh_array():
     epoch = make_epoch(3)
     first = epoch.effective_ivar
