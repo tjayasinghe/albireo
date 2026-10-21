@@ -87,6 +87,13 @@ class Known(Spec):
     sigma: Any
 
     def distribution(self):
+        sigma = _concrete(self.sigma)
+        if sigma is not None and not np.all(sigma > 0.0):
+            raise ValueError(
+                f"Known({self.value}, {self.sigma}): sigma must be positive. A zero or "
+                "negative width gives a nan prior density; declare Fixed(value) to hold the "
+                "parameter constant."
+            )
         return dist.Normal(_as_array(self.value), _as_array(self.sigma))
 
     def start(self):
@@ -115,9 +122,11 @@ class Between(Spec):
     start_at: Any = None
 
     def distribution(self):
+        self._check_bounds()
         return dist.Uniform(_as_array(self.lo), _as_array(self.hi))
 
     def start(self):
+        self._check_bounds()
         if self.start_at is not None:
             start = _as_array(self.start_at)
             lo, hi = _as_array(self.lo), _as_array(self.hi)
@@ -131,8 +140,21 @@ class Between(Spec):
         return 0.5 * (_as_array(self.lo) + _as_array(self.hi))
 
     def upper(self) -> float:
-        bounds = np.abs(np.atleast_1d(np.asarray(self.hi, dtype=float)))
-        return float(np.max(bounds))
+        lo = np.abs(np.atleast_1d(np.asarray(self.lo, dtype=float)))
+        hi = np.abs(np.atleast_1d(np.asarray(self.hi, dtype=float)))
+        return float(np.max(np.maximum(lo, hi)))
+
+    def _check_bounds(self) -> None:
+        # Checked where the prior is used rather than at construction: the label fits
+        # build library-derived default ranges eagerly, and a default that the
+        # declaration replaces may be empty without consequence.
+        lo, hi = _concrete(self.lo), _concrete(self.hi)
+        if lo is not None and hi is not None and not np.all(lo < hi):
+            raise ValueError(
+                f"Between({self.lo}, {self.hi}): the lower bound must lie below the upper "
+                "bound. Uniform(lo, hi) with lo >= hi has no support, and its log density "
+                "is nan."
+            )
 
 
 @dataclass(frozen=True)
@@ -205,6 +227,13 @@ class Sampled(Spec):
 
 
 def _as_array(value):
-    """A float or a jnp array, preserving scalars as scalars."""
-    array = jnp.asarray(value, dtype=jnp.float64)
-    return array
+    """``value`` as a float64 JAX array (0-d for a scalar)."""
+    return jnp.asarray(value, dtype=jnp.float64)
+
+
+def _concrete(value) -> np.ndarray | None:
+    """``value`` as a float NumPy array, or ``None`` when it is a traced JAX value."""
+    try:
+        return np.asarray(value, dtype=float)
+    except TypeError:  # jax.errors.TracerArrayConversionError is a TypeError
+        return None
