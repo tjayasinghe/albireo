@@ -15,6 +15,11 @@ Two invariants are tested directly:
 All data are generated in the tests. Nothing is downloaded.
 """
 
+import dataclasses
+import gc
+import warnings
+import weakref
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -665,7 +670,8 @@ def test_the_node_scan_program_has_bounded_temporaries(scan_inputs):
     problem, nodes = scan_inputs
     blocks = match_mod._node_blocks(nodes)
     np.testing.assert_array_equal(np.concatenate(blocks)[: nodes.shape[0]], nodes)
-    broaden = match_mod._broadened_nodes.lower(problem, 0, blocks[0], 5.0).compile()
+    program = match_mod._broadening_program(problem)
+    broaden = program.lower(problem, 0, blocks[0], 5.0).compile()
     analysis = broaden.memory_analysis()
     if analysis is None:
         pytest.skip("this backend reports no buffer assignment")
@@ -688,6 +694,38 @@ def test_a_repeated_scan_compiles_nothing(scan_inputs, compilations):
 
     scan()
     assert compilations(scan) == 0
+
+
+def test_the_scan_releases_its_programs_on_another_problem_signature(scan_inputs):
+    """The scan's programs are kept for one problem signature only.
+
+    A jitted function at module level keeps an executable for every model grid it meets, so
+    a process that fitted star after star kept the programs of every grid. A problem of
+    another signature, here another grid spacing, releases the programs of the previous
+    one.
+    """
+    problem, _ = scan_inputs
+    broaden = match_mod._broadening_program(problem)
+    chi2_at = match_mod._scan_chi2_program(problem, 0)
+    assert match_mod._broadening_program(problem) is broaden
+    assert match_mod._scan_chi2_program(problem, 0) is chi2_at
+    released = [weakref.ref(broaden), weakref.ref(chi2_at)]
+    del broaden, chi2_at
+    other = dataclasses.replace(problem, dx=problem.dx * (1.0 + 1e-6))
+    match_mod._broadening_program(other)
+    match_mod._scan_chi2_program(other, 0)
+    gc.collect()
+    assert [ref() for ref in released] == [None, None]
+
+
+def test_kept_programs_are_bounded_per_signature():
+    """At most ``kept`` functions per signature, the oldest released first."""
+    programs = match_mod._Programs(kept=2)
+    made = [programs.get("a", key, object) for key in range(3)]
+    assert list(programs.functions.values()) == made[1:]
+    assert programs.get("a", 2, object) is made[2]
+    programs.get("b", 0, object)
+    assert len(programs.functions) == 1 and programs.signature == "b"
 
 
 def test_stars_that_share_a_library_share_its_projection(library, grid, monkeypatch):
@@ -1050,6 +1088,30 @@ def test_an_unbounded_label_prior_is_held_inside_the_box(library, grid, monkeypa
     assert (lo[k], hi[k]) == (4100.0, 5000.0)
 
 
+def test_a_normal_prior_inside_the_box_is_not_warned(library, grid, monkeypatch):
+    """A Known label is warned of only when three standard deviations reach past the box.
+
+    Every Known label on a box library was warned of as reaching beyond it, including
+    Known(4800, 50) on the 4000-5500 K box, so routine declarations hid the real case.
+    """
+
+    def capture(problem, index, nodes, vsini_trials, v_trials):
+        raise _ScanReached
+
+    monkeypatch.setattr(match_mod, "_scan_component", capture)
+    common = {"logg": ab.Between(3.2, 4.9), "vsini": ab.Between(1.0, 60.0), "v_kms": ab.Fixed(0.0)}
+    stars = {
+        "A": StarLabels(library=library, teff=ab.Known(4800.0, 50.0), **common),
+        "B": StarLabels(library=library, teff=ab.Known(4400.0, 400.0), **common),
+    }
+    with warnings.catch_warnings(record=True) as caught, pytest.raises(_ScanReached):
+        warnings.simplefilter("always")
+        fit(library, grid, noisy_rows(library, grid), stars=stars)
+    beyond = [str(w.message) for w in caught if "reach beyond" in str(w.message)]
+    assert len(beyond) == 1
+    assert "teff_B" in beyond[0] and "teff_A" not in beyond[0]
+
+
 def test_non_finite_spectra_are_refused_by_name(library, grid):
     """One NaN pixel made every scan chi-square NaN, and the error blamed the priors."""
     rows = noisy_rows(library, grid)
@@ -1058,9 +1120,52 @@ def test_non_finite_spectra_are_refused_by_name(library, grid):
     with pytest.raises(ValueError, match="d_hat has 1 non-finite pixel"):
         fit(library, grid, bad)
     std = np.full_like(rows, NOISE)
-    std[1, 5:8] = np.inf
-    with pytest.raises(ValueError, match="std has 3 non-finite pixel"):
+    std[1, 5:7] = np.nan
+    std[0, 9] = -NOISE
+    with pytest.raises(ValueError, match="std has 3 NaN or negative value"):
         fit(library, grid, rows, std=std)
+    std = np.full_like(rows, NOISE)
+    std[1] = np.inf
+    with pytest.raises(ValueError, match="std is infinite at every pixel of the row"):
+        fit(library, grid, rows, std=std)
+
+
+@pytest.mark.parametrize("compare", ["native", "matched"])
+def test_an_infinite_std_removes_a_pixel_from_the_comparison(library, grid, monkeypatch, compare):
+    """A pixel with an infinite std has zero weight, whatever ``d_hat`` holds there.
+
+    In the warm-start scan an infinite std gave ``1/std^2 = 0``, so it served as a mask; in
+    the likelihood of the d_hat comparisons its ``log(std)`` was infinite. The pixel now
+    enters with zero weight and a finite std. In ``"matched"`` mode the pixels within the
+    kernel's half-width go with it, as for ``exclude_angstrom``.
+    """
+    captured = []
+    scan = match_mod._scan_component
+
+    def capture(problem, index, nodes, vsini_trials, v_trials):
+        captured.append((problem, np.asarray(nodes)))
+        raise _ScanReached
+
+    monkeypatch.setattr(match_mod, "_scan_component", capture)
+    rows = noisy_rows(library, grid)
+    spike = rows.copy()
+    spike[0, 300:305] += 0.5
+    std = np.full_like(rows, NOISE)
+    std[0, 300:305] = np.inf
+    for data in (rows, spike):
+        with pytest.raises(_ScanReached):
+            fit(library, grid, data, std=std, compare=compare)
+    (clean, nodes), (spiked, _) = captured
+    half = len(np.asarray(clean.lsf_kernel)) // 2 if compare == "matched" else 0
+    weight = np.asarray(clean.weight)
+    assert np.all(np.isfinite(np.asarray(clean.sigma)))
+    assert np.flatnonzero(weight[0] == 0.0).tolist() == list(range(300 - half, 305 + half))
+    assert np.all(weight[1] == 1.0)
+    np.testing.assert_array_equal(np.asarray(spiked.weight), weight)
+    trials = ((5.0, 20.0), (-10.0, 0.0))
+    np.testing.assert_array_equal(
+        scan(spiked, 0, nodes[:8], *trials), scan(clean, 0, nodes[:8], *trials)
+    )
 
 
 def test_matched_mode_keeps_excluded_flux_out_of_the_comparison(library, grid, monkeypatch):

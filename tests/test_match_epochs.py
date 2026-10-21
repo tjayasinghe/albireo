@@ -21,7 +21,9 @@ that share no code with the fast path:
 All data are simulated in the tests. Nothing is downloaded.
 """
 
+import gc
 import warnings
+import weakref
 
 import jax.numpy as jnp
 import numpy as np
@@ -728,9 +730,10 @@ def test_draw_refits_are_refused_for_the_epoch_comparison(plain, library):
 def test_a_repeated_epoch_fit_reuses_its_programs(plain, library, compilations):
     """The objective's six programs and the scan's are kept and reused by a second fit.
 
-    A second fit of the same declaration compiled twelve programs (1.7 s of 3.5 s on this
-    problem). The two that remain are the eager scans of the band product, which
-    ``BlockTridiagonal.matvec`` builds anew on every call, in the nulls of the fit.
+    A second fit of the same declaration, with the statistics passed, compiled ten programs
+    and took 2.9 s on this problem; it now compiles two and takes 0.5 s. The two that
+    remain are the eager scans of the band product, which ``BlockTridiagonal.matvec``
+    builds anew on every call, in the nulls of the fit.
     """
     fit, _ = plain
     stats = fit.epoch_statistics()
@@ -747,6 +750,24 @@ def test_a_repeated_epoch_fit_reuses_its_programs(plain, library, compilations):
 
     run()
     assert compilations(run) <= 2
+
+
+def test_an_epoch_objective_is_kept_for_one_signature():
+    """An objective is kept for the shapes of its problem and statistics, and released by
+    a fit of other shapes.
+
+    The objective was kept by declaration alone, so one objective met every model grid of a
+    process and kept the compiled programs of each: 50 to 65 MB per grid on this problem's
+    grids of 965 to 1,601 pixels.
+    """
+    first = match_mod._epoch_objective("layout", [], jnp.zeros(3), jnp.zeros(2))
+    assert match_mod._epoch_objective("layout", [], jnp.ones(3), jnp.ones(2)) is first
+    released = weakref.ref(first)
+    del first
+    other = match_mod._epoch_objective("layout", [], jnp.zeros(4), jnp.zeros(2))
+    gc.collect()
+    assert released() is None
+    assert match_mod._epoch_objective("layout", [], jnp.zeros(4), jnp.zeros(2)) is other
 
 
 class _LabelFitReached(Exception):

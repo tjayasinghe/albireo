@@ -62,7 +62,6 @@ import hashlib
 import time
 import warnings
 from dataclasses import dataclass, field
-from functools import partial
 from typing import Any
 
 import jax
@@ -921,7 +920,83 @@ def _nuisance_gram_inv(weight, basis):
 _NODE_CHUNK = 32
 
 
-@partial(jax.jit, static_argnums=1)
+def _leaf_type(leaf) -> tuple:
+    """Shape, dtype and weak type of one traced argument, as ``jax.jit`` distinguishes them."""
+    if type(leaf) in (bool, int, float, complex):  # a Python scalar is weakly typed
+        return (), np.result_type(leaf).str, True
+    weak = bool(getattr(leaf, "weak_type", False))
+    return tuple(np.shape(leaf)), np.dtype(leaf.dtype).str, weak
+
+
+def _signature(*trees) -> tuple:
+    """The pytree structure of ``trees`` and the type of each leaf.
+
+    A jitted function runs one compiled program for each signature of its traced arguments.
+    The structure includes the static fields of the pytrees, such as the grid spacing of a
+    :class:`LabelProblem`.
+    """
+    leaves, treedef = jax.tree_util.tree_flatten(trees)
+    return treedef, tuple(_leaf_type(leaf) for leaf in leaves)
+
+
+class _Programs:
+    """Jitted functions kept for reuse, for the most recent argument signature only.
+
+    A jitted function keeps an executable for every signature it has met, for as long as the
+    function exists. A function kept at module level by the label fit therefore held the
+    programs of every model grid a process had fitted: 50 to 65 MB per grid for the epoch
+    objective on the 965 to 1,601 pixel test problem, for every star of a pipeline worker.
+    Here a new signature, such as the model grid of the next star, releases every function
+    kept for the previous one before its own is built. At most ``kept`` functions are kept
+    for one signature, and the oldest is released first.
+    """
+
+    def __init__(self, kept: int):
+        self.kept = kept
+        self.signature: tuple | None = None
+        self.functions: dict = {}
+
+    def get(self, signature: tuple, key, build):
+        """The function kept under ``(signature, key)``, made by ``build()`` when absent."""
+        if self.signature is None or signature != self.signature:
+            self.functions.clear()
+            self.signature = signature
+        function = self.functions.get(key)
+        if function is None:
+            while len(self.functions) >= self.kept:
+                self.functions.pop(next(iter(self.functions)))
+            function = self.functions[key] = build()
+        return function
+
+
+# The broadening program of the warm-start scan, kept for one problem signature.
+_BROADENING_PROGRAMS = _Programs(kept=1)
+
+
+def _new_broadening_program():
+    """A jitted ``program(problem, index, nodes, vsini)`` for :func:`_broadened_nodes`.
+
+    Each call makes a new function object, so that the executables JAX keeps for it are
+    released with it.
+    """
+
+    def broadened(problem: LabelProblem, index: int, nodes, vsini):
+        def one(node):
+            normalized, _ = problem.interpolators[index](node)
+            return jnp.convolve(
+                normalized - 1.0, _broadening_kernel(problem, index, vsini), mode="same"
+            )
+
+        return jax.vmap(one)(nodes)
+
+    return jax.jit(broadened, static_argnums=1)
+
+
+def _broadening_program(problem: LabelProblem):
+    """The jitted program of :func:`_broadened_nodes` for the signature of ``problem``."""
+    return _BROADENING_PROGRAMS.get(_signature(problem), None, _new_broadening_program)
+
+
 def _broadened_nodes(problem: LabelProblem, index: int, nodes, vsini):
     """The deviation rows of one component at a block of library nodes, broadened once.
 
@@ -929,22 +1004,16 @@ def _broadened_nodes(problem: LabelProblem, index: int, nodes, vsini):
     interpolated spectrum less one, convolved with the component's broadening kernel, as in
     :func:`_component_model` before its Doppler shift. The problem, and with it the library
     slab of the interpolator, is a traced argument, so the program holds no copy of the
-    slab and is compiled once per block shape for every call with the same problem layout.
+    slab. It is compiled once per component and block shape, and kept while the scans use
+    problems of the same signature (:class:`_Programs`).
     """
-
-    def one(node):
-        normalized, _ = problem.interpolators[index](node)
-        return jnp.convolve(
-            normalized - 1.0, _broadening_kernel(problem, index, vsini), mode="same"
-        )
-
-    return jax.vmap(one)(nodes)
+    return _broadening_program(problem)(problem, index, nodes, vsini)
 
 
 # Chi-square programs of the warm-start scan kept for reuse, by the content of their
-# constants. A repeated fit of the same component spectrum reuses its program.
-_SCAN_PROGRAMS: dict = {}
-_SCAN_PROGRAMS_KEPT = 8
+# constants. A repeated fit of the same component spectrum reuses its program. They are
+# released when the scan meets a problem of another signature.
+_SCAN_PROGRAMS = _Programs(kept=8)
 
 
 def _digest(array) -> tuple:
@@ -966,26 +1035,24 @@ def _scan_chi2_program(problem: LabelProblem, index: int):
     weight = problem.weight[index] / problem.sigma[index] ** 2
     basis = problem.basis
     key = (problem.dx, problem.relativistic, _digest(data), _digest(weight), _digest(basis))
-    program = _SCAN_PROGRAMS.get(key)
-    if program is not None:
-        return program
-    gram_inv = _nuisance_gram_inv(weight, basis)
-    dx, relativistic = problem.dx, problem.relativistic
 
-    @jax.jit
-    def chi2_at(deviations, v):
-        shift = log_doppler_shift(v, relativistic=relativistic) / dx
+    def build():
+        gram_inv = _nuisance_gram_inv(weight, basis)
+        dx, relativistic = problem.dx, problem.relativistic
 
-        def one(deviation):
-            row = shift_spectrum(deviation, shift)
-            return _profiled_chi2(row, data, weight, basis, gram_inv)
+        @jax.jit
+        def chi2_at(deviations, v):
+            shift = log_doppler_shift(v, relativistic=relativistic) / dx
 
-        return jax.vmap(one)(deviations)
+            def one(deviation):
+                row = shift_spectrum(deviation, shift)
+                return _profiled_chi2(row, data, weight, basis, gram_inv)
 
-    while len(_SCAN_PROGRAMS) >= _SCAN_PROGRAMS_KEPT:
-        _SCAN_PROGRAMS.pop(next(iter(_SCAN_PROGRAMS)))
-    _SCAN_PROGRAMS[key] = chi2_at
-    return chi2_at
+            return jax.vmap(one)(deviations)
+
+        return chi2_at
+
+    return _SCAN_PROGRAMS.get(_signature(problem), key, build)
 
 
 def _node_blocks(nodes) -> list[jax.Array]:
@@ -1164,16 +1231,39 @@ def _box_ranges(interpolators, label_axes, names, shared_mh) -> dict[str, tuple[
     return out
 
 
-def _narrow_to_boxes(specs: dict, boxes: dict) -> tuple[dict, list]:
+def _prior_reach(spec) -> tuple[float, float]:
+    """The label range a prior that is not uniform can be expected to reach.
+
+    It is three standard deviations either side of the mean of a normal prior, the bounds of
+    a bounded prior, and otherwise the support of the distribution, which may be infinite.
+    """
+    moments = _normal_moments(spec)
+    if moments is not None:
+        mean, sd = moments
+        return mean - 3.0 * sd, mean + 3.0 * sd
+    bounds = _spec_bounds(spec)
+    if bounds is not None:
+        return bounds
+    support = spec.distribution().support
+    low = np.asarray(getattr(support, "lower_bound", -np.inf), dtype=np.float64)
+    high = np.asarray(getattr(support, "upper_bound", np.inf), dtype=np.float64)
+    return float(np.min(low)), float(np.max(high))
+
+
+def _narrow_to_boxes(specs: dict, boxes: dict) -> tuple[dict, list, list]:
     """Narrow uniform label priors to the box libraries' ranges, in place.
 
-    Returns ``(narrowed, beyond)``. ``narrowed`` maps each narrowed site to its new
-    ``[lo, hi]``. ``beyond`` lists the sites whose declaration still reaches outside a box:
-    a fixed value beyond it, or a prior that is unbounded or not uniform. A uniform prior
-    that does not overlap the box is left to the node selection, which refuses it.
+    Returns ``(narrowed, beyond, unheld)``. ``narrowed`` maps each narrowed site to its new
+    ``[lo, hi]``. ``unheld`` lists the sites whose prior cannot be narrowed and is not held
+    inside the box by its own bounds: a prior that is unbounded, or bounded beyond the box
+    and not uniform. ``beyond`` lists the sites whose declaration reaches outside a box: a
+    fixed value beyond it, or a site of ``unheld`` whose prior reaches past the box
+    (:func:`_prior_reach`). A uniform prior that does not overlap the box is left to the
+    node selection, which refuses it.
     """
     narrowed: dict[str, list[float]] = {}
     beyond: list[str] = []
+    unheld: list[str] = []
     for key, (low, high) in boxes.items():
         spec = specs.get(key)
         if spec is None:
@@ -1186,7 +1276,10 @@ def _narrow_to_boxes(specs: dict, boxes: dict) -> tuple[dict, list]:
         if bounds is not None and low <= bounds[0] and bounds[1] <= high:
             continue
         if bounds is None or not isinstance(spec.distribution(), dist.Uniform):
-            beyond.append(key)
+            unheld.append(key)
+            reach = _prior_reach(spec)
+            if not (low <= reach[0] and reach[1] <= high):
+                beyond.append(key)
             continue
         lo, hi = max(bounds[0], low), min(bounds[1], high)
         if not lo < hi:
@@ -1196,7 +1289,7 @@ def _narrow_to_boxes(specs: dict, boxes: dict) -> tuple[dict, list]:
         kept = start if start is not None and lo < start < hi else None
         specs[key] = Between(lo, hi, start_at=kept)
         narrowed[key] = [lo, hi]
-    return narrowed, beyond
+    return narrowed, beyond, unheld
 
 
 def _combine_scans(scans, node_tables, label_axes, shared_mh, top_k):
@@ -1386,7 +1479,9 @@ def match_labels(
     std
         Per-pixel posterior standard deviations, ``Fit.std()``. Defaults to a flat scale,
         with all the weighting set by the jitter site. Real per-pixel uncertainties are
-        preferable.
+        preferable. An infinite value gives its pixel zero weight; in ``"matched"`` mode
+        the pixels within the half-width of the instrument kernel go with it, as for
+        ``exclude_angstrom``. NaN and negative values are refused.
     mh
         Metallicity spec, shared across components by default (a binary has one
         composition). A mapping of name to spec frees them independently. Defaults to the
@@ -1601,18 +1696,27 @@ def match_labels(
     if sigma.shape != data.shape:
         raise ValueError(f"std must match d_hat's shape {data.shape}; got {sigma.shape}")
     # One non-finite pixel makes every chi-square of the scan NaN, whatever its weight, and
-    # the scan then reports that no node satisfies the priors.
+    # the scan then reports that no node satisfies the priors. An infinite std is accepted:
+    # it gives the pixel zero weight below.
     for what, array in (("d_hat", data), ("std", sigma)):
-        bad = ~np.isfinite(array) if what == "d_hat" else ~(np.isfinite(array) & (array >= 0))
+        bad = ~np.isfinite(array) if what == "d_hat" else np.isnan(array) | (array < 0)
         if bad.any():
             rows = ", ".join(repr(names[r]) for r in np.flatnonzero(bad.any(axis=1)))
             raise ValueError(
-                f"{what} has {int(bad.sum())} non-finite pixel(s)"
-                + ("" if what == "d_hat" else " or negative value(s)")
+                (
+                    f"d_hat has {int(bad.sum())} non-finite pixel(s)"
+                    if what == "d_hat"
+                    else f"std has {int(bad.sum())} NaN or negative value(s)"
+                )
                 + f", in the row(s) of {rows}. Every pixel enters the warm-start scan, "
-                "including excluded ones: replace them (for example by zero with a large "
-                "std) and drop their range with exclude_angstrom."
+                "including excluded ones: give such a pixel a finite d_hat and an infinite "
+                "std, which removes it from the comparison."
             )
+    # An infinite std marks a pixel without information. It enters with zero weight, as
+    # 1/std^2 = 0 did in the warm-start scan, and its std is set to one so that log(std) in
+    # the likelihood of the d_hat comparisons stays finite.
+    uninformed = np.isinf(sigma)
+    sigma = np.where(uninformed, 1.0, sigma)
 
     lsf_kernel = np.asarray(gaussian_kernel(lsf_sigma_kms / grid.dv_kms))
     matched = compare == "matched"
@@ -1641,12 +1745,22 @@ def match_labels(
     sigma = np.maximum(sigma, 1e-12 * float(np.max(np.abs(data)) or 1.0))
 
     weight = np.ones_like(data)
+    # The convolution of d_hat in "matched" mode spreads the flux of a pixel over the
+    # kernel's half-width on either side, so an excluded pixel takes its neighbours with it.
+    reach = np.ones(2 * (len(lsf_kernel) // 2) + 1)
+    if uninformed.any():
+        if matched:
+            uninformed = np.stack(
+                [np.convolve(row.astype(float), reach, mode="same") > 0.0 for row in uninformed]
+            )
+        weight[uninformed] = 0.0
+        empty = ~weight.any(axis=1)
+        if empty.any():
+            rows = ", ".join(repr(names[r]) for r in np.flatnonzero(empty))
+            raise ValueError(f"std is infinite at every pixel of the row(s) of {rows}")
     for lo, hi in exclude_angstrom:
         excluded = (grid.wave >= lo) & (grid.wave <= hi)
         if matched:
-            # The convolution of d_hat spreads the flux of the range over the kernel's
-            # half-width on either side, where the template has no such flux.
-            reach = np.ones(2 * (len(lsf_kernel) // 2) + 1)
             excluded = np.convolve(excluded.astype(float), reach, mode="same") > 0.0
         weight[:, excluded] = 0.0
     if not np.any(weight):
@@ -1719,7 +1833,7 @@ def match_labels(
     # not a measurement. On an APF target of the blind test the fit returned [M/H] = -1.24
     # against a box ending at -1.0 (D74).
     boxes = _box_ranges(interpolators, label_axes, names, shared_mh)
-    narrowed, beyond = _narrow_to_boxes(specs, boxes)
+    narrowed, beyond, unheld = _narrow_to_boxes(specs, boxes)
     if narrowed:
         warnings.warn(
             "label priors that extend beyond the library were narrowed to the library: "
@@ -1729,9 +1843,9 @@ def match_labels(
             UserWarning,
             stacklevel=2,
         )
-    # The epoch fit bounds every label site by the box; the d_hat comparisons cannot.
-    unbounded = [key for key in beyond if not _is_fixed(specs[key])]
-    warned = [key for key in beyond if not (epochs and key in unbounded)]
+    # The epoch fit bounds every label site by the box; the d_hat comparisons cannot. A
+    # prior well inside the box, such as Known(4800, 50) on a 4000-5500 K box, is not warned.
+    warned = [key for key in beyond if not (epochs and key in unheld)]
     if warned:
         warnings.warn(
             "the declarations of "
@@ -1837,8 +1951,8 @@ def match_labels(
     }
     if narrowed:
         assumptions["label_priors_narrowed_to_library"] = narrowed
-    if epochs and unbounded:
-        assumptions["label_bounds_from_library"] = {key: list(boxes[key]) for key in unbounded}
+    if epochs and unheld:
+        assumptions["label_bounds_from_library"] = {key: list(boxes[key]) for key in unheld}
 
     if epochs:
         assumptions["epoch_operator_lsf_sigma_kms"] = {
@@ -2415,12 +2529,15 @@ class _EpochObjective:
         return np.asarray(self._light_jac(jnp.asarray(phi), problem), dtype=np.float64)
 
 
-# Epoch objectives kept for reuse, by layout and prior. The jitted programs of an objective
-# depend on nothing else: the problem and the statistics are traced arguments. A second fit
-# with the same declaration and array shapes therefore reuses the six compiled programs of
-# the first, which took 1.7 s of a 2.8 s repeat fit on the 965-pixel test problem.
-_OBJECTIVES: dict = {}
-_OBJECTIVES_KEPT = 4
+# Epoch objectives kept for reuse, by the signature of the problem and the statistics and by
+# layout and prior. The jitted programs of an objective depend on nothing else: the problem
+# and the statistics are traced arguments. A second fit with the same declaration and array
+# shapes therefore reuses the six compiled programs of the first. With the scan's programs
+# also kept, a repeated fit of the 965-pixel test problem with its statistics passed
+# compiled ten programs in 2.9 s, and compiles two in 0.5 s. A fit on another model grid
+# releases them (:class:`_Programs`), so a process that fits many stars keeps the programs
+# of one.
+_OBJECTIVES = _Programs(kept=4)
 
 
 def _prior_key(terms) -> tuple | None:
@@ -2444,19 +2561,21 @@ def _prior_key(terms) -> tuple | None:
     return tuple(key)
 
 
-def _epoch_objective(layout: _Layout, terms) -> _EpochObjective:
-    """The objective for ``(layout, terms)``, reused when an equal one was built before."""
+def _epoch_objective(layout: _Layout, terms, problem, statistics) -> _EpochObjective:
+    """The objective for ``(layout, terms)``, reused when an equal one was built before.
+
+    ``problem`` and ``statistics`` are the arguments the objective will be evaluated with.
+    Only their signature enters the key, so that each kept objective compiles its programs
+    for one shape.
+    """
     prior = _prior_key(terms)
     if prior is None:
         return _EpochObjective(layout, terms)
-    key = (layout, prior)
-    objective = _OBJECTIVES.get(key)
-    if objective is None:
-        objective = _EpochObjective(layout, terms)
-        while len(_OBJECTIVES) >= _OBJECTIVES_KEPT:
-            _OBJECTIVES.pop(next(iter(_OBJECTIVES)))
-        _OBJECTIVES[key] = objective
-    return objective
+    return _OBJECTIVES.get(
+        _signature(problem, statistics),
+        (layout, prior),
+        lambda: _EpochObjective(layout, terms),
+    )
 
 
 @dataclass
@@ -2949,7 +3068,7 @@ def _fit_epochs(
     layout, lo, hi, terms = _epoch_layout(specs, config, problem)
     if layout.n == 0:
         raise ValueError("every label is declared Fixed; there is nothing to fit")
-    objective = _epoch_objective(layout, terms)
+    objective = _epoch_objective(layout, terms, problem, statistics)
     budget = {"max_iter": max(int(max_steps), 1), "max_eval": 4 * max(int(max_steps), 1)}
     report = None
     if progress is not None:
