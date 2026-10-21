@@ -375,8 +375,9 @@ def test_a_rejected_declaration_names_its_parameter(binary, library):
     empty = {**stars, "A": dataclasses.replace(stars["A"], vsini=ab.Between(30.0, 10.0))}
     with pytest.raises(ValueError, match=r"vsini of 'A': Between\(30.0, 10.0\): the lower"):
         fit_templates(dataset, empty, **options)
-    # numpyro does not validate the arguments of a distribution declared through Sampled.
-    flat = ab.Sampled(dist.Normal(5800.0, 0.0), start_at=5800.0)
+    # A distribution declared through Sampled reaches fit_templates unvalidated when its
+    # own validation is off; numpyro 0.22 validates at construction by default.
+    flat = ab.Sampled(dist.Normal(5800.0, 0.0, validate_args=False), start_at=5800.0)
     unchecked = {**stars, "A": dataclasses.replace(stars["A"], teff=flat)}
     with pytest.raises(ValueError, match="teff of 'A': the prior width must be positive"):
         fit_templates(dataset, unchecked, **options)
