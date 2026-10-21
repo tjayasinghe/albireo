@@ -1319,9 +1319,25 @@ def test_the_phase_is_rescanned_when_only_the_first_scan_pass_moved(dataset, mon
 
 def test_a_constant_offset_between_the_stars_is_still_a_cold_start(dataset):
     """The model removes one zero point per star, so per-star constants separate nothing."""
+    from albireo.facade import _centred_velocities
+
     n = dataset.n_epochs
     with pytest.raises(ValueError, match="never separate the components"):
         _dis(dataset, orbit=None, velocities=np.stack([np.full(n, 20.0), np.full(n, -20.0)]))
+    # Constants that are not exactly representable leave a rounding residue after the
+    # mean is removed; the residue is not a separation.
+    for pair in ((152.3, 148.7), (0.1, 0.3)):
+        table = np.stack([np.full(n, pair[0]), np.full(n, pair[1])])
+        assert np.max(np.ptp(_centred_velocities(table), axis=0)) > 0.0, "no residue to test"
+        with pytest.raises(ValueError, match="never separate the components"):
+            _dis(dataset, orbit=None, velocities=table)
+    with pytest.raises(ValueError, match="never separate the components"):
+        _dis(
+            dataset,
+            components=[ab.Star("only", light=1.0)],
+            orbit=None,
+            velocities=np.full((1, n), 152.3),
+        )
     # An unresolved pattern is not hidden by large per-star offsets.
     barely = np.stack([np.zeros(n) + 40.0, np.linspace(0.0, 1.0, n) - 40.0])
     with pytest.warns(RuntimeWarning, match="below the widest LSF sigma"):
@@ -1338,6 +1354,23 @@ def test_a_single_valued_semi_amplitude_for_two_stars_is_refused(dataset):
     single = _dis(dataset, components=[ab.Star("only", light=1.0)], orbit=_orbit(k=40.0))
     assert float(np.asarray(single.fixed["k"])) == 40.0 and "k" not in single.priors
     assert single.velocity_budget.terms[0][1] == pytest.approx(40.0)
+
+
+def test_a_sampled_semi_amplitude_is_sized_by_its_distribution():
+    """A Sampled k with one prior entry per star and a scalar start is a vector site."""
+    import jax.numpy as jnp
+    import numpyro.distributions as dist
+
+    from albireo.facade import _check_k_entries, _k_specs, _spec_size
+
+    vector = ab.Sampled(dist.Uniform(jnp.array([10.0, 5.0]), 90.0), start_at=40.0, upper_bound=90.0)
+    assert _spec_size(vector) == 2
+    _check_k_entries(vector, 2)
+    specs = _k_specs(_orbit(k=vector), 2)
+    assert [s.upper() for s in specs] == [90.0, 90.0]
+    scalar = ab.Sampled(dist.Normal(40.0, 30.0), start_at=40.0, upper_bound=150.0)
+    with pytest.raises(ValueError, match="one entry per star"):
+        _check_k_entries(scalar, 2)
 
 
 def test_one_vector_range_is_scanned_per_star_whichever_field_is_the_vector():

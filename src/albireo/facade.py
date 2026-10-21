@@ -846,12 +846,16 @@ def _check_velocities(dis, stars) -> np.ndarray:
     # epoch the stars are indistinguishable, and the fit converges to a solution
     # 122,000 nats below the warm-started one (D42). The separation is measured on the
     # centred table, which is what the model uses: it removes one zero point per
-    # component, so a constant offset between two stars separates nothing.
+    # component, so a constant offset between two stars separates nothing. Removing the
+    # mean of a constant that is not exactly representable leaves a rounding residue of a
+    # few units in the last place (5.7e-14 km/s for a row of 152.3 km/s), so the
+    # separation is compared with a tolerance of 1e-9 of the table's largest velocity, at
+    # least 1e-9 km/s. The tolerance is far below any LSF width.
     centred = _centred_velocities(v)
     separation = (
         float(np.max(np.ptp(centred, axis=0))) if v.shape[0] > 1 else float(np.ptp(centred))
     )
-    if separation <= 0.0:
+    if separation <= 1e-9 * max(1.0, float(np.max(np.abs(v)))):
         raise ValueError(
             "these velocities never separate the components: once each star's own zero "
             "point is removed (the model does not identify it), every star has the same "
@@ -876,16 +880,24 @@ def _check_velocities(dis, stars) -> np.ndarray:
     return v
 
 
-_NUMERIC_FIELDS = ("lo", "hi", "start_at", "value", "sigma", "values")
+_NUMERIC_FIELDS = ("lo", "hi", "start_at", "value", "sigma", "values", "upper_bound")
 
 
 def _spec_size(spec: Spec) -> int:
-    """The number of entries of a spec: the largest size among its numeric fields."""
+    """The number of entries of a spec: the largest size among its numeric fields.
+
+    For a :class:`Sampled` spec the size of its distribution (batch and event shape)
+    also counts, since that distribution sets the shape of the site.
+    """
     sizes = [
         np.atleast_1d(np.asarray(getattr(spec, attr), dtype=float)).size
         for attr in _NUMERIC_FIELDS
         if getattr(spec, attr, None) is not None
     ]
+    if isinstance(spec, Sampled):
+        prior = spec.distribution_
+        shape = tuple(prior.batch_shape) + tuple(prior.event_shape)
+        sizes.append(math.prod(shape))
     return max(sizes, default=1)
 
 
@@ -899,9 +911,10 @@ def _as_k(value) -> Any:
 def _check_k_entries(value, n: int) -> None:
     """Reject one single-valued ``k`` specification declared for two or more stars.
 
-    The ``k`` site has one entry per star. A specification whose fields are all scalars
-    would build a scalar site, and the model would then fail at its first evaluation with
-    a message about ``len(k)``.
+    The ``k`` site has one entry per star. A specification whose fields are all scalars,
+    and for :class:`Sampled` whose distribution is also scalar, would build a scalar
+    site, and the model would then fail at its first evaluation with a message about
+    ``len(k)``.
     """
     spec = _as_k(value)
     if n < 2 or not isinstance(spec, Spec) or isinstance(spec, Scanned):
