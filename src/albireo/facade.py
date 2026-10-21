@@ -399,17 +399,24 @@ class Nebular:
     Declaring one assembles several coupled pieces: the component column, the
     ``log_nebular_amp`` site with its prior and starting value, the per-pixel
     ``eta_profile`` that confines the component to its lines, the agreement between that
-    profile's velocity and ``nebular_v_kms``, the smoothness prior object passed at
-    construction so that ML-II keeps the profile, and the additional velocity budget.
+    profile and ``nebular_v_kms`` (the component is shifted by ``v_kms``, so its spectrum
+    holds the lines at rest, where the profile's windows are built), the smoothness prior
+    object passed at construction so that ML-II keeps the profile, and the additional
+    velocity budget.
     Omitting the profile makes the fit 250 nats worse and gives a 2.6% error in K₂.
     Omitting the component gives errors of 11.5% in the Hβ equivalent width and 59% in K₂.
 
     Parameters
     ----------
     v_kms
-        Velocity of the nebula in km/s, in the model grid's frame. It is not identified:
-        it sets only where the component's lines fall on the grid, which the window
-        profile must match, and is reported as a placement convention.
+        Velocity of the nebula in km/s, in the model grid's frame. The component is
+        shifted by this velocity (``nebular_v_kms`` of
+        :func:`albireo.forward.build_problem`), so its spectrum holds the lines at their
+        rest wavelengths, where the windows of the profile are built. The velocity is not
+        identified, since a constant shift of a free spectrum is absorbed by the spectrum,
+        and is reported as a placement convention. It must agree with the nebula's
+        velocity to well within ``halfwidth_kms``: a line displaced by more than the
+        half-width falls outside its window.
     lines
         Rest wavelengths in air angstrom. Default :data:`albireo.NEBULAR_LINES`.
     halfwidth_kms
@@ -1385,10 +1392,15 @@ class Disentangler:
                 source = NEBULAR_LINES if lines is None else lines
                 values = list(source.values()) if isinstance(source, Mapping) else list(source)
                 lines = [float(v) for v in np.asarray(air_to_vacuum(np.asarray(values)))]
+            # The model shifts the nebular row by nebular.v_kms (nebular_v_kms of
+            # build_problem), so the component's own spectrum holds the lines at rest. The
+            # windows confine that spectrum and are therefore built at rest, not at the
+            # nebula's velocity; at a velocity beyond the half-width a window built there
+            # misses the line altogether.
             windows = nebular_windows(
                 lines=lines,
                 halfwidth_kms=nebular.halfwidth_kms,
-                v_kms=nebular.v_kms,
+                v_kms=0.0,
                 wave_range=(float(wave[0]), float(wave[-1])),
             )
             if not windows:
@@ -1679,8 +1691,9 @@ class Disentangler:
         if nebular is not None:
             rows.append(
                 f"  nebular velocity   {nebular.v_kms:g} km/s\n"
-                "      unidentified: a placement convention for the window profile, not a "
-                "measurement."
+                "      unidentified: the shift from the component's lines at rest, where the "
+                "window profile\n      confines them, to the observed ones; a placement "
+                "convention, not a measurement."
             )
         by_instrument = self._declared_noise_correlation()
         if by_instrument is not None:

@@ -672,15 +672,17 @@ def build_problem(
         core-fill, which narrows the disentangled profile and biases every temperature
         and gravity derived from it.
     nebular_v_kms
-        Velocity of the nebula, in the frame the stellar velocities are measured in
-        (km/s). It is not identified by the data. The shift is the same at every epoch
-        (barycentric-frame data) or differs only by ``v_bary`` (topocentric), and a
-        constant shift of a free spectrum is a reparameterization ``d -> T(delta) d``,
-        as the systemic velocity is for the stellar components. It determines where the
-        component's lines fall on the model grid, which matters when the prior confines
-        the component to windows (:func:`albireo.priors.window_profile`), since the
-        windows and the shift must agree. Pass the same value to
-        :func:`albireo.priors.nebular_windows`.
+        Velocity by which the nebular component is shifted, in the frame the stellar
+        velocities are measured in (km/s). It is not identified by the data. The shift is
+        the same at every epoch (barycentric-frame data) or differs only by ``v_bary``
+        (topocentric), and a constant shift of a free spectrum is a reparameterization
+        ``d -> T(delta) d``, as the systemic velocity is for the stellar components. It
+        determines where the component's lines fall on the model grid: for a nebula at
+        velocity ``u`` they lie at ``u - nebular_v_kms``, at rest when this is ``u``. That
+        matters when the prior confines the component to windows
+        (:func:`albireo.priors.window_profile`), since the windows must contain the lines:
+        build them with :func:`albireo.priors.nebular_windows` at
+        ``v_kms = u - nebular_v_kms``, not at ``nebular_v_kms`` itself.
     nebular_amplitudes
         Per-epoch amplitudes ``(n_epochs,)`` for the nebular component (default: all
         ones). Only the product ``amplitude * spectrum`` is observable, so the overall

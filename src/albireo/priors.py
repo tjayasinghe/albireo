@@ -133,13 +133,16 @@ def nebular_windows(
         Half-width of each window in velocity [km/s], converted to wavelength at the
         line.
     v_kms
-        Velocity of the nebula in the frame of the model grid [km/s]. Windows are built
-        at ``lambda * (1 + v_kms / c)``, so this value must equal the ``nebular_v_kms``
-        passed to :func:`albireo.forward.build_problem`: that shift determines where the
-        component's lines fall on the model grid, and the profile must agree with it.
-        Both default to 0, which places the component at the observed barycentric
-        wavelengths, the convention the stellar components follow (their systemic
-        velocity is absorbed into their spectra).
+        Velocity of the lines in the nebular component's spectrum on the model grid
+        [km/s]. Windows are built at ``lambda * (1 + v_kms / c)``.
+        :func:`albireo.forward.build_problem` shifts the component by its
+        ``nebular_v_kms``, so for a nebula at velocity ``u`` the component holds its lines
+        at ``u - nebular_v_kms``, and that difference is the value to pass here. With
+        ``nebular_v_kms = u`` (as :class:`albireo.Nebular` declares it) the windows are
+        built at rest, ``v_kms = 0``. With ``nebular_v_kms = 0`` they are built at ``u``.
+        Passing ``u`` to both places the windows ``u`` away from the lines, and beyond the
+        half-width a window misses its line. To find which windows fall inside an
+        observed wavelength range, pass the nebula's velocity.
     wave_range
         Optional ``(min, max)`` in angstrom; windows disjoint from it are dropped.
         ``(grid.wave[0], grid.wave[-1])`` keeps only the lines a given model grid
