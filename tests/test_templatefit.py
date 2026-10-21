@@ -1079,3 +1079,202 @@ def test_more_declarations_are_checked(binary, library):
             start=_fit(binary, library).start,
             **options,
         )
+
+
+def _without_mh(library, mh=0.0):
+    """The library at one metallicity, as a grid computed at a fixed [M/H] without that axis."""
+    keep = library.nodes[:, 2] == mh
+    return ab.SpectralLibrary(
+        label_names=("teff", "logg"),
+        nodes=library.nodes[keep][:, :2],
+        normalized=library.normalized[keep],
+        log_continuum=library.log_continuum[keep],
+        wave=library.wave,
+        medium=library.medium,
+        meta=dict(library.meta),
+    )
+
+
+def test_a_library_box_is_checked_before_it_is_used(binary, library):
+    """A box without a temperature axis, and an object that is not a library, are named as
+    such rather than failing where the boxes are put in order of temperature."""
+    dataset, _, grid = binary
+    stars, mh = _declared(library)
+    options = {
+        "grid": grid,
+        "medium": "vacuum",
+        "mh": mh,
+        "v_range": V_RANGE,
+        "lsf_sigma_v": {"a": LSF_KMS},
+    }
+    keep = library.nodes[:, 0] == 5500.0
+    no_teff = ab.SpectralLibrary(
+        label_names=("logg", "mh"),
+        nodes=library.nodes[keep][:, 1:],
+        normalized=library.normalized[keep],
+        log_continuum=library.log_continuum[keep],
+        wave=library.wave,
+        medium=library.medium,
+    )
+    with pytest.raises(ValueError, match="without a teff axis"):
+        fit_templates(
+            dataset, {**stars, "B": dataclasses.replace(stars["B"], library=no_teff)}, **options
+        )
+    with pytest.raises(TypeError, match="must be a SpectralLibrary"):
+        fit_templates(
+            dataset, {**stars, "B": dataclasses.replace(stars["B"], library=None)}, **options
+        )
+
+
+def test_a_star_whose_library_has_no_metallicity_takes_no_part_in_it(binary, library):
+    """The metallicity shared by the stars is a label of those whose library has that axis.
+    A star rendered from a grid at one fixed metallicity reports none, and no error."""
+    stars, _ = _declared(library)
+    stars["B"] = dataclasses.replace(stars["B"], library=_without_mh(library))
+    mixed = _fit(binary, library, stars=stars, max_passes=1)
+    assert "mh" in mixed.parameter_names
+    assert np.isfinite(mixed.labels["A"]["mh"]) and np.isfinite(mixed.errors["A"]["mh"])
+    assert np.isnan(mixed.labels["B"]["mh"]) and np.isnan(mixed.errors["B"]["mh"])
+    assert np.isnan(mixed.template("B").meta["labels"]["mh"])
+    assert np.isfinite(mixed.labels["B"]["teff"]) and np.isfinite(mixed.errors["B"]["teff"])
+
+
+def test_the_derivative_in_temperature_stays_in_the_box_of_the_star(binary):
+    """Within a step below the shared temperature of two boxes, the difference in temperature
+    is taken in the star's own box. The upper box here starts at a higher gravity, so a
+    template rendered from it at the star's gravity is moved to its edge, and a difference
+    between the two boxes is a difference of gravity, not of temperature."""
+    import jax.numpy as jnp
+
+    from albireo.templatefit import _LabelSpace, _Layout, _Objective, _Parameter, _Star, _State
+
+    dataset, _, grid = binary
+    cool = synthetic_library(LIBRARY_WINDOW, teff=TEFF[:4], **AXES)
+    warm = synthetic_library(LIBRARY_WINDOW, teff=TEFF[3:], **{**AXES, "logg": (4.0, 4.5, 5.0)})
+    space = _LabelSpace([warm, cool], grid, "vacuum", "test")
+    star = _Star("A", space, grid, 0.6, 0.0, [])
+    labels = {"logg": 3.7, "mh": 0.0, "vsini": 10.0}
+    own = ab.library_interpolator(cool.resampled_to(grid, medium="vacuum"))
+
+    def rendered(teff):
+        return np.asarray(own(jnp.asarray([teff, labels["logg"], labels["mh"]]))[0]) - 1.0
+
+    seam = TEFF[3]
+    for teff in (seam - 50.0, seam - 2.0):
+        layout = _Layout()
+        layout.add(_Parameter("teff_A", "label", (0,), "teff"), teff, TEFF[0], TEFF[-1], None)
+        held = _State(
+            labels=[{"teff": teff, **labels}], amplitudes=[np.zeros(0)], light=np.ones((1, 1))
+        )
+        objective = _Objective(
+            dataset,
+            [star],
+            layout,
+            held,
+            groups=("a",),
+            shifts=np.zeros((1, dataset.n_epochs)),
+            scales=np.ones(dataset.n_epochs),
+            correlation={},
+            lsf_sigma_v={"a": LSF_KMS},
+            lsf_anchors_angstrom=None,
+            nuisance_order=0,
+            free_scale=False,
+        )
+        phi = np.array([teff])
+        vectors, _, slots = objective._vectors(phi, layout.unpack(phi, held), jacobian=True)
+        up, down = min(teff + 5.0, seam), teff - 5.0
+        expected = star.broaden((rendered(up) - rendered(down)) / (up - down), labels["vsini"])
+        scale = np.max(np.abs(expected))
+        np.testing.assert_allclose(vectors[slots[(0, 0)]], expected, rtol=0, atol=1e-9 * scale)
+
+
+def test_a_free_scale_epoch_returns_the_residual_at_its_shifts(binary, library, monkeypatch):
+    """With the scale free, the walk of an epoch's shifts and the solution for its scale
+    alternate until the scale settles, for at most a fixed number of rounds. An epoch that
+    reaches that number returns the residual at the shifts it returns, and the scale
+    solved there."""
+    import sys
+
+    module = sys.modules["albireo.templatefit"]
+    monkeypatch.setattr(module, "_MAX_SCALE_ROUNDS", 1)
+    epoch = module._Objective._epoch
+    seen = []
+
+    def recorded(self, stack, work, static, shift, scale, light):
+        out = epoch(self, stack, work, static, shift, scale, light)
+        if self.move and len(seen) < 24:
+            seen.append((self, stack, work, static, light, out))
+        return out
+
+    monkeypatch.setattr(module._Objective, "_epoch", recorded)
+    _fit(binary, library, scale="free", max_passes=1, max_iterations=1)
+    assert len(seen) == 24
+    for objective, stack, work, static, light, out in seen:
+        shift, scale, residual = out[0], out[1], out[2]
+        objective.move = False  # the epoch at the shifts as given, with its scale solved
+        again = epoch(objective, stack, work, static, shift, scale, light)
+        objective.move = True
+        assert again[1] == pytest.approx(scale, rel=1e-11)
+        assert float(again[2] @ again[2]) == pytest.approx(float(residual @ residual), rel=1e-11)
+
+
+def test_stars_on_one_library_share_its_projection_and_epochs_are_prepared_once(
+    binary, library, monkeypatch
+):
+    """Two stars on one library render from one projection of it, which the kept copies of
+    a library do not provide for a writable one or an optical grid, and the work of an
+    epoch is prepared once for every objective of the fit."""
+    import sys
+
+    module = sys.modules["albireo.templatefit"]
+    built, prepared = [], []
+    interpolator, prepare = module.library_interpolator, module._prepare_epoch
+
+    def counted_interpolator(lib, **options):
+        built.append(lib)
+        return interpolator(lib, **options)
+
+    def counted_prepare(index, *args):
+        prepared.append(index)
+        return prepare(index, *args)
+
+    monkeypatch.setattr(module, "library_interpolator", counted_interpolator)
+    monkeypatch.setattr(module, "_prepare_epoch", counted_prepare)
+    assert library.normalized.flags.writeable  # nothing of it is kept between calls
+    _fit(binary, library, max_passes=2)
+    assert len(built) == 1
+    assert len(prepared) == len(set(prepared)) <= binary[0].n_epochs
+
+
+def test_an_accepted_trial_point_takes_the_epochs_of_its_trial(binary, library, monkeypatch):
+    """The Levenberg-Marquardt evaluates a trial point without the Jacobian, and with it
+    where it accepts the point. The second evaluation takes the epochs of the first rather
+    than following each epoch's minimum again, and its result is the same bit for bit."""
+    import sys
+
+    module = sys.modules["albireo.templatefit"]
+    minimise, objectives = module._levenberg_marquardt, []
+
+    def kept(objective, *args, **kwargs):
+        objectives.append(objective)
+        return minimise(objective, *args, **kwargs)
+
+    monkeypatch.setattr(module, "_levenberg_marquardt", kept)
+    fit = _fit(binary, library, max_passes=1)
+    objective, phi = objectives[0], np.array(fit.values)
+    epoch, calls = module._Objective._epoch, []
+
+    def counted(self, *args):
+        calls.append(1)
+        return epoch(self, *args)
+
+    monkeypatch.setattr(module._Objective, "_epoch", counted)
+    objective.value(phi)
+    n_epochs = len(calls)
+    reused = objective.evaluate(phi, jacobian=True)
+    assert len(calls) == n_epochs > 0
+    objective._epochs_at = None
+    again = objective.evaluate(phi, jacobian=True)
+    assert len(calls) == 2 * n_epochs
+    for key in ("chi2", "shifts", "scales", "gradient", "hessian", "scatter", "sensitivity"):
+        assert np.array_equal(reused[key], again[key]), key

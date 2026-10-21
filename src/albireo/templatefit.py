@@ -61,7 +61,7 @@ import numpyro.distributions as dist
 
 from albireo.data import Dataset
 from albireo.grids import C_KMS, LogGrid, _in_epoch_blocks
-from albireo.library import SUPPORTED_MEDIA, library_interpolator
+from albireo.library import SUPPORTED_MEDIA, SpectralLibrary, library_interpolator
 from albireo.match import (
     _as_spec,
     _is_fixed,
@@ -196,19 +196,14 @@ class _LabelSpace:
     """
 
     def __init__(self, libraries, grid: LogGrid, medium: str, where: str) -> None:
-        libraries = sorted(libraries, key=lambda lib: lib.bounds["teff"][0])
+        libraries = tuple(libraries)
         if not libraries:
             raise ValueError(f"{where}: no library")
-        powers = {lib.resolving_power for lib in libraries}
-        if len(powers) != 1:
-            raise ValueError(
-                f"{where}: the library boxes declare different resolving powers "
-                f"({sorted(str(p) for p in powers)}); one template has one width"
-            )
-        self.resolving_power = next(iter(powers))
-        self.libraries = tuple(libraries)
-        self.boxes = []
         for lib in libraries:
+            if not isinstance(lib, SpectralLibrary):
+                raise TypeError(
+                    f"{where}: a library box must be a SpectralLibrary; got {type(lib).__name__}"
+                )
             if "teff" not in lib.label_names:
                 raise ValueError(f"{where}: a library without a teff axis cannot be fitted")
             unknown = [axis for axis in lib.label_names if axis not in _LABELS]
@@ -217,13 +212,23 @@ class _LabelSpace:
                     f"{where}: the library has the axes {list(lib.label_names)}; the fit "
                     f"knows {list(_LABELS)}"
                 )
+        libraries = tuple(sorted(libraries, key=lambda lib: lib.bounds["teff"][0]))
+        powers = {lib.resolving_power for lib in libraries}
+        if len(powers) != 1:
+            raise ValueError(
+                f"{where}: the library boxes declare different resolving powers "
+                f"({sorted(str(p) for p in powers)}); one template has one width"
+            )
+        self.resolving_power = next(iter(powers))
+        self.libraries = libraries
+        self.boxes: list[dict[str, Any]] = []
+        for lib in libraries:
             resampled = lib.resampled_to(grid, medium=medium)
             self.boxes.append(
                 {
                     "interpolator": library_interpolator(resampled),
                     "axes": tuple(resampled.label_names),
                     "bounds": {axis: tuple(lib.bounds[axis]) for axis in lib.label_names},
-                    "name": dict(getattr(lib, "meta", {})).get("name", "unnamed"),
                 }
             )
         self._upper = np.array([box["bounds"]["teff"][1] for box in self.boxes[:-1]])
@@ -266,18 +271,18 @@ class _LabelSpace:
             return None
         return min(lo for lo, _ in having), max(hi for _, hi in having)
 
-    def clamped(self, values: Mapping[str, float]) -> dict[str, float]:
-        """The labels as rendered: each moved into the box of the temperature."""
-        box = self.box(values["teff"])
+    def clamped(self, values: Mapping[str, float], box: dict | None = None) -> dict[str, float]:
+        """The labels as rendered: each moved into the box of the temperature, or ``box``."""
+        box = self.box(values["teff"]) if box is None else box
         out = {key: float(value) for key, value in values.items()}
         for axis in box["axes"]:
             out[axis] = float(np.clip(values[axis], *box["bounds"][axis]))
         return out
 
-    def deviation(self, values: Mapping[str, float]) -> np.ndarray:
-        """``flux - 1`` at the labels, each moved into the box of the temperature."""
-        box = self.box(values["teff"])
-        inside = self.clamped(values)
+    def deviation(self, values: Mapping[str, float], box: dict | None = None) -> np.ndarray:
+        """``flux - 1`` at the labels, each moved into the box of the temperature, or ``box``."""
+        box = self.box(values["teff"]) if box is None else box
+        inside = self.clamped(values, box)
         point = [inside[axis] for axis in box["axes"]]
         normalized = _normalized(box["interpolator"], jnp.asarray(point))
         return np.asarray(normalized, dtype=np.float64) - 1.0
@@ -480,6 +485,19 @@ def _star_exchange(layout: _Layout, stars: Sequence[_Star]):
 # ---------------------------------------------------------------------------
 
 
+def _prepared_epoch(index: int, epoch, grid: LogGrid, nuisance_order) -> tuple:
+    """One epoch's work (:func:`albireo.todcor._prepare_epoch`) and its weighted arrays.
+
+    The weighted arrays are the square roots of the weights, the weighted data and nuisance
+    basis, and the inverse of the basis's normal matrix (``None`` without a nuisance).
+    """
+    work = _prepare_epoch(index, epoch, grid, nuisance_order)
+    weight = np.sqrt(np.asarray(work.w, dtype=np.float64))
+    basis = np.asarray(work.basis, dtype=np.float64) * weight[:, None]
+    inverse = np.linalg.inv(basis.T @ basis) if basis.shape[1] else None
+    return work, (weight, np.asarray(work.z, dtype=np.float64) * weight, basis, inverse)
+
+
 class _Objective:
     """``F(phi) = sum_j min over the epoch's own parameters of chi2_j + priors``.
 
@@ -506,6 +524,7 @@ class _Objective:
         nuisance_order,
         free_scale: bool,
         move: bool = True,
+        prepared: Sequence[tuple] | None = None,
     ) -> None:
         self.stars = list(stars)
         self.layout = layout
@@ -515,28 +534,27 @@ class _Objective:
         self.lsf_anchors = lsf_anchors_angstrom
         self.free_scale = bool(free_scale)
         self.move = bool(move)
-        self.works = [
-            _prepare_epoch(j, epoch, self.grid, nuisance_order) for j, epoch in enumerate(dataset)
-        ]
+        # ``prepared``: the (work, static) of every epoch of ``dataset`` from
+        # :func:`_prepared_epoch`, which depend on the epoch, the grid and the nuisance
+        # order only and can be shared between objectives.
+        if prepared is None:
+            prepared = [
+                _prepared_epoch(j, epoch, self.grid, nuisance_order)
+                for j, epoch in enumerate(dataset)
+            ]
+        self.works = [work for work, _ in prepared]
+        self.static = [static for _, static in prepared]
         self.keys = [_lsf_key(epoch, lsf_sigma_v) for epoch in dataset]
         self.group = [list(groups).index(epoch.instrument) for epoch in dataset]
         self.correlation = [float(correlation.get(epoch.instrument, 0.0)) for epoch in dataset]
-        # Per epoch: the square roots of the weights, the weighted data and nuisance basis,
-        # and the inverse of the basis's normal matrix (None without a nuisance).
-        self.static = []
-        for work in self.works:
-            weight = np.sqrt(np.asarray(work.w, dtype=np.float64))
-            basis = np.asarray(work.basis, dtype=np.float64) * weight[:, None]
-            inverse = np.linalg.inv(basis.T @ basis) if basis.shape[1] else None
-            self.static.append(
-                (weight, np.asarray(work.z, dtype=np.float64) * weight, basis, inverse)
-            )
         self.shift_ref = np.array(shifts, dtype=np.float64).T.copy()  # (n_epochs, n_stars)
         self.scale_ref = np.array(scales, dtype=np.float64).copy()
         self.lower = np.asarray(layout.lower, dtype=np.float64)
         self.upper = np.asarray(layout.upper, dtype=np.float64)
         self.evaluations = 0
-        self.last: dict | None = None
+        # The epochs of the last evaluation without the Jacobian, with the point and the
+        # starting shifts and scales they were found from.
+        self._epochs_at: tuple | None = None
 
     # -- templates and their derivatives -------------------------------------
 
@@ -571,6 +589,11 @@ class _Objective:
                     step = _STEPS[par.label]
                     up = min(float(phi[p]) + step, self.upper[p])
                     down = max(float(phi[p]) - step, self.lower[p])
+                    # Both sides of a difference are rendered from the box of the star's
+                    # temperature. Two boxes agree at their shared temperature only for the
+                    # other labels both hold, and a temperature on the upper edge of a box
+                    # that is not the last would select the next box.
+                    box = star.space.box(labels["teff"])
                     if par.label == "vsini":
                         # Below half a pixel the rotation kernel is one pixel and the
                         # template does not depend on the rotation: the step reaches past
@@ -578,9 +601,7 @@ class _Objective:
                         flat = 0.5 * self.grid.dv_kms
                         up = min(max(up, flat + 2.0 * step), self.upper[p])
                     elif par.label == "teff":
-                        # Inside the box the star is rendered from: two boxes agree at
-                        # their shared temperature only for the other labels both hold.
-                        inside = star.space.box(labels["teff"])["bounds"]["teff"]
+                        inside = box["bounds"]["teff"]
                         up, down = min(up, inside[1]), max(down, inside[0])
                     if not up > down:
                         continue
@@ -589,8 +610,8 @@ class _Objective:
                             star.broaden(intrinsic[s], up) - star.broaden(intrinsic[s], down)
                         ) / (up - down)
                     else:
-                        high = star.space.deviation({**labels, par.label: up})
-                        low = star.space.deviation({**labels, par.label: down})
+                        high = star.space.deviation({**labels, par.label: up}, box)
+                        low = star.space.deviation({**labels, par.label: down}, box)
                         vector = star.broaden((high - low) / (up - down), vsini)
                 slots[(p, s)] = len(vectors)
                 vectors.append(vector)
@@ -674,6 +695,8 @@ class _Objective:
         of the correlation's own refinement (:func:`albireo.todcor._refine`). A minimum
         left on a face is a kink of the surface, the pixel-locking of the linear shift
         operator, and the shift there does not respond to a small change of the templates.
+        Returns the lowest corner and the fractional shifts of the cell, and the window of
+        templates and its base, which hold the cell.
         """
         n_star = len(self.stars)
         corner = np.floor(shift).astype(int)
@@ -703,7 +726,20 @@ class _Objective:
             if best is None:
                 break
             chi2, corner, fraction = best
-        return corner, fraction
+        return corner, fraction, window, base
+
+    def _pair(self, stack, work, static, corner, window, base):
+        """The weighted templates at the shifts ``corner`` and ``corner + 1``.
+
+        They are read from the window of a walk (:meth:`_walk`) where it holds them, which
+        it does for the cell the walk ends in, and gathered otherwise.
+        """
+        if window is not None:
+            k = corner - base + 1
+            if np.all((k >= 0) & (k <= 2)):
+                rows = np.arange(len(self.stars))
+                return np.stack([window[rows, :, k], window[rows, :, k + 1]], axis=-1)
+        return self._gather(stack, work, static[0], corner, 2)
 
     def _epoch(self, stack, work, static, shift, scale: float, light):
         """One epoch at its own minimum: residual, local design, and where the minimum is.
@@ -718,8 +754,9 @@ class _Objective:
         rows = np.arange(n_star)
         shift = np.array(shift, dtype=np.float64)
         scale = float(scale)
+        window = base = None
         if self.move:
-            corner, fraction = self._walk(stack, work, static, shift, light, scale)
+            corner, fraction, window, base = self._walk(stack, work, static, shift, light, scale)
         else:
             # At the shifts as given, which a correlation left on a face where they are
             # within rounding of an integer.
@@ -727,8 +764,8 @@ class _Objective:
             on_face = np.abs(shift - nearest) < _FACE_TOLERANCE
             corner = np.where(on_face, nearest, np.floor(shift)).astype(int)
             fraction = np.where(on_face, 0.0, shift - corner)
-        for _ in range(_MAX_SCALE_ROUNDS):
-            pair = self._gather(stack, work, static[0], corner, 2)
+        for round_ in range(_MAX_SCALE_ROUNDS):
+            pair = self._pair(stack, work, static, corner, window, base)
             slope = pair[:, :, 1] - pair[:, :, 0]
             value = pair[:, :, 0] + fraction[:, None] * slope
             composite = light @ value
@@ -738,9 +775,13 @@ class _Objective:
             columns = np.column_stack([composite, basis])
             solved = np.linalg.lstsq(columns, data, rcond=None)[0]
             change, scale = abs(float(solved[0]) - scale), float(solved[0])
-            if change < 1e-10 or not self.move:
+            # The last round ends with the scale solved at the shifts returned, so that the
+            # residual and the design below are those of the shifts.
+            if change < 1e-10 or not self.move or round_ == _MAX_SCALE_ROUNDS - 1:
                 break
-            corner, fraction = self._walk(stack, work, static, corner + fraction, light, scale)
+            corner, fraction, window, base = self._walk(
+                stack, work, static, corner + fraction, light, scale
+            )
         residual = self._without_nuisance(data - scale * composite, basis, inverse)
         free = (fraction > 0.0) & (fraction < 1.0)
         columns = [scale * light[i] * slope[i] for i in rows[free]]
@@ -784,13 +825,32 @@ class _Objective:
         chi2_epochs = np.zeros(len(self.works))
         dof_epochs = np.zeros(len(self.works), dtype=int)
         kept = []
+        # The Levenberg-Marquardt evaluates a trial point without the Jacobian and then,
+        # where it accepts it, with. An epoch depends on the point and on the shifts and
+        # scale it starts from, and the rows of the templates are rendered and convolved one
+        # by one, so the epochs of the first evaluation are those of the second, bit for bit.
+        found = None
+        if jacobian and self._epochs_at is not None:
+            point, shift_ref, scale_ref, epochs = self._epochs_at
+            if (
+                point == phi.tobytes()
+                and shift_ref is self.shift_ref
+                and scale_ref is self.scale_ref
+            ):
+                found = epochs
+        epochs_here = []
         for j, work in enumerate(self.works):
             stack = stacks[self.keys[j]]
             static = self.static[j]
             light = state.light[self.group[j]]
-            shift, scale, residual, local, value, corner, fraction, free = self._epoch(
-                stack[:n_star], work, static, self.shift_ref[j], self.scale_ref[j], light
-            )
+            if found is not None:
+                epoch = found[j]
+            else:
+                epoch = self._epoch(
+                    stack[:n_star], work, static, self.shift_ref[j], self.scale_ref[j], light
+                )
+            epochs_here.append(epoch)
+            shift, scale, residual, local, value, corner, fraction, free = epoch
             shifts[j], scales[j] = shift, scale
             chi2_epochs[j] = float(residual @ residual)
             if residuals:
@@ -827,6 +887,8 @@ class _Objective:
             # the curvature (docs/math.md 10.4 and 10.7).
             correlation = self.correlation[j]
             meat += reduced.T @ (_ar1_apply(reduced, correlation) if correlation else reduced)
+        if not jacobian:
+            self._epochs_at = (phi.tobytes(), self.shift_ref, self.scale_ref, epochs_here)
         prior, prior_gradient, prior_hessian = self._prior(phi)
         out = {
             "objective": chi2 + prior,
@@ -859,7 +921,6 @@ class _Objective:
         out = self.evaluate(phi, jacobian=True)
         # An accepted point: the next trial starts each epoch from its minimum here.
         self.shift_ref, self.scale_ref = out["shifts"], out["scales"]
-        self.last = out
         return out["objective"], out["chi2"], out["gradient"], out["hessian"]
 
 
@@ -1138,6 +1199,16 @@ def _scatter_ratio(difference: np.ndarray, phi: float) -> float:
     return float(difference @ _ar1_apply(difference, float(phi))) / norm
 
 
+def _light_key(name: str, group: str, groups: Sequence[str]) -> str:
+    """The name of the fitted light fraction of a star, per instrument where there are several."""
+    return f"light_{name}" if len(groups) == 1 else f"light_{name}[{group}]"
+
+
+def _measured(table: VelocityTable) -> np.ndarray:
+    """Per epoch: every velocity of the table is finite and none is at the edge of its range."""
+    return np.all(np.isfinite(table.velocity), axis=0) & ~np.any(table.at_edge, axis=0)
+
+
 def _instrument_light(table: VelocityTable, groups: Sequence[str]) -> np.ndarray:
     """Starting light fractions per instrument from a table: the medians of its amplitudes.
 
@@ -1336,6 +1407,11 @@ def fit_templates(
     )
     models: list[_Star] = []
     spans = []
+    # Stars that declare the same library boxes share one label space, and so one
+    # projection and one interpolator of each box. The kept copies of a library
+    # (SpectralLibrary.resampled_to) skip a writable library and an optical grid, and each
+    # copy of the FGK box on a grid of 20,000 pixels is 146 MB.
+    spaces: dict[tuple[int, ...], _LabelSpace] = {}
     for i, name in enumerate(names):
         declared = stars[name]
         if getattr(declared, "v_kms", None) is not None:
@@ -1343,7 +1419,11 @@ def fit_templates(
                 f"star {name!r}: v_kms is a label of a disentangled component's frame; the "
                 "template fit measures a velocity at every epoch and takes none"
             )
-        space = _LabelSpace(_libraries_of(declared.library), grid, medium, f"star {name!r}")
+        boxes = _libraries_of(declared.library)
+        shared = tuple(sorted(id(box) for box in boxes))
+        space = spaces.get(shared)
+        if space is None:
+            space = spaces[shared] = _LabelSpace(boxes, grid, medium, f"star {name!r}")
         teff_range = space.range("teff", 0.0, 0.0)
         teff_spec = _as_spec(declared.teff, f"teff of {name!r}", Between(*teff_range))
         if _is_fixed(teff_spec):
@@ -1431,34 +1511,33 @@ def fit_templates(
             _Star(name, space, grid, eps, float(getattr(declared, "macro_kms", 0.0)), vectors)
         )
 
-    # The metallicity: one parameter for every star, or one each.
-    def mh_range(indices):
-        ranges = [models[i].space.range("mh", *spans[i]) for i in indices]
-        ranges = [r for r in ranges if r is not None]
-        if not ranges:
-            return None
-        return max(lo for lo, _ in ranges), min(hi for _, hi in ranges)
-
+    # The metallicity: one parameter for every star, or one each. A star whose library has
+    # no mh axis takes no part in it, and its mh is nan.
+    mh_ranges = [models[i].space.range("mh", *spans[i]) for i in range(n_star)]
     blocks = [tuple(range(n_star))] if shared_mh else [(i,) for i in range(n_star)]
+    mh_stars: set[int] = set()
     for block in blocks:
-        available = mh_range(block)
         key = "mh" if shared_mh else f"mh_{names[block[0]]}"
         declared_mh = mh if shared_mh else mh.get(names[block[0]])
-        if available is None:
+        for i in block:
+            held.labels[i]["mh"] = float("nan")
+        having = tuple(i for i in block if mh_ranges[i] is not None)
+        if not having:
             if declared_mh is not None:
                 raise ValueError(f"{key} is declared, and no library of its star(s) has an mh axis")
-            for i in block:
-                held.labels[i]["mh"] = float("nan")
             continue
+        covered = [r for r in (mh_ranges[i] for i in having) if r is not None]
+        available = (max(lo for lo, _ in covered), min(hi for _, hi in covered))
         spec = _as_spec(declared_mh, key, Between(*available))
         if _is_fixed(spec):
-            for i in block:
+            for i in having:
                 held.labels[i]["mh"] = _held(spec, available, key)
             continue
         value, lower, upper, prior = _prior_of(spec, key)
         lower, upper = max(lower, available[0]), min(upper, available[1])
-        layout.add(_Parameter(key, "label", block, "mh"), value, lower, upper, prior)
-        for i in block:
+        layout.add(_Parameter(key, "label", having, "mh"), value, lower, upper, prior)
+        mh_stars.update(having)
+        for i in having:
             held.labels[i]["mh"] = float(np.clip(value, lower, upper))
 
     fit_light = isinstance(light, str)
@@ -1556,9 +1635,10 @@ def fit_templates(
         held.light[:] = _instrument_light(start, groups)
         for g, group in enumerate(groups):
             for i in range(1, n_star):
-                key = f"light_{names[i]}" if len(groups) == 1 else f"light_{names[i]}[{group}]"
                 layout.add(
-                    _Parameter(key, "light", (i,), "light", group=g),
+                    _Parameter(
+                        _light_key(names[i], group, groups), "light", (i,), "light", group=g
+                    ),
                     held.light[g, i],
                     *_LIGHT_BOUNDS,
                     None,
@@ -1568,6 +1648,16 @@ def fit_templates(
     phi = np.asarray(layout.start, dtype=np.float64)
     if layout.n == 0:
         raise ValueError("every parameter is held; there is nothing to fit")
+
+    # The work of every epoch, prepared once and shared by the objectives of the passes,
+    # of the exchanged image, of the order probes and of the final sensitivities.
+    prepared: dict[int, tuple] = {}
+
+    def prepared_for(epochs: np.ndarray) -> list[tuple]:
+        for j in (int(j) for j in epochs):
+            if j not in prepared:
+                prepared[j] = _prepared_epoch(j, dataset.epochs[j], grid, nuisance_order)
+        return [prepared[int(j)] for j in epochs]
 
     def objective_for(table: VelocityTable, epochs: np.ndarray, *, move: bool) -> _Objective:
         subset = Dataset(epochs=tuple(dataset.epochs[j] for j in epochs), frame=dataset.frame)
@@ -1590,6 +1680,7 @@ def fit_templates(
             nuisance_order=nuisance_order,
             free_scale=scale == "free",
             move=move,
+            prepared=prepared_for(epochs),
         )
 
     def minimise(objective: _Objective, phi0):
@@ -1686,7 +1777,7 @@ def fit_templates(
     run = None
     objective = None
     for number in range(max(int(max_passes), 1)):
-        measured = np.all(np.isfinite(table.velocity), axis=0) & ~np.any(table.at_edge, axis=0)
+        measured = _measured(table)
         use = np.flatnonzero(table.good)
         if use.size < 3:
             use = np.flatnonzero(measured)
@@ -1794,15 +1885,13 @@ def fit_templates(
                 f"its declared value ({prior[0]:g}): the declaration, or the minimum the fit "
                 "reached, is in doubt"
             )
-    if any(key in at_bounds for key in layout.keys):
+    if at_bounds:
         notes.append(
             "parameter(s) on a bound are held there for the covariance: " + ", ".join(at_bounds)
         )
 
     # -- sensitivities of the velocities of the final table --------------------------
-    measured = np.flatnonzero(
-        np.all(np.isfinite(table.velocity), axis=0) & ~np.any(table.at_edge, axis=0)
-    )
+    measured = np.flatnonzero(_measured(table))
     sensitivity = np.full((n_star, table.n_epochs, layout.n), np.nan)
     if measured.size:
         at_table = objective_for(table, measured, move=False).evaluate(phi, jacobian=True)
@@ -1834,7 +1923,7 @@ def fit_templates(
         errors_out[name] = {
             "teff": error_of(f"teff_{name}"),
             "logg": error_of(f"logg_{name}"),
-            "mh": error_of("mh" if shared_mh else f"mh_{name}"),
+            "mh": error_of("mh" if shared_mh else f"mh_{name}") if i in mh_stars else math.nan,
             "vsini": error_of(f"vsini_{name}"),
         }
     light_out, light_errors = {}, {}
@@ -1842,10 +1931,7 @@ def fit_templates(
         light_out[group] = np.array(state.light[g])
         variance = np.zeros(n_star)
         if fit_light and n_star > 1:
-            rows = [
-                index[f"light_{names[i]}" if len(groups) == 1 else f"light_{names[i]}[{group}]"]
-                for i in range(1, n_star)
-            ]
+            rows = [index[_light_key(names[i], group, groups)] for i in range(1, n_star)]
             block = covariance[np.ix_(rows, rows)]
             variance[1:] = np.diag(block)
             variance[0] = float(np.sum(block))  # the first fraction is one minus the others
