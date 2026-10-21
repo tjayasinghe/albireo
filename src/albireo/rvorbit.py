@@ -56,13 +56,13 @@ import functools
 import math
 import re
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, replace
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
-from albireo.grids import _EPOCH_BLOCK, C_KMS, _in_epoch_blocks
+from albireo.grids import _EPOCH_BLOCK, _in_epoch_blocks
 from albireo.kepler import (
     _NEWTON_ITERATIONS,
     _t_peri_from_t_conj_numpy,
@@ -120,17 +120,22 @@ def _valid_velocities(table) -> np.ndarray:
     """``(n_comp, n_epochs)``: whether each velocity can enter a period search or a fit.
 
     A velocity is valid where its own component was measured: a finite velocity and a
-    finite error off that component's search edge, at an epoch that is not blended. The
-    other components do not matter: a primary measured at an epoch whose secondary was at
-    the search edge, or was removed by the caller, is still a measurement of the primary.
-    Where every component is valid this is ``table.good`` repeated per component, with the
-    errors' finiteness added.
+    positive finite error off that component's search edge, at an epoch that is not
+    blended. The other components do not matter: a primary measured at an epoch whose
+    secondary was at the search edge, or was removed by the caller, is still a measurement
+    of the primary. Where every component is valid this is ``table.good`` repeated per
+    component, with the errors' finiteness and sign added.
+
+    An error of zero would give an infinite weight. In :func:`find_period` it made every
+    normalized weight ``nan`` and every power zero, and the end of the grid was returned
+    as the period.
     """
     v = np.asarray(table.velocity, dtype=np.float64)
     s = np.asarray(table.sigma, dtype=np.float64)
     at_edge = np.broadcast_to(np.asarray(table.at_edge, dtype=bool), v.shape)
     blended = np.asarray(table.blended, dtype=bool)
-    return np.isfinite(v) & np.isfinite(s) & ~at_edge & ~blended[None, :]
+    positive = np.where(np.isfinite(s), s, 0.0) > 0.0
+    return np.isfinite(v) & np.isfinite(s) & positive & ~at_edge & ~blended[None, :]
 
 
 def _table_arrays(table, components):
@@ -368,11 +373,11 @@ def find_period(
     epoch time by a rounding error does not move the grid relative to the peaks
     (:func:`_frequency_grid`).
 
-    Each velocity enters where its own component was measured: a finite velocity and error,
-    off that component's search edge, at an epoch that is not blended. The relative velocity
-    of two components is defined where both are. One component searched alone
-    (``components=[name]``) keeps every epoch at which it was measured, regardless of the
-    other components.
+    Each velocity enters where its own component was measured: a finite velocity and a
+    positive finite error, off that component's search edge, at an epoch that is not
+    blended. The relative velocity of two components is defined where both are. One
+    component searched alone (``components=[name]``) keeps every epoch at which it was
+    measured, regardless of the other components.
 
     With ``n_harmonics = 2`` the model is ``c + a1 cos(wt) + b1 sin(wt) + a2 cos(2wt) +
     b2 sin(2wt)``, fitted by weighted least squares at every frequency, and the power is
@@ -486,9 +491,12 @@ def find_period(
     }
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class RVOrbit:
     """A Keplerian fitted to a velocity table.
+
+    Two orbits compare equal only when they are the same object. Equality by fields is not
+    defined, since most fields are arrays.
 
     Attributes
     ----------
@@ -521,6 +529,17 @@ class RVOrbit:
         component.
     used
         Per epoch: whether any component's velocity at that epoch entered the fit.
+    covariance
+        Covariance of the parameters, ordered as :attr:`parameter_names` and rescaled by
+        the reduced chi-square.
+    parameter_names
+        The parameters of the model, in the order of :attr:`covariance`: ``period`` and
+        ``t_conj``, ``secosw`` and ``sesinw``, ``k_<name>`` per component, and ``gamma``
+        or ``gamma_<name>`` per component. Elements held by the model are not listed: the
+        period and the time of conjunction of :func:`fit_rv_ephemeris`, and the two
+        eccentricity parameters of a circular fit or of a held shape. The semi-amplitude
+        of a component in :attr:`held`, and its own systemic velocity where it has one,
+        are listed, with ``nan`` rows and columns in :attr:`covariance`.
     held
         Components whose semi-amplitude was held at its starting value rather than fitted,
         because they had no more usable velocities than parameters of their own (one, or two
@@ -675,18 +694,34 @@ class RVOrbit:
         }
 
     def summary(self) -> str:
-        """A text report: the elements with their errors, and the derived quantities."""
+        """A text report: the elements with their errors, and the derived quantities.
+
+        An element the model held rather than fitted (not in :attr:`parameter_names`) is
+        marked ``(held)``, and a held eccentricity of zero ``(held at zero)``.
+        """
         e = self.errors
         rescale = self.chi2 / max(self.n_points - self.n_parameters, 1)
+        fitted = self.parameter_names
+        if fitted:
+            ecc_held = "secosw" not in fitted
+            period_note = "" if "period" in fitted else "   (held)"
+            t_conj_note = "" if "t_conj" in fitted else "   (held)"
+        else:  # an orbit built without parameter names: the rule of the error alone
+            ecc_held = "ecc" in e and e["ecc"] == 0.0
+            period_note = t_conj_note = ""
+        ecc_note = ""
+        if ecc_held:
+            ecc_note = "   (held at zero)" if self.ecc == 0.0 else "   (held)"
+        omega_note = "   (held)" if fitted and ecc_held and self.ecc != 0.0 else ""
         lines = [
             f"Keplerian fit to {self.n_points} velocities of {len(self.names)} component(s): "
             f"chi2 {self.chi2:.2f} for {self.n_points - self.n_parameters} dof "
             f"(errors rescaled by sqrt({rescale:.3f}))",
-            f"  P      = {self.period:.6f} +- {e['period']:.6f} d",
-            f"  T_conj = {self.t_conj:.5f} +- {e['t_conj']:.5f}",
-            f"  e      = {self.ecc:.4f} +- {e['ecc']:.4f}"
-            + ("   (held at zero)" if "ecc" in e and e["ecc"] == 0.0 else ""),
-            f"  omega  = {math.degrees(self.omega):.2f} +- {math.degrees(e['omega']):.2f} deg",
+            f"  P      = {self.period:.6f} +- {e['period']:.6f} d" + period_note,
+            f"  T_conj = {self.t_conj:.5f} +- {e['t_conj']:.5f}" + t_conj_note,
+            f"  e      = {self.ecc:.4f} +- {e['ecc']:.4f}" + ecc_note,
+            f"  omega  = {math.degrees(self.omega):.2f} +- {math.degrees(e['omega']):.2f} deg"
+            + omega_note,
         ]
         for i, name in enumerate(self.names):
             lines.append(
@@ -854,6 +889,112 @@ def _semi_amplitude_start(y) -> float:
     return 0.5 * float(np.ptp(y)) if y.size else 0.0
 
 
+def _gamma_mode(gamma: str | None, absolute) -> str:
+    """``gamma`` checked, or by default ``"shared"`` where every component is absolute."""
+    if gamma is None:
+        gamma = "shared" if all(absolute) else "per-component"
+    if gamma not in ("shared", "per-component"):
+        raise ValueError("gamma must be 'shared' or 'per-component'")
+    return gamma
+
+
+def _entering_velocities(table, v, valid, n_gamma: int):
+    """The velocities that enter a fit, and the components held for want of them.
+
+    A component with no more usable velocities than parameters of its own (one, or two
+    with a systemic velocity of its own) is held and its velocities have no weight. An
+    epoch enters where any velocity does. Returns ``valid`` without the held components,
+    the held components, the epochs that enter, the mask of the velocities that enter at
+    those epochs, their times, and their velocities with zero elsewhere.
+    """
+    own_parameters = 1 if n_gamma == 1 else 2
+    held_components = valid.sum(axis=1) <= own_parameters
+    valid = valid & ~held_components[:, None]
+    good = np.any(valid, axis=0)
+    mask = valid[:, good]
+    t = np.asarray(table.bjd, dtype=np.float64)[good]
+    y = np.where(mask, v[:, good], 0.0)
+    return valid, held_components, good, mask, t, y
+
+
+def _check_enough(mask, n_par: int, n_comp: int) -> None:
+    """Raise unless more velocities enter than parameters are fitted."""
+    n_points = int(mask.sum())
+    if n_points > n_par:
+        return
+    n_epochs = mask.shape[1]
+    if bool(mask.all()):
+        raise ValueError(
+            f"{n_epochs} usable epochs x {n_comp} components is not enough to fit "
+            f"{n_par} parameters"
+        )
+    raise ValueError(
+        f"{n_points} usable velocities of {n_comp} components over {n_epochs} epochs is not "
+        f"enough to fit {n_par} parameters"
+    )
+
+
+def _shape_errors(h: float, g: float, cov) -> tuple[float, float]:
+    """Errors of ``e`` and ``omega`` from the covariance ``cov`` of ``(h, g)``.
+
+    ``h = sqrt(e) cos w`` and ``g = sqrt(e) sin w``, propagated by the delta method.
+    """
+    jac_e = np.array([2.0 * h, 2.0 * g])
+    jac_w = np.array([-g, h]) / max(h * h + g * g, 1e-30)
+    ecc_err = math.sqrt(max(float(jac_e @ cov @ jac_e), 0.0))
+    omega_err = math.sqrt(max(float(jac_w @ cov @ jac_w), 0.0))
+    return ecc_err, omega_err
+
+
+def _residuals_and_rms(v, model, valid) -> tuple[np.ndarray, np.ndarray]:
+    """Observed minus model where a velocity entered, ``nan`` elsewhere; RMS per component."""
+    resid = np.where(valid, v - model, np.nan)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # a component with no usable velocity
+        rms = np.sqrt(np.nanmean(resid**2, axis=1))
+    return resid, rms
+
+
+def _parameter_names(head: list[str], names, n_gamma: int) -> tuple[str, ...]:
+    """``head``, then one semi-amplitude per component and the systemic velocity or velocities."""
+    par_names = list(head) + [f"k_{n}" for n in names]
+    par_names += ["gamma"] if n_gamma == 1 else [f"gamma_{n}" for n in names]
+    return tuple(par_names)
+
+
+def _conjunction_chi2(t, y, sqrt_w, *, period, t_conj, h, g, k, gamma) -> np.ndarray:
+    """Weighted chi-square of the model at each trial time of conjunction, in NumPy.
+
+    ``t_conj`` holds the trials, ``(h, g) = (sqrt(e) cos w, sqrt(e) sin w)`` the shape
+    (both zero for a circular orbit), ``k`` the semi-amplitudes and ``gamma`` one systemic
+    velocity or one per component. The model is that of :func:`fit_rv_orbit` with
+    ``e = h^2 + g^2`` and ``omega = atan2(g, h)``, and the second component at
+    ``omega + pi``. Kepler's equation is solved by :func:`albireo.kepler.true_anomaly_numpy`
+    once for all trials, so nothing is compiled. The values agree with those of the
+    compiled model to about 1e-13 of the chi-square, and only their order is used. The
+    compiled model, called once per trial, cost 1 to 5 ms per fit. On 790 fits, searches
+    and assignments of simulated tables, which made 1,279 scans, every output was the same
+    bit for bit as with the compiled scan.
+    """
+    t_conj = np.asarray(t_conj, dtype=np.float64)
+    ecc = h * h + g * g
+    omega = math.atan2(g, h)
+    # The time of periastron of each trial, as `_t_peri_from_t_conj_numpy` gives it.
+    nu_conj = 0.5 * math.pi - omega
+    e_conj = 2.0 * math.atan2(
+        math.sqrt(1.0 - ecc) * math.sin(0.5 * nu_conj),
+        math.sqrt(1.0 + ecc) * math.cos(0.5 * nu_conj),
+    )
+    t_peri = t_conj - (e_conj - ecc * math.sin(e_conj)) * period / (2.0 * math.pi)
+    nu = true_anomaly_numpy(t[None, :] - t_peri[:, None], period=period, t_peri=0.0, ecc=ecc)
+    chi2 = np.zeros(t_conj.size)
+    for i in range(len(k)):
+        om = omega + (i % 2) * math.pi
+        model = gamma[0 if len(gamma) == 1 else i] + k[i] * (np.cos(nu + om) + ecc * math.cos(om))
+        chi2 += np.sum(((y[i] - model) * sqrt_w[i]) ** 2, axis=1)
+    return chi2
+
+
 def fit_rv_orbit(
     table,
     *,
@@ -901,6 +1042,9 @@ def fit_rv_orbit(
     t_conj, ecc, omega, k
         Optional starting values; defaults are derived from the table (``t_conj`` from a
         scan over phase, ``ecc`` = 0.1, ``omega`` = 0, and ``k`` as described below).
+        Unless the fit is circular, ``ecc`` must lie in ``(0, 1)`` and the start
+        ``(sqrt(e) cos w, sqrt(e) sin w)`` within the bounds of the fit. ``k`` is one value
+        per component, or one value for all.
 
         The default starting semi-amplitude of a component is half the range of its own
         usable velocities, which is ``K`` at any eccentricity once the phases are covered.
@@ -944,6 +1088,13 @@ def fit_rv_orbit(
     -------
     RVOrbit
 
+    Raises
+    ------
+    ValueError
+        If ``gamma`` is not recognized, the period is not positive, the table has no more
+        usable velocities than parameters, or a starting value is outside the domain
+        stated above.
+
     Warns
     -----
     RuntimeWarning
@@ -958,10 +1109,7 @@ def fit_rv_orbit(
 
     names, v, s, absolute, valid = _table_arrays(table, components)
     n_comp = len(names)
-    if gamma is None:
-        gamma = "shared" if all(absolute) else "per-component"
-    if gamma not in ("shared", "per-component"):
-        raise ValueError("gamma must be 'shared' or 'per-component'")
+    gamma = _gamma_mode(gamma, absolute)
     if gamma == "shared" and not all(absolute):
         warnings.warn(
             "a shared systemic velocity is being fitted to components whose zero points are "
@@ -977,15 +1125,8 @@ def fit_rv_orbit(
     # velocities than parameters of its own is held (see the docstring) and its velocities
     # have no weight. An epoch enters where any velocity does, and a velocity that does not
     # is held at zero with zero weight.
-    valid = valid & (np.where(np.isfinite(s), s, 0.0) > 0.0)
     n_gamma = 1 if gamma == "shared" else n_comp
-    own_parameters = 1 if n_gamma == 1 else 2
-    held_components = valid.sum(axis=1) <= own_parameters
-    valid = valid & ~held_components[:, None]
-    good = np.any(valid, axis=0)
-    mask = valid[:, good]
-    t = np.asarray(table.bjd, dtype=np.float64)[good]
-    y = np.where(mask, v[:, good], 0.0)
+    valid, held_components, good, mask, t, y = _entering_velocities(table, v, valid, n_gamma)
     w = np.where(mask, 1.0 / np.where(mask, s[:, good], 1.0) ** 2, 0.0)
     head = 2 if circular else 4
     held = np.zeros(head + n_comp + n_gamma, dtype=bool)
@@ -996,20 +1137,17 @@ def fit_rv_orbit(
     free = ~held
     n_par = int(free.sum())
     n_points = int(mask.sum())
-    if n_points <= n_par:
-        if bool(mask.all()):
-            raise ValueError(
-                f"{t.size} usable epochs x {n_comp} components is not enough to fit "
-                f"{n_par} parameters"
-            )
-        raise ValueError(
-            f"{n_points} usable velocities of {n_comp} components over {t.size} epochs is not "
-            f"enough to fit {n_par} parameters"
-        )
+    _check_enough(mask, n_par, n_comp)
 
     # Starting values.
     if k is not None:
-        k0 = np.asarray(k, dtype=np.float64)
+        try:
+            k0 = np.broadcast_to(np.asarray(k, dtype=np.float64), (n_comp,)).copy()
+        except ValueError:
+            raise ValueError(
+                f"k must hold one starting semi-amplitude for each of the {n_comp} "
+                f"component(s) fitted; got shape {np.shape(k)}"
+            ) from None
     else:
         k0 = np.array([_semi_amplitude_start(y[i, mask[i]]) for i in range(n_comp)])
     k0 = np.maximum(k0, 1e-3)
@@ -1021,6 +1159,21 @@ def fit_rv_orbit(
         gamma0 = np.array([overall])
     ecc0 = 0.0 if circular else (0.1 if ecc is None else float(ecc))
     omega0 = 0.0 if omega is None else float(omega)
+    h0 = g0 = 0.0  # the start of (sqrt(e) cos w, sqrt(e) sin w)
+    if not circular:
+        # The start must lie inside the box of the fit, away from the singular origin.
+        if not 0.0 < ecc0 < 1.0:
+            raise ValueError(
+                f"the starting eccentricity must lie in (0, 1); got {ecc0}. The origin of "
+                "(sqrt(e) cos w, sqrt(e) sin w) is singular: use circular=True for e = 0, "
+                "or start at a small positive e"
+            )
+        h0, g0 = math.sqrt(ecc0) * math.cos(omega0), math.sqrt(ecc0) * math.sin(omega0)
+        if not (abs(h0) <= 0.95 and abs(g0) <= 0.95):
+            raise ValueError(
+                f"the start (sqrt(e) cos w, sqrt(e) sin w) = ({h0:.4g}, {g0:.4g}) from "
+                f"ecc={ecc0} and omega={omega0} lies outside the bounds of +-0.95 on each"
+            )
 
     objective = _objective(bool(circular), int(n_comp), int(n_gamma))
     # Inside `_epoch_blocks()` the compiled residuals and their Jacobian are evaluated on
@@ -1042,19 +1195,24 @@ def fit_rv_orbit(
         return shaped[:, :n_fit].reshape(n_comp * n_fit, *values.shape[1:])
 
     def pack(tc):
-        head = [period, tc]
-        if not circular:
-            head += [math.sqrt(ecc0) * math.cos(omega0), math.sqrt(ecc0) * math.sin(omega0)]
+        head = [period, tc] if circular else [period, tc, h0, g0]
         return np.array([*head, *k0, *gamma0])
 
     if t_conj is None:
         # A scan over conjunction phase: the least-squares problem is multimodal in it.
+        # The trials are evaluated in NumPy, all at once (`_conjunction_chi2`).
         trial_phases = np.linspace(0.0, 1.0, 24, endpoint=False)
-        chi2_trials = []
-        for phase in trial_phases:
-            params = pack(t.min() + phase * period)
-            r = crop(objective.residuals(jnp.asarray(params), *data))
-            chi2_trials.append(float(r @ r))
+        chi2_trials = _conjunction_chi2(
+            t,
+            y,
+            np.sqrt(w),
+            period=period,
+            t_conj=t.min() + trial_phases * period,
+            h=h0,
+            g=g0,
+            k=k0,
+            gamma=gamma0,
+        )
         t_conj = t.min() + trial_phases[int(np.argmin(chi2_trials))] * period
     x0 = pack(float(t_conj))
 
@@ -1085,7 +1243,8 @@ def fit_rv_orbit(
     )
     x = np.array(x0)
     x[free] = result.x
-    jac = crop(jac_jit(jnp.asarray(result.x), *extra))
+    # The trust-region method keeps the Jacobian of the point it returns, already cropped.
+    jac = np.asarray(result.jac)
     chi2 = float(result.fun @ result.fun)
     dof = max(n_points - n_par, 1)
     scale = chi2 / dof
@@ -1107,11 +1266,7 @@ def fit_rv_orbit(
         ecc_fit = h * h + g * g
         omega_fit = math.atan2(g, h)
         offset = 4
-        jac_e = np.array([2.0 * h, 2.0 * g])
-        jac_w = np.array([-g, h]) / max(h * h + g * g, 1e-30)
-        sub = cov[2:4, 2:4]
-        ecc_err = math.sqrt(max(float(jac_e @ sub @ jac_e), 0.0))
-        omega_err = math.sqrt(max(float(jac_w @ sub @ jac_w), 0.0))
+        ecc_err, omega_err = _shape_errors(h, g, cov[2:4, 2:4])
     k_fit = np.asarray(x[offset : offset + n_comp], dtype=np.float64)
     gam = np.asarray(x[offset + n_comp :], dtype=np.float64)
     diag = np.sqrt(np.clip(np.diag(cov), 0.0, None))
@@ -1133,13 +1288,10 @@ def fit_rv_orbit(
         lambda times: objective.model(fitted_parameters, times),
         np.asarray(table.bjd, dtype=np.float64),
     )
-    resid = np.where(valid, v - model_all, np.nan)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)  # a component with no usable velocity
-        rms = np.sqrt(np.nanmean(resid**2, axis=1))
-    par_names = ["period", "t_conj"] + ([] if circular else ["secosw", "sesinw"])
-    par_names += [f"k_{n}" for n in names]
-    par_names += ["gamma"] if n_gamma == 1 else [f"gamma_{n}" for n in names]
+    resid, rms = _residuals_and_rms(v, model_all, valid)
+    par_names = _parameter_names(
+        ["period", "t_conj"] + ([] if circular else ["secosw", "sesinw"]), names, n_gamma
+    )
     orbit = RVOrbit(
         names=tuple(names),
         period=p,
@@ -1157,7 +1309,7 @@ def fit_rv_orbit(
         rms=rms,
         used=good,
         covariance=cov,
-        parameter_names=tuple(par_names),
+        parameter_names=par_names,
         held=tuple(name for name, h in zip(names, held_components, strict=True) if h),
     )
     _warn_if_gamma_correlated(orbit, stacklevel=3)
@@ -1200,7 +1352,7 @@ def _ephemeris_curve(t, period: float, t_conj: float, ecc: float, omega: float) 
     return np.cos(nu + omega) + ecc * math.cos(omega)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class _EphemerisOrbit(RVOrbit):
     """An :class:`RVOrbit` whose :meth:`predict` is evaluated in NumPy.
 
@@ -1230,25 +1382,15 @@ def _fit_rv_ephemeris(
 
     names, v, s, absolute, valid = _table_arrays(table, components)
     n_comp = len(names)
-    if gamma is None:
-        gamma = "shared" if all(absolute) else "per-component"
-    if gamma not in ("shared", "per-component"):
-        raise ValueError("gamma must be 'shared' or 'per-component'")
+    gamma = _gamma_mode(gamma, absolute)
     if not period > 0.0:
         raise ValueError("period must be positive")
     if not 0.0 <= ecc < 1.0:
         raise ValueError(f"ecc must lie in [0, 1); got {ecc}")
 
     # The velocities that enter, and the components held, as in `fit_rv_orbit`.
-    valid = valid & (np.where(np.isfinite(s), s, 0.0) > 0.0)
     n_gamma = 1 if gamma == "shared" else n_comp
-    own_parameters = 1 if n_gamma == 1 else 2
-    held_components = valid.sum(axis=1) <= own_parameters
-    valid = valid & ~held_components[:, None]
-    good = np.any(valid, axis=0)
-    mask = valid[:, good]
-    t = np.asarray(table.bjd, dtype=np.float64)[good]
-    y = np.where(mask, v[:, good], 0.0)
+    valid, held_components, good, mask, t, y = _entering_velocities(table, v, valid, n_gamma)
     sqrt_w = np.where(mask, 1.0 / np.where(mask, s[:, good], 1.0), 0.0)
     signs = np.where(np.arange(n_comp) % 2 == 0, 1.0, -1.0)
 
@@ -1263,16 +1405,7 @@ def _fit_rv_ephemeris(
     n_shape = 2 if fit_eccentricity else 0
     n_par = n_linear + n_shape
     n_points = int(mask.sum())
-    if n_points <= n_par:
-        if bool(mask.all()):
-            raise ValueError(
-                f"{t.size} usable epochs x {n_comp} components is not enough to fit "
-                f"{n_par} parameters"
-            )
-        raise ValueError(
-            f"{n_points} usable velocities of {n_comp} components over {t.size} epochs is not "
-            f"enough to fit {n_par} parameters"
-        )
+    _check_enough(mask, n_par, n_comp)
     start = np.zeros(n_comp + n_gamma)
     start[:n_comp] = 1e-3
     lower = np.full(n_comp + n_gamma, -np.inf)
@@ -1348,11 +1481,7 @@ def _fit_rv_ephemeris(
     diag = np.sqrt(np.clip(np.diag(cov), 0.0, None))
     ecc_err, omega_err = 0.0, 0.0
     if fit_eccentricity:
-        h, g = float(shape[0]), float(shape[1])
-        jac_e = np.array([2.0 * h, 2.0 * g])
-        jac_w = np.array([-g, h]) / max(h * h + g * g, 1e-30)
-        ecc_err = math.sqrt(max(float(jac_e @ cov[:2, :2] @ jac_e), 0.0))
-        omega_err = math.sqrt(max(float(jac_w @ cov[:2, :2] @ jac_w), 0.0))
+        ecc_err, omega_err = _shape_errors(float(shape[0]), float(shape[1]), cov[:2, :2])
     k_fit = np.asarray(x[:n_comp], dtype=np.float64)
     gam = np.asarray(x[n_comp:], dtype=np.float64)
     k_err = diag[n_shape : n_shape + n_comp]
@@ -1363,13 +1492,8 @@ def _fit_rv_ephemeris(
         np.asarray(table.bjd, dtype=np.float64), period, t_conj, ecc_fit, omega_fit
     )
     model_all = gam[:, None] + (k_fit * signs)[:, None] * curve_all[None, :]
-    resid = np.where(valid, v - model_all, np.nan)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)  # a component with no usable velocity
-        rms = np.sqrt(np.nanmean(resid**2, axis=1))
-    par_names = ["secosw", "sesinw"] if fit_eccentricity else []
-    par_names += [f"k_{n}" for n in names]
-    par_names += ["gamma"] if n_gamma == 1 else [f"gamma_{n}" for n in names]
+    resid, rms = _residuals_and_rms(v, model_all, valid)
+    par_names = _parameter_names(["secosw", "sesinw"] if fit_eccentricity else [], names, n_gamma)
     return _EphemerisOrbit(
         names=tuple(names),
         period=float(period),
@@ -1394,7 +1518,7 @@ def _fit_rv_ephemeris(
         rms=rms,
         used=good,
         covariance=cov,
-        parameter_names=tuple(par_names),
+        parameter_names=par_names,
         held=tuple(name for name, h in zip(names, held_components, strict=True) if h),
     )
 
@@ -1409,8 +1533,6 @@ def _shape_trials() -> list[tuple[float, float]]:
 
 
 def _plain_orbit(orbit: RVOrbit) -> RVOrbit:
-    from dataclasses import fields
-
     return RVOrbit(**{f.name: getattr(orbit, f.name) for f in fields(RVOrbit)})
 
 
@@ -1499,6 +1621,26 @@ def fit_rv_ephemeris(
     )
 
 
+def _check_prediction(table, predicted: np.ndarray) -> None:
+    """Raise unless ``predicted`` holds one velocity per component and epoch of ``table``."""
+    if predicted.shape != (table.n_components, table.n_epochs):
+        raise ValueError(
+            f"predicted must have shape ({table.n_components}, {table.n_epochs}), one row "
+            f"per component of the table; got {predicted.shape}"
+        )
+
+
+def _usable_pairs(table) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The velocities and errors of a table, and per epoch whether all of them are usable.
+
+    An epoch is usable where ``table.good`` holds and every velocity and error is finite.
+    """
+    v = np.asarray(table.velocity, dtype=np.float64)
+    s = np.asarray(table.sigma, dtype=np.float64)
+    good = table.good & np.all(np.isfinite(v), axis=0) & np.all(np.isfinite(s), axis=0)
+    return v, s, good
+
+
 def reassign_by_orbit(table, predicted, *, threshold: float = 3.0):
     """Swap the two components at epochs where the swap fits the orbit far better.
 
@@ -1528,13 +1670,17 @@ def reassign_by_orbit(table, predicted, *, threshold: float = 3.0):
         light fractions and detection statistics alike), and the boolean mask of the
         epochs that were swapped. A table with other than two components is returned
         unchanged with an all-false mask.
+
+    Raises
+    ------
+    ValueError
+        If the table has two components and ``predicted`` is not ``(2, n_epochs)``.
     """
     pred = np.asarray(predicted, dtype=np.float64)
-    if table.n_components != 2 or pred.shape != (2, table.n_epochs):
+    if table.n_components != 2:
         return table, np.zeros(table.n_epochs, dtype=bool)
-    v = np.asarray(table.velocity, dtype=np.float64)
-    s = np.asarray(table.sigma, dtype=np.float64)
-    good = table.good & np.all(np.isfinite(v), axis=0) & np.all(np.isfinite(s), axis=0)
+    _check_prediction(table, pred)
+    v, s, good = _usable_pairs(table)
     if int(good.sum()) < 3:
         return table, np.zeros(table.n_epochs, dtype=bool)
     r_pred = pred[0] - pred[1]
@@ -1604,8 +1750,6 @@ class Assignment:
         ``resolved_by_orbit``. The decisions can be made on one copy of a table and
         applied to another with the same epochs.
         """
-        from dataclasses import replace
-
         if not self.changes:
             return table
         out = _with_alternative(table, self.alternative)
@@ -1667,11 +1811,17 @@ def assign_by_orbit(table, predicted, *, threshold: float = 3.0, exchange: bool 
         The table with the decisions made (:meth:`Assignment.apply`) and the decisions. A
         table with other than two components, or with fewer than three usable epochs, is
         returned unchanged.
+
+    Raises
+    ------
+    ValueError
+        If the table has two components and ``predicted`` is not ``(2, n_epochs)``.
     """
     pred = np.asarray(predicted, dtype=np.float64)
     assignment = Assignment.none(table.n_epochs)
-    if table.n_components != 2 or pred.shape != (2, table.n_epochs):
+    if table.n_components != 2:
         return table, assignment
+    _check_prediction(table, pred)
     assignment = _decided(table, assignment, pred, threshold, exchange, _open_epochs(table))
     return assignment.apply(table), assignment
 
@@ -1950,8 +2100,7 @@ def assign_by_ephemeris(
     if not exchange and not open_epochs.any():
         return table, _plain_orbit(fit(table)), nothing
     starts = [nothing.exchanged]
-    shared = gamma == "shared" or (gamma is None and all(table.absolute))
-    if exchange and shared:
+    if exchange and _gamma_mode(gamma, table.absolute) == "shared":
         v = np.asarray(table.velocity, dtype=np.float64)
         s = np.asarray(table.sigma, dtype=np.float64)
         times = np.asarray(table.bjd, dtype=np.float64)
@@ -2058,8 +2207,6 @@ def _with_alternative(table, taken):
     ``margin`` changes sign, so the minimum the correlation returned stays recorded as the
     alternative, lower by that amount. ``light`` and ``delta_chi2`` are kept.
     """
-    from dataclasses import replace
-
     taken = np.asarray(taken, dtype=bool)
     if not taken.any():
         return table
@@ -2115,9 +2262,7 @@ def _chosen_minima(table, ordered, predicted, threshold: float, exchange: bool, 
     """
     n = table.n_epochs
     taken, flipped = np.zeros(n, dtype=bool), np.zeros(n, dtype=bool)
-    v = np.asarray(ordered.velocity, dtype=np.float64)
-    s = np.asarray(ordered.sigma, dtype=np.float64)
-    good = ordered.good & np.all(np.isfinite(v), axis=0) & np.all(np.isfinite(s), axis=0)
+    v, _, good = _usable_pairs(ordered)
     if not open_epochs.any() or int(good.sum()) < 3:
         return taken, flipped, np.zeros(n, dtype=bool)
     target = predicted + np.median((v - predicted)[:, good], axis=1)[:, None]
@@ -2204,6 +2349,26 @@ def _settled_assignment(table, start, fit, threshold: float, max_rounds: int, ex
     return best
 
 
+def _kepler_newton(ecc_anomaly, m, ecc: float) -> np.ndarray:
+    """``_NEWTON_ITERATIONS`` Newton steps on ``E - e sin(E) = m`` from ``ecc_anomaly``.
+
+    The result is that of the full count of steps, bit for bit, without taking every one.
+    Each step is the same elementwise function of the iterate, so once an iterate equals
+    the one two steps earlier at every element, the iterates alternate between the last
+    two and the final one is known. In floating point the iterates settle into such a
+    fixed point or pair of values after 6 to 10 of the 15 steps.
+    """
+    previous = None
+    for done in range(1, _NEWTON_ITERATIONS + 1):
+        new = ecc_anomaly - (ecc_anomaly - ecc * np.sin(ecc_anomaly) - m) / (
+            1.0 - ecc * np.cos(ecc_anomaly)
+        )
+        if previous is not None and np.array_equal(new, previous):
+            return new if (_NEWTON_ITERATIONS - done) % 2 == 0 else ecc_anomaly
+        previous, ecc_anomaly = ecc_anomaly, new
+    return ecc_anomaly
+
+
 def _relative_curves(t, period: float) -> np.ndarray:
     """Relative-velocity curves of unit amplitude on a grid of Keplerian orbits at ``period``.
 
@@ -2216,8 +2381,9 @@ def _relative_curves(t, period: float) -> np.ndarray:
 
     Kepler's equation is solved here with NumPy, by the starter and the Newton count of
     :func:`albireo.kepler.solve_kepler`, so that the scan compiles nothing. It is solved
-    once per phase and eccentricity, since the argument of periastron does not enter it.
-    A test checks the curves against :func:`albireo.kepler.radial_velocity`.
+    once per phase and eccentricity, since the argument of periastron does not enter it,
+    and the steps end where the iterates repeat (:func:`_kepler_newton`). A test checks
+    the curves against :func:`albireo.kepler.radial_velocity`.
     """
     t = np.asarray(t, dtype=np.float64)
     half = np.arange(_ASSIGNMENT_PHASES) / (2.0 * _ASSIGNMENT_PHASES)
@@ -2228,10 +2394,8 @@ def _relative_curves(t, period: float) -> np.ndarray:
         mean_anomaly = 2.0 * np.pi * (t[None, :] / period - phase[:, None])
         m = np.mod(mean_anomaly + np.pi, 2.0 * np.pi) - np.pi
         ecc_anomaly = m + ecc * np.sin(m) + 0.5 * ecc**2 * np.sin(2.0 * m)
-        for _ in range(_NEWTON_ITERATIONS):
-            ecc_anomaly = ecc_anomaly - (ecc_anomaly - ecc * np.sin(ecc_anomaly) - m) / (
-                1.0 - ecc * np.cos(ecc_anomaly)
-            )
+        if ecc != 0.0:  # at e = 0 the starter is the solution and every step is zero
+            ecc_anomaly = _kepler_newton(ecc_anomaly, m, ecc)
         return 2.0 * np.arctan2(
             np.sqrt(1.0 + ecc) * np.sin(0.5 * ecc_anomaly),
             np.sqrt(1.0 - ecc) * np.cos(0.5 * ecc_anomaly),
@@ -2287,9 +2451,7 @@ def _assignments_by_period(
     once, where its best curve is at another period than ``period``: the table as
     measured is then also fitted from that period.
     """
-    v = np.asarray(table.velocity, dtype=np.float64)
-    s = np.asarray(table.sigma, dtype=np.float64)
-    good = table.good & np.all(np.isfinite(v), axis=0) & np.all(np.isfinite(s), axis=0)
+    v, s, good = _usable_pairs(table)
     variance = np.where(good, s[0] ** 2 + s[1] ** 2, 1.0)
     good = good & (variance > 0.0)
     if int(good.sum()) < 3:
@@ -2341,8 +2503,6 @@ def _exchanged(table, swap):
     (``alternative``), and ``settings["reassigned_by_orbit"]`` records the count. Used by
     :func:`reassign_by_orbit` and :meth:`Assignment.apply`.
     """
-    from dataclasses import replace
-
     swap = np.asarray(swap, dtype=bool)
 
     def exchange(array):
@@ -2375,13 +2535,3 @@ def _exchanged(table, swap):
         alternative_covariance=exchange_covariance(table.alternative_covariance),
         settings={**dict(table.settings), "reassigned_by_orbit": int(swap.sum())},
     )
-
-
-def relativistic_add(v_kms, u_kms):
-    """Relativistic addition of two velocities, the composition law of log-wavelength shifts.
-
-    See ``docs/math.md`` §7.6.
-    """
-    b1 = np.asarray(v_kms, dtype=np.float64) / C_KMS
-    b2 = np.asarray(u_kms, dtype=np.float64) / C_KMS
-    return C_KMS * (b1 + b2) / (1.0 + b1 * b2)

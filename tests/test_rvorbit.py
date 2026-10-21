@@ -244,6 +244,7 @@ def test_a_circular_fit_holds_the_eccentricity_at_zero():
     np.testing.assert_allclose(fit.k, [K1, K2], atol=0.1)
     assert fit.n_parameters == 5
     assert "held at zero" in fit.summary()
+    assert "(held)" not in fit.summary()  # the period and the conjunction are fitted
     theta = fit.to_theta()
     assert float(theta["secosw"]) == 0.0 and float(theta["sesinw"]) == 0.0
 
@@ -654,8 +655,42 @@ def test_an_assignment_that_decides_nothing_returns_the_table():
     nothing = Assignment.none(table.n_epochs)
     assert not nothing.changes and nothing.apply(table) is table
     assert nothing.same_as(Assignment.none(table.n_epochs))
-    same, decided = assign_by_orbit(table, np.zeros((3, table.n_epochs)))
+    # The table's own velocities as the prediction contradict no epoch.
+    same, decided = assign_by_orbit(table, table.velocity)
     assert same is table and not decided.changes
+
+
+def test_a_prediction_of_the_wrong_shape_is_refused():
+    """A prediction that is not ``(2, n_epochs)`` raises rather than deciding nothing.
+
+    A transposed prediction, or one from another set of epochs, was returned as an
+    unchanged table with no epoch exchanged, which is also the result of an orbit that
+    agrees with every epoch.
+    """
+    table, _truth, orbit = make_table(
+        n_epochs=16, sigma=0.2, seed=2, absolute=(False, False), offsets=(3.0, -3.0)
+    )
+    predicted = orbit.component_velocities(table.bjd)
+    for wrong in (predicted.T, np.zeros((3, table.n_epochs)), predicted[:, :-1]):
+        with pytest.raises(ValueError, match="predicted must have shape"):
+            reassign_by_orbit(table, wrong)
+        with pytest.raises(ValueError, match="predicted must have shape"):
+            assign_by_orbit(table, wrong)
+    # A table with another number of components is still returned as it is.
+    one = replace(
+        table,
+        names=("A",),
+        velocity=table.velocity[:1],
+        sigma=table.sigma[:1],
+        sigma_ivar=table.sigma_ivar[:1],
+        covariance=table.covariance[:, :1, :1],
+        light=table.light[:1],
+        delta_chi2=table.delta_chi2[:1],
+        at_edge=table.at_edge[:1],
+        absolute=(True,),
+    )
+    assert reassign_by_orbit(one, predicted.T)[0] is one
+    assert assign_by_orbit(one, predicted.T)[0] is one
 
 
 def test_the_swap_invariant_search_survives_exchanged_epochs():
@@ -1170,6 +1205,119 @@ def test_argument_validation():
         find_period(table, period_range=(5.0, 1.0))
 
 
+def test_starting_values_outside_the_domain_of_the_fit_are_refused():
+    """A start at the singular origin, outside the box, or of the wrong length raises.
+
+    At ``ecc=0`` the Jacobian of ``atan2`` at the origin is ``0/0`` and SciPy failed with
+    a message about infinite or nan values. A start outside the bounds of 0.95 and a
+    semi-amplitude list of the wrong length failed inside SciPy or NumPy as well.
+    """
+    table, _, _ = make_table()
+    with pytest.raises(ValueError, match="circular=True"):
+        fit_rv_orbit(table, period=P, ecc=0.0)
+    with pytest.raises(ValueError, match="starting eccentricity"):
+        fit_rv_orbit(table, period=P, ecc=1.2)
+    with pytest.raises(ValueError, match="outside the bounds"):
+        fit_rv_orbit(table, period=P, ecc=0.95, omega=0.0)
+    with pytest.raises(ValueError, match="outside the bounds"):
+        fit_rv_orbit(table, period=P, ecc=0.5, omega=float("nan"))
+    for k in ([28.0, 50.0, 1.0], [[28.0, 50.0], [28.0, 50.0]]):
+        with pytest.raises(ValueError, match="one starting semi-amplitude for each of the 2"):
+            fit_rv_orbit(table, period=P, k=k)
+    # One value is taken for every component, and a circular fit has no eccentricity start.
+    for k in (28.0, [28.0]):
+        assert fit_rv_orbit(table, period=P, k=k, max_iterations=1).k.tolist() == [28.0, 28.0]
+    assert fit_rv_orbit(table, period=P, ecc=0.0, circular=True).ecc == 0.0
+    # A start within the box away from the axes is accepted.
+    assert fit_rv_orbit(table, period=P, ecc=0.95, omega=0.8).n_parameters == 7
+
+
+def test_an_error_that_is_not_positive_does_not_enter_the_search_or_the_fit():
+    """A velocity with a zero or negative error is not a measurement.
+
+    A zero error is an infinite weight. In the period search one of them made every
+    normalized weight nan and every power zero, and the end of the grid (2 d here) was
+    returned as the period. The fit already left such velocities out.
+    """
+    table, _, _ = make_table(n_epochs=30, seed=3)
+    removed = find_period(
+        _without(table, 0, [3], at_edge=False), components=["A"], period_range=(2.0, 20.0)
+    )
+    for value in (0.0, -0.05):
+        sigma = np.array(table.sigma)
+        sigma[0, 3] = value
+        bad = replace(table, sigma=sigma, sigma_ivar=sigma)
+        alone = find_period(bad, components=["A"], period_range=(2.0, 20.0))
+        assert not alone["used"][3] and abs(alone["period"] / P - 1.0) < 0.01
+        np.testing.assert_array_equal(alone["power"], removed["power"])
+        pair = find_period(bad, period_range=(2.0, 20.0))
+        assert not pair["used"][3] and abs(pair["period"] / P - 1.0) < 0.01
+        assert fit_rv_orbit(bad, period=P).n_points == 2 * 30 - 1
+
+
+def test_orbits_compare_by_identity():
+    """An orbit holds arrays, so equality by fields is not defined, and hashing works."""
+    from albireo.rvorbit import _fit_rv_ephemeris
+
+    table, _, orbit = make_table(ecc=0.0)
+    one, two = fit_rv_orbit(table, period=P), fit_rv_orbit(table, period=P)
+    assert one == one and one != two and len({one, two}) == 2
+    t_conj = _conjunction(orbit)
+    first = _fit_rv_ephemeris(table, period=P, t_conj=t_conj)
+    second = _fit_rv_ephemeris(table, period=P, t_conj=t_conj)
+    assert first == first and first != second and len({first, second}) == 2
+
+
+def test_the_conjunction_scan_ranks_the_trials_as_the_compiled_model_does(compilations):
+    """The trial conjunctions are evaluated in NumPy, and the scan compiles nothing.
+
+    The chi-squares of the 24 trials agree with those of the compiled residuals of the
+    fit, and the same trial is selected. A fit whose companion is held uses the compiled
+    residuals of its free parameters only, and the scan adds no program to them.
+    """
+    import jax.numpy as jnp
+
+    from albireo.rvorbit import _conjunction_chi2, _objective
+
+    for seed, circular in ((0, False), (1, True), (2, False)):
+        table, _, _ = make_table(n_epochs=17, sigma=0.5, seed=seed, ecc=0.0 if circular else 0.4)
+        t, y, sqrt_w = table.bjd, table.velocity, 1.0 / table.sigma
+        k, gamma = np.array([25.0, 50.0]), np.array([10.0])
+        h, g = (0.0, 0.0) if circular else (math.sqrt(0.2) * math.cos(1.0), math.sqrt(0.2) * 0.84)
+        trials = t.min() + np.linspace(0.0, 1.0, 24, endpoint=False) * P
+        scanned = _conjunction_chi2(
+            t, y, sqrt_w, period=P, t_conj=trials, h=h, g=g, k=k, gamma=gamma
+        )
+        objective = _objective(circular, 2, 1)
+        compiled = []
+        for t_conj in trials:
+            params = [P, t_conj, *([] if circular else [h, g]), *k, *gamma]
+            data = (jnp.asarray(t), jnp.asarray(y), jnp.asarray(sqrt_w))
+            r = np.asarray(objective.residuals(jnp.asarray(params), *data))
+            compiled.append(float(r @ r))
+        np.testing.assert_allclose(scanned, compiled, rtol=1e-11)
+        assert int(np.argmin(scanned)) == int(np.argmin(compiled))
+
+    table, _, _ = make_table(n_epochs=23, sigma=0.05, seed=4)
+    blind = _without(table, 1, np.ones(23, dtype=bool), at_edge=False)
+    fit_rv_orbit(blind, period=P, t_conj=2.5)  # compiles the programs of the fit
+    assert compilations(lambda: fit_rv_orbit(blind, period=P)) == 0
+
+
+def test_the_newton_steps_of_the_assignment_curves_end_where_the_iterates_repeat():
+    """Stopping at a repeated pair of iterates returns the full count of steps, bit for bit."""
+    from albireo.kepler import _NEWTON_ITERATIONS
+    from albireo.rvorbit import _kepler_newton
+
+    m = np.random.default_rng(3).uniform(-np.pi, np.pi, size=(60, 37))
+    for ecc in (0.03, 0.2, 0.4, 0.6, 0.8, 0.95):
+        start = m + ecc * np.sin(m) + 0.5 * ecc**2 * np.sin(2.0 * m)
+        full = start
+        for _ in range(_NEWTON_ITERATIONS):
+            full = full - (full - ecc * np.sin(full) - m) / (1.0 - ecc * np.cos(full))
+        np.testing.assert_array_equal(_kepler_newton(start, m, ecc), full)
+
+
 # ---------------------------------------------------------------------------
 # The fit at a held ephemeris
 # ---------------------------------------------------------------------------
@@ -1217,6 +1365,22 @@ def test_a_held_eccentric_shape_and_a_fitted_one():
     assert 0.0 < fitted.errors["ecc"] < 0.02 and fitted.covariance.shape == (5, 5)
     # A circular model of the same velocities fits far worse.
     assert fit_rv_ephemeris(table, period=P, t_conj=t_conj).chi2 > 50.0 * fitted.chi2
+
+    # The report marks what was held: the ephemeris, and the shape where it was not fitted.
+    # A held eccentric shape is not reported as an eccentricity held at zero.
+    def line(orbit, start):
+        return next(text for text in orbit.summary().splitlines() if text.startswith(start))
+
+    assert line(held, "  e ").endswith("   (held)") and "zero" not in line(held, "  e ")
+    assert line(held, "  omega").endswith("   (held)")
+    for orbit in (held, fitted):
+        assert line(orbit, "  P ").endswith("   (held)")
+        assert line(orbit, "  T_conj").endswith("   (held)")
+    assert "held" not in line(fitted, "  e ") and "held" not in line(fitted, "  omega")
+    circular = fit_rv_ephemeris(table, period=P, t_conj=t_conj)
+    assert line(circular, "  e ").endswith("(held at zero)")
+    free = fit_rv_orbit(table, period=P)
+    assert all("held" not in line(free, start) for start in ("  P ", "  T_conj", "  e ", "  omega"))
 
 
 def test_the_held_fit_gives_differential_components_their_own_gamma():
