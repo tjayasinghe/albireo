@@ -58,8 +58,10 @@ Gebruers, S., Tkachenko, A., Bowman, D. M., et al. 2022, A&A, 665, A36
 
 from __future__ import annotations
 
+import hashlib
 import time
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Any
 
 import jax
@@ -292,29 +294,13 @@ class FixedDilution:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class _FixedValue:
-    """A bare float presented through the spec interface."""
-
-    value: Any
-
-    def distribution(self):
-        return None
-
-    def start(self):
-        return jnp.asarray(self.value, dtype=jnp.float64)
-
-    def upper(self) -> float:
-        return float(np.max(np.abs(np.atleast_1d(np.asarray(self.value, dtype=float)))))
-
-
 def _as_spec(value, name: str, default=None):
     if value is None:
         if default is None:
             raise ValueError(f"{name} must be declared (a float, or Fixed/Between/Known/Sampled)")
         return default
     if isinstance(value, (int, float, np.floating)):
-        return _FixedValue(float(value))
+        return Fixed(float(value))
     if isinstance(value, tuple):
         raise TypeError(
             f"{name} was given as a tuple; use Between{value} instead, so that the prior and "
@@ -346,6 +332,31 @@ def _is_fixed(spec) -> bool:
     return spec.distribution() is None
 
 
+def _site_key(label: str, name: str, shared_mh: bool) -> str:
+    """The site of one component's label: ``mh`` when the metallicity is shared,
+    ``v_<name>`` for the frame velocity ``v_kms``, and ``<label>_<name>`` otherwise."""
+    if label == "mh" and shared_mh:
+        return "mh"
+    if label == "v_kms":
+        return f"v_{name}"
+    return f"{label}_{name}"
+
+
+def _amplitudes(dilution: str, names, value, ell0):
+    """The dilution amplitudes ``A_i`` that :func:`_model_rows` takes.
+
+    ``value(key)`` returns the value of a dilution site: a sample, a fitted value, or a
+    slice of the flat parameter vector. For :class:`RadiusRatio` the amplitudes are the
+    squared radius ratios with ``A_1 = 1``, for :class:`ScalarDilution` the factors, and
+    for :class:`FixedDilution` the declared light fractions ``ell0``.
+    """
+    if dilution == "radius_ratio":
+        return jnp.stack([jnp.asarray(1.0)] + [value(f"ratio_{name}") for name in names[1:]]) ** 2
+    if dilution == "scalar":
+        return jnp.stack([value(f"scale_{name}") for name in names])
+    return ell0
+
+
 # ---------------------------------------------------------------------------
 # The traced problem
 # ---------------------------------------------------------------------------
@@ -356,9 +367,12 @@ def _is_fixed(spec) -> bool:
 class LabelProblem:
     """The inputs of the label likelihood, as one traced pytree argument.
 
-    It is passed to the numpyro model through ``model_args`` rather than captured in a
-    closure, because the interpolated grids occupy tens of megabytes and XLA constant-folds
-    closure constants into the compiled executable.
+    It is passed to the numpyro model through ``model_args``, and to the programs of the
+    warm-start scan and the epoch comparison as an argument, rather than captured in a
+    closure, because the interpolated grids occupy tens of megabytes to gigabytes and XLA
+    constant-folds closure constants into the compiled executable. The one exception is the
+    scan's chi-square program, which holds one component's data row, weights and nuisance
+    basis as constants, each of the size of one spectrum.
 
     ``lsf_kernel`` is the declared instrument profile, which ``"matched"`` applies to
     ``d_hat``. ``model_lsf_kernels`` holds, per star, the profile applied to that star's
@@ -515,17 +529,9 @@ def label_model(problem: LabelProblem, specs: dict, config: dict):
             vsini.append(_sample(f"vsini_{name}", specs[f"vsini_{name}"]))
             v_kms.append(_sample(f"v_{name}", specs[f"v_{name}"]))
 
-        if problem.dilution == "radius_ratio":
-            ratios = [jnp.asarray(1.0)] + [
-                _sample(f"ratio_{name}", specs[f"ratio_{name}"]) for name in names[1:]
-            ]
-            amplitudes = jnp.stack(ratios) ** 2
-        elif problem.dilution == "scalar":
-            amplitudes = jnp.stack(
-                [_sample(f"scale_{name}", specs[f"scale_{name}"]) for name in names]
-            )
-        else:
-            amplitudes = problem.ell0
+        amplitudes = _amplitudes(
+            problem.dilution, names, lambda key: _sample(key, specs[key]), problem.ell0
+        )
 
         offsets = (
             jnp.stack([_sample(f"offset_{name}", specs[f"offset_{name}"]) for name in names])
@@ -891,6 +897,16 @@ def _profiled_chi2(model_row, data, weight, basis, gram_inv):
     return jnp.sum(weight * (residual - basis @ coeffs) ** 2)
 
 
+def _nuisance_gram_inv(weight, basis):
+    """``(B^T W B + ridge)^-1`` for the additive nuisance of one component.
+
+    The ridge, ``1e-10`` of the trace, keeps the inverse finite where the weights leave a
+    Chebyshev term unconstrained.
+    """
+    gram = basis.T @ (weight[:, None] * basis)
+    return jnp.linalg.inv(gram + 1e-10 * jnp.trace(gram) * jnp.eye(basis.shape[1]))
+
+
 # Library nodes per program of the warm-start scan. The temporaries of the vmapped program
 # grow linearly with the number of nodes it evaluates: one program over the 455 nodes of the
 # BOSZ FGK box needed 11.2 GB at 18,739 model pixels, and a block of 32 needs 0.36 GB with the
@@ -900,25 +916,71 @@ def _profiled_chi2(model_row, data, weight, basis, gram_inv):
 _NODE_CHUNK = 32
 
 
-def _scan_program(problem: LabelProblem, index: int):
-    """``program(nodes, vsini, v)``: the profiled chi-square of one component at each node.
+@partial(jax.jit, static_argnums=1)
+def _broadened_nodes(problem: LabelProblem, index: int, nodes, vsini):
+    """The deviation rows of one component at a block of library nodes, broadened once.
 
-    ``nodes`` is an ``(n, n_label)`` block of library nodes and ``vsini`` and ``v`` are one
-    trial rotation and frame velocity. The program is vmapped over the nodes and compiled
-    once per block shape.
+    ``nodes`` is an ``(n, n_label)`` block and ``vsini`` one trial rotation. Each row is the
+    interpolated spectrum less one, convolved with the component's broadening kernel, as in
+    :func:`_component_model` before its Doppler shift. The problem, and with it the library
+    slab of the interpolator, is a traced argument, so the program holds no copy of the
+    slab and is compiled once per block shape for every call with the same problem layout.
+    """
+
+    def one(node):
+        normalized, _ = problem.interpolators[index](node)
+        return jnp.convolve(
+            normalized - 1.0, _broadening_kernel(problem, index, vsini), mode="same"
+        )
+
+    return jax.vmap(one)(nodes)
+
+
+# Chi-square programs of the warm-start scan kept for reuse, by the content of their
+# constants. A repeated fit of the same component spectrum reuses its program.
+_SCAN_PROGRAMS: dict = {}
+_SCAN_PROGRAMS_KEPT = 8
+
+
+def _digest(array) -> tuple:
+    """Shape, dtype and a 128-bit hash of an array's bytes: a key for its content."""
+    array = np.ascontiguousarray(np.asarray(array))
+    return array.shape, array.dtype.str, hashlib.blake2b(array.tobytes(), digest_size=16).digest()
+
+
+def _scan_chi2_program(problem: LabelProblem, index: int):
+    """``program(deviations, v)``: the profiled chi-square of broadened rows at one velocity.
+
+    ``deviations`` is a block from :func:`_broadened_nodes`. Each row is Doppler shifted by
+    ``v`` and compared with the component's data, with the additive nuisance profiled out.
+    The data, weights and nuisance basis are constants of the program, because with them
+    as traced arguments the chi-square changed in the last bit. The program is therefore
+    compiled once per component spectrum, and kept by the content of its constants.
     """
     data = problem.data[index]
     weight = problem.weight[index] / problem.sigma[index] ** 2
     basis = problem.basis
-    gram = basis.T @ (weight[:, None] * basis)
-    gram_inv = jnp.linalg.inv(gram + 1e-10 * jnp.trace(gram) * jnp.eye(basis.shape[1]))
+    key = (problem.dx, problem.relativistic, _digest(data), _digest(weight), _digest(basis))
+    program = _SCAN_PROGRAMS.get(key)
+    if program is not None:
+        return program
+    gram_inv = _nuisance_gram_inv(weight, basis)
+    dx, relativistic = problem.dx, problem.relativistic
 
     @jax.jit
-    def chi2_at(node, vsini, v):
-        row, _ = _component_model(problem, index, node, vsini, v)
-        return _profiled_chi2(row, data, weight, basis, gram_inv)
+    def chi2_at(deviations, v):
+        shift = log_doppler_shift(v, relativistic=relativistic) / dx
 
-    return jax.vmap(chi2_at, in_axes=(0, None, None))
+        def one(deviation):
+            row = shift_spectrum(deviation, shift)
+            return _profiled_chi2(row, data, weight, basis, gram_inv)
+
+        return jax.vmap(one)(deviations)
+
+    while len(_SCAN_PROGRAMS) >= _SCAN_PROGRAMS_KEPT:
+        _SCAN_PROGRAMS.pop(next(iter(_SCAN_PROGRAMS)))
+    _SCAN_PROGRAMS[key] = chi2_at
+    return chi2_at
 
 
 def _node_blocks(nodes) -> list[jax.Array]:
@@ -942,20 +1004,26 @@ def _scan_component(problem: LabelProblem, index: int, nodes, vsini_trials, v_tr
     (the ``FixedDilution`` model). The scan is a coarse start that places the optimizer in
     the right basin. The nodes are evaluated in blocks of ``_NODE_CHUNK``, which bounds the
     memory of the scan independently of the size of the library.
+
+    Each block is interpolated and broadened once per trial rotation, and only the Doppler
+    shift and the chi-square are repeated per trial velocity. Every node meets the trials in
+    the order rotation, then velocity, and a later trial replaces an earlier one only when
+    its chi-square is strictly lower.
     """
-    scan = _scan_program(problem, index)
-    blocks = _node_blocks(nodes)
+    chi2_at = _scan_chi2_program(problem, index)
     n = nodes.shape[0]
     best = np.full((n, 3), np.inf)
-    for vsini in vsini_trials:
-        for v in v_trials:
-            chi2 = np.concatenate(
-                [np.asarray(scan(block, float(vsini), float(v))) for block in blocks]
-            )[:n]
-            better = chi2 < best[:, 0]
-            best[better] = np.column_stack(
-                [chi2, np.full_like(chi2, vsini), np.full_like(chi2, v)]
-            )[better]
+    for k, block in enumerate(_node_blocks(nodes)):
+        part = best[k * _NODE_CHUNK : (k + 1) * _NODE_CHUNK]  # a view of the block's rows
+        m = part.shape[0]
+        for vsini in vsini_trials:
+            deviations = _broadened_nodes(problem, index, block, float(vsini))
+            for v in v_trials:
+                chi2 = np.asarray(chi2_at(deviations, float(v)))[:m]
+                better = chi2 < part[:, 0]
+                part[better] = np.column_stack(
+                    [chi2, np.full_like(chi2, vsini), np.full_like(chi2, v)]
+                )[better]
     return best
 
 
@@ -998,8 +1066,7 @@ def _allowed_nodes(table, axes, specs, name, shared_mh):
     """
     allowed = np.ones(table.shape[0], dtype=bool)
     for column, label in enumerate(axes):
-        key = "mh" if (label == "mh" and shared_mh) else f"{label}_{name}"
-        spec = specs.get(key)
+        spec = specs.get(_site_key(label, name, shared_mh))
         if spec is None:
             continue
         bounds = _spec_bounds(spec)
@@ -1070,6 +1137,55 @@ def _combine_scans(scans, node_tables, label_axes, shared_mh, top_k):
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _LibraryRecord:
+    """A library projected onto the model grid, without its flux arrays.
+
+    The attributes are those of :class:`~albireo.library.SpectralLibrary` that the fit and
+    its result read: the label names and nodes, the medium, the metadata and the resolving
+    power. The flux is held once, by the interpolator built from the projection. Above the
+    library cache (96 MB) the projection is otherwise a second copy of the flux, held
+    through the warm-start scan and in :attr:`LabelMatch.libraries`: 0.26 GB at 455 nodes
+    and 36,085 model pixels.
+    """
+
+    label_names: tuple
+    nodes: np.ndarray
+    medium: str
+    meta: dict
+    resolving_power: float | None
+
+    @property
+    def n_nodes(self) -> int:
+        """Number of grid nodes."""
+        return int(self.nodes.shape[0])
+
+    @property
+    def bounds(self) -> dict[str, tuple[float, float]]:
+        """Per-label ``(min, max)`` over the nodes, as :attr:`SpectralLibrary.bounds`."""
+        return {
+            name: (float(self.nodes[:, i].min()), float(self.nodes[:, i].max()))
+            for i, name in enumerate(self.label_names)
+        }
+
+
+def _project(source: SpectralLibrary, grid: LogGrid, medium: str, interpolation: str):
+    """``(record, interpolator)``: a library resampled onto the model grid and interpolated.
+
+    The projection goes out of scope on return, so that its flux is released unless the
+    library cache keeps it.
+    """
+    library = source.resampled_to(grid, medium=medium)
+    record = _LibraryRecord(
+        label_names=tuple(library.label_names),
+        nodes=np.asarray(library.nodes),
+        medium=str(library.medium),
+        meta=library.meta,
+        resolving_power=library.resolving_power,
+    )
+    return record, library_interpolator(library, method=interpolation)
 
 
 def _chebyshev_basis(n_pix: int, order: int | None) -> np.ndarray:
@@ -1190,7 +1306,11 @@ def match_labels(
     offset_order
         Degree of the additive Chebyshev nuisance per component. The ``m = 0`` term is the
         unconstrained zero point of ``docs/math.md`` §5.1. The default of 2 also absorbs
-        the slope and curvature left by the low-``k`` exchange modes.
+        the slope and curvature left by the low-``k`` exchange modes. ``None`` fits no
+        nuisance, the control case.
+    offset_scale
+        Standard deviation of the zero-mean normal prior on each Chebyshev coefficient, in
+        the units of ``d_hat`` (continuum units).
     jitter
         Whether each component has a bounded noise-scale site. Defaults to ``True`` for
         the ``d_hat`` comparisons and ``False`` for ``"epochs"``, whose chi-square is
@@ -1199,6 +1319,10 @@ def match_labels(
         Wavelength ranges to drop: nebular cores, detector gaps, and any region the
         disentangling could not model. Not available in ``"epochs"`` mode, where the
         comparison runs over epoch pixels: mask them in the epochs before disentangling.
+    interpolation
+        How each library is interpolated between its nodes, passed to
+        :func:`albireo.library.library_interpolator`: ``"auto"`` (a Catmull-Rom cubic on a
+        complete box, barycentric otherwise), ``"linear"``, ``"cubic"`` or ``"simplex"``.
     scan_vsini, scan_velocities
         Trial values for the warm-start scan. ``scan_vsini`` defaults to 1, 5 and 10 km/s
         and a fifth and a half of the ``vsini`` prior's upper bound, clipped to the priors,
@@ -1224,6 +1348,15 @@ def match_labels(
         a coarse joint grid in its dilution, rotation, temperature and gravity. It refits
         from the best distinct points. The rounds stop once a round lowers chi-square by
         less than 1. ``0`` disables them.
+    seed
+        Seed of the random keys of the ``"native"`` and ``"matched"`` fits: numpyro's model
+        initialisation in :func:`albireo.run_map` (``seed``) and the Laplace approximation
+        (``seed + 1``). The ``"epochs"`` fit draws no random numbers.
+    progress
+        Called after every accepted optimizer step as ``progress(step, potential,
+        grad_norm, params)``, as the ``callback`` of :func:`albireo.run_map`. In
+        ``"epochs"`` mode ``potential`` is half the objective and ``params`` the constrained
+        values of the free sites.
 
     Returns
     -------
@@ -1317,14 +1450,14 @@ def match_labels(
     # One projection and one interpolator per library object. The pipeline declares one
     # library for every star, and a projection larger than the library's own cache (96 MB,
     # which the BOSZ FGK box exceeds above about 13,800 model pixels) was otherwise made and
-    # held once per star: 0.25 GB per copy at 36,085 pixels.
+    # held once per star: 0.25 GB per copy at 36,085 pixels. Only the interpolator keeps the
+    # flux; the projection itself is reduced to its labels and metadata (`_LibraryRecord`).
     projected, interpolators, label_axes = [], [], []
     built: dict[int, tuple] = {}
     for name in names:
         source = declared[name].library
         if id(source) not in built:
-            library = source.resampled_to(grid, medium=medium)
-            built[id(source)] = (library, library_interpolator(library, method=interpolation))
+            built[id(source)] = _project(source, grid, medium, interpolation)
         library, interpolator = built[id(source)]
         projected.append(library)
         interpolators.append(interpolator)
@@ -1483,7 +1616,6 @@ def match_labels(
     node_tables = [np.asarray(library.nodes) for library in projected]
     scans = []
     for i, name in enumerate(names):
-        scan = _scan_component(problem, i, node_tables[i], scan_vsini, scan_velocities)
         allowed = _allowed_nodes(node_tables[i], label_axes[i], specs, name, shared_mh)
         if not allowed.any():
             raise ValueError(
@@ -1491,7 +1623,13 @@ def match_labels(
                 f"{projected[i].bounds}; widen the priors, or check that they are in the same "
                 "units as the grid."
             )
-        scan[~allowed, 0] = np.inf
+        # Only the nodes the priors permit are scanned. The others keep an infinite
+        # chi-square and no trial rotation or velocity (NaN).
+        scan = np.full((node_tables[i].shape[0], 3), np.nan)
+        scan[:, 0] = np.inf
+        scan[allowed] = _scan_component(
+            problem, i, node_tables[i][allowed], scan_vsini, scan_velocities
+        )
         scans.append(scan)
     candidates = _combine_scans(scans, node_tables, label_axes, shared_mh, top_k)
 
@@ -1593,10 +1731,8 @@ def match_labels(
     )
 
 
-def _normal_spec(size, scale):
-    """A zero-mean normal spec for a nuisance: vector when ``size`` is given, else scalar."""
-    if size is None:
-        return _NormalSpec(dist.Normal(0.0, scale), 0.0)
+def _normal_spec(size: int, scale):
+    """A zero-mean normal spec for a nuisance vector of ``size`` coefficients."""
     return _NormalSpec(dist.Normal(jnp.zeros(size), scale), jnp.zeros(size))
 
 
@@ -1639,7 +1775,7 @@ def _init_from_scan(specs, config, names, label_axes, node_tables, scans, picks)
             if label not in axes:
                 continue
             value = float(node[axes.index(label)])
-            key = label if (label == "mh" and config["shared_mh"]) else f"{label}_{name}"
+            key = _site_key(label, name, config["shared_mh"])
             if not _is_fixed(specs[key]):
                 init[key] = _clip_to_support(specs[key], value)
         for key, value in (
@@ -1866,11 +2002,7 @@ class _Layout:
         return jnp.asarray(dict(self.fixed)[key], dtype=jnp.float64)
 
     def label_key(self, label: str, name: str) -> str:
-        if label == "mh" and self.shared_mh:
-            return "mh"
-        if label == "v_kms":
-            return f"v_{name}"
-        return f"{label}_{name}"
+        return _site_key(label, name, self.shared_mh)
 
 
 def _epoch_layout(specs, config, problem):
@@ -1943,12 +2075,9 @@ def _layout_labels(layout: _Layout, phi, problem):
 
 
 def _layout_amplitudes(layout: _Layout, phi, problem):
-    if layout.dilution == "radius_ratio":
-        ratios = [jnp.asarray(1.0)] + [layout.site(phi, f"ratio_{n}") for n in layout.names[1:]]
-        return jnp.stack(ratios) ** 2
-    if layout.dilution == "scalar":
-        return jnp.stack([layout.site(phi, f"scale_{n}") for n in layout.names])
-    return problem.ell0
+    return _amplitudes(
+        layout.dilution, layout.names, lambda key: layout.site(phi, key), problem.ell0
+    )
 
 
 def _layout_rows(layout: _Layout, phi, problem):
@@ -2080,6 +2209,50 @@ class _EpochObjective:
 
     def light_jac(self, phi, problem) -> np.ndarray:
         return np.asarray(self._light_jac(jnp.asarray(phi), problem), dtype=np.float64)
+
+
+# Epoch objectives kept for reuse, by layout and prior. The jitted programs of an objective
+# depend on nothing else: the problem and the statistics are traced arguments. A second fit
+# with the same declaration and array shapes therefore reuses the six compiled programs of
+# the first, which took 1.7 s of a 2.8 s repeat fit on the 965-pixel test problem.
+_OBJECTIVES: dict = {}
+_OBJECTIVES_KEPT = 4
+
+
+def _prior_key(terms) -> tuple | None:
+    """A hashable description of the prior terms, or ``None`` for a prior not described.
+
+    Only Normal priors are described: their location and scale, with dtype and shape, are
+    the only values the compiled prior reads. Any other distribution gives ``None``, and
+    its objective is built anew.
+    """
+    key = []
+    for start, size, distribution in terms:
+        if type(distribution) is not dist.Normal:
+            return None
+        parts: list[Any] = []
+        for value in (distribution.loc, distribution.scale):
+            array = np.asarray(value)
+            weak = getattr(value, "weak_type", None)
+            parts.append((type(value).__name__, weak, array.dtype.str, array.shape))
+            parts.append(array.tobytes())
+        key.append((int(start), int(size), *parts))
+    return tuple(key)
+
+
+def _epoch_objective(layout: _Layout, terms) -> _EpochObjective:
+    """The objective for ``(layout, terms)``, reused when an equal one was built before."""
+    prior = _prior_key(terms)
+    if prior is None:
+        return _EpochObjective(layout, terms)
+    key = (layout, prior)
+    objective = _OBJECTIVES.get(key)
+    if objective is None:
+        objective = _EpochObjective(layout, terms)
+        while len(_OBJECTIVES) >= _OBJECTIVES_KEPT:
+            _OBJECTIVES.pop(next(iter(_OBJECTIVES)))
+        _OBJECTIVES[key] = objective
+    return objective
 
 
 @dataclass
@@ -2528,6 +2701,28 @@ class EpochFit:
     seconds: float
 
 
+def _round_record(number, faint, collapsed, kinds, tried, before):
+    """``(record, moved, gain)`` for one restart round.
+
+    ``record`` is the entry of :attr:`EpochFit.rounds`, ``moved`` the run that lowered the
+    objective below ``before`` (``None`` when none did), and ``gain`` the decrease, which
+    is negative when every restart ended above the optimum.
+    """
+    winner = min(tried, key=lambda r: r.objective) if tried else None
+    gain = before - winner.objective if winner is not None else 0.0
+    record = {
+        "round": number,
+        "faint": faint,
+        "collapse": collapsed,
+        "starts": len(tried),
+        "kinds": kinds,
+        "objective_before": before,
+        "gain": max(gain, 0.0),
+        "moved_by": winner.kind if gain > 0.0 else None,
+    }
+    return record, (winner if gain > 0.0 else None), gain
+
+
 def _fit_epochs(
     problem,
     specs,
@@ -2550,7 +2745,7 @@ def _fit_epochs(
     layout, lo, hi, terms = _epoch_layout(specs, config, problem)
     if layout.n == 0:
         raise ValueError("every label is declared Fixed; there is nothing to fit")
-    objective = _EpochObjective(layout, terms)
+    objective = _epoch_objective(layout, terms)
     budget = {"max_iter": max(int(max_steps), 1), "max_eval": 4 * max(int(max_steps), 1)}
     report = None
     if progress is not None:
@@ -2604,23 +2799,14 @@ def _fit_epochs(
             joint_on = best.phi.copy()
         tried = [lm(start, kind) for kind, start in plan]
         runs += tried
-        before = best.objective
-        winner = min(tried, key=lambda r: r.objective) if tried else None
-        gain = before - winner.objective if winner is not None else 0.0
-        record = {
-            "round": number,
-            "faint": names[faint],
-            "collapse": collapsed,
-            "starts": len(plan),
-            "kinds": sorted({kind.split(" ")[0] for kind, _ in plan}),
-            "objective_before": before,
-            "gain": max(gain, 0.0),
-            "moved_by": winner.kind if gain > 0.0 else None,
-        }
+        kinds = sorted({kind.split(" ")[0] for kind, _ in plan})
+        record, moved, gain = _round_record(
+            number, names[faint], collapsed, kinds, tried, best.objective
+        )
         rounds.append(record)
-        if gain > 0.0:
-            best = winner
-            moved_by.append(winner.kind)
+        if moved is not None:
+            best = moved
+            moved_by.append(moved.kind)
         if gain < _RESTART_GAIN:
             break
 
@@ -2636,23 +2822,13 @@ def _fit_epochs(
             plan = [(kind, start) for kind, start in plan if kind.startswith("joint")]
             tried = [lm(start, kind) for kind, start in plan]
             runs += tried
-            winner = min(tried, key=lambda r: r.objective) if tried else None
-            gain = best.objective - winner.objective if winner is not None else 0.0
-            rounds.append(
-                {
-                    "round": len(rounds),
-                    "faint": names[faint],
-                    "collapse": collapsed,
-                    "starts": len(plan),
-                    "kinds": ["joint"],
-                    "objective_before": best.objective,
-                    "gain": max(gain, 0.0),
-                    "moved_by": winner.kind if gain > 0.0 else None,
-                }
+            record, moved, _ = _round_record(
+                len(rounds), names[faint], collapsed, ["joint"], tried, best.objective
             )
-            if gain > 0.0:
-                best = winner
-                moved_by.append(winner.kind)
+            rounds.append(record)
+            if moved is not None:
+                best = moved
+                moved_by.append(moved.kind)
             light = objective.light(best.phi, problem)
             faint = int(np.argmin(light))
             collapsed = _collapse(layout, lo, hi, best.phi, light, faint)
@@ -2870,8 +3046,7 @@ class LabelMatch:
             for label in _LABEL_ORDER:
                 if label not in axes:
                     continue
-                key = label if (label == "mh" and self.config["shared_mh"]) else f"{label}_{name}"
-                entry[label] = self._value(key)
+                entry[label] = self._value(_site_key(label, name, self.config["shared_mh"]))
             entry["vsini"] = self._value(f"vsini_{name}")
             entry["v_kms"] = self._value(f"v_{name}")
             out[name] = entry
@@ -2880,15 +3055,12 @@ class LabelMatch:
     @property
     def fixed(self) -> dict[str, list[str]]:
         """Which labels were held fixed for each component."""
+        shared = self.config["shared_mh"]
         return {
             name: sorted(
                 label
                 for label in ("teff", "logg", "mh", "vsini", "v_kms")
-                for key in [
-                    "mh"
-                    if (label == "mh" and self.config["shared_mh"])
-                    else f"{'v' if label == 'v_kms' else label}_{name}"
-                ]
+                for key in [_site_key(label, name, shared)]
                 if key in self.specs and _is_fixed(self.specs[key])
             )
             for name in self.names
@@ -2950,12 +3122,8 @@ class LabelMatch:
         return out
 
     def _site_key(self, label: str, name: str) -> str | None:
-        if label == "mh" and self.config["shared_mh"]:
-            key = "mh"
-        elif label == "v_kms":
-            key = f"v_{name}"
-        else:
-            key = f"{label}_{name}"
+        """The free site of a label, or ``None`` when it is fixed or absent."""
+        key = _site_key(label, name, self.config["shared_mh"])
         if key not in self.specs or _is_fixed(self.specs[key]):
             return None
         return key
@@ -3082,39 +3250,40 @@ class LabelMatch:
 
     # -- goodness, against nulls -------------------------------------------
 
-    def _rows(self):
-        params = dict(self.result.params)
-        labels, vsini, v_kms, offsets = [], [], [], []
-        for i, name in enumerate(self.names):
-            axes = self.problem.label_axes[i]
-            values = {}
-            for label in _LABEL_ORDER:
-                key = "mh" if (label == "mh" and self.config["shared_mh"]) else f"{label}_{name}"
-                if key in self.specs:
-                    values[label] = jnp.asarray(
-                        params[key] if key in params else self.specs[key].start()
-                    )
-            labels.append(jnp.stack([values[axis] for axis in axes]))
-            vsini.append(jnp.asarray(self._value(f"vsini_{name}")))
-            v_kms.append(jnp.asarray(self._value(f"v_{name}")))
-            offsets.append(
-                jnp.asarray(params[f"offset_{name}"]) if self.config["offsets"] else jnp.zeros(0)
-            )
-        if self.problem.dilution == "radius_ratio":
-            amplitudes = (
-                jnp.stack(
-                    [jnp.asarray(1.0)]
-                    + [jnp.asarray(self._value(f"ratio_{name}")) for name in self.names[1:]]
+    def _label_vector(self, index: int):
+        """The fitted label vector of one component, in its library's axis order."""
+        name = self.names[index]
+        params = self.result.params
+        values = {}
+        for label in _LABEL_ORDER:
+            key = _site_key(label, name, self.config["shared_mh"])
+            if key in self.specs:
+                values[label] = jnp.asarray(
+                    params[key] if key in params else self.specs[key].start()
                 )
-                ** 2
-            )
-        elif self.problem.dilution == "scalar":
-            amplitudes = jnp.stack(
-                [jnp.asarray(self._value(f"scale_{name}")) for name in self.names]
-            )
-        else:
-            amplitudes = self.problem.ell0
-        return _model_rows(self.problem, labels, vsini, v_kms, amplitudes, jnp.stack(offsets))
+        return jnp.stack([values[axis] for axis in self.problem.label_axes[index]])
+
+    def _amplitudes(self):
+        """The fitted dilution amplitudes, as :func:`_model_rows` takes them."""
+        return _amplitudes(
+            self.problem.dilution,
+            self.names,
+            lambda key: jnp.asarray(self._value(key)),
+            self.problem.ell0,
+        )
+
+    def _rows(self):
+        params = self.result.params
+        labels = [self._label_vector(i) for i in range(len(self.names))]
+        vsini = [jnp.asarray(self._value(f"vsini_{name}")) for name in self.names]
+        v_kms = [jnp.asarray(self._value(f"v_{name}")) for name in self.names]
+        offsets = [
+            jnp.asarray(params[f"offset_{name}"]) if self.config["offsets"] else jnp.zeros(0)
+            for name in self.names
+        ]
+        return _model_rows(
+            self.problem, labels, vsini, v_kms, self._amplitudes(), jnp.stack(offsets)
+        )
 
     @property
     def chi2(self) -> float:
@@ -3141,8 +3310,7 @@ class LabelMatch:
         for i in range(self.problem.n_star):
             weight = self.problem.weight[i] / self.problem.sigma[i] ** 2
             basis = self.problem.basis
-            gram = basis.T @ (weight[:, None] * basis)
-            gram_inv = jnp.linalg.inv(gram + 1e-10 * jnp.trace(gram) * jnp.eye(basis.shape[1]))
+            gram_inv = _nuisance_gram_inv(weight, basis)
             total += float(
                 _profiled_chi2(
                     jnp.zeros(self.problem.n_pix), self.problem.data[i], weight, basis, gram_inv
@@ -3188,32 +3356,15 @@ class LabelMatch:
         return np.stack([np.interp(np.asarray(wave), self.wave, np.asarray(row)) for row in rows])
 
     def _light_fraction_rows(self):
+        shape = (self.problem.n_star, self.problem.n_pix)
         if self.problem.dilution == "fixed":
-            return jnp.broadcast_to(
-                self.problem.ell0[:, None], (self.problem.n_star, self.problem.n_pix)
-            )
-        params = dict(self.result.params)
+            return jnp.broadcast_to(self.problem.ell0[:, None], shape)
+        amplitudes = self._amplitudes()
         if self.problem.dilution == "scalar":
-            values = jnp.stack([jnp.asarray(self._value(f"scale_{n}")) for n in self.names])
-            return jnp.broadcast_to(values[:, None], (self.problem.n_star, self.problem.n_pix))
-        amplitudes = (
-            jnp.stack(
-                [jnp.asarray(1.0)]
-                + [jnp.asarray(self._value(f"ratio_{n}")) for n in self.names[1:]]
-            )
-            ** 2
-        )
-        continua = []
-        for i, name in enumerate(self.names):
-            axes = self.problem.label_axes[i]
-            values = {}
-            for label in _LABEL_ORDER:
-                key = "mh" if (label == "mh" and self.config["shared_mh"]) else f"{label}_{name}"
-                if key in self.specs:
-                    values[label] = jnp.asarray(
-                        params[key] if key in params else self.specs[key].start()
-                    )
-            continua.append(self.problem.interpolators[i](jnp.stack([values[a] for a in axes]))[1])
+            return jnp.broadcast_to(amplitudes[:, None], shape)
+        continua = [
+            self.problem.interpolators[i](self._label_vector(i))[1] for i in range(len(self.names))
+        ]
         return _light_fractions(continua, amplitudes)
 
     @property
@@ -3226,24 +3377,18 @@ class LabelMatch:
         """The MAP model spectrum for one component, as flux on the fit's grid.
 
         It is broadened and shifted as fitted, and undiluted, since a template represents
-        the star alone. :mod:`albireo.handoff` writes it to a file.
+        the star alone. In the ``"matched"`` comparison it also carries the instrument
+        profile the template was compared with, the quadrature width of
+        :attr:`LabelProblem.model_lsf_kernels`; in the other comparisons it carries no
+        instrument profile. :mod:`albireo.handoff` writes it to a file.
         """
         if name not in self.names:
             raise ValueError(f"unknown component {name!r}; declared: {', '.join(self.names)}")
         index = self.names.index(name)
-        params = dict(self.result.params)
-        axes = self.problem.label_axes[index]
-        values = {}
-        for label in _LABEL_ORDER:
-            key = "mh" if (label == "mh" and self.config["shared_mh"]) else f"{label}_{name}"
-            if key in self.specs:
-                values[label] = jnp.asarray(
-                    params[key] if key in params else self.specs[key].start()
-                )
         deviation, _ = _component_model(
             self.problem,
             index,
-            jnp.stack([values[a] for a in axes]),
+            self._label_vector(index),
             jnp.asarray(self._value(f"vsini_{name}")),
             jnp.asarray(self._value(f"v_{name}")),
         )
@@ -3467,6 +3612,8 @@ def refit_draws(match: LabelMatch, draws, *, max_steps: int = 60, seed: int = 0)
         )
     kernel = np.asarray(match.problem.lsf_kernel)
     collected: dict[str, dict[str, list[float]]] = {n: {} for n in match.names}
+    # One model for every draw: the draw's problem is its traced argument.
+    model = label_model(match.problem, match.specs, match.config)
     for index, draw in enumerate(draws):
         rows = (
             np.stack([np.convolve(row, kernel, mode="same") for row in draw])
@@ -3482,13 +3629,13 @@ def refit_draws(match: LabelMatch, draws, *, max_steps: int = 60, seed: int = 0)
                 "data": jnp.asarray(rows),
             }
         )
-        model = label_model(problem, match.specs, match.config)
         try:
             result = run_map(
                 model,
                 init=match.start,
                 max_steps=max_steps,
                 rng_key=jax.random.PRNGKey(seed + index),
+                model_args=(problem,),
             )
         except FloatingPointError:  # pragma: no cover - a pathological draw is skipped
             continue

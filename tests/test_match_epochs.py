@@ -725,6 +725,30 @@ def test_draw_refits_are_refused_for_the_epoch_comparison(plain, library):
         ab.refit_draws(got, np.zeros((2, 2, fit.dis.grid.n)))
 
 
+def test_a_repeated_epoch_fit_reuses_its_programs(plain, library, compilations):
+    """The objective's six programs and the scan's are kept and reused by a second fit.
+
+    A second fit of the same declaration compiled twelve programs (1.7 s of 3.5 s on this
+    problem). The two that remain are the eager scans of the band product, which
+    ``BlockTridiagonal.matvec`` builds anew on every call, in the nulls of the fit.
+    """
+    fit, _ = plain
+    stats = fit.epoch_statistics()
+
+    def run():
+        fit.match_labels(
+            _stars(library),
+            mh=ab.Between(-1.0, 0.5),
+            top_k=1,
+            restart_rounds=1,
+            max_steps=5,
+            statistics=stats,
+        )
+
+    run()
+    assert compilations(run) <= 2
+
+
 class _LabelFitReached(Exception):
     """Raised in place of the label fit, once ``Fit.match_labels`` has prepared its input."""
 
