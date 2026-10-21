@@ -2546,7 +2546,6 @@ def test_a_failure_the_zero_points_did_not_cause_leaves_them_in_the_record(toy, 
     retried, at the cost of a second correlation that failed in the same way. The record
     keeps the adopted zero points, with no flag naming them as dropped.
     """
-    from albireo.facade import _ZeroPointWindowError
     from albireo.pipeline import _measure_epoch_velocities
 
     dataset, truth, grid = toy
@@ -2582,6 +2581,8 @@ def test_a_failure_the_zero_points_did_not_cause_leaves_them_in_the_record(toy, 
     # A window failure that the drop resolves, followed by another failure without the
     # zero points: the second failure is raised, chained to the first, and the record
     # states the drop that was made.
+    from albireo.facade import _ZeroPointWindowError
+
     class _FailsAfterTheDrop:
         def measure_velocities(self, *, templates, light):
             if any(t.v_zero_kms is not None for t in templates):
@@ -3311,3 +3312,29 @@ def test_a_template_table_short_of_pixels_names_the_pixels_not_the_templates(
         _library_table(ctx, dataset, {"TOY": LSF(5.5)}, library, "bootstrap")
     assert "declare starting temperatures closer" not in str(raised.value)
     assert "'few': bootstrap" in str(raised.value)
+
+
+def test_the_two_reasons_of_an_unmeasured_light_are_told_apart_in_todcors_own_words():
+    """The pipeline reads the reason from the message that ``_global_light`` raises.
+
+    The tests above raise copies of those messages. Here both are raised by the function
+    itself, from a free pass whose amplitudes are a difference of the two templates at
+    every epoch, and from one with no measured epoch, so that a change of wording in
+    ``albireo.todcor`` fails here and not in a pipeline run.
+    """
+    from albireo.pipeline import _templates_unmeasured
+    from albireo.todcor import _global_light, _LightNotMeasured
+
+    first = replace(_velocity_table(), n_pixels=np.array([5.0, 4.0, 3.0, 2.0, 1.0, 0.0]))
+    difference = np.vstack([np.full(6, 1.4), np.full(6, -0.4)])
+    with pytest.raises(_LightNotMeasured) as templates_case:
+        _global_light(replace(first, light=difference))
+    with pytest.raises(_LightNotMeasured) as pixels_case:
+        _global_light(replace(first, light=np.full((2, 6), np.nan)))
+
+    assert _templates_unmeasured(templates_case.value)
+    assert not _templates_unmeasured(pixels_case.value)
+    # The copies used above are the function's own messages.
+    assert str(pixels_case.value) == _TOO_FEW_PIXELS
+    message = str(templates_case.value)
+    assert message.startswith("instrument 'TOY': no epoch gives a positive amplitude"), message

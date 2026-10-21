@@ -803,6 +803,59 @@ def test_the_velocity_panels_of_equal_periods_are_ordered_by_name():
         assert _by_period(names, systems) == ["c", "a", "b"]
 
 
+def _saved_figures(monkeypatch) -> dict:
+    """The figures the report saves, by file stem; nothing is written to disk."""
+    from pathlib import Path
+
+    from matplotlib.figure import Figure
+
+    saved: dict = {}
+    monkeypatch.setattr(
+        Figure, "savefig", lambda fig, path, **kw: saved.update({Path(path).stem: fig})
+    )
+    return saved
+
+
+@pytest.mark.skipif(not HAS_MPL, reason="needs matplotlib")
+def test_the_teff_panel_places_a_row_at_the_star_its_component_was_compared_with(
+    systems, tmp_path, monkeypatch
+):
+    """An exchanged pair is plotted at the secondary's injected Teff, as its error refers to it."""
+    from albireo.benchmark import _write_figures
+
+    exchanged = _fake_result(systems[1], "orbit")
+    exchanged["truth"]["components_exchanged"] = True
+    _write_run(tmp_path, systems[:2], ["orbit"], results={f"{systems[1].name}__orbit": exchanged})
+    rows = collect(tmp_path)
+    assert [r["exchanged"] for r in rows] == [False, True]
+    assert systems[1].teff1 != systems[1].teff2
+    saved = _saved_figures(monkeypatch)
+    _write_figures(tmp_path, rows, ["orbit"])
+    (scatter,) = saved["velocities_spectra_labels"].axes[2].collections
+    np.testing.assert_array_equal(
+        np.asarray(scatter.get_offsets())[:, 0], [systems[0].teff1, systems[1].teff2]
+    )
+
+
+@pytest.mark.skipif(not HAS_MPL, reason="needs matplotlib")
+def test_the_velocity_figure_orders_its_panels_by_period_and_then_by_name(
+    systems, tmp_path, monkeypatch
+):
+    """Four systems of one period: a set's iteration order would give 1 chance in 24."""
+    from albireo.benchmark import _write_rv_figures
+
+    names = ["d", "b", "a", "c"]
+    equal = [
+        BinarySystem.from_dict({**systems[0].to_dict(), "name": name, "period": 5.0})
+        for name in names
+    ]
+    _write_run(tmp_path, equal, ["orbit"])
+    saved = _saved_figures(monkeypatch)
+    _write_rv_figures(tmp_path, collect_velocities(tmp_path), {s.name: s for s in equal}, ["orbit"])
+    titles = [ax.get_title() for ax in saved["rv_curves_orbit"].axes if ax.get_visible()]
+    assert [title.split()[0] for title in titles] == sorted(names), titles
+
+
 @pytest.mark.slow
 def test_two_systems_run_end_to_end(systems, library, tmp_path):
     config = BenchmarkConfig(
