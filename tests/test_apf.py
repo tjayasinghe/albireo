@@ -231,6 +231,37 @@ def test_the_zero_point_and_the_width_can_be_declared(files):
         apf.extract(exposure, files["solution"], zero_point="none", lsf="header")
 
 
+def test_the_rows_and_a_declared_width_are_checked(files):
+    exposure = apf.read_apf_exposure(files["drifted"])
+    declared = {"zero_point": "none", "lsf": 5.0}
+    forward = apf.extract(exposure, SOLUTION, rows=(50, 51, 52), **declared)
+    # Rows in echelle-order sequence, or repeated, are merged as rows 50-52. In an earlier
+    # version (52, 51, 50) returned only part of the spectrum, and repeated rows gave a wrong
+    # spectrum or raised LinAlgError.
+    for rows in ((52, 51, 50), (50, 51, 51, 52, 50)):
+        other = apf.extract(exposure, SOLUTION, rows=rows, **declared)
+        np.testing.assert_array_equal(other.wave, forward.wave)
+        np.testing.assert_array_equal(other.flux, forward.flux)
+    for rows in ((), (-1,), (30, 79)):
+        with pytest.raises(ValueError, match="rows"):
+            apf.extract(exposure, SOLUTION, rows=rows, **declared)
+    with pytest.raises(ValueError, match="rows"):
+        apf.build_blaze([exposure], SOLUTION, rows=(78, 79))
+    with pytest.raises(ValueError, match="rows"):
+        apf.refine_wavelengths(
+            SOLUTION,
+            exposure,
+            template_wave=np.linspace(5000.0, 6000.0, 1000),
+            template_flux=np.ones(1000),
+            rows=(),
+        )
+    for fwhm in (0.0, -2.0, float("nan")):
+        with pytest.raises(ValueError, match="positive FWHM"):
+            apf.extract(exposure, SOLUTION, zero_point="none", lsf=fwhm, rows=(50,))
+    with pytest.raises(ValueError, match="finite shift"):
+        apf.extract(exposure, SOLUTION, zero_point=float("nan"), lsf=5.0, rows=(50,))
+
+
 def test_an_exposure_through_the_iodine_cell_is_refused_or_masked(files):
     exposure = apf.read_apf_exposure(files["iodine"])
     assert exposure.iodine_in

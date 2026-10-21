@@ -58,7 +58,7 @@ continuum on the merged spectrum).
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -386,6 +386,22 @@ def _line_mask(wave: np.ndarray, centres: Sequence[float], halfwidth_kms: float)
     return mask
 
 
+def _checked_rows(rows: Iterable[int]) -> list[int]:
+    """The rows in increasing order without repeats.
+
+    Raises ``ValueError`` if there are none or one lies outside 0-78.
+    """
+    checked = sorted({int(row) for row in rows})
+    if not checked:
+        raise ValueError(f"rows is empty: give at least one row between 0 and {_N_ROWS - 1}")
+    if checked[0] < 0 or checked[-1] >= _N_ROWS:
+        raise ValueError(
+            f"rows must lie between 0 and {_N_ROWS - 1} (row 0 is the bluest order); got "
+            f"{checked[0]} to {checked[-1]}"
+        )
+    return checked
+
+
 def build_blaze(
     exposures: Sequence[ApfExposure],
     wavelengths,
@@ -409,7 +425,7 @@ def build_blaze(
     wavelengths : ApfWavelengths or array or path
         The wavelength solution, used to find the Balmer lines.
     rows : sequence of int, optional
-        The rows to model; the others are set to 1.
+        The rows to model, between 0 and 78; the others are set to 1.
     gain, read_term : float, optional
         The noise model (module docstring, step 4).
 
@@ -417,13 +433,18 @@ def build_blaze(
     -------
     numpy.ndarray
         Shape ``(79, 4608)``, for the ``blaze`` option of :func:`extract`.
+
+    Raises
+    ------
+    ValueError
+        If ``rows`` is empty or holds a row outside 0-78, or no order could be modelled.
     """
     from scipy.interpolate import UnivariateSpline
 
     waves = _as_wavelengths(wavelengths).wave
     blaze = np.ones(APF_SHAPE)
     x = np.arange(_N_PIX, dtype=float)
-    rows = list(rows)
+    rows = _checked_rows(rows)
     stack: dict[int, list[np.ndarray]] = {row: [] for row in rows}
     for exposure in exposures:
         for row in rows:
@@ -598,7 +619,8 @@ def extract(
     blaze : array of shape (79, 4608), optional
         A blaze function (:func:`build_blaze`). Default: each order's upper envelope.
     rows : sequence of int, optional
-        The orders to merge. Default rows 3-60 (3846-7470 A).
+        The orders to merge, rows between 0 and 78 in any order; repeats are ignored.
+        Default rows 3-60 (3846-7470 A).
     iodine : {"error", "mask", "ignore"}, optional
         What to do with an exposure taken through the iodine cell. Default ``"error"``.
     mask_sky : bool, optional
@@ -615,8 +637,9 @@ def extract(
     Raises
     ------
     ValueError
-        If the exposure was taken through the iodine cell and ``iodine="error"``, or the
-        telluric zero point cannot be measured.
+        If the exposure was taken through the iodine cell and ``iodine="error"``, the
+        telluric zero point cannot be measured, ``rows`` is empty or holds a row outside
+        0-78, or a supplied shift or FWHM is not finite (the FWHM also not positive).
     """
     if iodine not in ("error", "mask", "ignore"):
         raise ValueError(f"iodine must be 'error', 'mask' or 'ignore'; got {iodine!r}")
@@ -628,7 +651,7 @@ def extract(
         )
     solution = _as_wavelengths(wavelengths)
     lines = telluric_lines() if lines is None else lines
-    rows = list(_DEFAULT_ROWS if rows is None else rows)
+    rows = _checked_rows(_DEFAULT_ROWS if rows is None else rows)
     notes: list[str] = [f"wavelengths: {solution.source}"]
     decker_fwhm = DECKER_LSF_FWHM_KMS.get(exposure.decker)
     orders = _Orders(exposure, gain, read_term)
@@ -662,6 +685,8 @@ def extract(
             )
     else:
         drift = float(zero_point)
+        if not math.isfinite(drift):
+            raise ValueError(f"zero_point must be a finite shift in km/s; got {zero_point!r}")
         notes.append(f"zero point: shift {drift:+.3f} km/s supplied")
     wave = solution.wave * (1.0 + drift / _C_KMS)
 
@@ -682,6 +707,8 @@ def extract(
             )
     else:
         lsf_fwhm, lsf_source = float(lsf), "supplied"
+        if not (math.isfinite(lsf_fwhm) and lsf_fwhm > 0.0):
+            raise ValueError(f"lsf must be a positive FWHM in km/s; got {lsf!r}")
     notes.append(f"LSF FWHM {lsf_fwhm:.2f} km/s ({lsf_source})")
 
     fluxes: dict[int, np.ndarray] = {}
@@ -925,7 +952,8 @@ def refine_wavelengths(
     lsf_fwhm_kms : float, optional
         The exposure's LSF FWHM. Default: the decker's typical value.
     rows : sequence of int, optional
-        Rows with stellar chunks. Default: the rows whose centres lie inside the template.
+        Rows with stellar chunks, between 0 and 78. Default: the rows whose centres lie
+        inside the template.
     nx, nm : int, optional
         Degrees of the correction in the pixel and the order. Default 5 and 4.
     search_kms : float, optional
@@ -942,7 +970,8 @@ def refine_wavelengths(
     Raises
     ------
     ValueError
-        If too few chunks correlate to fit the correction.
+        If too few chunks correlate to fit the correction, or ``rows`` is empty or holds a
+        row outside 0-78.
     """
     from numpy.polynomial import chebyshev as cheb
 
@@ -966,9 +995,9 @@ def refine_wavelengths(
     if rows is None:
         centres = waves[:, _N_PIX // 2]
         rows = [r for r in range(_N_ROWS) if t_wave.min() + 20 < centres[r] < t_wave.max() - 20]
-    rows = list(rows)
-    if not rows:
-        raise ValueError("the template covers none of the orders")
+        if not rows:
+            raise ValueError("the template covers none of the orders")
+    rows = _checked_rows(rows)
 
     orders = _Orders(exposure, gain, read_term)
     prepared = {}
