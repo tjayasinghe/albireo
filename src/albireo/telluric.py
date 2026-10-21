@@ -290,7 +290,9 @@ def telluric_shift(
     ``+-v_range`` km/s in steps of 0.25 km/s. The positive parts of the correlations are
     summed over regions and the highest peak is taken. Each region is then refined to its
     own peak within 6 km/s of it, and the regions are averaged with weights ``r**4``, so
-    that a region with weak or blended telluric lines contributes little.
+    that a region with weak or blended telluric lines contributes little. A region whose
+    highest correlation within those 6 km/s lies on the edge of the window has its peak
+    outside it and is left out.
 
     Parameters
     ----------
@@ -318,7 +320,8 @@ def telluric_shift(
     Raises
     ------
     ValueError
-        If no region has enough good pixels or a usable correlation peak.
+        If no region has enough good pixels or a usable correlation peak within 6 km/s of
+        the summed correlations' peak.
     """
     lines = telluric_lines() if lines is None else lines
     segments = _segments(segments)
@@ -354,17 +357,20 @@ def telluric_shift(
             f"of {dict(regions)} (air Angstrom, topocentric) with {min_pixels} good pixels"
         )
     j0 = int(np.argmax(total))
+    idx = np.where(np.abs(lags - lags[j0]) <= 6.0)[0]
     found_regions: dict[str, tuple[float, float]] = {}
     for name, r in curves.items():
-        idx = np.where(np.abs(lags - lags[j0]) <= 6.0)[0]
         j = int(idx[int(np.argmax(r[idx]))])
-        if 0 < j < lags.size - 1 and r[j] > min_correlation:
+        # A maximum on the edge of the window is not a peak: the region's own peak lies
+        # outside it, and a parabola through a monotonic slope extrapolates without bound.
+        if idx[0] < j < idx[-1] and r[j] > min_correlation:
             v = float(lags[j] + _parabola_peak(r, j) * _STEP_KMS)
             found_regions[name] = (v, float(r[j]))
     if not found_regions:
         raise ValueError(
-            "no telluric region gave a correlation peak above "
-            f"{min_correlation}: is the spectrum normalised and in the topocentric frame?"
+            f"no telluric region gave a correlation peak above {min_correlation} within "
+            "6 km/s of the peak of the summed correlations: is the spectrum normalised and "
+            "in the topocentric frame?"
         )
     values = np.array([v for v, _ in found_regions.values()])
     weights = np.array([r for _, r in found_regions.values()]) ** 4

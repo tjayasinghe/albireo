@@ -112,6 +112,26 @@ def test_the_shift_puts_the_lines_back_at_rest(displacement):
         assert v == pytest.approx(-displacement, abs=0.05) and r > 0.9
 
 
+@pytest.mark.parametrize("displacement", [9.0, 10.0])
+def test_a_region_whose_peak_lies_outside_the_window_is_left_out(displacement):
+    """A region displaced by more than 6 km/s from the others has its own peak outside the
+    window around the summed peak. Its maximum in the window is on the edge, and a parabola
+    through it extrapolated to -11 km/s (9 km/s) or -54 km/s (10 km/s) in an earlier version,
+    which moved the zero point by 1 to 1.7 km/s."""
+    wave = np.exp(np.arange(math.log(6200.0), math.log(7400.0), 1.0 / C_KMS))
+    lo, hi = TELLURIC_REGIONS["O2_gamma"]
+    inside = (wave > lo - 5.0) & (wave < hi + 5.0)
+    flux = 1.0 + np.where(
+        inside, telluric_model(wave, shift_kms=displacement), telluric_model(wave)
+    )
+    found = telluric_shift(
+        [(wave, flux, np.ones(wave.size, dtype=bool))], lsf_sigma_kms=7.3 / FWHM_PER_SIGMA
+    )
+    assert "O2_gamma" not in found.regions
+    assert found.n_regions == len(TELLURIC_REGIONS) - 1
+    assert found.v_kms == pytest.approx(0.0, abs=0.02)
+
+
 def test_the_shift_of_a_narrower_noisy_spectrum():
     lsf = 4.2
     segments = spectrum(1.7, lines_at(lsf), step_kms=0.9, noise=0.01)
