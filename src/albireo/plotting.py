@@ -367,7 +367,8 @@ def plot_residual_zscores(problem, d_stack, *, bjd=None, axes=None):
     axes[0].set_title(f"all pixels: sd = {flat.std():.3f}")
     axes[0].legend(fontsize=8)
 
-    scatter = np.array([r.std() for r in per_epoch])
+    # An epoch with no good pixel has no scatter; NaN leaves it out of the panel.
+    scatter = np.array([r.std() if r.size else np.nan for r in per_epoch])
     x_epoch = np.arange(len(per_epoch)) if bjd is None else np.asarray(bjd, dtype=float)
     axes[1].plot(x_epoch, scatter, "o", ms=4, color="C0")
     axes[1].axhline(1.0, color="k", ls=":", lw=1.0)
@@ -380,7 +381,11 @@ def plot_residual_zscores(problem, d_stack, *, bjd=None, axes=None):
     axes[2].axhline(0.0, color="k", ls=":", lw=1.0)
     axes[2].set_xlabel("epoch" if bjd is None else "BJD")
     axes[2].set_ylabel("lag-1 autocorrelation")
-    axes[2].set_title(f"lag-1 (median {np.median(lag1):+.3f})")
+    # _lag1 is NaN for an epoch with fewer than three residuals or none that vary, and
+    # such an epoch must not make the median of the others NaN.
+    defined = lag1[np.isfinite(lag1)]
+    median = f"{np.median(defined):+.3f}" if defined.size else "undefined"
+    axes[2].set_title(f"lag-1 (median {median})")
     return fig, axes
 
 
@@ -483,6 +488,8 @@ def plot_light_fractions(samples, *, bjd=None, period=None, t_conj=None, ax=None
     samples
         Posterior samples containing the ``light`` site, shape
         ``(n_draws, n_epochs, n_comp)`` or ``(n_draws, n_comp)`` for a constant ratio.
+        A constant ratio is drawn once per entry of ``bjd`` when ``bjd`` is given, and
+        once otherwise.
     bjd
         Epoch times [d]. With ``period`` and ``t_conj`` the x-axis becomes phase.
     period, t_conj
@@ -503,6 +510,11 @@ def plot_light_fractions(samples, *, bjd=None, period=None, t_conj=None, ax=None
         light = light[:, None, :]
     mean, sd = light.mean(axis=0), light.std(axis=0)
     n_epochs, n_comp = mean.shape
+    if n_epochs == 1 and bjd is not None:
+        # A constant ratio is one value for every epoch, drawn at each epoch's time.
+        n_epochs = np.atleast_1d(np.asarray(bjd)).size
+        mean = np.broadcast_to(mean, (n_epochs, n_comp))
+        sd = np.broadcast_to(sd, (n_epochs, n_comp))
 
     if bjd is not None and period is not None and t_conj is not None:
         x = phase_of(bjd, float(period), float(t_conj))
@@ -987,17 +999,11 @@ def plot_velocity_table(table, *, period=None, t_conj=None, orbit=None, truth=No
         if truth is not None:
             ax.plot(x, np.asarray(truth)[i], "_", color="k", ms=10, alpha=0.7)
     if orbit is not None:
-        if folded:
-            dense_phase = np.linspace(0.0, 1.0, 400)
-            dense_t = t_conj + dense_phase * period
-            model = orbit.predict(dense_t)
-            for i in range(model.shape[0]):
-                ax.plot(dense_phase, model[i], color=_color(i), lw=1.0, alpha=0.7)
-        else:
-            dense_t = np.linspace(table.bjd.min(), table.bjd.max(), 1500)
-            model = orbit.predict(dense_t)
-            for i in range(model.shape[0]):
-                ax.plot(dense_t, model[i], color=_color(i), lw=1.0, alpha=0.7)
+        # An orbit supplies the period and conjunction time, so its curve is always folded.
+        dense_phase = np.linspace(0.0, 1.0, 400)
+        model = orbit.predict(orbit.t_conj + dense_phase * orbit.period)
+        for i in range(model.shape[0]):
+            ax.plot(dense_phase, model[i], color=_color(i), lw=1.0, alpha=0.7)
         if len(axes) > 1:
             res = axes[1]
             for i in range(orbit.residuals.shape[0]):

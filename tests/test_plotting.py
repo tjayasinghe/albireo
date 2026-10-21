@@ -175,6 +175,26 @@ def test_plot_residual_zscores_has_three_panels(fitted_problem, small_dataset):
     assert len(axes[1].lines[0].get_xdata()) == len(list(small_dataset))
 
 
+def test_plot_residual_zscores_tolerates_epochs_too_short_for_a_lag(monkeypatch):
+    """An epoch with fewer than three good pixels has no lag-1 value and no NaN median."""
+    import warnings
+
+    import albireo.forward
+
+    rng = np.random.default_rng(3)
+    per_epoch = [rng.normal(size=400), rng.normal(size=2), np.zeros(0), rng.normal(size=300)]
+    monkeypatch.setattr(albireo.forward, "data_residual_zscores", lambda *a, **k: per_epoch)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        _, axes = plotting.plot_residual_zscores(None, None)
+    title = axes[2].get_title()
+    assert "nan" not in title.lower()
+    lag1 = [plotting._lag1(r) for r in per_epoch]
+    assert title == f"lag-1 (median {np.median([lag1[0], lag1[3]]):+.3f})"
+    scatter = np.asarray(axes[1].lines[0].get_ydata())
+    assert np.isnan(scatter[2]) and np.all(np.isfinite(scatter[[0, 1, 3]]))
+
+
 def test_data_residual_zscores_per_epoch_partitions_the_flat_array(fitted_problem, small_dataset):
     from albireo.forward import data_residual_zscores
 
@@ -220,6 +240,20 @@ def test_plot_light_fractions_handles_per_epoch_and_constant():
     constant = rng.dirichlet([8.0, 5.0], size=25)
     _, ax2 = plotting.plot_light_fractions({"light": constant})
     assert ax2.get_xlabel() == "epoch"
+
+
+@pytest.mark.parametrize("orbit", [{}, {"period": 2.0, "t_conj": 0.0}])
+def test_plot_light_fractions_draws_a_constant_ratio_at_every_epoch(orbit):
+    """A constant ratio with epoch times is the same value drawn at each epoch."""
+    constant = np.random.default_rng(6).dirichlet([8.0, 5.0], size=25)
+    bjd = np.arange(4.0) + 0.3
+    _, ax = plotting.plot_light_fractions({"light": constant}, bjd=bjd, **orbit)
+    assert ax.get_xlabel() == ("phase from conjunction" if orbit else "BJD")
+    assert len(ax.containers) == constant.shape[1]
+    for c, container in enumerate(ax.containers):
+        y = np.asarray(container.lines[0].get_ydata())
+        assert y.size == bjd.size
+        np.testing.assert_allclose(y, constant[:, c].mean())
 
 
 # ---------------------------------------------------------------------------
