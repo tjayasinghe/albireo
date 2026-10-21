@@ -5406,7 +5406,8 @@ regression tests of the defects fixed, take 91 s. The modules whose time changed
 | `test_library.py` | 76 → 90 | 8 → 31 |
 
 Most of `test_library.py`'s increase was one new test that waited out a 20 s timeout on
-every run; it now releases the held download when the queued ones are cancelled. The slow
+every run; it now releases the held download when the queued ones are cancelled, and the
+module takes 11 s. The slow
 tests (`-m "slow and not network"`) pass on the code after the pass: 68 tests, 859 s of
 wall-clock time in three processes.
 
