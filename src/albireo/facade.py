@@ -175,6 +175,14 @@ class Smoothness:
     eta_min: float | None = None
 
     def __post_init__(self) -> None:
+        for name in ("tau0", "eta0", "sigma"):
+            value = float(getattr(self, name))
+            if not (np.isfinite(value) and value > 0.0):
+                raise ValueError(
+                    f"Smoothness {name} must be a finite positive number; got {value}. The "
+                    "hyperpriors are normal in ln tau and ln eta, centred on ln tau0 and "
+                    "ln eta0 with width sigma."
+                )
         if self.eta_min is not None and not (
             np.isfinite(float(self.eta_min)) and float(self.eta_min) > 0.0
         ):
@@ -241,7 +249,7 @@ class LSF:
         Examples
         --------
         >>> round(LSF.from_resolution(48_000).sigma_kms, 3)
-        2.653
+        2.652
         """
         if not resolving_power > 0:
             raise ValueError(f"resolving power must be positive; got {resolving_power}")
@@ -427,7 +435,10 @@ class Orbit:
         a phase scan to be meaningful (or a periodogram run first).
     k
         Velocity semi-amplitude in km/s per :class:`Star`, in the order the stars are
-        declared. Either one specification covering all of them, or one per star.
+        declared. Either one specification with one entry per star, such as
+        ``Between([10.0, 10.0], [90.0, 90.0])``, or a sequence of one specification per
+        star. A bare number is ``Fixed``. A single-valued specification is accepted only
+        for a single star.
     t_conj
         Time of conjunction in the dataset's time system. The default ``"scan"`` locates
         it by scanning one period before optimization. The marginal likelihood is sharply
@@ -445,8 +456,9 @@ class Orbit:
         eccentricity's range) sets the start of the fit, for instance from a velocity
         table's orbit. The default start is ``e = 0.05`` at 0.5 rad.
     outer
-        Outer orbit of a hierarchical triple. Its ``k`` must have two entries, for the
-        inner pair and the tertiary.
+        Outer orbit of a hierarchical triple. :class:`Disentangler` does not support it
+        in this version and raises ``NotImplementedError`` when it is set; the model
+        supports triples through :class:`~albireo.inference.MarginalOrbitModel`.
     """
 
     period: Any
@@ -520,11 +532,6 @@ def _velocity_budget(orbit: Orbit | None, velocities, components, frame: str, ex
             ecc_max = float(np.max(np.abs(np.asarray(orbit.ecc.value, dtype=float))))
         total = reach * (1.0 + ecc_max)
         terms.append((f"x (1 + e_max = {1.0 + ecc_max:.2f})", total))
-
-    if orbit is not None and orbit.outer is not None:
-        outer = sum(spec.upper() for spec in _k_specs(orbit.outer, 2)) * (1.0 + ecc_max)
-        total += outer
-        terms.append(("outer orbit", outer))
 
     if frame == "topocentric" or any(isinstance(c, Telluric) for c in components):
         total += 2.0 * _V_BARY_MAX
@@ -600,7 +607,7 @@ def _place_hyperparameters(dis, priors: dict, init: dict) -> None:
         )
         init["log_eta"] = jnp.asarray(_above_floor(np.log(etas), floor))
 
-    if any(isinstance(c, Nebular) for c in dis.components):
+    if dis._nebular is not None:
         n_epochs = dis.dataset.n_epochs
         priors["log_nebular_amp"] = dist.Normal(jnp.zeros(n_epochs), 0.3).to_event(1)
         init["log_nebular_amp"] = jnp.zeros(n_epochs)
@@ -765,6 +772,16 @@ def _check_noise_correlation(dis) -> None:
         values = [float(v) for v in np.atleast_1d(np.asarray(declared.start(), dtype=float))]
         if len(values) != 1:
             raise ValueError("a fitted noise_correlation is one value shared by every epoch")
+        if isinstance(declared, Between):
+            bounds = np.concatenate(
+                [np.atleast_1d(np.asarray(b, dtype=float)) for b in (declared.lo, declared.hi)]
+            )
+            if not (np.all(np.isfinite(bounds)) and np.all(np.abs(bounds) <= 1.0)):
+                raise ValueError(
+                    f"a fitted noise_correlation must range within [-1, 1]; got {declared}. "
+                    "The model rejects |phi| >= 1, so a wider range would be cut there "
+                    "rather than sampled."
+                )
     elif isinstance(declared, Mapping):
         missing = sorted(set(dis.dataset.instruments) - set(declared))
         if missing:
@@ -799,8 +816,13 @@ def _place_noise_correlation(dis, priors: dict, init: dict, fixed: dict) -> None
 
 
 def _check_velocities(dis, stars) -> np.ndarray:
-    """Validate a ``velocities=`` declaration, rejecting a table that cannot warm-start."""
-    v = np.atleast_2d(np.asarray(dis.velocities, dtype=float))
+    """Validate a ``velocities=`` declaration, rejecting a table that cannot warm-start.
+
+    Returns a read-only copy, so that a later change to the caller's array cannot
+    desynchronize the declaration from the budget, grid and model built from it.
+    """
+    v = np.array(np.atleast_2d(np.asarray(dis.velocities, dtype=float)), dtype=float, copy=True)
+    v.setflags(write=False)
     want = (len(stars), dis.dataset.n_epochs)
     if v.shape != want:
         raise ValueError(
@@ -812,11 +834,17 @@ def _check_velocities(dis, stars) -> np.ndarray:
 
     # A cold start raises an error. With every component at the same velocity at every
     # epoch the stars are indistinguishable, and the fit converges to a solution
-    # 122,000 nats below the warm-started one (D42).
-    separation = float(np.max(np.ptp(v, axis=0))) if v.shape[0] > 1 else float(np.ptp(v))
+    # 122,000 nats below the warm-started one (D42). The separation is measured on the
+    # centred table, which is what the model uses: it removes one zero point per
+    # component, so a constant offset between two stars separates nothing.
+    centred = _centred_velocities(v)
+    separation = (
+        float(np.max(np.ptp(centred, axis=0))) if v.shape[0] > 1 else float(np.ptp(centred))
+    )
     if separation <= 0.0:
         raise ValueError(
-            "these velocities never separate the components: every star has the same "
+            "these velocities never separate the components: once each star's own zero "
+            "point is removed (the model does not identify it), every star has the same "
             "velocity at every epoch, which is exactly the cold start the free-velocity "
             "mode is measured to fail from (122,000 nats worse than a warm one). "
             "Supply the measured per-epoch velocities "
@@ -826,8 +854,8 @@ def _check_velocities(dis, stars) -> np.ndarray:
     widest = dis._widest_lsf()
     if separation < widest:
         warnings.warn(
-            f"the declared velocities separate the components by at most "
-            f"{separation:.2f} km/s, which is below the widest LSF sigma "
+            f"the declared velocities, each star's zero point removed, separate the "
+            f"components by at most {separation:.2f} km/s, which is below the widest LSF sigma "
             f"({widest:.2f} km/s); at no epoch are the two resolved. The free-velocity "
             "fit is warm-started from these, and a warm start inside the unresolved "
             "regime is close to the cold one measured failing. Check the sign "
@@ -838,23 +866,59 @@ def _check_velocities(dis, stars) -> np.ndarray:
     return v
 
 
+_NUMERIC_FIELDS = ("lo", "hi", "start_at", "value", "sigma", "values")
+
+
+def _spec_size(spec: Spec) -> int:
+    """The number of entries of a spec: the largest size among its numeric fields."""
+    sizes = [
+        np.atleast_1d(np.asarray(getattr(spec, attr), dtype=float)).size
+        for attr in _NUMERIC_FIELDS
+        if getattr(spec, attr, None) is not None
+    ]
+    return max(sizes, default=1)
+
+
+def _as_k(value) -> Any:
+    """A declared ``k``, with a bare number taken as ``Fixed`` as everywhere else."""
+    if isinstance(value, int | float):
+        return _coerce_spec(value, "orbit.k")
+    return value
+
+
+def _check_k_entries(value, n: int) -> None:
+    """Reject one single-valued ``k`` specification declared for two or more stars.
+
+    The ``k`` site has one entry per star. A specification whose fields are all scalars
+    would build a scalar site, and the model would then fail at its first evaluation with
+    a message about ``len(k)``.
+    """
+    spec = _as_k(value)
+    if n < 2 or not isinstance(spec, Spec) or isinstance(spec, Scanned):
+        return
+    if _spec_size(spec) == 1:
+        raise ValueError(
+            f"orbit.k is one specification with a single value, {spec}, for {n} stars, "
+            "and the semi-amplitude site has one entry per star. Declare one specification "
+            f"with {n} entries, e.g. Between([10.0] * {n}, [90.0] * {n}), or a sequence of "
+            "one specification per star."
+        )
+
+
 def _k_specs(orbit: Orbit, n: int) -> list[Spec]:
     """The per-component ``k`` specifications, given either as one spec or a sequence."""
-    if isinstance(orbit.k, Spec):
-        spec = orbit.k
-        # A single spec may still be vector-valued, e.g. Between([10, 5], [90, 70]). Detect
-        # that from whichever field holds the numbers rather than from `hi` alone: a vector
-        # Known or Fixed has no `hi`, and would otherwise be counted at its largest entry n
-        # times, inflating the budget.
-        for attr in ("hi", "value", "values", "start_at"):
-            declared = getattr(spec, attr, None)
-            if declared is None:
-                continue
-            if np.atleast_1d(np.asarray(declared, dtype=float)).size == n:
-                return [_ScalarView(spec, i) for i in range(n)]
-            break
+    k = _as_k(orbit.k)
+    if isinstance(k, Spec):
+        spec = k
+        # A single spec may still be vector-valued, e.g. Between([10, 5], [90, 70]). Its
+        # size is the largest among all of its numeric fields, not that of the first one
+        # found: Between([10, 5], 90) has a scalar `hi` and two entries, and a vector Known
+        # or Fixed has no `hi` and would otherwise be counted at its largest entry n times,
+        # inflating the budget.
+        if _spec_size(spec) == n:
+            return [_ScalarView(spec, i) for i in range(n)]
         return [spec] * n
-    specs = [_coerce_spec(item, "each entry of orbit.k") for item in orbit.k]
+    specs = [_coerce_spec(item, "each entry of orbit.k") for item in k]
     if len(specs) != n:
         raise ValueError(f"orbit.k has {len(specs)} entries for {n} stars")
     return specs
@@ -962,8 +1026,10 @@ class Disentangler:
         and ``velocities`` are given, if more than one :class:`Telluric` or
         :class:`Nebular` component is declared, if an instrument in the dataset has no
         LSF, if a :class:`Telluric` or :class:`Nebular` component is declared for a
-        dataset whose wavelength medium is undeclared, or if a noise correlation omits
-        an instrument or lies outside ``(-1, 1)``.
+        dataset whose wavelength medium is undeclared, if a noise correlation omits
+        an instrument or lies outside ``(-1, 1)``, if ``orbit.k`` is one single-valued
+        specification for two or more stars, or if the declared velocities do not
+        separate the stars once each star's zero point is removed.
     NotImplementedError
         If ``orbit.outer`` is set. Hierarchical triples are supported by
         :class:`~albireo.inference.MarginalOrbitModel` but not by this interface.
@@ -1041,8 +1107,8 @@ class Disentangler:
                 "yet). They are alternatives: a free velocity table replaces the orbit "
                 "entirely, and the model rejects Keplerian sites alongside it."
             )
-        if self.velocities is not None:
-            object.__setattr__(self, "velocities", _check_velocities(self, stars))
+        if self.orbit is not None:
+            _check_k_entries(self.orbit.k, len(stars))
         if self.orbit is not None and self.orbit.outer is not None:
             raise NotImplementedError(
                 "hierarchical triples are not in the façade's v1 vocabulary. The model "
@@ -1066,6 +1132,10 @@ class Disentangler:
         for key in self.dataset.instruments:
             if _coerce_lsf(self.lsf[key], key).is_per_epoch:
                 declared_lsf_widths(self.dataset, key)  # raises, naming undeclared epochs
+        # The velocity check compares the table with the widest LSF, so it follows the LSF
+        # checks above.
+        if self.velocities is not None:
+            object.__setattr__(self, "velocities", _check_velocities(self, stars))
         _check_noise_correlation(self)
         # A telluric or nebular component depends on absolute line positions, which an
         # undeclared wavelength medium leaves uncertain by a nearly constant 83 km/s.
@@ -1089,6 +1159,16 @@ class Disentangler:
     def n_stellar(self) -> int:
         """The number of stellar components in the model."""
         return len(self.stars)
+
+    @property
+    def _nebular(self) -> Nebular | None:
+        """The declared :class:`Nebular` component, or ``None``."""
+        return next((c for c in self.components if isinstance(c, Nebular)), None)
+
+    @property
+    def _has_telluric(self) -> bool:
+        """Whether a :class:`Telluric` component is declared."""
+        return any(isinstance(c, Telluric) for c in self.components)
 
     @property
     def ordered_components(self) -> tuple[Component, ...]:
@@ -1218,18 +1298,14 @@ class Disentangler:
 
     def _noise_line(self) -> str:
         """One line for :meth:`explain`: the noise model and the source of its correlation."""
-        declared = self.noise_correlation
-        if declared is None:
+        if self.noise_correlation is None:
             return "  noise      diagonal: independent pixels"
-        if isinstance(declared, Spec):
+        by_instrument = self._declared_noise_correlation()
+        if by_instrument is None:
             return (
                 "  noise      AR(1) along the pixel index, one lag-one correlation fitted "
                 "(site ar1_phi)"
             )
-        values = self.noise_correlation_per_epoch()
-        by_instrument = {}
-        for epoch, phi in zip(self.dataset, values, strict=True):
-            by_instrument.setdefault(epoch.instrument, float(phi))
         listed = ", ".join(f"{k} {v:.3f}" for k, v in by_instrument.items())
         return f"  noise      AR(1) along the pixel index, lag-one correlation {listed} (declared)"
 
@@ -1265,7 +1341,7 @@ class Disentangler:
         tau = np.array([_smoothness_of(c).tau0 for c in self.ordered_components], dtype=float)
         eta = np.array([_smoothness_of(c).eta0 for c in self.ordered_components], dtype=float)
         eta_profile = None
-        nebular = next((c for c in self.components if isinstance(c, Nebular)), None)
+        nebular = self._nebular
         if nebular is not None:
             wave = np.asarray(self.grid.wave)
             # nebular_windows takes rest wavelengths in air. On a vacuum grid the lines lie
@@ -1309,7 +1385,7 @@ class Disentangler:
             lsf_sigma[key] = spec.sigma_kms
             if spec.anchors_angstrom is not None:
                 anchors[key] = spec.anchors_angstrom
-        nebular = next((c for c in self.components if isinstance(c, Nebular)), None)
+        nebular = self._nebular
         return MarginalOrbitModel(
             self.grid,
             self.dataset,
@@ -1317,7 +1393,7 @@ class Disentangler:
             lsf_sigma_v=lsf_sigma,
             lsf_anchors_angstrom=anchors or None,
             v_rel_max_kms=self.velocity_budget.total,
-            telluric=any(isinstance(c, Telluric) for c in self.components),
+            telluric=self._has_telluric,
             nebular=nebular is not None,
             nebular_v_kms=0.0 if nebular is None else float(nebular.v_kms),
             prior=self.smoothness_prior,
@@ -1329,14 +1405,32 @@ class Disentangler:
     def noise_correlation_per_epoch(self) -> np.ndarray | None:
         """The declared lag-one noise correlation of every epoch, ``(n_epochs,)``.
 
-        Returns ``None`` when no correlation is declared, or when it is a fitted site.
+        Returns ``None`` when no correlation is declared, or when it is a fitted site. A
+        :class:`Fixed` correlation is held, as a bare number is, and is returned.
         """
         declared = self.noise_correlation
-        if declared is None or isinstance(declared, Spec):
+        if declared is None:
             return None
+        if isinstance(declared, Spec):
+            if declared.distribution() is not None:
+                return None
+            return np.full(self.dataset.n_epochs, float(np.asarray(declared.start())))
         if isinstance(declared, Mapping):
             return np.array([float(declared[epoch.instrument]) for epoch in self.dataset])
         return np.full(self.dataset.n_epochs, float(declared))
+
+    def _declared_noise_correlation(self) -> dict[str, float] | None:
+        """The held lag-one correlation per instrument, or ``None`` when none is held.
+
+        ``None`` means either the diagonal noise model or a fitted correlation.
+        """
+        values = self.noise_correlation_per_epoch()
+        if values is None:
+            return None
+        by_instrument: dict[str, float] = {}
+        for epoch, phi in zip(self.dataset, values, strict=True):
+            by_instrument.setdefault(epoch.instrument, float(phi))
+        return by_instrument
 
     def _make_specs(self):
         """``(priors, init, fixed)``, built together so their key sets cannot diverge."""
@@ -1367,20 +1461,19 @@ class Disentangler:
             return priors, init, fixed
 
         place("period", _coerce_spec(self.orbit.period, "orbit.period"))
+        period = _largest(_start_of(self.orbit.period))
         if self.orbit.t_conj == "scan":
             # The site is always sampled, so fit() replaces this start with the scan result
             # and narrows the prior around it. expert() returns both unchanged. The prior
             # here starts at the first epoch rather than at zero: real epochs lie near BJD
             # 2.46e6, and a prior centred on the origin excludes every conjunction in the
             # span of the data.
-            period = float(np.max(np.atleast_1d(np.asarray(_start_of(self.orbit.period)))))
             first = float(np.min(np.asarray(self.dataset.bjd)))
             priors["t_conj"] = dist.Uniform(first, first + period)
             init["t_conj"] = first + 0.5 * period
         else:
             spec = _coerce_spec(self.orbit.t_conj, "orbit.t_conj")
             if isinstance(spec, Between):
-                period = float(np.max(np.atleast_1d(np.asarray(_start_of(self.orbit.period)))))
                 width = float(np.max(np.asarray(spec.hi)) - np.min(np.asarray(spec.lo)))
                 if width > 0.2 * period:
                     warnings.warn(
@@ -1402,14 +1495,9 @@ class Disentangler:
                 "Between(...) to fit it."
             )
         place("k", _vector_spec(self.orbit.k, self.n_stellar, "orbit.k"))
+        # An outer orbit is refused at construction, so there are no outer-orbit sites.
         for name, spec in _ecc_sites(self.orbit, self.ecc_max):
             place(name, spec)
-        if self.orbit.outer is not None:
-            place("period_out", _coerce_spec(self.orbit.outer.period, "outer period"))
-            place("t_conj_out", _coerce_spec(self.orbit.outer.t_conj, "outer t_conj"))
-            place("k_out", _vector_spec(self.orbit.outer.k, 2, "outer k"))
-            for name, spec in _ecc_sites(self.orbit.outer, self.ecc_max, suffix="_out"):
-                place(name, spec)
 
         _place_hyperparameters(self, priors, init)
         _place_noise_correlation(self, priors, init, fixed)
@@ -1499,9 +1587,11 @@ class Disentangler:
 
     def _refuse_anchored_lsf(self, what: str) -> None:
         """Reject a wavelength-dependent LSF: ``k2_scan`` takes one width per instrument."""
-        anchored = [
-            key for key, value in self.lsf.items() if _coerce_lsf(value, key).anchors_angstrom
-        ]
+        anchored = []
+        for key, value in self.lsf.items():
+            anchors = _coerce_lsf(value, key).anchors_angstrom
+            if anchors is not None and len(anchors) > 0:
+                anchored.append(key)
         if anchored:
             raise ValueError(
                 f"{what}() takes one line-spread width per instrument, but {anchored} "
@@ -1509,6 +1599,25 @@ class Disentangler:
                 "the first anchor. Declare a single representative sigma for the scan, or "
                 "use albireo.k2_scan directly."
             )
+
+    def _refuse_correlated_noise(self, what: str) -> None:
+        """Reject a correlated noise model: ``k2_scan`` evaluates the diagonal one only.
+
+        A declared correlation of zero is the diagonal model and is accepted.
+        """
+        if self.noise_correlation is None:
+            return
+        held = self._declared_noise_correlation()
+        if held is not None and all(value == 0.0 for value in held.values()):
+            return
+        raise ValueError(
+            f"{what}() evaluates the likelihood with independent pixel noise "
+            "(albireo.k2_scan has no AR(1) noise model), but this declaration has "
+            f"noise_correlation={self.noise_correlation!r}. Under correlated noise a "
+            "white-noise scan over-counts the residuals, and a threshold calibrated with it "
+            "understates the false-alarm rate. Declare noise_correlation=None to scan "
+            "under the diagonal model."
+        )
 
     def assumptions(self) -> str:
         """Report every declared quantity that the data cannot constrain.
@@ -1538,18 +1647,15 @@ class Disentangler:
                 "unidentified,\n      so what these have to be right about is the "
                 "epoch-to-epoch pattern, not the level."
             )
-        nebular = next((c for c in self.components if isinstance(c, Nebular)), None)
+        nebular = self._nebular
         if nebular is not None:
             rows.append(
                 f"  nebular velocity   {nebular.v_kms:g} km/s\n"
                 "      unidentified: a placement convention for the window profile, not a "
                 "measurement."
             )
-        if self.noise_correlation is not None and not isinstance(self.noise_correlation, Spec):
-            values = self.noise_correlation_per_epoch()
-            by_instrument: dict[str, float] = {}
-            for epoch, phi in zip(self.dataset, values, strict=True):
-                by_instrument.setdefault(epoch.instrument, float(phi))
+        by_instrument = self._declared_noise_correlation()
+        if by_instrument is not None:
             listed = "  ".join(f"{k}={v:.3f}" for k, v in by_instrument.items())
             rows.append(
                 f"  noise correlation  {listed}\n"
@@ -1656,7 +1762,11 @@ class Disentangler:
                 init["t_conj"] = scan.best
             if ranged:
                 amplitude_scan = scanner._scan_semi_amplitudes(init)
+                # Whether either pass of the scan moved the start. The second pass is
+                # measured from the first pass's best, so its gain alone does not say.
+                moved = False
                 if amplitude_scan is not None and amplitude_scan.gain > 0.0:
+                    moved = True
                     init["k"] = jnp.asarray(amplitude_scan.best)
                     if self.orbit.t_conj == "scan":
                         init["t_conj"] = amplitude_scan.best_t_conj
@@ -1671,13 +1781,13 @@ class Disentangler:
                         j: c for j, c in profile.items() if abs(math.log(c)) >= math.log(2.0)
                     }
                     if adapted:
-                        names = [c.name for c in self.ordered_components]
                         log_tau = np.array(init["log_tau"], dtype=float)
                         log_eta = np.array(init["log_eta"], dtype=float)
                         for j, c in adapted.items():
-                            row = names.index(self.stars[j].name)
-                            log_tau[row] -= 2.0 * math.log(c)
-                            log_eta[row] -= 2.0 * math.log(c)
+                            # Star j is model row j: the stars occupy the first rows of
+                            # ordered_components, ahead of a telluric or nebular row.
+                            log_tau[j] -= 2.0 * math.log(c)
+                            log_eta[j] -= 2.0 * math.log(c)
                         init["log_tau"] = jnp.asarray(log_tau)
                         # A declared bound on eta holds for the adapted start as well.
                         init["log_eta"] = jnp.asarray(_above_floor(log_eta, self._log_eta_floor()))
@@ -1706,10 +1816,11 @@ class Disentangler:
                                 ),
                             )
                             if second.gain > 0.0:
+                                moved = True
                                 init["k"] = jnp.asarray(second.best)
                                 if self.orbit.t_conj == "scan":
                                     init["t_conj"] = second.best_t_conj
-                if amplitude_scan is not None and amplitude_scan.gain > 0.0:
+                if moved:
                     if self.orbit.t_conj == "scan":
                         # The joint scan located the phase coarsely. The fine phase scan
                         # at the chosen semi-amplitudes refines it.
@@ -1799,8 +1910,7 @@ class Disentangler:
         ``init`` values. The ``c`` with the highest marginal log-likelihood is returned.
         This takes nine evaluations per star through the compiled marginal.
         """
-        theta = {k: jnp.asarray(v) for k, v in init.items()}
-        theta.update({k: jnp.asarray(v) for k, v in self.fixed.items()})
+        theta = self._theta_at(init)
         lights = np.array([s.light for s in self.stars], dtype=float)
         n = max(3, math.ceil(2.0 * math.log(span) / math.log(ratio)) + 1)
         grid = np.geomspace(1.0 / span, span, n)
@@ -1822,6 +1932,16 @@ class Disentangler:
             out[j] = float(trials[int(np.argmax(np.where(np.isfinite(values), values, -np.inf)))])
         return out
 
+    def _theta_at(self, init) -> dict:
+        """``init`` with the fixed sites added, as JAX arrays: the ``theta`` of the scans."""
+        theta = {k: jnp.asarray(v) for k, v in init.items()}
+        theta.update({k: jnp.asarray(v) for k, v in self.fixed.items()})
+        return theta
+
+    def _start_period(self, init) -> float:
+        """The period at which the scans run: the start in ``init``, or the fixed value."""
+        return _largest(init.get("period", self.fixed.get("period")))
+
     def _scan_phase(self, init) -> PhaseScan:
         """Locate conjunction on a 42-point grid over one period, before optimizing.
 
@@ -1836,11 +1956,9 @@ class Disentangler:
         The marginal likelihood is sharply multimodal in phase, and L-BFGS does not cross
         between the troughs.
         """
-        declared = init.get("period", self.fixed.get("period"))
-        period = float(np.max(np.atleast_1d(np.asarray(declared))))
+        period = self._start_period(init)
         trials = float(np.min(self.dataset.bjd)) + np.linspace(0.0, period, 42, endpoint=False)
-        theta = {k: jnp.asarray(v) for k, v in init.items()}
-        theta.update({k: jnp.asarray(v) for k, v in self.fixed.items()})
+        theta = self._theta_at(init)
         # The trials are evaluated one at a time through the already-compiled marginal
         # rather than in a batched sweep. A 42-wide sweep is one more large XLA compile
         # per model shape, and on Windows a long session of compiles has ended in a heap
@@ -1932,12 +2050,10 @@ class Disentangler:
             lo, hi = ranges[i]
             inner = (lo + 0.02 * (hi - lo), hi - 0.02 * (hi - lo))
             bounds[i] = (max(inner[0], 1e-3 * hi), inner[1])
-        declared = init.get("period", self.fixed.get("period"))
-        period = float(np.max(np.atleast_1d(np.asarray(declared))))
+        period = self._start_period(init)
         t_conj = float(np.asarray(init.get("t_conj", self.fixed.get("t_conj")), dtype=float))
         scanning_phase = self.orbit.t_conj == "scan"
-        theta = {k: jnp.asarray(v) for k, v in init.items()}
-        theta.update({k: jnp.asarray(v) for k, v in self.fixed.items()})
+        theta = self._theta_at(init)
         theta["t_conj"] = jnp.asarray(t_conj)
         history: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
 
@@ -2228,29 +2344,16 @@ class Disentangler:
         ValueError
             If the declaration has no :class:`Orbit`, does not have exactly two stars,
             does not declare the companion's ``k`` as :class:`Scanned` and the primary's
-            as :class:`Fixed` or :class:`Known`, or declares a wavelength-dependent LSF.
+            as :class:`Fixed` or :class:`Known`, declares a wavelength-dependent LSF, or
+            declares a nonzero ``noise_correlation``. The scan evaluates the diagonal
+            noise model only.
         """
         from albireo.scan import k2_scan
 
-        k1, k2 = self._scan_k()
-        self._refuse_anchored_lsf("scan")
-        lsf_sigma = {k: _coerce_lsf(v, k).sigma_kms for k, v in self.lsf.items()}
         return k2_scan(
             self.grid,
             self.dataset,
-            orbit=self._scan_orbit(),
-            k1=float(np.asarray(k1.start())),
-            k2_grid=np.asarray(k2.values, dtype=float),
-            light_fractions=[s.light for s in self.stars],
-            lsf_sigma_v=lsf_sigma,
-            prior=self.smoothness_prior,
-            v_rel_max_kms=self.velocity_budget.total,
-            k1_sigma=float(np.asarray(k1.sigma)) if isinstance(k1, Known) else None,
-            telluric=any(isinstance(c, Telluric) for c in self.components),
-            nebular=any(isinstance(c, Nebular) for c in self.components),
-            nebular_v_kms=next(
-                (float(c.v_kms) for c in self.components if isinstance(c, Nebular)), 0.0
-            ),
+            **self._k2_scan_kwargs("scan"),
             block_size=block_size if block_size is not None else self.block_size,
             sweep_batch=sweep_batch,
         )
@@ -2276,12 +2379,36 @@ class Disentangler:
         ------
         ValueError
             Under the same conditions as :meth:`scan`.
+        TypeError
+            If ``kwargs`` names an argument that the declaration supplies, such as
+            ``orbit`` or ``k1``.
         """
         from albireo.calibrate import detection_limit
 
+        scan_kwargs = self._k2_scan_kwargs("detection_limit")
+        clash = sorted(set(scan_kwargs) & set(kwargs))
+        if clash:
+            raise TypeError(
+                f"detection_limit() takes {clash} from the declaration, so that the "
+                "calibration scans with the arguments of scan(); change the declaration "
+                "instead"
+            )
+        # A block size passed by the caller takes precedence over the declaration's.
+        if self.block_size is not None:
+            kwargs.setdefault("block_size", self.block_size)
+        return detection_limit(self.grid, self.dataset, **scan_kwargs, **kwargs)
+
+    def _k2_scan_kwargs(self, what: str) -> dict[str, Any]:
+        """The arguments that :meth:`scan` and :meth:`detection_limit` pass to the K2 scan.
+
+        Both methods take them from here, so the calibration scans with the arguments of
+        the scan it calibrates. ``what`` names the calling method in the error messages.
+        """
         k1, k2 = self._scan_k()
-        self._refuse_anchored_lsf("detection_limit")
-        scan_kwargs = {
+        self._refuse_anchored_lsf(what)
+        self._refuse_correlated_noise(what)
+        nebular = self._nebular
+        return {
             "orbit": self._scan_orbit(),
             "k1": float(np.asarray(k1.start())),
             "k2_grid": np.asarray(k2.values, dtype=float),
@@ -2289,17 +2416,11 @@ class Disentangler:
             "lsf_sigma_v": {k: _coerce_lsf(v, k).sigma_kms for k, v in self.lsf.items()},
             "prior": self.smoothness_prior,
             "v_rel_max_kms": self.velocity_budget.total,
+            "k1_sigma": float(np.asarray(k1.sigma)) if isinstance(k1, Known) else None,
+            "telluric": self._has_telluric,
+            "nebular": nebular is not None,
+            "nebular_v_kms": 0.0 if nebular is None else float(nebular.v_kms),
         }
-        if isinstance(k1, Known):
-            scan_kwargs["k1_sigma"] = float(np.asarray(k1.sigma))
-        scan_kwargs["telluric"] = any(isinstance(c, Telluric) for c in self.components)
-        scan_kwargs["nebular"] = any(isinstance(c, Nebular) for c in self.components)
-        scan_kwargs["nebular_v_kms"] = next(
-            (float(c.v_kms) for c in self.components if isinstance(c, Nebular)), 0.0
-        )
-        if self.block_size is not None:
-            scan_kwargs.setdefault("block_size", self.block_size)
-        return detection_limit(self.grid, self.dataset, **scan_kwargs, **kwargs)
 
 
 # -- results ------------------------------------------------------------------
@@ -4308,6 +4429,11 @@ def _start_of(spec) -> Any:
     return _coerce_spec(spec, "spec").start()
 
 
+def _largest(value) -> float:
+    """The largest entry of a scalar or array value, as a float."""
+    return float(np.max(np.atleast_1d(np.asarray(value))))
+
+
 def _hyper_of(params: Mapping, names: Sequence[str]) -> dict[str, dict[str, float]]:
     """The fitted hyperparameters, keyed by component name and in linear units."""
     tau = np.exp(np.atleast_1d(np.asarray(params["log_tau"], dtype=float)))
@@ -4355,6 +4481,7 @@ def _smoothing_notes(smoothing, resolving_power) -> list[str]:
 
 def _has_scanned(value) -> bool:
     """Whether a declared semi-amplitude includes a scan axis."""
+    value = _as_k(value)
     if isinstance(value, Scanned):
         return True
     if isinstance(value, Spec):
@@ -4363,7 +4490,12 @@ def _has_scanned(value) -> bool:
 
 
 def _vector_spec(value, n: int, what: str) -> Spec:
-    """A spec for a vector-valued site, declared either as one spec or as a sequence."""
+    """A spec for a vector-valued site, declared either as one spec or as a sequence.
+
+    A bare number is ``Fixed``; for a single star it gives a scalar site.
+    """
+    if isinstance(value, int | float):
+        return _coerce_spec(value, what)
     if isinstance(value, Spec):
         return value
     specs = [_coerce_spec(item, f"each entry of {what}") for item in value]

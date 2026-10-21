@@ -1213,3 +1213,217 @@ def test_zero_points_that_move_a_window_off_its_own_velocities_are_refused(
     # A declared window is used as given, whatever the zero points are.
     fit.measure_velocities(templates=templates, v_range=(-300.0, 300.0))
     assert captured_todcor["v_range"] == (-300.0, 300.0)
+
+
+# -- defects found by the 2026-10-20 review ------------------------------------
+#
+# Each test below failed on the code before the review. The fits are stubbed where only
+# the bookkeeping around the scans is under test, so that nothing is compiled.
+
+
+class _ReachedRunMap(Exception):
+    """Raised in place of the optimizer by the stubbed fits below."""
+
+
+def _stub_the_scans(monkeypatch, *, gains, profile):
+    """Replace the scans and the optimizer of `fit` with records of how they were called.
+
+    The n-th semi-amplitude scan gains ``gains[n]`` nats, and a scan that gains moves every
+    semi-amplitude by a factor of 1.5.
+    """
+    facade = importlib.import_module("albireo.facade")
+    calls = {"phase": [], "amplitude": [], "init": None}
+
+    def phase(self, init):
+        calls["phase"].append(np.array(init["k"], dtype=float))
+        first = float(np.min(np.asarray(self.dataset.bjd)))
+        return facade.PhaseScan(
+            period=6.0, trials=np.array([first]), values=np.array([0.0]), best=first + 1.0
+        )
+
+    def amplitude(self, init):
+        start = np.array(init["k"], dtype=float)
+        gain = gains[len(calls["amplitude"])]
+        calls["amplitude"].append(start)
+        best = 1.5 * start if gain > 0.0 else start
+        first = float(np.min(np.asarray(self.dataset.bjd)))
+        return facade.SemiAmplitudeScan(
+            k=best[None, :],
+            t_conj=np.array([first + 2.0]),
+            values=np.array([gain]),
+            best=best,
+            best_t_conj=first + 2.0,
+            best_value=gain,
+            start=start,
+            start_value=0.0,
+        )
+
+    def run_map(model, *, init, **kwargs):
+        calls["init"] = {key: np.asarray(value) for key, value in init.items()}
+        raise _ReachedRunMap
+
+    monkeypatch.setattr(facade.Disentangler, "_scan_phase", phase)
+    monkeypatch.setattr(facade.Disentangler, "_scan_semi_amplitudes", amplitude)
+    monkeypatch.setattr(
+        facade.Disentangler, "_profile_prior_amplitudes", lambda self, init, **kw: dict(profile)
+    )
+    monkeypatch.setattr(facade, "run_map", run_map)
+    return calls
+
+
+def test_an_adapted_prior_amplitude_moves_only_the_star_rows(dataset, monkeypatch):
+    """The adaptation reached a telluric row by name, and a Telluric has no name."""
+    calls = _stub_the_scans(monkeypatch, gains=[40.0, 40.0], profile={0: 1.0, 1: 4.0})
+    dis = _dis(_air(dataset), components=[*_stars(), ab.Telluric()])
+    with pytest.raises(_ReachedRunMap):
+        dis.fit(max_steps=1)
+    shift = calls["init"]["log_tau"] - np.asarray(dis.init["log_tau"])
+    np.testing.assert_allclose(shift, [0.0, -2.0 * np.log(4.0), 0.0])
+    shift = calls["init"]["log_eta"] - np.asarray(dis.init["log_eta"])
+    np.testing.assert_allclose(shift, [0.0, -2.0 * np.log(4.0), 0.0])
+
+
+def test_the_phase_is_rescanned_when_only_the_first_scan_pass_moved(dataset, monkeypatch):
+    """The second pass is measured from the first pass's best, so its gain alone does not
+    say whether the start moved. With the first pass moving the semi-amplitudes and the
+    adapted pass holding them, the phase must still be rescanned at the new values."""
+    calls = _stub_the_scans(monkeypatch, gains=[40.0, 0.0], profile={0: 1.0, 1: 4.0})
+    dis = _dis(dataset)
+    declared = np.array(dis.init["k"], dtype=float)
+    with pytest.raises(_ReachedRunMap):
+        dis.fit(max_steps=1)
+    assert len(calls["amplitude"]) == 2
+    assert len(calls["phase"]) == 2, "the phase scan at the chosen semi-amplitudes did not run"
+    np.testing.assert_allclose(calls["phase"][0], declared)
+    np.testing.assert_allclose(calls["phase"][1], 1.5 * declared)
+    np.testing.assert_allclose(calls["init"]["k"], 1.5 * declared)
+
+
+def test_a_constant_offset_between_the_stars_is_still_a_cold_start(dataset):
+    """The model removes one zero point per star, so per-star constants separate nothing."""
+    n = dataset.n_epochs
+    with pytest.raises(ValueError, match="never separate the components"):
+        _dis(dataset, orbit=None, velocities=np.stack([np.full(n, 20.0), np.full(n, -20.0)]))
+    # An unresolved pattern is not hidden by large per-star offsets.
+    barely = np.stack([np.zeros(n) + 40.0, np.linspace(0.0, 1.0, n) - 40.0])
+    with pytest.warns(RuntimeWarning, match="below the widest LSF sigma"):
+        _dis(dataset, orbit=None, velocities=barely)
+
+
+def test_a_single_valued_semi_amplitude_for_two_stars_is_refused(dataset):
+    """A scalar spec built a scalar k site, which failed at the first likelihood evaluation."""
+    with pytest.raises(ValueError, match="one entry per star"):
+        _dis(dataset, orbit=_orbit(k=ab.Between(10.0, 90.0)))
+    with pytest.raises(ValueError, match="one entry per star"):
+        _dis(dataset, orbit=_orbit(k=40.0))
+    # A bare number is Fixed, as everywhere else, and is valid for a single star.
+    single = _dis(dataset, components=[ab.Star("only", light=1.0)], orbit=_orbit(k=40.0))
+    assert float(np.asarray(single.fixed["k"])) == 40.0 and "k" not in single.priors
+    assert single.velocity_budget.terms[0][1] == pytest.approx(40.0)
+
+
+def test_one_vector_range_is_scanned_per_star_whichever_field_is_the_vector():
+    """Between([10, 5], 90) has two entries although its upper bound is a scalar."""
+    from albireo.facade import _k_specs, _range_bounds
+
+    specs = _k_specs(_orbit(k=ab.Between([10.0, 5.0], 90.0)), 2)
+    assert [_range_bounds(s) for s in specs] == [(10.0, 90.0), (5.0, 90.0)]
+    assert sum(s.upper() for s in specs) == pytest.approx(180.0)
+
+
+def _k2_declaration(dataset, **kwargs):
+    orbit = ab.Orbit(
+        period=ab.Fixed(6.0),
+        t_conj=ab.Fixed(0.5),
+        ecc=ab.Fixed(0.0),
+        k=[ab.Fixed(40.0), ab.Scanned(np.arange(20.0, 60.0, 10.0))],
+    )
+    options = {
+        "components": [ab.Star("a", light=0.97), ab.Star("b", light=0.03)],
+        "orbit": orbit,
+        "lsf": {"DEMO": 6.5},
+    }
+    return ab.Disentangler(dataset, **{**options, **kwargs})
+
+
+def test_a_scan_refuses_a_correlated_noise_model_it_cannot_evaluate(dataset):
+    """k2_scan has no AR(1) noise model; the declared correlation was dropped silently."""
+    dis = _k2_declaration(dataset, noise_correlation={"DEMO": 0.3})
+    with pytest.raises(ValueError, match="no AR\\(1\\) noise model"):
+        dis.scan()
+    with pytest.raises(ValueError, match="no AR\\(1\\) noise model"):
+        dis.detection_limit(k2_true=40.0, ell2_grid=[0.1])
+    fitted = _k2_declaration(dataset, noise_correlation=ab.Between(-0.9, 0.9))
+    with pytest.raises(ValueError, match="no AR\\(1\\) noise model"):
+        fitted.scan()
+    # A zero correlation is the diagonal model, which the scan does evaluate.
+    _k2_declaration(dataset, noise_correlation=0.0)._refuse_correlated_noise("scan")
+
+
+def test_the_callers_block_size_reaches_the_calibration(dataset, monkeypatch):
+    """The declaration's block size was inserted before the caller's, which then collided."""
+    calibrate = importlib.import_module("albireo.calibrate")
+    seen = {}
+
+    def spy(grid, dataset, **kwargs):
+        seen.clear()
+        seen.update(kwargs)
+        return "limit"
+
+    monkeypatch.setattr(calibrate, "detection_limit", spy)
+    dis = _k2_declaration(dataset, block_size=64)
+    assert dis.detection_limit(block_size=32, k2_true=40.0, ell2_grid=[0.1]) == "limit"
+    assert seen["block_size"] == 32
+    dis.detection_limit(k2_true=40.0, ell2_grid=[0.1])
+    assert seen["block_size"] == 64
+    assert seen["k1"] == 40.0 and seen["k1_sigma"] is None
+    with pytest.raises(TypeError, match="from the declaration"):
+        dis.detection_limit(k1=41.0, k2_true=40.0, ell2_grid=[0.1])
+
+
+def test_a_velocity_declaration_without_an_lsf_names_the_instrument(dataset, truth):
+    """The velocity check read the LSF before the missing-LSF check had run."""
+    with pytest.raises(ValueError, match="no LSF declared"):
+        _dis(dataset, orbit=None, velocities=_measured(truth), lsf={"OTHER": 6.5})
+
+
+def test_anchors_given_as_an_array_are_refused_by_the_scan(dataset):
+    """The truth value of an array of anchors is ambiguous, which raised the wrong error."""
+    lsf = ab.LSF([6.0, 7.0], anchors_angstrom=np.array([4500.0, 4560.0]))
+    dis = _k2_declaration(dataset, lsf={"DEMO": lsf})
+    with pytest.raises(ValueError, match="one line-spread width per instrument"):
+        dis.scan()
+
+
+def test_a_fixed_noise_correlation_is_reported_as_held(dataset):
+    """Fixed(phi) holds the site, as a bare number does, and is an assumption."""
+    dis = _dis(dataset, noise_correlation=ab.Fixed(0.3))
+    assert float(np.asarray(dis.fixed["ar1_phi"])) == pytest.approx(0.3)
+    assert "ar1_phi" not in dis.priors
+    np.testing.assert_allclose(dis.noise_correlation_per_epoch(), 0.3)
+    assert "(declared)" in dis._noise_line() and "fitted" not in dis._noise_line()
+    assert "noise correlation  DEMO=0.300" in dis.assumptions()
+    fitted = _dis(dataset, noise_correlation=ab.Between(-0.9, 0.9))
+    assert fitted.noise_correlation_per_epoch() is None and "fitted" in fitted._noise_line()
+
+
+def test_declared_velocities_are_copied(dataset, truth):
+    """The budget, grid and model are built once, from the table as it was declared."""
+    v = _measured(truth)
+    dis = _dis(dataset, orbit=None, velocities=v)
+    budget = dis.velocity_budget.total
+    v[:] = 0.0
+    assert np.ptp(dis.velocities) > 0.0
+    assert dis.velocity_budget.total == budget
+    with pytest.raises(ValueError, match="read-only"):
+        dis.velocities[0, 0] = 1.0
+
+
+def test_smoothness_starts_must_be_positive(dataset):
+    """ln(0) is -inf and a negative width is not a normal distribution."""
+    for bad in ({"tau0": 0.0}, {"eta0": -1.0}, {"sigma": 0.0}, {"tau0": float("nan")}):
+        with pytest.raises(ValueError, match="finite positive"):
+            ab.Smoothness(**bad)
+    with pytest.raises(ValueError, match=r"within \[-1, 1\]"):
+        _dis(dataset, noise_correlation=ab.Between(-1.5, 0.9))
+    assert "ar1_phi" in _dis(dataset, noise_correlation=ab.Between(-1.0, 1.0)).priors
