@@ -710,7 +710,9 @@ def test_the_candidate_periods_share_one_coarse_model_with_identical_values(tmp_
     trial = _table_orbit_trial(dict(dis2.init), orbit2, spec2, ctx.settings)
     values = []
     assert compilations(lambda: values.append(_coarse_marginal(second, trial))) == 0
-    own = dis2._scan_declaration()  # the same declaration with a model of its own
+    # The same declaration with a model of its own: a copy of the declaration, since
+    # dis2 keeps the coarse declaration it built, whose model is now the shared one.
+    own = replace(dis2)._scan_declaration()
     assert own.model is not first.model
     assert values[0] == _coarse_marginal(own, trial)
     init = dict(dis2.init)

@@ -1240,7 +1240,10 @@ def test_stars_on_one_library_share_its_projection_and_epochs_are_prepared_once(
 
     monkeypatch.setattr(module, "library_interpolator", counted_interpolator)
     monkeypatch.setattr(module, "_prepare_epoch", counted_prepare)
-    assert library.normalized.flags.writeable  # nothing of it is kept between calls
+    # synthetic_library returns read-only arrays, which the library caches keep between
+    # calls; a writable copy of one array leaves nothing of the library kept.
+    library = dataclasses.replace(library, normalized=np.array(library.normalized))
+    assert library.normalized.flags.writeable
     _fit(binary, library, max_passes=2)
     assert len(built) == 1
     assert len(prepared) == len(set(prepared)) <= binary[0].n_epochs
