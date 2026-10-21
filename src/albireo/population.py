@@ -37,9 +37,12 @@ Winn, J. N. 2010, in Exoplanets, ed. S. Seager (Tucson: University of Arizona Pr
 
 from __future__ import annotations
 
+import csv
 import dataclasses
+import io
 import json
 import math
+import re
 import urllib.parse
 import urllib.request
 from collections.abc import Iterable, Mapping, Sequence
@@ -77,6 +80,11 @@ _KEPLER_A_RSUN = 4.208  # a / Rsun = 4.208 (M / Msun)^(1/3) (P / d)^(2/3), IAU 2
 _SYNCHRONOUS_KMS = 2.0 * math.pi * _RSUN_M / _DAY_S / 1e3  # 50.593 km/s per (R/Rsun)/(P/d)
 _LOGG_SUN = 4.438  # log10 of the solar surface gravity in cgs
 _TEFF_SUN = 5772.0
+# The system G of the Gaia DR3 double-lined sample: mean and standard deviation of a normal
+# distribution, clipped to the sample's range. Also the systemic-velocity dispersion.
+_G_MAG_MEAN_SD = (9.8, 1.3)
+_G_MAG_RANGE = (5.0, 12.2)
+_GAMMA_SIGMA_KMS = 30.0
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +283,7 @@ def _isotonic_rows(rows) -> np.ndarray:
     """
     table = np.array([row[1:] for row in rows], dtype=np.float64)
     order = np.argsort(table[:, 7])
-    kept = []
+    kept: list[np.ndarray] = []
     for index in order:
         row = table[index]
         if kept and not (row[7] > kept[-1][7] and row[0] > kept[-1][0] and row[6] < kept[-1][6]):
@@ -287,6 +295,7 @@ def _isotonic_rows(rows) -> np.ndarray:
 _MAMAJEK_BY_MASS = _isotonic_rows(_MAMAJEK_ROWS)  # increasing in mass
 _MAMAJEK_LOGM = np.log10(_MAMAJEK_BY_MASS[:, 7])
 _MAMAJEK_LOGT = np.log10(_MAMAJEK_BY_MASS[:, 0])
+_MAMAJEK_G_MINUS_V = _MAMAJEK_BY_MASS[:, 6] - _MAMAJEK_BY_MASS[:, 3]  # M_G - M_V
 
 # Eker et al. (2018) Table 4: log L = a log M + b over six mass domains, and Table 5: the
 # mass-radius relation below 1.5 Msun and the mass-temperature relation above it. The third
@@ -302,11 +311,21 @@ _EKER_MLR = (
 
 
 def _eker_log_luminosity(mass: float) -> float:
-    for lo, hi, a, b in _EKER_MLR:
-        if lo < mass <= hi or (mass <= lo and lo == _EKER_MLR[0][0]):
+    """``log L / Lsun`` of Eker et al. (2018) Table 4.
+
+    The domains are contiguous, so the first one whose upper bound is not below the mass
+    applies. The first relation extends below 0.179 Msun and the last above 31 Msun.
+    """
+    for _, hi, a, b in _EKER_MLR:
+        if mass <= hi:
             return a * math.log10(mass) + b
-    lo, hi, a, b = _EKER_MLR[-1]
+    _, _, a, b = _EKER_MLR[-1]
     return a * math.log10(mass) + b
+
+
+def _eker_log_teff(mass: float) -> float:
+    """``log Teff`` of the Eker et al. (2018) mass-temperature relation (above 1.5 Msun)."""
+    return -0.170 * math.log10(mass) ** 2 + 0.888 * math.log10(mass) + 3.671
 
 
 @dataclasses.dataclass(frozen=True)
@@ -394,7 +413,7 @@ class MainSequence:
         if mass < 1.5:
             return 0.438 * mass**2 + 0.479 * mass + 0.075
         log_l = _eker_log_luminosity(mass)
-        log_t = -0.170 * math.log10(mass) ** 2 + 0.888 * math.log10(mass) + 3.671
+        log_t = _eker_log_teff(mass)
         return math.sqrt(10**log_l) * (_TEFF_SUN / 10**log_t) ** 2
 
     @staticmethod
@@ -403,7 +422,7 @@ class MainSequence:
             log_l = _eker_log_luminosity(mass)
             radius = MainSequence._eker_radius(mass)
             return _TEFF_SUN * (10**log_l / radius**2) ** 0.25
-        return 10 ** (-0.170 * math.log10(mass) ** 2 + 0.888 * math.log10(mass) + 3.671)
+        return 10 ** _eker_log_teff(mass)
 
 
 # ---------------------------------------------------------------------------
@@ -427,6 +446,36 @@ def _f_logp(m1: float, logp: float) -> float:
     if logp < 5.5:
         return b + alpha * dlogp + (logp - 2.7 - dlogp) / (2.8 - dlogp) * (c - b - alpha * dlogp)
     return c * math.exp(-0.3 * (logp - 5.5))
+
+
+def _f_logp_grid(m1: float, logp: np.ndarray) -> np.ndarray:
+    """:func:`_f_logp` on an array of ``log P``, with the same value at every element.
+
+    The four linear segments are evaluated as array expressions in the scalar function's
+    order of operations. The exponential tail beyond ``log P = 5.5`` is evaluated element
+    by element with :func:`math.exp`, whose result can differ from :func:`numpy.exp` in the
+    last bit.
+    """
+    lp = np.asarray(logp, dtype=np.float64)
+    lm = math.log10(m1)
+    a = 0.020 + 0.04 * lm + 0.07 * lm**2
+    b = 0.039 + 0.07 * lm + 0.01 * lm**2
+    c = 0.078 - 0.05 * lm + 0.04 * lm**2
+    alpha, dlogp = 0.018, 0.7
+    density = np.select(
+        [lp < 1.0, lp < 2.7 - dlogp, lp < 2.7 + dlogp, lp < 5.5],
+        [
+            np.full_like(lp, a),
+            a + (lp - 1.0) / (1.7 - dlogp) * (b - a - alpha * dlogp),
+            b + alpha * (lp - 2.7),
+            b + alpha * dlogp + (lp - 2.7 - dlogp) / (2.8 - dlogp) * (c - b - alpha * dlogp),
+        ],
+        default=0.0,
+    )
+    tail = ~(lp < 5.5)
+    if np.any(tail):
+        density[tail] = [c * math.exp(-0.3 * (value - 5.5)) for value in lp[tail].tolist()]
+    return density
 
 
 def _gamma_largeq(m1: float, logp: float) -> float:
@@ -729,7 +778,12 @@ def _jsonable(value):
 
 
 class _ContinuumRatio:
-    """The RVS-band continuum of a library at a label point, cached per library."""
+    """The RVS-band continuum of a library at a label point.
+
+    The library is sliced to the band and its interpolator built once, when the instance is
+    made. A population draw makes one instance and evaluates it for every system;
+    :func:`rvs_light_ratio` makes one per call.
+    """
 
     def __init__(self, library, band=RVS_BAND):
         from albireo.library import library_interpolator
@@ -777,6 +831,19 @@ def rvs_light_ratio(library, labels1, labels2, radius_ratio: float) -> float:
 # ---------------------------------------------------------------------------
 
 
+def _system_g_minus_rp(sequence: MainSequence, m1, m2) -> float:
+    """G - G_RP of a pair on the sequence: the two stars' fluxes added in G and in G_RP.
+
+    With ``f_2`` the secondary's G flux relative to the primary's, the system colour is
+    ``2.5 log10((10^(0.4 c_1) + f_2 10^(0.4 c_2)) / (1 + f_2))`` for the stellar colours
+    ``c_1`` and ``c_2``. A faint companion therefore moves it little.
+    """
+    gr1, gr2 = float(sequence.g_minus_rp(m1)), float(sequence.g_minus_rp(m2))
+    f_g2 = 10 ** (-0.4 * (float(sequence.absolute_g(m2)) - float(sequence.absolute_g(m1))))
+    f_rp1, f_rp2 = 10 ** (0.4 * gr1), f_g2 * 10 ** (0.4 * gr2)
+    return float(2.5 * math.log10((f_rp1 + f_rp2) / (1.0 + f_g2)))
+
+
 def _draw_mass(rng, lo: float, hi: float, sequence=None, slope: float = -2.3) -> float:
     """A primary mass on ``[lo, hi]`` from the IMF ``dN/dm ~ m^slope``.
 
@@ -797,8 +864,7 @@ def _draw_mass(rng, lo: float, hi: float, sequence=None, slope: float = -2.3) ->
 
 def _draw_period(rng, m1: float, lo: float, hi: float) -> float:
     grid = np.linspace(math.log10(lo), math.log10(hi), 400)
-    pdf = np.array([_f_logp(m1, lp) for lp in grid])
-    return float(10 ** _sample_from_pdf(rng, grid, pdf))
+    return float(10 ** _sample_from_pdf(rng, grid, _f_logp_grid(m1, grid)))
 
 
 def _draw_mass_ratio(rng, m1: float, logp: float, q_min: float) -> float:
@@ -954,10 +1020,11 @@ def draw_population(
         m2 = q * m1
         if m2 < m_lo:
             continue
+        absolute_g1, absolute_g2 = sequence.absolute_g(m1), sequence.absolute_g(m2)
         if mass_weighting == "magnitude":
             # The pair is kept in proportion to the volume its combined light reaches,
             # relative to the twin, which reaches furthest.
-            delta = float(sequence.absolute_g(m2)) - float(sequence.absolute_g(m1))
+            delta = float(absolute_g2) - float(absolute_g1)
             if rng.uniform() > ((1.0 + 10.0 ** (-0.4 * delta)) / 2.0) ** 1.5:
                 continue
         ecc = _sample_eccentricity(rng, m1, period)
@@ -991,13 +1058,9 @@ def draw_population(
                 * math.exp(ratio.log_continuum(labels2) - ratio.log_continuum(labels1))
             )
         else:
-            light_ratio = float(10 ** (-0.4 * (sequence.absolute_g(m2) - sequence.absolute_g(m1))))
+            light_ratio = float(10 ** (-0.4 * (absolute_g2 - absolute_g1)))
         g_sys = float(np.clip(rng.normal(g_mag[0], g_mag[1]), g_mag_range[0], g_mag_range[1]))
-        # The system colour: flux-weighted in G and RP, from the G-band ratio of the sequence.
-        gr1, gr2 = float(sequence.g_minus_rp(m1)), float(sequence.g_minus_rp(m2))
-        f_g2 = 10 ** (-0.4 * (float(sequence.absolute_g(m2)) - float(sequence.absolute_g(m1))))
-        f_rp1, f_rp2 = 10 ** (0.4 * gr1), f_g2 * 10 ** (0.4 * gr2)
-        g_rp = float(2.5 * math.log10((f_rp1 + f_rp2) / (1.0 + f_g2)))
+        g_rp = _system_g_minus_rp(sequence, m1, m2)
         grvs = float(predict_grvs(g_sys, g_sys - g_rp))
         if not np.isfinite(grvs):
             continue
@@ -1124,12 +1187,19 @@ def _complete(
     source: str,
     meta: dict,
 ) -> BinarySystem:
-    """Fill what a catalogue row lacks with the parametric prescriptions."""
+    """Fill what a catalogue row lacks with the parametric prescriptions.
+
+    Component 1 of the record is the more massive star. When the catalogue lists the less
+    massive one first, the two are exchanged, and the argument of periastron, which a
+    catalogue gives for its first component, becomes ``omega + pi``.
+    """
     if m2 > m1:  # component 1 is the more massive star
         m1, m2, r1, r2, teff1, teff2 = m2, m1, r2, r1, teff2, teff1
         vsini1, vsini2 = vsini2, vsini1
         if k1 is not None and k2 is not None:
             k1, k2 = k2, k1
+        if omega is not None:
+            omega = (omega + math.pi) % (2.0 * math.pi)
         meta = {**meta, "components_swapped": True}
     if ecc is None:
         ecc = _sample_eccentricity(rng, m1, period)
@@ -1161,17 +1231,18 @@ def _complete(
             (r2 / r1) ** 2 * math.exp(ratio.log_continuum(labels2) - ratio.log_continuum(labels1))
         )
     else:
-        # Outside a library: the Rayleigh-Jeans-like ratio of surface fluxes at 858 nm.
+        # Outside a library: the ratio of blackbody surface fluxes at 858 nm.
         light_ratio = float((r2 / r1) ** 2 * _planck_ratio(teff2, teff1))
     if vsini1 is None:
         vsini1 = _draw_vsini(rng, r1, period, incl, teff1)
     if vsini2 is None:
         vsini2 = _draw_vsini(rng, r2, period, incl, teff2)
     if g_mag is None:
-        g_mag = float(np.clip(rng.normal(9.8, 1.3), 5.0, 12.2))
+        g_mag = float(np.clip(rng.normal(*_G_MAG_MEAN_SD), *_G_MAG_RANGE))
     if g_rp is None:
+        # The colour of the pair, from the sequence at the two stars' temperatures.
         mm1, mm2 = sequence.mass_from_teff(teff1), sequence.mass_from_teff(teff2)
-        g_rp = float(0.5 * (sequence.g_minus_rp(mm1) + sequence.g_minus_rp(mm2)))
+        g_rp = _system_g_minus_rp(sequence, mm1, mm2)
     if grvs is None or not np.isfinite(grvs):
         grvs = float(predict_grvs(g_mag, g_mag - g_rp))
         if not np.isfinite(grvs):
@@ -1185,7 +1256,7 @@ def _complete(
             )[0]
         )
     if gamma is None:
-        gamma = float(rng.normal(0.0, 30.0))
+        gamma = float(rng.normal(0.0, _GAMMA_SIGMA_KMS))
     return BinarySystem(
         name=name,
         m1=float(m1),
@@ -1285,12 +1356,9 @@ def from_debcat(
             teff1, teff2 = 10 ** values["logt1"], 10 ** values["logt2"]
             g_mag = None
             if vmag is not None:
-                # G - V from the sequence at the primary's temperature (the table's M_G - M_V).
-                mass = sequence.mass_from_teff(teff1)
-                g_minus_v = float(
-                    sequence.absolute_g(mass)
-                    - np.interp(np.log10(mass), _MAMAJEK_LOGM, _MAMAJEK_BY_MASS[:, 3])
-                )
+                # G - V of the table (M_G - M_V) at the primary's temperature, for either
+                # relation: the photometry of both comes from the Mamajek table at Teff.
+                g_minus_v = float(np.interp(np.log10(teff1), _MAMAJEK_LOGT, _MAMAJEK_G_MINUS_V))
                 g_mag = float(vmag + g_minus_v)
             systems.append(
                 _complete(
@@ -1341,13 +1409,58 @@ SELECT TOP {limit} nss.source_id, nss.nss_solution_type,
        nss.rv_n_good_obs_primary
 FROM gaiadr3.nss_two_body_orbit AS nss
 JOIN gaiadr3.gaia_source AS s ON nss.source_id = s.source_id
-LEFT JOIN gaiadr3.binary_masses AS bm ON nss.source_id = bm.source_id
+LEFT JOIN gaiadr3.binary_masses AS bm
+       ON nss.source_id = bm.source_id AND bm.m2 IS NOT NULL
 WHERE nss.nss_solution_type IN ('SB2', 'SB2C')
-ORDER BY nss.source_id
+ORDER BY {order}
 """
+_GAIA_SB2_ORDER = {"source_id": "nss.source_id", "random": "s.random_index"}
+_INTEGER_CELL = re.compile(r"[+-]?\d+")
 
 
-def query_gaia_sb2(limit: int = 500, *, timeout: float = 120.0) -> list[dict[str, Any]]:
+def _parse_tap_csv(text: str) -> list[dict[str, Any]]:
+    """The rows of a CSV table returned by a TAP service, one dictionary per row.
+
+    A cell of decimal digits is read as an integer. A Gaia ``source_id`` has up to 19
+    digits, beyond the 2^53 below which a double holds every integer, and a float would
+    replace its low digits. Other numeric cells are read as floats, empty and ``null``
+    cells as ``None``, and any other cell is kept as a string.
+
+    Raises
+    ------
+    ValueError
+        If the response has no header line, or is XML (an error report) rather than CSV.
+    """
+    if text.lstrip().startswith("<"):
+        raise ValueError(
+            "the archive returned XML rather than CSV, usually an error report: "
+            f"{text.strip()[:300]!r}"
+        )
+    records = [cells for cells in csv.reader(io.StringIO(text)) if any(c.strip() for c in cells)]
+    if not records:
+        raise ValueError("the archive returned an empty response (no CSV header)")
+    header = [name.strip() for name in records[0]]
+    rows = []
+    for cells in records[1:]:
+        row: dict[str, Any] = {}
+        for key, cell in zip(header, cells, strict=False):
+            cell = cell.strip()
+            if cell in ("", "null", "NULL"):
+                row[key] = None
+            elif _INTEGER_CELL.fullmatch(cell):
+                row[key] = int(cell)
+            else:
+                try:
+                    row[key] = float(cell)
+                except ValueError:
+                    row[key] = cell
+        rows.append(row)
+    return rows
+
+
+def query_gaia_sb2(
+    limit: int = 500, *, order: str = "source_id", timeout: float = 120.0
+) -> list[dict[str, Any]]:
     """The Gaia DR3 double-lined orbits (``SB2`` and ``SB2C``) with their masses and photometry.
 
     Runs a synchronous, anonymous ADQL query against the Gaia archive (network) and
@@ -1358,11 +1471,34 @@ def query_gaia_sb2(limit: int = 500, *, timeout: float = 120.0) -> list[dict[str
     predicted from the colour, the transit count is ``rv_n_good_obs_primary``, and the
     light ratio comes from the masses through the main sequence.
 
+    The masses are joined from ``binary_masses`` where it gives both. That table has a
+    second row for 72 of the 5376 double-lined sources (an ``Orbital+M1`` combination
+    with no secondary mass, beside the ``SB2+M1`` one), and a row without ``m2`` would
+    repeat the source. Integer columns are returned as Python integers, so a
+    ``source_id`` keeps all its digits.
+
+    Parameters
+    ----------
+    limit
+        Number of sources (``TOP``).
+    order
+        Which sources the limit keeps. ``"source_id"`` (default): the first by
+        ``source_id``. A ``source_id`` begins with the HEALPix index of the source's
+        position, so these lie together in one part of the sky: the fourteen systems the
+        D61 benchmark kept of the first sixteen are within 10 degrees of the ecliptic,
+        where Gaia records the fewest transits. ``"random"``: the first by
+        ``gaia_source.random_index``, the archive's random permutation, which makes the
+        limit a random subsample.
+    timeout
+        Seconds for the request.
+
     References
     ----------
     Gaia Collaboration, Arenou, F., Babusiaux, C., et al. 2023, A&A, 674, A34
     """
-    query = _GAIA_SB2_ADQL.format(limit=int(limit))
+    if order not in _GAIA_SB2_ORDER:
+        raise ValueError(f"order must be one of {sorted(_GAIA_SB2_ORDER)}; got {order!r}")
+    query = _GAIA_SB2_ADQL.format(limit=int(limit), order=_GAIA_SB2_ORDER[order])
     params = urllib.parse.urlencode(
         {"REQUEST": "doQuery", "LANG": "ADQL", "FORMAT": "csv", "QUERY": query}
     )
@@ -1371,23 +1507,7 @@ def query_gaia_sb2(limit: int = 500, *, timeout: float = 120.0) -> list[dict[str
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         text = response.read().decode("utf-8")
-    lines = [line for line in text.splitlines() if line.strip()]
-    header = [h.strip() for h in lines[0].split(",")]
-    rows = []
-    for line in lines[1:]:
-        cells = line.split(",")
-        row: dict[str, Any] = {}
-        for key, cell in zip(header, cells, strict=False):
-            cell = cell.strip().strip('"')
-            if cell in ("", "null", "NULL"):
-                row[key] = None
-            else:
-                try:
-                    row[key] = float(cell)
-                except ValueError:
-                    row[key] = cell
-        rows.append(row)
-    return rows
+    return _parse_tap_csv(text)
 
 
 def from_gaia_sb2(
@@ -1408,12 +1528,17 @@ def from_gaia_sb2(
     and the main sequence (``q = K_1 / K_2``, the primary at the mass whose sequence
     temperature is the GSP-Phot value). Radii and temperatures follow from the masses
     along the sequence, and the inclination is the one that reconciles the masses with
-    the catalogue's K. Rows without a period or a semi-amplitude are skipped.
+    the catalogue's K. Component 1 of a system is the more massive star: where the
+    catalogue's primary is the less massive, the components are exchanged and the
+    argument of periastron becomes the other star's, ``omega + pi``. Without the RP
+    magnitude the system colour is the flux-weighted colour of the two stars on the
+    sequence, as :func:`draw_population` computes it. Rows without a period or a
+    semi-amplitude are skipped.
     """
     rng = np.random.default_rng(seed)
     sequence = relation if isinstance(relation, MainSequence) else MainSequence(relation)
     ratio = _ContinuumRatio(library) if library is not None else None
-    systems = []
+    systems: list[BinarySystem] = []
     for row in rows:
         period, k1, k2 = row.get("period"), row.get("k1"), row.get("k2")
         if period is None or k1 is None or k2 is None or not (period > 0 and k1 > 0 and k2 > 0):

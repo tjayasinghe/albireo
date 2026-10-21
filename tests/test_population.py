@@ -335,6 +335,171 @@ def test_gaia_rows_are_completed(library):
     assert second.source.startswith("Gaia")
 
 
+def test_a_swapped_catalogue_pair_takes_the_secondarys_argument_of_periastron():
+    """A catalogue gives omega for its first component; after the exchange it is omega + pi."""
+    row = {
+        "source_id": 126,
+        "nss_solution_type": "SB2",
+        "period": 12.0,
+        "eccentricity": 0.4,
+        "arg_periastron": 40.0,
+        "k1": 60.0,
+        "k2": 45.0,
+        "gamma": 3.0,
+        "phot_g_mean_mag": 10.0,
+        "phot_rp_mean_mag": 9.5,
+        "teff_gspphot": 6000.0,
+        "ecl_lat": 10.0,
+        "rv_n_good_obs_primary": 18,
+    }
+    (system,) = from_gaia_sb2([row], seed=0)
+    # K1 > K2 makes the catalogue's first star the less massive one.
+    assert system.meta["components_swapped"] and system.m1 > system.m2
+    assert (system.k1, system.k2) == (45.0, 60.0)
+    # The record's component 1 is the catalogue's second star, whose velocity curve is
+    # -K2 / K1 times the first star's: it takes the first star's omega plus pi.
+    assert system.omega == pytest.approx(math.radians(40.0) + math.pi)
+    # A pair listed in the order of its masses keeps the catalogue's omega.
+    (kept,) = from_gaia_sb2([{**row, "k1": 45.0, "k2": 60.0}], seed=0)
+    assert "components_swapped" not in kept.meta
+    assert kept.omega == pytest.approx(math.radians(40.0))
+
+
+def test_debcat_g_is_read_at_the_primarys_temperature_under_either_relation(tmp_path):
+    """G - V is the table's M_G - M_V at Teff; the Eker masses index another row of it."""
+    from albireo.population import _MAMAJEK_BY_MASS, _MAMAJEK_LOGT
+
+    lines = [
+        "CM_Dra M4.5_V M4.5_V 1.268 12.90 1.60 -0.6478 0.0006 -0.6776 0.0006 -0.6003 0.0003 "
+        "-0.6243 0.0004 4.9908 0.0008 5.0091 0.0007 3.4960 0.0100 3.4940 0.0140 "
+        "-2.2580 0.0380 -2.3130 0.0560 -0.3000 0.1200",
+        "A_pair A2_V A7_V 3.000 7.10 0.10 0.2967 0.01 0.2480 0.01 0.3263 0.005 0.2430 0.005 "
+        "4.2 0.01 4.3 0.01 3.9445 0.005 3.8899 0.005 1.4 0.02 1.0 0.02 0.0 0.1",
+    ]
+    path = tmp_path / "debs.dat"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    mamajek = from_debcat(path, seed=0)
+    eker = from_debcat(path, seed=0, relation="eker")
+    g_minus_v = _MAMAJEK_BY_MASS[:, 6] - _MAMAJEK_BY_MASS[:, 3]
+    for s_m, s_e, vmag in zip(mamajek, eker, (12.90, 7.10), strict=True):
+        expected = vmag + float(np.interp(np.log10(s_m.teff1), _MAMAJEK_LOGT, g_minus_v))
+        assert s_m.g_mag == pytest.approx(expected, abs=1e-12)
+        assert s_e.g_mag == pytest.approx(expected, abs=1e-12)
+
+
+def test_the_adapters_give_a_pair_the_colour_the_draw_gives_it():
+    """The system G - G_RP adds the two stars' fluxes, in the draw and in the adapters alike."""
+    sequence = MainSequence()
+    drawn = draw_population(6, seed=1, mass_range=(0.6, 1.4))
+    rows = [
+        {
+            "source_id": 1000 + i,
+            "period": s.period,
+            "k1": s.k1,
+            "k2": s.k2,
+            "m1": s.m1,
+            "m2": s.m2,
+            "phot_g_mean_mag": 10.0,
+            "phot_rp_mean_mag": None,  # no colour from the catalogue
+        }
+        for i, s in enumerate(drawn)
+    ]
+    completed = from_gaia_sb2(rows, seed=0)
+    for s, c in zip(drawn, completed, strict=True):
+        assert c.g_rp == pytest.approx(s.g_rp, rel=1e-9, abs=1e-12)
+    # The weighting: a faint red companion moves the colour less than the plain mean does.
+    m1, m2 = 1.0, 0.7
+    g1, g2 = float(sequence.absolute_g(m1)), float(sequence.absolute_g(m2))
+    c1, c2 = float(sequence.g_minus_rp(m1)), float(sequence.g_minus_rp(m2))
+    f2 = 10 ** (-0.4 * (g2 - g1))
+    weighted = 2.5 * math.log10((10 ** (0.4 * c1) + f2 * 10 ** (0.4 * c2)) / (1.0 + f2))
+    row = {
+        "source_id": 7,
+        "period": 5.0,
+        "k1": 40.0,
+        "k2": 40.0 / 0.7,
+        "m1": m1,
+        "m2": m2,
+        "phot_g_mean_mag": 10.0,
+    }
+    (pair,) = from_gaia_sb2([row], seed=0)
+    assert pair.g_rp == pytest.approx(weighted, rel=1e-9)
+    assert c1 < pair.g_rp < 0.5 * (c1 + c2)
+
+
+def test_the_tap_csv_keeps_every_digit_of_a_source_id(monkeypatch):
+    """Gaia source_ids exceed 2^53, so they are read as integers, not floats."""
+    import io
+    import urllib.parse
+    import urllib.request
+
+    from albireo.population import _parse_tap_csv, query_gaia_sb2
+
+    text = (
+        "source_id,nss_solution_type,period,eccentricity,arg_periastron,t_periastron,k1,k2,"
+        "gamma,m1,m2,phot_g_mean_mag,phot_rp_mean_mag,teff_gspphot,ecl_lat,ra,dec,"
+        "rv_n_good_obs_primary\r\n"
+        "5853498713190525696,SB2,12.5,0.21,40.0,3.1,61.2,48.7,-12.0,1.2,1.0,9.8,9.3,6100.5,"
+        "-30.2,250.1,-45.3,21\r\n"
+        "5853498713190525697,SB2C,3.25,,,1.0,80.0,90.0,5.0,,,10.4,9.9,5900.0,-30.2,250.1,"
+        "-45.3,14\r\n"
+    )
+    rows = _parse_tap_csv(text)
+    assert [r["source_id"] for r in rows] == [5853498713190525696, 5853498713190525697]
+    assert isinstance(rows[0]["source_id"], int) and rows[0]["rv_n_good_obs_primary"] == 21
+    assert rows[0]["nss_solution_type"] == "SB2" and rows[0]["period"] == 12.5
+    assert rows[1]["eccentricity"] is None and rows[1]["m1"] is None
+    with pytest.raises(ValueError, match="empty response"):
+        _parse_tap_csv("\r\n")
+    with pytest.raises(ValueError, match="XML rather than CSV"):
+        _parse_tap_csv('<?xml version="1.0"?><VOTABLE><INFO name="QUERY_STATUS" value="ERROR"/>')
+
+    # The network call, replaced: the names and the provenance carry the exact identifiers.
+    requested = []
+
+    def fake_urlopen(request, timeout):
+        requested.append(request.full_url)
+        return io.BytesIO(text.encode("utf-8"))
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    systems = from_gaia_sb2(query_gaia_sb2(2), seed=0)
+    assert [s.name for s in systems] == ["gaia-5853498713190525696", "gaia-5853498713190525697"]
+    assert systems[0].meta["source_id"] == 5853498713190525696
+    assert systems[0].n_transits == 21
+    query = urllib.parse.unquote_plus(requested[0])
+    assert "ORDER BY nss.source_id" in query and "bm.m2 IS NOT NULL" in query
+    query_gaia_sb2(2, order="random")
+    assert "ORDER BY s.random_index" in urllib.parse.unquote_plus(requested[1])
+    with pytest.raises(ValueError, match="order"):
+        query_gaia_sb2(2, order="north")
+
+
+def test_the_builders_share_the_draws_defaults_and_the_mission_start():
+    """The adapters' G and systemic-velocity draws use the defaults of draw_population, and
+    every builder draws the periastron time from the start of the mission."""
+    import inspect
+
+    from albireo import population
+    from albireo.gaia import RVS_SPANS
+
+    defaults = inspect.signature(draw_population).parameters
+    assert defaults["g_mag"].default == population._G_MAG_MEAN_SD
+    assert defaults["g_mag_range"].default == population._G_MAG_RANGE
+    assert defaults["gamma_sigma_kms"].default == population._GAMMA_SIGMA_KMS
+    for builder in (draw_population, from_debcat, from_gaia_sb2):
+        start = inspect.signature(builder).parameters["start_bjd"].default
+        assert start == RVS_SPANS["dr3"][0] == RVS_SPANS["dr4"][0]
+
+
+def test_the_period_density_is_the_same_on_an_array():
+    from albireo.population import _f_logp, _f_logp_grid
+
+    logp = np.concatenate([np.linspace(-1.0, 9.0, 801), [1.0, 2.0, 3.4, 5.5]])
+    for m1 in (0.3, 0.9, 1.0, 2.2, 5.0, 12.0):
+        scalar = np.array([_f_logp(m1, float(x)) for x in logp])
+        np.testing.assert_array_equal(_f_logp_grid(m1, logp), scalar)
+
+
 def test_binary_system_from_dict_ignores_unknown_keys():
     data = draw_population(1, seed=5)[0].to_dict()
     data["extra"] = 1
