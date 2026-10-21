@@ -433,16 +433,52 @@ def test_excluded_ranges_drop_pixels(library, grid):
 
 @pytest.mark.slow
 def test_draws_refit_gives_a_wider_spread_than_the_curvature(library, grid, baseline):
-    """The spread over refitted draws exceeds the formal error, so both are quoted."""
+    """The spread over refitted draws exceeds the formal error, so both are quoted.
+
+    The residuals of a disentangling are correlated over several pixels, and the formal
+    error assumes them white. The draws here are correlated over a Gaussian of 3 pixels at
+    the per-pixel noise level. With white draws the spread equals the formal error, which
+    the test then asserted by a margin of 4 percent once the refits started at the optimum.
+    """
     rng = np.random.default_rng(3)
     base = np.asarray(baseline.problem.data)
-    draws = base[None, :, :] + rng.normal(0.0, NOISE, (8, *base.shape))
-    got = refit_draws(baseline, draws, max_steps=40)
+    kernel = np.exp(-0.5 * (np.arange(-9.0, 10.0) / 3.0) ** 2)
+    kernel /= np.sqrt(np.sum(kernel**2))
+    white = rng.normal(0.0, NOISE, (8, *base.shape))
+    correlated = np.apply_along_axis(np.convolve, -1, white, kernel, mode="same")
+    got = refit_draws(baseline, base[None, :, :] + correlated, max_steps=40)
     spread = got.errors("draws")
     formal = got.errors("laplace")
     assert spread["A"]["teff"] > 0.0
     assert spread["A"]["teff"] > formal["A"]["teff"]
     assert "from draws" in got.summary()
+
+
+def test_draw_refits_start_from_the_optimum(baseline, monkeypatch):
+    """Each draw is refitted from the optimum, not from the warm-start node.
+
+    From the node, 40 to 60 steps did not bring a draw equal to the data back to the optimum
+    (10 and 32 K short in Teff on this problem), so the spread of the draws included the
+    optimizer's distance from convergence and doubled the spread of teff_B.
+    """
+    real = match_mod.run_map
+    seen = []
+
+    def spy(model, **kwargs):
+        result = real(model, **kwargs)
+        seen.append((kwargs["init"], result))
+        return result
+
+    monkeypatch.setattr(match_mod, "run_map", spy)
+    data = np.asarray(baseline.problem.data)
+    refit_draws(baseline, np.stack([data, data]), max_steps=60)
+    assert len(seen) == 2
+    for init, result in seen:
+        assert set(init) == set(baseline.result.params)
+        for key, value in baseline.result.params.items():
+            np.testing.assert_allclose(init[key], value, rtol=1e-9)
+        for name in ("A", "B"):
+            assert abs(result.params[f"teff_{name}"] - baseline.labels[name]["teff"]) < 0.5
 
 
 def test_errors_refuse_to_invent_a_spread(baseline):
@@ -808,3 +844,293 @@ def test_facade_hook_refuses_an_undeclared_wavelength_scale(small_dataset, blue_
     fit = dis.fit(max_steps=10)
     with pytest.raises(ValueError, match="air or vacuum"):
         fit.match_labels(_labelled(blue_library))
+
+
+# ---------------------------------------------------------------------------
+# declarations taken as declared
+# ---------------------------------------------------------------------------
+
+
+def _one_star(library, **labels):
+    declared = {
+        "teff": ab.Between(4200.0, 5400.0),
+        "logg": ab.Between(3.2, 4.9),
+        "vsini": ab.Between(1.0, 60.0),
+        "v_kms": ab.Fixed(0.0),
+        **labels,
+    }
+    return {"A": StarLabels(library=library, **declared)}
+
+
+def test_a_single_star_is_fitted_with_a_free_scalar_dilution(library, grid):
+    """One star always has light 1, the upper end of a light fraction.
+
+    The default dilution of one star, ``ScalarDilution``, put the start of its factor on the
+    upper bound of its prior, which no fit can start from, so every single-star fit raised.
+    The prior now extends above 1 for a declared light of 1.
+    """
+    rows = noisy_rows(library, grid)[:1]
+    got = fit(
+        library,
+        grid,
+        rows,
+        light_fractions=[1.0],
+        dilution=None,
+        stars=_one_star(library),
+        top_k=1,
+        max_steps=40,
+    )
+    assert got.assumptions["dilution"] == "scalar"
+    lo, hi = match_mod._spec_bounds(got.specs["scale_A"])
+    assert lo < 1.0 < hi
+    assert lo < got.result.params["scale_A"] < hi
+    assert np.isfinite(got.chi2)
+
+
+def test_a_prior_between_two_nodes_starts_from_the_bracketing_nodes(library, grid):
+    """A prior inside the grid that contains no node value is not disjoint from the grid.
+
+    The toy grid has a Teff node every 250 K, so (4800, 4950) lies between the nodes at
+    4750 and 5000. Only a prior outside the grid's range is refused.
+    """
+    stars = {
+        "A": StarLabels(
+            library=library,
+            teff=ab.Between(4800.0, 4950.0),
+            logg=ab.Between(3.2, 4.9),
+            vsini=ab.Between(1.0, 60.0),
+            v_kms=ab.Fixed(0.0),
+        ),
+        "B": StarLabels(
+            library=library,
+            teff=ab.Between(4100.0, 5000.0),
+            logg=ab.Between(3.2, 4.9),
+            vsini=ab.Between(1.0, 60.0),
+            v_kms=ab.Fixed(0.0),
+        ),
+    }
+    got = fit(library, grid, noisy_rows(library, grid), stars=stars, top_k=1, max_steps=20)
+    assert 4800.0 < got.labels["A"]["teff"] < 4950.0
+    scanned = np.isfinite(got.node_scan[0][:, 0])
+    assert set(np.unique(got.node_tables[0][scanned, 0])) == {4750.0, 5000.0}
+
+
+class _TrialsSeen(Exception):
+    """Raised once the warm-start scan has been asked for every component."""
+
+
+def _scan_trials(library, grid, stars, monkeypatch, **kwargs):
+    seen = {}
+
+    def capture(problem, index, nodes, vsini_trials, v_trials):
+        seen[index] = ([float(v) for v in vsini_trials], [float(v) for v in v_trials])
+        if index == len(stars) - 1:
+            raise _TrialsSeen
+        return np.zeros((np.asarray(nodes).shape[0], 3))
+
+    monkeypatch.setattr(match_mod, "_scan_component", capture)
+    with pytest.raises(_TrialsSeen):
+        fit(library, grid, noisy_rows(library, grid), stars=stars, **kwargs)
+    return seen
+
+
+def test_the_scan_trials_follow_each_components_own_prior(library, grid, monkeypatch):
+    """The default trials of a component lie inside its own prior and include a fixed value.
+
+    They were the same for every component: velocities symmetric about zero out to the
+    largest bound of any star, and rotations from the smallest lower to the largest upper
+    bound. A prior of (-80, 10) km/s was scanned over (-10, 10), a Known(-60, 2) over
+    (-70, 70), and a fixed v sin i of 12 km/s at 1, 5, 10, 12 and 30 km/s.
+    """
+    stars = {
+        "A": StarLabels(
+            library=library,
+            teff=ab.Between(4200.0, 5400.0),
+            logg=ab.Between(3.2, 4.9),
+            vsini=ab.Fixed(12.0),
+            v_kms=ab.Between(-80.0, 10.0),
+        ),
+        "B": StarLabels(
+            library=library,
+            teff=ab.Between(4100.0, 5000.0),
+            logg=ab.Between(3.2, 4.9),
+            vsini=ab.Between(25.0, 35.0),
+            v_kms=ab.Known(-60.0, 2.0),
+        ),
+    }
+    seen = _scan_trials(library, grid, stars, monkeypatch)
+    assert seen[0] == ([12.0], list(np.linspace(-80.0, 10.0, 5)))
+    assert seen[1][0] == match_mod._default_scan_vsini(25.0, 35.0)
+    np.testing.assert_allclose(seen[1][1], [-64.0, -62.0, -60.0, -58.0, -56.0])
+
+
+def test_identical_declarations_keep_the_shared_scan_trials(library, grid, monkeypatch):
+    """With the same prior for every star the trials are those the scan always used."""
+    stars = {
+        name: StarLabels(
+            library=library,
+            teff=ab.Between(4100.0, 5400.0),
+            logg=ab.Between(3.2, 4.9),
+            vsini=ab.Between(1.0, 60.0),
+            v_kms=ab.Between(-50.0, 50.0),
+        )
+        for name in ("A", "B")
+    }
+    seen = _scan_trials(library, grid, stars, monkeypatch)
+    expected = (match_mod._default_scan_vsini(1.0, 60.0), list(np.linspace(-50.0, 50.0, 5)))
+    assert seen[0] == expected and seen[1] == expected
+    explicit = _scan_trials(
+        library, grid, stars, monkeypatch, scan_vsini=[3.0], scan_velocities=[-5.0, 5.0]
+    )
+    assert explicit[0] == explicit[1] == ([3.0], [-5.0, 5.0])
+
+
+def test_a_prior_beyond_a_box_library_is_narrowed_to_it(library, grid):
+    """A box library is extrapolated outside its nodes, so a fit there measures nothing.
+
+    The toy box ends at [M/H] = -1.0. A declared (-1.3, 0.4) is narrowed to (-1.0, 0.4),
+    with a warning and a record in the assumptions. On an APF blind-test target the fit
+    otherwise returned [M/H] = -1.24 against a box ending at -1.0 (D74).
+    """
+    with pytest.warns(UserWarning, match="narrowed to the library"):
+        got = fit(
+            library, grid, noisy_rows(library, grid), mh=ab.Between(-1.3, 0.4), top_k=1,
+            max_steps=5,
+        )  # fmt: skip
+    assert match_mod._spec_bounds(got.specs["mh"]) == (-1.0, 0.4)
+    assert got.assumptions["label_priors_narrowed_to_library"] == {"mh": [-1.0, 0.4]}
+    assert -1.0 <= got.labels["A"]["mh"] <= 0.4
+
+
+def test_an_unbounded_label_prior_is_held_inside_the_box(library, grid, monkeypatch):
+    """A Known label on a box library is bounded by the box in the epoch fit and warned of
+    in the d_hat comparisons, whose optimizer has no bounds."""
+    captured = {}
+
+    def capture(problem, index, nodes, vsini_trials, v_trials):
+        captured["problem"] = problem
+        raise _ScanReached
+
+    monkeypatch.setattr(match_mod, "_scan_component", capture)
+    stars = {
+        "A": StarLabels(
+            library=library,
+            teff=ab.Known(4800.0, 1000.0),
+            logg=ab.Between(3.2, 4.9),
+            vsini=ab.Between(1.0, 60.0),
+            v_kms=ab.Fixed(0.0),
+        ),
+        "B": StarLabels(
+            library=library,
+            teff=ab.Between(4100.0, 5000.0),
+            logg=ab.Between(3.2, 4.9),
+            vsini=ab.Between(1.0, 60.0),
+            v_kms=ab.Fixed(0.0),
+        ),
+    }
+    with pytest.warns(UserWarning, match="teff_A"), pytest.raises(_ScanReached):
+        fit(library, grid, noisy_rows(library, grid), stars=stars)
+    problem = captured["problem"]
+    specs = {
+        "mh": ab.Between(-0.9, 0.4),
+        "teff_A": ab.Known(4800.0, 1000.0),
+        "logg_A": ab.Between(3.2, 4.9),
+        "vsini_A": ab.Between(1.0, 60.0),
+        "v_A": ab.Fixed(0.0),
+        "teff_B": ab.Between(4100.0, 5000.0),
+        "logg_B": ab.Between(3.2, 4.9),
+        "vsini_B": ab.Between(1.0, 60.0),
+        "v_B": ab.Fixed(0.0),
+    }
+    config = {"names": ("A", "B"), "shared_mh": True, "hull_guard": False, "offsets": False}
+    layout, lo, hi, _ = match_mod._epoch_layout(specs, config, problem)
+    j = layout.index("teff_A")
+    assert (lo[j], hi[j]) == (4000.0, 5500.0)
+    k = layout.index("teff_B")
+    assert (lo[k], hi[k]) == (4100.0, 5000.0)
+
+
+def test_non_finite_spectra_are_refused_by_name(library, grid):
+    """One NaN pixel made every scan chi-square NaN, and the error blamed the priors."""
+    rows = noisy_rows(library, grid)
+    bad = rows.copy()
+    bad[0, 100] = np.nan
+    with pytest.raises(ValueError, match="d_hat has 1 non-finite pixel"):
+        fit(library, grid, bad)
+    std = np.full_like(rows, NOISE)
+    std[1, 5:8] = np.inf
+    with pytest.raises(ValueError, match="std has 3 non-finite pixel"):
+        fit(library, grid, rows, std=std)
+
+
+def test_matched_mode_keeps_excluded_flux_out_of_the_comparison(library, grid, monkeypatch):
+    """The LSF spreads flux inside an excluded range into its neighbours, which are dropped.
+
+    ``"matched"`` convolves ``d_hat`` with the instrument profile before the comparison. An
+    emission line inside an excluded range then changed the data of the weighted pixels
+    within the kernel's half-width of the range (by up to 134 sigma for a line of 0.5).
+    """
+    captured = []
+
+    def capture(problem, index, nodes, vsini_trials, v_trials):
+        captured.append(problem)
+        raise _ScanReached
+
+    monkeypatch.setattr(match_mod, "_scan_component", capture)
+    rows = noisy_rows(library, grid)
+    line = rows.copy()
+    wave = np.asarray(grid.wave)
+    inside = (wave >= 5195.0) & (wave <= 5200.0)
+    line[0, inside] += 0.5 * np.exp(-0.5 * ((wave[inside] - 5197.5) / 0.3) ** 2)
+    for data in (rows, line):
+        with pytest.raises(_ScanReached):
+            fit(
+                library,
+                grid,
+                data,
+                compare="matched",
+                dilution=RadiusRatio(),
+                exclude_angstrom=[(5195.0, 5200.0)],
+            )
+    clean, emitting = captured
+    weighted = np.asarray(clean.weight) > 0
+    np.testing.assert_array_equal(np.asarray(emitting.weight), np.asarray(clean.weight))
+    np.testing.assert_array_equal(
+        np.asarray(emitting.data)[weighted], np.asarray(clean.data)[weighted]
+    )
+    half = len(np.asarray(clean.lsf_kernel)) // 2
+    assert int((~weighted[0]).sum()) == int(inside.sum()) + 2 * half
+
+
+def test_the_nearest_node_null_keeps_one_metallicity(library, grid):
+    """With a shared [M/H] the null is the best pair on one metallicity slice.
+
+    The per-star minima here lie on different slices (A at 0.0, B at -0.5), a pair the
+    model cannot represent. Their sum was quoted as the null, below every pair the fit can
+    reach, so the pipeline's test that a fit beats both nulls failed spuriously.
+    """
+    truth = {"A": (4830.0, 4.10, 0.0, 12.0), "B": (4390.0, 4.60, -0.5, 30.0)}
+    rows = noisy_rows(library, grid, truth=truth)
+    got = fit(library, grid, rows, top_k=1, max_steps=5)
+    mh_column = 2
+    best = [int(np.argmin(scan[:, 0])) for scan in got.node_scan]
+    slices = [got.node_tables[i][best[i], mh_column] for i in range(2)]
+    assert slices[0] != slices[1]
+    independent = sum(float(np.min(scan[:, 0])) for scan in got.node_scan)
+    assert got.chi2_nearest_node == got.candidates[0][0]
+    assert got.chi2_nearest_node > independent
+
+
+def test_a_failed_laplace_approximation_is_reported(library, grid, monkeypatch):
+    """The fit is kept, and the summary says why it has no formal errors."""
+
+    def fails(*args, **kwargs):
+        raise RuntimeError("out of memory")
+
+    monkeypatch.setattr(match_mod, "laplace_inverse_mass", fails)
+    got = fit(library, grid, noisy_rows(library, grid), top_k=1, max_steps=5)
+    assert got.covariance is None
+    assert got.assumptions["laplace_failed"] == "RuntimeError: out of memory"
+    summary = got.summary()
+    assert "Laplace approximation failed (RuntimeError: out of memory)" in summary
+    assert "laplace_failed" not in summary

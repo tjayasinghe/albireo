@@ -813,3 +813,71 @@ def test_the_spectra_and_their_errors_come_from_one_solve(
     with pytest.raises(_LabelFitReached):
         replace(telluric).match_labels(_stars(library))
     assert len(model_solves) == 1
+
+
+# ---------------------------------------------------------------------------
+# a single star
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def single(library):
+    """One star on a known orbit, its Fit placed at the declared start, as in `_system`."""
+    grid = ab.LogGrid.from_wavelength_range(5155.0, 5245.0, dv_kms=DV_KMS)
+    interpolator = library_interpolator(library.resampled_to(grid, medium="air"))
+    teff, logg, mh, vsini = TRUTH["A"]
+    normalized, _ = interpolator(jnp.asarray([teff, logg, mh]))
+    kernel = np.asarray(ab.rotational_kernel(vsini / grid.dv_kms))
+    row = np.convolve(np.asarray(normalized) - 1.0, kernel, mode="same")
+    dataset, _ = ab.simulate_dataset(
+        grid,
+        [row],
+        bjd=np.linspace(0.3, 5.7, 8),
+        instruments={
+            "S": ab.InstrumentSpec(
+                wave=np.arange(5162.0, 5238.0, 0.06), sigma_v_lsf=LSF_KMS, snr=150.0
+            )
+        },
+        light_fractions=[1.0],
+        orbit=ab.OrbitParams(period=PERIOD, t_peri=0.0, ecc=0.0, omega=0.0, k=(K[0],)),
+        seed=5,
+    )
+    dataset = ab.Dataset(tuple(_replace(e, medium="air") for e in dataset), frame=dataset.frame)
+    t_conj = float(t_conj_from_t_peri(0.0, period=PERIOD, ecc=0.0, omega=0.0))
+    dis = ab.Disentangler(
+        dataset,
+        components=[ab.Star("A", light=1.0)],
+        orbit=ab.Orbit(
+            period=ab.Fixed(PERIOD),
+            k=ab.Fixed(K[0]),
+            t_conj=ab.Fixed(t_conj),
+            ecc=ab.Fixed(0.0),
+        ),
+        lsf={"S": LSF_KMS},
+        dv_kms=DV_KMS,
+    )
+    start = MAPResult(
+        params=dict(dis.init),
+        unconstrained={},
+        potential=0.0,
+        grad_norm=0.0,
+        converged=False,
+        num_steps=0,
+    )
+    return ab.Fit(dis=dis, result=start, hyper={})
+
+
+def test_a_single_star_is_fitted_through_the_epochs(single, library):
+    """The epoch comparison of one star, the default of the Disentangler interface.
+
+    One star has light 1, and its default ScalarDilution started on the upper bound of the
+    factor's prior, so the label stage of the pipeline flagged 'labels failed' for every
+    single-star target.
+    """
+    stars = {"A": _stars(library)["A"]}
+    got = single.match_labels(stars, mh=ab.Between(-1.0, 0.5), top_k=1, max_steps=40)
+    assert got.compare == "epochs" and got.assumptions["dilution"] == "scalar"
+    lo, hi = match_mod._spec_bounds(got.specs["scale_A"])
+    assert lo < 1.0 < hi
+    assert abs(got.labels["A"]["teff"] - TRUTH["A"][0]) < 0.03 * TRUTH["A"][0]
+    assert abs(got.flux_ratio["A"] - 1.0) < 0.1

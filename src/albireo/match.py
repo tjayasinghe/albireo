@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import hashlib
 import time
+import warnings
 from dataclasses import dataclass, field
 from functools import partial
 from typing import Any
@@ -270,6 +271,10 @@ class ScalarDilution:
     than :class:`RadiusRatio`: the components are not coupled, the sum to one is not
     enforced, and the wavelength dependence that contains the light-ratio information is
     discarded. :meth:`LabelMatch.summary` records that a fit used it.
+
+    The default prior of each factor is uniform on ``(0.001, 1)``, started at the declared
+    light fraction. A declared light of 1 or more, as for a single star, extends it to twice
+    the declared light, which is the start.
 
     References
     ----------
@@ -1046,6 +1051,53 @@ def _default_scan_vsini(lower: float, upper: float) -> list[float]:
     return sorted({float(np.clip(v, lower, upper)) for v in trials})
 
 
+def _normal_moments(spec) -> tuple[float, float] | None:
+    """``(mean, sd)`` of a scalar normal prior (``Known``), else ``None``."""
+    distribution = spec.distribution()
+    if not isinstance(distribution, dist.Normal) or np.size(distribution.loc) != 1:
+        return None
+    return float(np.asarray(distribution.loc)), float(np.asarray(distribution.scale))
+
+
+def _component_scan_vsini(spec) -> list[float]:
+    """One component's trial rotations for the warm-start scan, within its own prior.
+
+    A fixed value is the only trial. A bounded prior takes the trials of
+    :func:`_default_scan_vsini` between its bounds. Any other prior takes them between zero
+    and its declared upper magnitude, with the mean of a normal prior added.
+    """
+    if _is_fixed(spec):
+        return [float(np.asarray(spec.start()))]
+    bounds = _spec_bounds(spec)
+    if bounds is not None:
+        return _default_scan_vsini(*bounds)
+    upper = spec.upper()
+    trials = _default_scan_vsini(0.0, upper)
+    moments = _normal_moments(spec)
+    if moments is not None and 0.0 <= moments[0] <= upper:
+        trials = sorted({*trials, moments[0]})
+    return trials
+
+
+def _component_scan_velocities(spec) -> list[float]:
+    """One component's five trial frame velocities for the warm-start scan.
+
+    A fixed velocity is the only trial. A bounded prior is spanned from bound to bound, and
+    a normal prior from two standard deviations below its mean to two above. Any other
+    prior is spanned symmetrically about zero to its declared upper magnitude.
+    """
+    if _is_fixed(spec):
+        return [float(np.asarray(spec.start()))]
+    bounds = _spec_bounds(spec)
+    if bounds is not None:
+        return [float(v) for v in np.linspace(bounds[0], bounds[1], 5)]
+    moments = _normal_moments(spec)
+    if moments is not None:
+        return [float(v) for v in moments[0] + moments[1] * np.linspace(-2.0, 2.0, 5)]
+    reach = spec.upper()
+    return [float(v) for v in np.linspace(-reach, reach, 5)] if reach > 0 else [0.0]
+
+
 def _spec_bounds(spec):
     """``(lo, hi)`` for a bounded prior, else ``None``."""
     distribution = spec.distribution()
@@ -1063,6 +1115,9 @@ def _allowed_nodes(table, axes, specs, name, shared_mh):
     Without it the warm start can pass the optimizer a node the prior excludes, and numpyro
     rejects the fit with the opaque "cannot find valid initial parameters". A fixed label is
     narrowed to the nearest node value, since a fixed Teff rarely coincides with a grid point.
+    A bounded prior that lies inside the grid between two node values, such as Teff in
+    (5800, 5900) K on a grid with nodes at 5750 and 6000 K, is narrowed to those two
+    values; the start is then moved into the prior (:func:`_clip_to_support`).
     """
     allowed = np.ones(table.shape[0], dtype=bool)
     for column, label in enumerate(axes):
@@ -1071,12 +1126,77 @@ def _allowed_nodes(table, axes, specs, name, shared_mh):
             continue
         bounds = _spec_bounds(spec)
         if bounds is not None:
-            allowed &= (table[:, column] >= bounds[0]) & (table[:, column] <= bounds[1])
+            lo, hi = bounds
+            values = np.unique(table[:, column])
+            if not np.any((values >= lo) & (values <= hi)) and values[0] <= lo and hi <= values[-1]:
+                lo, hi = values[values <= lo][-1], values[values >= hi][0]
+            allowed &= (table[:, column] >= lo) & (table[:, column] <= hi)
         elif _is_fixed(spec):
             values = np.unique(table[:, column])
             nearest = values[int(np.argmin(np.abs(values - float(np.asarray(spec.start())))))]
             allowed &= table[:, column] == nearest
     return allowed
+
+
+def _box_ranges(interpolators, label_axes, names, shared_mh) -> dict[str, tuple[float, float]]:
+    """``{site: (lo, hi)}``: the label ranges over which the box libraries interpolate.
+
+    :class:`~albireo.library.BoxInterpolator` holds its stencil to the outermost cell but
+    not the coordinate, so beyond the box its cubic is extrapolated, with no barrier.
+    Scattered libraries are left out, since their hull guard applies, and so is an axis with
+    one node, along which the interpolant is constant. A shared [M/H] takes the
+    intersection of the boxes.
+    """
+    out: dict[str, tuple[float, float]] = {}
+    for i, name in enumerate(names):
+        axes = getattr(interpolators[i], "axes", None)
+        if axes is None:
+            continue
+        for column, label in enumerate(label_axes[i]):
+            axis = np.asarray(axes[column])
+            if axis.size < 2:
+                continue
+            key = _site_key(label, name, shared_mh)
+            lo, hi = float(axis[0]), float(axis[-1])
+            if key in out:
+                lo, hi = max(lo, out[key][0]), min(hi, out[key][1])
+            out[key] = (lo, hi)
+    return out
+
+
+def _narrow_to_boxes(specs: dict, boxes: dict) -> tuple[dict, list]:
+    """Narrow uniform label priors to the box libraries' ranges, in place.
+
+    Returns ``(narrowed, beyond)``. ``narrowed`` maps each narrowed site to its new
+    ``[lo, hi]``. ``beyond`` lists the sites whose declaration still reaches outside a box:
+    a fixed value beyond it, or a prior that is unbounded or not uniform. A uniform prior
+    that does not overlap the box is left to the node selection, which refuses it.
+    """
+    narrowed: dict[str, list[float]] = {}
+    beyond: list[str] = []
+    for key, (low, high) in boxes.items():
+        spec = specs.get(key)
+        if spec is None:
+            continue
+        if _is_fixed(spec):
+            if not low <= float(np.asarray(spec.start())) <= high:
+                beyond.append(key)
+            continue
+        bounds = _spec_bounds(spec)
+        if bounds is not None and low <= bounds[0] and bounds[1] <= high:
+            continue
+        if bounds is None or not isinstance(spec.distribution(), dist.Uniform):
+            beyond.append(key)
+            continue
+        lo, hi = max(bounds[0], low), min(bounds[1], high)
+        if not lo < hi:
+            continue
+        start = getattr(spec, "start_at", None)
+        start = None if start is None else float(np.asarray(start))
+        kept = start if start is not None and lo < start < hi else None
+        specs[key] = Between(lo, hi, start_at=kept)
+        narrowed[key] = [lo, hi]
+    return narrowed, beyond
 
 
 def _combine_scans(scans, node_tables, label_axes, shared_mh, top_k):
@@ -1319,15 +1439,20 @@ def match_labels(
         Wavelength ranges to drop: nebular cores, detector gaps, and any region the
         disentangling could not model. Not available in ``"epochs"`` mode, where the
         comparison runs over epoch pixels: mask them in the epochs before disentangling.
+        In ``"matched"`` mode each range is widened by the half-width of the instrument
+        kernel on either side, since the convolution of ``d_hat`` spreads the flux of the
+        range into those pixels.
     interpolation
         How each library is interpolated between its nodes, passed to
         :func:`albireo.library.library_interpolator`: ``"auto"`` (a Catmull-Rom cubic on a
         complete box, barycentric otherwise), ``"linear"``, ``"cubic"`` or ``"simplex"``.
     scan_vsini, scan_velocities
-        Trial values for the warm-start scan. ``scan_vsini`` defaults to 1, 5 and 10 km/s
-        and a fifth and a half of the ``vsini`` prior's upper bound, clipped to the priors,
-        so that slow rotation is tried (reasoning in ``_default_scan_vsini``);
-        ``scan_velocities`` to five velocities spanning the ``v_kms`` prior.
+        Trial values for the warm-start scan, the same for every component. By default
+        each component takes its own, within its own priors: ``scan_vsini`` 1, 5 and
+        10 km/s and a fifth and a half of the upper bound of its ``vsini`` prior, clipped to
+        that prior, so that slow rotation is tried (reasoning in ``_default_scan_vsini``);
+        ``scan_velocities`` five velocities spanning its ``v_kms`` prior, or two standard
+        deviations either side of a ``Known`` mean. A fixed value is its only trial.
     top_k
         How many of the scan's best starting points to optimise from. The default is more
         than one because a label surface with two basins is common. The report states when
@@ -1475,6 +1600,19 @@ def match_labels(
     )
     if sigma.shape != data.shape:
         raise ValueError(f"std must match d_hat's shape {data.shape}; got {sigma.shape}")
+    # One non-finite pixel makes every chi-square of the scan NaN, whatever its weight, and
+    # the scan then reports that no node satisfies the priors.
+    for what, array in (("d_hat", data), ("std", sigma)):
+        bad = ~np.isfinite(array) if what == "d_hat" else ~(np.isfinite(array) & (array >= 0))
+        if bad.any():
+            rows = ", ".join(repr(names[r]) for r in np.flatnonzero(bad.any(axis=1)))
+            raise ValueError(
+                f"{what} has {int(bad.sum())} non-finite pixel(s)"
+                + ("" if what == "d_hat" else " or negative value(s)")
+                + f", in the row(s) of {rows}. Every pixel enters the warm-start scan, "
+                "including excluded ones: replace them (for example by zero with a large "
+                "std) and drop their range with exclude_angstrom."
+            )
 
     lsf_kernel = np.asarray(gaussian_kernel(lsf_sigma_kms / grid.dv_kms))
     matched = compare == "matched"
@@ -1504,7 +1642,13 @@ def match_labels(
 
     weight = np.ones_like(data)
     for lo, hi in exclude_angstrom:
-        weight[:, (grid.wave >= lo) & (grid.wave <= hi)] = 0.0
+        excluded = (grid.wave >= lo) & (grid.wave <= hi)
+        if matched:
+            # The convolution of d_hat spreads the flux of the range over the kernel's
+            # half-width on either side, where the template has no such flux.
+            reach = np.ones(2 * (len(lsf_kernel) // 2) + 1)
+            excluded = np.convolve(excluded.astype(float), reach, mode="same") > 0.0
+        weight[:, excluded] = 0.0
     if not np.any(weight):
         raise ValueError("exclude_angstrom removed every pixel")
 
@@ -1561,9 +1705,42 @@ def match_labels(
             )
     elif dilution_kind == "scalar":
         for i, name in enumerate(names):
+            # A declared light of 1, which one star always has, is the upper end of a light
+            # fraction, where no fit can start. The factor is then allowed up to twice the
+            # declared light, so that a factor near 1 is not held at a bound.
+            start = float(ell0[i])
+            upper = 1.0 if start < 1.0 else 2.0 * start
             specs[f"scale_{name}"] = _as_spec(
-                dilution.factor, f"factor for {name}", Between(1e-3, 1.0, start_at=float(ell0[i]))
+                dilution.factor, f"factor for {name}", Between(1e-3, upper, start_at=start)
             )
+
+    # -- label priors within the box libraries -----------------------------
+    # A box library is extrapolated beyond its nodes without a barrier, and a label there is
+    # not a measurement. On an APF target of the blind test the fit returned [M/H] = -1.24
+    # against a box ending at -1.0 (D74).
+    boxes = _box_ranges(interpolators, label_axes, names, shared_mh)
+    narrowed, beyond = _narrow_to_boxes(specs, boxes)
+    if narrowed:
+        warnings.warn(
+            "label priors that extend beyond the library were narrowed to the library: "
+            + ", ".join(f"{key} to ({lo:g}, {hi:g})" for key, (lo, hi) in narrowed.items())
+            + ". A box library is extrapolated beyond its nodes, and a label there is not "
+            "a measurement.",
+            UserWarning,
+            stacklevel=2,
+        )
+    # The epoch fit bounds every label site by the box; the d_hat comparisons cannot.
+    unbounded = [key for key in beyond if not _is_fixed(specs[key])]
+    warned = [key for key in beyond if not (epochs and key in unbounded)]
+    if warned:
+        warnings.warn(
+            "the declarations of "
+            + ", ".join(f"{key} reach beyond the library's {boxes[key]}" for key in warned)
+            + ". A box library is extrapolated beyond its nodes. Declare a Between(lo, hi) "
+            "within the library, or a fixed value inside it.",
+            UserWarning,
+            stacklevel=2,
+        )
 
     # -- the traced problem ------------------------------------------------
     vsini_upper = max(specs[f"vsini_{name}"].upper() for name in names)
@@ -1601,17 +1778,17 @@ def match_labels(
     }
 
     # -- warm start --------------------------------------------------------
-    if scan_vsini is None:
-        lowers = [
-            _spec_bounds(specs[f"vsini_{name}"])[0]
-            if _spec_bounds(specs[f"vsini_{name}"]) is not None
-            else 0.0
-            for name in names
-        ]
-        scan_vsini = _default_scan_vsini(min(lowers), vsini_upper)
-    if scan_velocities is None:
-        reach = max(specs[f"v_{name}"].upper() for name in names)
-        scan_velocities = np.linspace(-reach, reach, 5) if reach > 0 else [0.0]
+    # Each component is scanned within its own priors, unless the trials are given.
+    vsini_trials = [
+        _component_scan_vsini(specs[f"vsini_{name}"]) if scan_vsini is None else scan_vsini
+        for name in names
+    ]
+    v_trials = [
+        _component_scan_velocities(specs[f"v_{name}"])
+        if scan_velocities is None
+        else scan_velocities
+        for name in names
+    ]
 
     node_tables = [np.asarray(library.nodes) for library in projected]
     scans = []
@@ -1628,7 +1805,7 @@ def match_labels(
         scan = np.full((node_tables[i].shape[0], 3), np.nan)
         scan[:, 0] = np.inf
         scan[allowed] = _scan_component(
-            problem, i, node_tables[i][allowed], scan_vsini, scan_velocities
+            problem, i, node_tables[i][allowed], vsini_trials[i], v_trials[i]
         )
         scans.append(scan)
     candidates = _combine_scans(scans, node_tables, label_axes, shared_mh, top_k)
@@ -1658,6 +1835,10 @@ def match_labels(
         },
         "grids": {name: projected[i].meta.get("grid", "unnamed") for i, name in enumerate(names)},
     }
+    if narrowed:
+        assumptions["label_priors_narrowed_to_library"] = narrowed
+    if epochs and unbounded:
+        assumptions["label_bounds_from_library"] = {key: list(boxes[key]) for key in unbounded}
 
     if epochs:
         assumptions["epoch_operator_lsf_sigma_kms"] = {
@@ -1712,7 +1893,11 @@ def match_labels(
             "light_fractions are finite and that the libraries cover the declared ranges."
         )
 
-    covariance, site_order = _laplace(model, best_result, seed)
+    try:
+        covariance, site_order = _laplace(model, best_result, seed)
+    except Exception as exc:  # the fit is kept; the summary states why it has no errors
+        covariance, site_order = None, _site_order(best_result)
+        assumptions["laplace_failed"] = f"{type(exc).__name__}: {exc}"
     return LabelMatch(
         names=names,
         result=best_result,
@@ -1765,6 +1950,16 @@ def _clip_to_support(spec, value: float) -> float:
     return float(np.clip(value, lo + pad, hi - pad))
 
 
+def _inside_support(spec, value):
+    """A fitted value as a starting value: unchanged where it lies strictly inside a
+    bounded prior, and moved inside by :func:`_clip_to_support` where the logistic
+    transform has rounded it onto a bound."""
+    bounds = None if spec is None else _spec_bounds(spec)
+    if bounds is None or np.ndim(value) != 0 or bounds[0] < float(value) < bounds[1]:
+        return value
+    return _clip_to_support(spec, float(value))
+
+
 def _init_from_scan(specs, config, names, label_axes, node_tables, scans, picks):
     """Constrained starting values for every sampled site, from one scan candidate."""
     init = {}
@@ -1800,22 +1995,26 @@ def _laplace(model, result, seed):
     The row labels are built from the sites' shapes, not their names: the Chebyshev offsets
     are vectors, so a covariance row is not a site. Zipping sorted site names against the
     diagonal shifts every entry after the first vector site, which gives an implausibly
-    small uncertainty and raises no error.
+    small uncertainty and raises no error. An exception of the approximation propagates;
+    :func:`match_labels` keeps the fit and records it.
     """
+    labels = _site_order(result)
+    inverse_mass = np.asarray(
+        laplace_inverse_mass(model, result.params, rng_key=jax.random.PRNGKey(seed + 1))
+    )
+    if inverse_mass.shape[0] != len(labels):  # pragma: no cover - shape contract changed
+        return None, labels
+    return inverse_mass, labels
+
+
+def _site_order(result) -> tuple[str, ...]:
+    """The rows of the unconstrained covariance: one per scalar, ``key[i]`` per vector entry."""
     flat = {key: np.atleast_1d(np.asarray(value)) for key, value in result.unconstrained.items()}
     labels: list[str] = []
     for key in sorted(flat):  # jax ravels dict pytrees in sorted-key order
         size = flat[key].size
         labels.extend([key] if size == 1 else [f"{key}[{i}]" for i in range(size)])
-    try:
-        inverse_mass = np.asarray(
-            laplace_inverse_mass(model, result.params, rng_key=jax.random.PRNGKey(seed + 1))
-        )
-    except Exception:  # pragma: no cover - a singular Hessian is reported, not raised
-        return None, tuple(labels)
-    if inverse_mass.shape[0] != len(labels):  # pragma: no cover - shape contract changed
-        return None, tuple(labels)
-    return inverse_mass, tuple(labels)
+    return tuple(labels)
 
 
 # ---------------------------------------------------------------------------
@@ -2010,9 +2209,11 @@ def _epoch_layout(specs, config, problem):
 
     Uniform priors become bounds and contribute nothing inside them. A Normal prior
     contributes its quadratic ``((x - mu) / s)^2``, and any other prior ``-2 log p``, with
-    bounds from its support where it has them.
+    bounds from its support where it has them. A label of a box library is also bounded by
+    the box (:func:`_box_ranges`), beyond which the library is extrapolated.
     """
     names = tuple(config["names"])
+    boxes = _box_ranges(problem.interpolators, problem.label_axes, names, config["shared_mh"])
     order = ["mh"] if config["shared_mh"] else []
     for name in names:
         order += [f"teff_{name}", f"logg_{name}"]
@@ -2042,6 +2243,9 @@ def _epoch_layout(specs, config, problem):
             low = getattr(support, "lower_bound", -np.inf)
             high = getattr(support, "upper_bound", np.inf)
             terms.append((position, size, distribution))
+        if key in boxes:
+            low = max(float(np.asarray(low)), boxes[key][0])
+            high = min(float(np.asarray(high)), boxes[key][1])
         lo.append(np.broadcast_to(np.asarray(low, dtype=np.float64), (size,)))
         hi.append(np.broadcast_to(np.asarray(high, dtype=np.float64), (size,)))
         keys.append(key)
@@ -3323,14 +3527,16 @@ class LabelMatch:
         """The null of snapping to the best raw grid node, the practical alternative.
 
         The gap between this and :attr:`chi2` measures what continuous interpolation, fitted
-        broadening and fitted dilution contribute over selecting the nearest node. In
-        ``"epochs"`` mode it is the epoch chi-square of the best warm-start candidate (its
-        nodes, scanned rotations and velocities, and starting dilution) with the additive
-        nuisance profiled out.
+        broadening and fitted dilution contribute over selecting the nearest node. It is the
+        best warm-start candidate: with a shared [M/H] the best pair of nodes on one
+        metallicity, which the model can represent, rather than the sum of each star's best
+        node. In ``"epochs"`` mode it is the epoch chi-square of that candidate (its nodes,
+        scanned rotations and velocities, and starting dilution) with the additive nuisance
+        profiled out.
         """
         if self.epoch_fit is not None:
             return float(self.epoch_fit.chi2_nearest_node)
-        return float(sum(np.min(scan[:, 0]) for scan in self.node_scan))
+        return float(self.candidates[0][0])
 
     @property
     def n_pixels_used(self) -> int:
@@ -3482,6 +3688,12 @@ class LabelMatch:
                 "  (68th-percentile pulls 1.4, 1.0, 1.4) and too small by about three for",
                 "  v sin i and the light fraction (3.5 and 2.7); see docs/math.md 9.5.",
             ]
+        elif "laplace_failed" in self.assumptions:
+            lines += [
+                "",
+                "  No formal errors: the Laplace approximation failed "
+                f"({self.assumptions['laplace_failed']}).",
+            ]
         elif drawn is None:
             lines += [
                 "",
@@ -3514,7 +3726,8 @@ class LabelMatch:
             ]
         lines += ["", "  Assumed, not measured:"]
         for key, value in self.assumptions.items():
-            lines.append(f"    {key}: {value}")
+            if key != "laplace_failed":  # a result, reported above
+                lines.append(f"    {key}: {value}")
         if self.assumptions.get("dilution") == "scalar":
             lines.append(
                 "    (a wavelength-independent dilution: weaker than a joint radius-ratio fit)"
@@ -3588,7 +3801,7 @@ def refit_draws(match: LabelMatch, draws, *, max_steps: int = 60, seed: int = 0)
         rows. They must be joint: independent per-component draws would omit the correlation
         this function propagates.
     max_steps
-        L-BFGS steps per draw, starting from the MAP, which is normally close.
+        L-BFGS steps per draw, starting from the MAP of ``match``, which is normally close.
 
     Returns
     -------
@@ -3614,6 +3827,13 @@ def refit_draws(match: LabelMatch, draws, *, max_steps: int = 60, seed: int = 0)
     collected: dict[str, dict[str, list[float]]] = {n: {} for n in match.names}
     # One model for every draw: the draw's problem is its traced argument.
     model = label_model(match.problem, match.specs, match.config)
+    # Every draw starts from the optimum. From the warm-start node, 40 to 60 steps did not
+    # bring even a draw equal to the data back to the optimum (10 and 32 K short in Teff on
+    # the test problem), and the spread then included that shortfall.
+    init = {
+        key: _inside_support(match.specs.get(key), value)
+        for key, value in match.result.params.items()
+    }
     for index, draw in enumerate(draws):
         rows = (
             np.stack([np.convolve(row, kernel, mode="same") for row in draw])
@@ -3632,7 +3852,7 @@ def refit_draws(match: LabelMatch, draws, *, max_steps: int = 60, seed: int = 0)
         try:
             result = run_map(
                 model,
-                init=match.start,
+                init=init,
                 max_steps=max_steps,
                 rng_key=jax.random.PRNGKey(seed + index),
                 model_args=(problem,),
