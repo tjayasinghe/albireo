@@ -261,20 +261,31 @@ def test_the_held_pass_of_global_light_reuses_the_free_pass(sb2, monkeypatch):
 
     module = importlib.import_module("albireo.todcor")
     dataset, _, templates = sb2
-    original = module._epoch_terms
-    calls = []
+    original_terms, original_light = module._epoch_terms, module._global_light
+    calls = {"free": [], "held": []}
+    current = ["free"]
 
     def counted(*args, **kwargs):
-        calls.append((np.asarray(args[4]).tobytes(), np.asarray(args[6]).tobytes()))
-        return original(*args, **kwargs)
+        shifts = (np.asarray(args[4]).tobytes(), np.asarray(args[6]).tobytes())
+        calls[current[0]].append(shifts)
+        return original_terms(*args, **kwargs)
+
+    def between_passes(first):
+        current[0] = "held"
+        return original_light(first)
 
     monkeypatch.setattr(module, "_epoch_terms", counted)
+    monkeypatch.setattr(module, "_global_light", between_passes)
     table = todcor(dataset, templates, light="global", **COMMON)
-    assert len(calls) == len(set(calls))  # no epoch is evaluated twice at the same shifts
+    # The held pass evaluates no epoch at shifts that the free pass evaluated. It removes
+    # what it takes, so shifts it asks for twice are evaluated twice.
+    assert calls["free"] and not set(calls["held"]) & set(calls["free"])
     monkeypatch.setattr(module, "_REUSE_BYTES", 0)
-    calls.clear()
+    calls["free"].clear()
+    calls["held"].clear()
+    current[0] = "free"
     recomputed = todcor(dataset, templates, light="global", **COMMON)
-    assert len(calls) > len(set(calls))
+    assert set(calls["held"]) & set(calls["free"])
     for name in ("velocity", "sigma", "covariance", "light", "chi2", "margin", "delta_chi2"):
         np.testing.assert_array_equal(getattr(table, name), getattr(recomputed, name))
     np.testing.assert_array_equal(
@@ -393,6 +404,32 @@ def test_an_instrument_without_a_measured_epoch_is_skipped_under_global_light(
     assert set(table.settings["global_light"]) == {"a"}
     np.testing.assert_allclose(table.velocity[:, :8], reference.velocity, rtol=0, atol=1e-12)
     assert np.all(np.isnan(table.velocity[:, 8])) and table.n_pixels[8] == n_weighted
+
+
+def test_global_light_is_an_error_where_no_epoch_has_the_pixels_of_the_free_pass(sb2):
+    """Where the free pass measures no epoch at all, the light is not measured.
+
+    The error is the one of templates that measure no light, which the pipeline and the
+    survey catch, and it states the pixel counts. A table with every epoch skipped is not
+    returned.
+    """
+    import dataclasses
+
+    from albireo.todcor import _LightNotMeasured
+
+    dataset, _, templates = sb2
+    sparse = []
+    for epoch in dataset.epochs[:2]:
+        ivar = np.zeros_like(epoch.ivar)
+        ivar[400:409] = epoch.ivar[400:409]
+        sparse.append(dataclasses.replace(epoch, ivar=ivar))
+    options = {"v_range": (-150.0, 150.0), "nuisance_order": 3, "lsf_sigma_v": {"a": 5.0}}
+    message = r"no epoch has the 10 weighted pixels that the free pass needs for its 8 param"
+    with (
+        pytest.warns(UserWarning, match="only 9 weighted pixels"),
+        pytest.raises(_LightNotMeasured, match=message),
+    ):
+        todcor(Dataset(sparse, frame=dataset.frame), templates, light="global", **options)
 
 
 def test_free_scale_reports_the_normalization_and_the_same_velocities(sb2, fixed_table):
@@ -896,6 +933,55 @@ def test_a_range_shorter_than_the_refinement_window_bounds_the_shift(copies, top
     assert table.good[0] and not table.at_edge[0, 0]
     assert 0.0 <= shift <= top
     assert abs(shift - copies[0][0]) < 1.0
+
+
+@pytest.mark.parametrize(("first", "top"), [(2, 4), (1, 25)])
+def test_a_fine_window_at_the_shifts_of_the_coarse_pass_is_refined_under_global_light(
+    first, top, monkeypatch
+):
+    """The terms the held pass takes from the free pass are those of the same window.
+
+    At a coarse stride of one pixel and a range of at most 31 pixels, the coarse pass and a
+    fine window placed at the start of the range evaluate the same 32 shifts. The terms of
+    the coarse pass, which carry nothing for the refinement, were returned for that window,
+    and ``light="global"`` raised an AttributeError. The table equals, bit for bit, the one
+    with every term recomputed.
+    """
+    import importlib
+
+    module = importlib.import_module("albireo.todcor")
+    dataset = _copies_epochs([[(first, 1.0)], [(first + 1, 1.0)]], seed=2)
+    v_range = (float(GRID.pixels_to_velocity(-0.5)), float(GRID.pixels_to_velocity(top + 0.5)))
+    options = {
+        "v_range": v_range,
+        "coarse_step": 1,
+        "light": "global",
+        "lsf_sigma_v": None,
+        "nuisance_order": None,
+    }
+    template = [Template("A", GRID, NARROW, v_zero_kms=0.0)]
+    table = todcor(dataset, template, **options)
+    shifts = [_pixels(v) for v in table.velocity[0]]
+    np.testing.assert_allclose(shifts, [first, first + 1], rtol=0, atol=0.05)
+    monkeypatch.setattr(module, "_REUSE_BYTES", 0)
+    recomputed = todcor(dataset, template, **options)
+    for name in (
+        "velocity",
+        "sigma",
+        "covariance",
+        "light",
+        "chi2",
+        "margin",
+        "delta_chi2",
+        "at_edge",
+        "blended",
+        "alternative",
+        "refined",
+    ):
+        np.testing.assert_array_equal(getattr(table, name), getattr(recomputed, name))
+    np.testing.assert_array_equal(
+        table.settings["first_pass_light"], recomputed.settings["first_pass_light"]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1516,6 +1602,35 @@ def test_the_margin_check_includes_the_barycentric_offset(v_bary):
         todcor(still, template, light=[1.0], v_range=(-150.0, 150.0), lsf_sigma_v=None)
 
 
+def test_the_margin_check_takes_the_shifts_searched_at_offsets_of_both_signs():
+    """With offsets of +-28 km/s the shifts searched run to +-178 km/s, inside a 180 km/s grid.
+
+    The previous bound added the spread of the offsets, 56 km/s, at both ends, and reported
+    the grid as about 17 pixels too narrow.
+    """
+    import warnings
+
+    wave = np.arange(5008.0, 5052.0, 0.05)
+    rng = np.random.default_rng(0)
+    epochs = [
+        EpochData(
+            wave=wave,
+            flux=1.0 + rng.normal(0.0, 0.001, wave.size),
+            ivar=np.full(wave.size, 1e6),
+            bjd=float(j),
+            v_bary=v,
+        )
+        for j, v in enumerate((28.0, -28.0))
+    ]
+    both = Dataset(epochs, frame="topocentric")
+    grid = ab.LogGrid.covering(both, 1.5, v_margin_kms=180.0, extra_pixels=0)
+    (deviation,) = components(grid=grid, seeds=(21,))
+    template = [Template("A", grid, deviation, v_zero_kms=0.0)]
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", message=".*too narrow")
+        todcor(both, template, light=[1.0], v_range=(-150.0, 150.0), lsf_sigma_v=None)
+
+
 def test_the_pixel_locking_warning_is_set_by_the_width_of_the_lines(sb2):
     """The ripple depends on the width of the convolved lines, ``max(sigma_inst, sigma_t)``.
 
@@ -1532,6 +1647,17 @@ def test_the_pixel_locking_warning_is_set_by_the_width_of_the_lines(sb2):
     sharp = {"v_range": (-150.0, 150.0), "lsf_sigma_v": {"a": 2.5}}
     with pytest.warns(UserWarning, match=r"1\.67 template pixels wide \(sigma\)"):
         todcor(dataset, templates, light=LIGHT, **sharp)
+    # Without declared LSF widths the templates are used as they are, and the width is
+    # their own sigma_kms. A template that declares none does not raise the warning.
+    as_given = {"v_range": (-150.0, 150.0), "lsf_sigma_v": None}
+    declared = [
+        Template(t.name, GRID, t.deviation, sigma_kms=2.4, v_zero_kms=0.0) for t in templates
+    ]
+    with pytest.warns(UserWarning, match=r"1\.60 template pixels wide \(sigma\)"):
+        todcor(dataset, declared, light=LIGHT, **as_given)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", message=".*pixel-locking")
+        todcor(dataset, [declared[0], templates[1]], light=LIGHT, **as_given)
 
 
 def test_batch_records_failures_and_writes_one_table_per_star(sb2, tmp_path):

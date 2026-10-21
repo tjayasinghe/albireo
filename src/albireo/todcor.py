@@ -1223,7 +1223,8 @@ class _Reuse:
     templates: tuple | None = None
     terms: dict = field(default_factory=dict)
     nbytes: int = 0
-    # Whether new terms are kept. The held pass, the last to use them, takes and removes.
+    # Whether new terms are kept. The held pass, the last to use them, takes and removes
+    # them, which frees the memory as it goes; shifts it evaluates twice are computed twice.
     record: bool = True
 
     def take(self, key):
@@ -1244,9 +1245,10 @@ def _terms_at(stack, work: _EpochWork, deltas: np.ndarray, reuse, n_shift: int |
 
     ``terms`` is the NumPy copy of the first ``n_shift`` shifts (:func:`_terms_numpy`), or
     ``None`` without ``n_shift``. Both are taken from ``reuse`` (a :class:`_Reuse`) where
-    it holds them.
+    it holds them. The key includes ``n_shift``: at a coarse stride of one pixel a fine
+    window can have the shifts of the coarse pass, whose entry holds no ``terms``.
     """
-    key = (work.index, deltas.shape, deltas.tobytes())
+    key = (work.index, n_shift, deltas.shape, deltas.tobytes())
     if reuse is not None:
         value = reuse.take(key)
         if value is not None:
@@ -1729,7 +1731,9 @@ def _global_light(first: VelocityTable) -> dict[str, np.ndarray]:
     held fractions, one of them negative, left every epoch of the table on a ridge.
 
     An instrument none of whose epochs was measured (each had too few weighted pixels)
-    has no entry, and the held pass skips its epochs.
+    has no entry, and the held pass skips its epochs. Where no epoch of any instrument was
+    measured, :class:`_LightNotMeasured` is raised, with the pixel counts. The pipeline and
+    the survey catch it.
     """
     out = {}
     instruments = sorted(set(first.instrument))
@@ -1752,6 +1756,13 @@ def _global_light(first: VelocityTable) -> dict[str, np.ndarray]:
         fractions = first.light[:, sel] / first.light[:, sel].sum(axis=0, keepdims=True)
         med = np.median(fractions, axis=1)
         out[inst] = med / med.sum()
+    if not out:
+        n_par = int(first.settings["n_parameters"])
+        raise _LightNotMeasured(
+            f"no epoch has the {max(8, n_par + 2)} weighted pixels that the free pass needs "
+            f"for its {n_par} parameters (the most at one epoch is {int(first.n_pixels.max())}), "
+            "so the light fractions are not measured: pass light=<fractions> to hold them"
+        )
     return out
 
 
