@@ -338,7 +338,10 @@ Two structural consequences follow, both static. $`\mathbf{A}^\top \mathbf{W} \m
 couples rebin rows up to `ar1_max_gap` apart, widening the half-bandwidth by the
 largest model-pixel offset between a stored link's row supports
 (`Problem.ar_bandwidth_extra`; `MarginalOrbitModel` reserves it when its ``ar1``
-flag is set, the same declared-bandwidth convention used elsewhere). The inner sandwich of
+flag is set, the same declared-bandwidth convention used elsewhere).
+`Problem.half_bandwidth_bound` includes it for a correlated problem, and with `ar1=True`
+for a diagonal problem to which the chain is applied afterwards, as inside a jitted
+function. The inner sandwich of
 the direct band assembly also gains the chain's cross-row terms: each link contributes the
 symmetrized outer product
 $`-c_k \sqrt{w_n w_p}\, r_n r_p (\mathbf{R}_n^\top \mathbf{R}_p + \mathbf{R}_p^\top \mathbf{R}_n)`$
@@ -801,7 +804,9 @@ recomputes its primal inline for the same reason and `jax.hessian` still runs be
 inner `jacrev` resolves both boundaries. The loss of forward mode, however, is package-wide
 rather than confined to the solve stage. albireo therefore contains no `jax.jvp`:
 `forecast._effective_parameters` is a `jax.grad` of the same scalar-to-scalar function,
-returning the identical `p_eff`.
+returning the identical `p_eff`. `sensitivity_forecast` itself takes `p_eff` from the
+selected inverse (§5.5); the derivative is kept as the reference of the tests and for
+`scripts/aiphe_k1k2_map.py`.
 
 ### 4.5a The tridiagonal noise sandwich: link pair tables
 
@@ -1009,6 +1014,14 @@ every epoch's noise by $`\alpha \to \alpha e^{t}`$ sends $`\mathbf{A}^\top\mathb
 \;=\; -2\,p_{\rm eff}.
 ```
 
+`sensitivity_forecast` evaluates the same trace directly. $`\boldsymbol\Lambda_p`$ and
+$`\mathbf{A}^\top\mathbf{W}\mathbf{A}`$ are block tridiagonal, so the trace needs only the
+diagonal and first subdiagonal blocks of $`\boldsymbol\Sigma`$, which the Takahashi sweep for
+the pointwise band forms one at a time. Each block is contracted with the corresponding
+block of $`\tilde{\boldsymbol\Lambda} - \boldsymbol\Lambda_p`$ as it is formed, and the prior's
+blocks are rebuilt there from its three nonzero diagonals. This needs no second assembly or
+factorization, and agrees with the derivative to about $`10^{-13}`$ relative.
+
 For ranking whole designs the scalar is the expected information gain. For a linear-Gaussian
 model the prior-predictive expectation of $`\mathrm{KL}(p(d|y)\,\|\,p(d))`$ is exactly
 
@@ -1030,7 +1043,7 @@ $`|g(k)| = J|\cos(k\,\Delta_{\rm sep}/2)|`$, which returns to $`J`$ at a comb of
 `examples/08_forecast.py` measures this on a 13.7 d circular SB2 with eight epochs in hand and
 twelve to plan:
 
-| twelve planned nights | RMS $`\Delta v`$ | blind fraction | 2nd mode $`\sigma`$ | information gain |
+| twelve planned nights | sd of $`\Delta v`$ over epochs | blind fraction | 2nd mode $`\sigma`$ | information gain |
 |---|---|---|---|---|
 | at $`P/2`$ (aliased) | 117.8 km/s | 58% | 0.518 | 243 nats |
 | continuing the existing cadence | 115.7 km/s | 56% | 0.106 | 295 nats |
@@ -1758,7 +1771,13 @@ with no training cost and nothing to host.
 
 There are two interpolants, chosen by geometry: separable Catmull-Rom on a complete axis
 product, and barycentric interpolation over a Delaunay triangulation when the grid is incomplete
-at its corners for physical reasons, as in the OB libraries. The cubic reproduces a node
+at its corners for physical reasons, as in the OB libraries. The cubic is a Hermite cubic in
+each cell. Along an axis of equal steps its tangent at a node is Catmull-Rom's, the difference
+of the two neighbours over twice the step. Along an axis of unequal steps that tangent is not
+exact on linear data, so the tangent there is that of the parabola through the node and its
+two neighbours (Bessel's tangent), which reduces to Catmull-Rom on equal steps. Both are exact
+on linear data and continuous in the first derivative at the nodes. The registered boxes have
+equal steps. The cubic reproduces a node
 bit-for-bit. The barycentric path reproduces one to rounding, since its weights at a vertex are
 $`1-\epsilon`$ and $`\epsilon`$ rather than $`1`$ and $`0`$. Either allows the warm-start node
 scan and the continuous fit to be compared directly.

@@ -150,12 +150,17 @@ restricting the transits to the release's data span:
 Both steps are random and seeded, so the result is one realisation of a plausible epoch
 list and does not state which nights Gaia observed a particular star.
 
-The raw response is cached under `cache_dir() / "gost"` in a file named for every
-parameter of the query, and the cache is read before the network is used. A benchmark that
-revisits a position therefore queries the service once, and a cached position needs no
-network. When the request fails and nothing is cached, the `RuntimeError` names the
-endpoint and the path the response would have been written to, so the file can be fetched
-elsewhere and copied in.
+The raw response is cached under `cache_dir() / "gost"` in a file named for the parameters
+of the query, with the position and the window to four decimals (1e-4 degree, 1e-4 day),
+and the cache is read before the network is used. A benchmark that revisits a position
+therefore queries the service once, and a cached position needs no network. The file
+appears under its name only when it is complete. When the request fails and nothing is
+cached, the `RuntimeError` names the endpoint and the path the response would have been
+written to, so the file can be fetched elsewhere and copied in. A cached file that is not
+well-formed XML is fetched again and kept beside the new one with the suffix
+`.unreadable`; when the service cannot be reached, the error names it. A cached table that
+is well-formed but unusable, such as one with an empty CCD row, raises an error that names
+the file and is not replaced.
 
 `draw_population` gives every drawn system a position (an ecliptic longitude uniform over
 [0, 360) at the latitude already drawn, rotated to ICRS by `ecliptic_to_icrs`), and
@@ -191,7 +196,10 @@ $`(K_1 + K_2)(1 + e)`$, a double-lined analysis can resolve. The benchmark scrip
 selections about half the pairs are twins with $`q > 0.95`$, as in a magnitude-limited
 double-lined sample. `from_debcat` and `from_gaia_sb2` build the same records from real
 catalogues and fill in only what the catalogue lacks. `query_gaia_sb2` fetches the Gaia DR3
-double-lined orbits with their masses (network). Gaia publishes no G_RVS, no transit count
+double-lined orbits with their masses (network). Its `limit` keeps the first sources by
+`source_id` by default, which begins with the HEALPix index of the position and so selects
+one region of the sky; `order="random"` keeps the first by the archive's `random_index`, a
+random subsample. Gaia publishes no G_RVS, no transit count
 and no light ratio for its double-lined sources, and the adapters state what they
 substitute.
 
@@ -233,7 +241,13 @@ into `velocities.csv` (one row per system, tier, epoch and component),
 `summarize_velocities` pools the usable epochs per tier, and the report plots each tier's
 systems phase-folded against the injected orbit (`figures/rv_curves_<tier>.png`).
 `write_report` regenerates the report (`report.md`, `rows.csv`, `velocities.csv`,
-`summary.json`, figures) at any time, and an interrupted run resumes.
+`summary.json`, figures) at any time, and an interrupted run resumes. Beside each result
+the run records what the result depends on (`benchmark_key.json`: the system, its
+simulation seed, the product, library, cadence and resolving power, the tier and the
+analysis settings). A resumed run compares that record with its own, field by field and
+with NaN equal to NaN. A result recorded under other values, such as a run with other tiers
+or another `min_transits`, which renumbers the noise seeds, is run again with a warning,
+and the earlier `result.json` is kept as `result.stale.json`.
 
 ```bash
 python scripts/gaia_rvs_benchmark.py --n 40 --jobs 8 --out bench/rvs

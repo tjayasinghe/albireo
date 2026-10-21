@@ -165,8 +165,8 @@ albireo run survey.toml --jobs auto       # cpu_count // 4 workers
 Stars are independent, so they run in worker processes. On the development desktop four
 workers finish a batch of eight simulated stars 2.0× faster than one process, and eight workers
 2.5× faster. The scaling is sub-linear because one star already uses several cores. Each
-worker's XLA and BLAS threads are capped at `cpu_count // jobs` as a precaution against
-oversubscription. On that benchmark the cap made no measurable difference. One failing star (a
+worker's BLAS and OpenMP threads are capped at `cpu_count // jobs` as a precaution against
+oversubscription; XLA's own thread pool is not capped. One failing star (a
 missing file, or a declaration the `Disentangler` interface rejects) is recorded in
 `failures.txt` with its message and does not stop the others. The numbers are in
 [the benchmark record](../benchmarks.md#the-pipeline-in-worker-processes-2026-09-01).
@@ -182,7 +182,12 @@ row = run.results["AI Phe"].report["orbit"]      # period, ecc, k, gamma, errors
 ```
 
 With `jobs=1` each `StarResult.live` also holds the objects (the `Fit`, the velocity table,
-the label match and the orbit), for uses the written products do not cover.
+the label match and the orbit), for uses the written products do not cover. A batch that
+keeps them holds every star's `Fit` and label match at once. `keep_live=False`, which the
+`albireo` command passes, releases them after each star, and by default also releases the
+programs JAX compiled for the star (`release_compiled`), which clears every JAX cache of the
+process and makes the next star compile its programs again
+([Batches](../api/pipeline.md#batches)).
 
 ## BLOeM by name
 

@@ -72,8 +72,10 @@ The declaration has three properties:
   remains unidentified, so the declaration must be correct in its epoch-to-epoch pattern
   but need not be correct in its level. A systemic offset of +150 km/s changes neither the
   result nor the solver's bandwidth, because the budget is derived from the centred table.
-- A declaration whose components never separate is equivalent to a cold start and raises
-  an error. Velocities that never resolve the pair beyond the LSF width produce a warning.
+- A declaration whose components never separate once each star's own zero point is
+  removed is equivalent to a cold start and raises an error. This includes a table that
+  differs between the stars only by a constant, to within rounding. Velocities that never
+  resolve the pair beyond the LSF width on the same centred table produce a warning.
 - `scan()` and `detection_limit()` require a known SB1 orbit and raise an error without
   one.
 
@@ -136,7 +138,9 @@ The noise model becomes AR(1) along the pixel index
 epoch or fitted as one shared `ar1_phi` site. `dis.explain()` states which, and a declared
 value is listed among the assumptions. The same value is passed to
 `fit.measure_velocities()`, whose errors include it through the sandwich of
-[§10.4](../math.md#104-uncertainties-and-detection).
+[§10.4](../math.md#104-uncertainties-and-detection). `scan()` and `detection_limit()`
+evaluate the diagonal noise model only, and raise an error for a nonzero or fitted
+`noise_correlation`.
 
 ## Stellar labels from a fit
 

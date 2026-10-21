@@ -92,7 +92,7 @@ caller and should be finely sampled. The grid of the packaged example's injected
 samples the DEMO LSF at one pixel per sigma, so the snippet upsamples it by three.
 
 **The light fractions.** `light="global"` (the default) fits them freely in every epoch, takes
-the weighted median over the well-detected, unblended epochs of each instrument, and holds
+the median over the well-detected, unblended epochs of each instrument, and holds
 that value. This is standard practice, because a per-epoch ratio is noisy and a ratio fitted
 at a blended phase is not a measurement. An epoch at which a fitted amplitude is negative
 does not enter the median: templates that do not describe the components fit a blend as a

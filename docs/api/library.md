@@ -27,8 +27,11 @@ to host. Whether this holds for a particular grid is measured by `crossval_libra
 `library_interpolator` selects its method from the grid's geometry: a separable
 Catmull-Rom cubic on a complete axis product, and barycentric interpolation over a Delaunay
 triangulation when physical limits have removed corners of the grid, as they have for every
-public OB library. The cubic reproduces a node bit-for-bit, because at a node the weights
-are exactly 1 and 0. The simplex path reproduces one to rounding, because its weights are
+public OB library. Along an axis of unequal steps the cubic takes the tangent at a node
+from the parabola through the node and its two neighbours, which equals the Catmull-Rom
+tangent where the steps are equal, so it stays exact on linear data
+([§9.3](../math.md#93-interpolation-of-the-spectral-grid)). The cubic reproduces a node
+bit-for-bit, because at a node the weights are exactly 1 and 0. The simplex path reproduces one to rounding, because its weights are
 an affine transform of the point. Its error is machine epsilon times the spread of the
 spectra across the simplex, at the ulp level for a library whose neighbouring nodes are
 alike. Either error is far below what the data can distinguish, so the warm-start node scan
@@ -127,15 +130,28 @@ recomputed on 2025-09-25 to correct its hydrogen lines and OH⁺ strength withou
 name, so the build date is recorded in `meta["retrieved"]`, and an older build is a
 different calculation.
 
-**A library read from a file is read-only.** `fetch_library` and `load_library` return
-arrays that cannot be written to, and `SpectralLibrary.replace` makes a changed copy. For
-such a library `resampled_to` returns the same object for the same grid and medium, and
+**A library read from a file is read-only.** `fetch_library` (with or without
+`wave_range=`), `load_library` and `albireo.simulate.synthetic_library` return arrays that
+cannot be written to, and `SpectralLibrary.replace` makes a changed copy. For such a library
+`resampled_to` returns the same object for the same grid and medium, and
 `library_interpolator` builds its interpolator once per method, so rendering many
 templates on one grid resamples the library once (0.012 s for two templates of the RVS
 box, against 0.16 s when each resamples it). The results kept per library are the most
 recently used, up to 96 MB: a simulation grid and a template grid of the Gaia RVS band,
-and no optical grid of 20,000 pixels. A library built from arrays that can be written to,
-`synthetic_library` among them, is resampled on every call.
+and no optical grid of 20,000 pixels. A library built from arrays that can be written to
+is resampled on every call.
+
+**Library files are read without unpickling.** Unpickling a file can execute code, and a
+library cache can be a shared directory, so `load_library` reads every file with
+`allow_pickle=False`. `save_library` stores the label names as text. A file written by an
+earlier version stores them as a pickled object array and raises an error until it is
+converted once, with its label axes in order:
+
+```python
+ab.save_library(ab.load_library(path, label_names=("teff", "logg", "mh")), path)
+```
+
+The cached builds of the registry need no conversion.
 
 ## Above 7000 K: the hot box
 

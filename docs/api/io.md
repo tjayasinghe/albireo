@@ -62,6 +62,40 @@ merged spectra with `flux = 0.0, err = 1.0` exactly, which is indistinguishable 
 measurement, and those products have no quality column. The ends must be trimmed by the
 caller.
 
+## Image spectra and older headers
+
+A one-dimensional image spectrum takes its wavelengths from `CRVAL1`, `CDELT1` and
+`CRPIX1`. Three logarithmic conventions are read:
+
+- IRAF's `DC-FLAG = 1`: the axis is the base-10 logarithm of the wavelength.
+- A `CTYPE1` ending in `-LOG` (FITS WCS, Greisen et al. 2006): `CRVAL1` is a wavelength, and
+  $`\lambda = \mathrm{CRVAL1}\, \exp[\mathrm{CDELT1}\,(p - \mathrm{CRPIX1}) / \mathrm{CRVAL1}]`$
+  at pixel $`p`$.
+- `LOG` in `CTYPE1` without a base, as the Mercator HERMES pipeline writes for natural
+  logarithms: base 10 where that gives wavelengths between 100 Å and 10⁶ Å, and the natural
+  logarithm otherwise, with a warning.
+
+`DC-FLAG = -1`, which records no dispersion solution, raises an error, and so does an axis
+that gives no wavelengths between 100 Å and 10⁶ Å in any reading; `wave_scale=` corrects a
+wrong unit. Samples without a finite wavelength, such as the padding of a table, are left out
+with a warning.
+
+A `DATE-OBS` that holds only a date is combined with the first of `TIME-OBS`, `UTSTART`,
+`UT-START` and `UT` that gives the time as `hh:mm:ss`. Where none does, or the time is not
+valid, an error asks for `bjd=`; read as midnight, the epoch could be up to 24 hours wrong.
+The pre-1999 form `DD/MM/YY` is read as 19YY. Site coordinates may be numbers or
+sexagesimal strings and are read as east-positive degrees, so a header that writes a
+west-positive longitude needs `bjd=` and `v_bary=`. An elevation that cannot be read is taken
+as 0 m with a warning, which changes the BJD by less than 20 μs and the barycentric velocity
+by less than 0.4 m/s for a site below 5 km. Sexagesimal `RA` and `DEC` strings are read in
+hours and degrees.
+
+`read_raw_spectra` and `read_dataset` take the `instrument` and `frame` of `read_kwargs`, the
+`[read]` table of a pipeline configuration, as overrides for every file. Given the keyword
+arguments of `to_epoch` (`epoch_kwargs=`, which `read_dataset` passes), each spectrum is cut
+to the padded region as soon as it is read, so that one full-band file at a time is held in
+memory; the epochs are identical bit for bit.
+
 Background and references: [science overview](../science.md).
 
 ::: albireo.io

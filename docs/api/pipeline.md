@@ -39,6 +39,16 @@ There are three routes to the orbit:
 | `period = "search"` | a first velocity table is measured with library templates at the declared starting labels. Four periodograms propose candidate periods, a Keplerian is fitted from each, and the chi-square ranks them. The best few are compared by the disentangling's marginal likelihood, and the chosen orbit warm-starts the disentangling |
 | `velocities = "file"` | the free per-epoch table is fitted from measured velocities, and the period is obtained from the table afterwards. A non-numeric entry raises an error naming the epoch and the component, because the free fit has one velocity site per component per epoch and none for an unmeasured epoch. Such an epoch must be measured or removed from the dataset |
 
+**Checks of the declaration.** A configuration is checked when it is read, and
+`PipelineConfig` raises an error that names the star for a value that a stage would
+reject: a reversed `region`, `k_min` above `k_max`, semi-amplitude priors of different
+kinds within one star (a range, a held value, a Gaussian; a component without `k` takes the
+range `[k_min, k_max]`), a held eccentricity outside [0, 1), `light = "measure"` with
+declared `velocities`, an empty `{lo, hi}` range, or a `{value, sigma}` prior whose sigma is
+not positive and finite. A declared eccentricity above the bound that the disentangling is
+given (`ecc_max`) fails the star before its data are read, and the message names the
+setting to change.
+
 **Period search.** The candidates come from four periodograms of the same table
 ([`find_period`](rvorbit.md)). The floating-mean generalized Lomb-Scargle periodogram of
 the relative velocity contributes its fifty highest peaks, and its two-harmonic form, which
@@ -284,8 +294,10 @@ and the second scan pass of [`Disentangler.fit`](facade.md) are not run. They re
 within a basin, and this comparison only selects the basin. The cost is one evaluation at
 the table orbit, 42 phase trials and about 300 semi-amplitude trials per candidate for two
 components over a hundredfold semi-amplitude range, of order a minute or two per candidate
-on a dozen epochs. Each candidate's declaration holds a compiled model and is released as
-soon as its value is known.
+on a dozen epochs. The candidates' coarse declarations differ only in their starting values,
+so they share one compiled model, which is released after the last candidate. On four
+candidates of a simulated pair of 12 epochs of 1,934 pixels the comparison took 26.6 s with
+the shared model against 39.9 s with one model per candidate, with identical values.
 
 The table orbit is evaluated because the scans do not evaluate it (D75). They hold the
 period at the table's value and the eccentricity at its start, which is the table's value
@@ -311,7 +323,10 @@ comparison ran. Each candidate has an entry with its period, table chi-square, v
 nats, the two trials that value is the larger of (`scan_nats`, `table_orbit_nats`), the
 one that gave it (`scored_at`, `"scans"` or `"table orbit"`), that trial's semi-amplitudes
 and conjunction, the number of trials and the time in seconds. The chosen period and the
-margins over the runner-up and over the table's choice are also recorded.
+margins over the runner-up and over the table's choice (`margin_nats`, `over_table_nats`)
+are also recorded. A margin over a candidate without a finite marginal likelihood is
+`null`, and a candidate's value is the largest over its trials with a finite marginal
+likelihood.
 
 **Component order.** Components must be declared in order of decreasing mass, which for a
 main-sequence pair is the brighter star first. The likelihood does not determine which
@@ -349,7 +364,8 @@ diverged fit of the [D62 benchmark](../benchmarks.md), whose components correlat
 injected spectra at 0.07 and 0.02 and whose semi-amplitudes were constrained only by their
 priors. Everything downstream is measured against those components, so such a fit would
 still yield a full set of products, all of them derived from a failed fit. The star's
-directory keeps `log.txt`, `error.txt` and any table measured before the disentangling. The
+directory keeps `log.txt`, `error.txt` and any table measured before the disentangling,
+which `products.json` lists. The
 noise model (`noise_correlation` included, where the spectra were resampled onto a common
 grid) and the priors are the first things to check.
 
@@ -420,7 +436,8 @@ against 25 percent with a freely fitted amplitude. Where a component's precision
 from its start by more than a factor of ten, the correlation fits the amplitudes freely.
 The table's light column is then that fitted scale and not a light fraction, and a flag
 names the component, its starting value and the fitted one. `velocities.light_source` in
-`result.json` records which applied (`"declared"` or `"global re-measure"`). Where the
+`result.json` records which applied: `"declared"`, `"measured (correlation)"` for fractions
+that the `light = "measure"` stage measured, or `"global re-measure"`. Where the
 amplitudes are fitted freely and no epoch gives positive ones, there is none to hold. The
 table then has the amplitudes of each epoch, a flag says that they are not light
 fractions, and the entry is `"free per epoch"`.
@@ -471,13 +488,28 @@ Stars are independent, so `jobs > 1` runs them in a spawn-based process pool. On
 development desktop, four workers finish a batch of eight simulated stars 2.0× faster than
 one process and eight workers 2.5× faster. The scaling is sub-linear because a single star
 already occupies several cores, so the workers overlap only each star's serial part. Each
-worker's XLA and BLAS thread counts are capped at `cpu_count // jobs` as a precaution
-against oversubscription. On that benchmark the cap made no measurable difference. A
-worker returns a plain-data report. The live objects (the `Fit`, the velocity table, the
-label match) are retained only on an in-process run (`jobs=1`), since they hold compiled
-JAX programs that cannot be sent through a pipe. A star that fails is recorded in
-`failures.txt` and does not stop the others. The measurements are in
+worker's BLAS and OpenMP thread counts are capped at `cpu_count // jobs` as a precaution
+against oversubscription. XLA's own thread pool is not capped. The effect of the caps has
+not been measured: the recorded comparison varied XLA's Eigen threading only, and made no
+measurable difference. A worker returns a plain-data report. An interruption of the parent,
+such as a Ctrl-C at the console, cancels the stars still queued and is raised once the
+stars already running have returned. A star that fails is recorded in `failures.txt` and
+does not stop the others. The measurements are in
 [the benchmark record](../benchmarks.md#the-pipeline-in-worker-processes-2026-09-01).
+
+The live objects (the `Fit`, the velocity table, the label match) are retained only on an
+in-process run (`jobs=1`), since they hold compiled JAX programs that cannot be sent through
+a pipe, and only with `keep_live=True`, the default of `run_pipeline`. They take tens of MB
+per star on a short window and up to about a GB on an echelle star, and a batch that keeps
+them holds every star's at once. `keep_live=False`, which `albireo run` and `albireo demo`
+pass, releases them after each star. `release_compiled`, by default the opposite of
+`keep_live`, also releases the programs that JAX compiled for the star before the next one,
+through `jax.clear_caches()`, which clears every JAX cache of the process, those of other
+code included. Each star then compiles its programs again. Over five simulated stars of 7 to
+11 epochs without the label stage, the resident memory after each star stayed between 0.61
+and 0.69 GB with the release, against 1.95 rising to 3.94 GB without it, and each star took
+40 to 47 s against 26 to 34 s; the products were identical. The cost with the label stage
+and on real data has not been measured.
 
 ## Products
 
@@ -497,9 +529,20 @@ Each star's products are written to `<output>/<star>/`:
 | `spectra.png`, `residuals.png`, `velocities.png`, `phase_scan.png`, `todcor_surface.png`, `rv_curve.png` | the figures |
 | `log.txt` | the progress lines with timings, and every warning |
 
+A failed star's directory holds `log.txt`, `error.txt` and the products written before the
+failure, which `products.json` lists. The directory is named after the star, with `_2`,
+`_3`, ... appended where an earlier star of the batch took the name, compared without
+regard to case, so a run of a selection (`run_pipeline(stars=[...])`) writes each star
+where the whole batch would. A re-run of a star first removes its `result.json`,
+`summary.txt`, `error.txt` and `products.json`, and every product that the earlier
+`result.json` or `products.json` lists, so the directory holds the products of one run. The
+`spectra` directory of a BLOeM download and a declared velocity file are kept.
+
 Each batch has `results.json` (every report), `results.csv` (one row per star: period,
 eccentricity, semi-amplitudes and systemic velocities with errors, labels, flags),
-`summary.txt`, `failures.txt`, and `run.json` (the declaration as run).
+`summary.txt`, `failures.txt`, and `run.json` (the declaration as run). The JSON files are
+strict JSON: a value that is not finite is written as `null`, and `results.csv` leaves its
+cell empty.
 
 Background and references: [science overview](../science.md).
 

@@ -81,7 +81,9 @@ paths = ab.export_draws("draws/", grid, draws, format="gssp")
 
 Then fit every file with the same grid, the same line list, the same masks and the same
 starting guess, and take the spread of the resulting parameters. That spread is the
-disentangling contribution.
+disentangling contribution. For iSpec,
+`ab.export_draws("draws/", grid, draws, format="ispec", std=ab.spectra_std(marginal))`
+writes row *i* of the standard deviation as the error column of component *i* in every draw.
 
 `N = 100` is the recommended count. The relative standard error of a sample standard deviation
 is `1/sqrt(2(N-1))`: 7% at 100, 12.7% at 32, and 18% at 16. Below about 32 the spread is too

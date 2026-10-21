@@ -656,7 +656,9 @@ a fitted light fraction far from the declared one as the signature of a wrong or
 degeneracy also exposed a defect in the `Disentangler` interface (per-component `start_at` values
 were silently dropped), which is fixed. The scaling of a batch across worker processes is measured
 in [the benchmark record](../docs/benchmarks.md): 2.0× for four workers and 2.5× for eight. The
-per-worker thread cap, kept as a precaution, made no measurable difference there.
+per-worker BLAS and OpenMP thread caps are kept as a precaution. The comparison recorded there
+varied XLA's Eigen threading only and made no measurable difference; XLA's own thread pool was
+not capped (corrected 2026-10-21).
 
 ### 12. Templates fitted to the epochs (done, D70)
 

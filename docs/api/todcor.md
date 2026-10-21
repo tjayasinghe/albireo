@@ -132,7 +132,10 @@ minimum to record.
 `light="global"` solves the amplitudes at every epoch, takes the median over the epochs of
 each instrument at which every amplitude is positive, the epoch is usable and every
 component is detected, and measures again with that median held. Where no epoch
-qualifies, the median is over the epochs with positive amplitudes.
+qualifies, the median is over the epochs with positive amplitudes. An instrument none of
+whose epochs has the weighted pixels that the free pass needs has no median, and its epochs
+are skipped with a warning. Where no epoch of any instrument has them, `todcor` raises an
+error that gives the pixel counts.
 
 An amplitude of the free solution can be negative. Two templates that are both cooler than
 the stars reproduce a blend of weaker lines as a difference of the two, and a pair that is

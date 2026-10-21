@@ -256,13 +256,18 @@ took 6 minutes and at most 5 GB.
   `bosz2024-fgk-r50000` and `bosz2024-hot-r50000` libraries are sharper than PEPSI and are
   compared with it at its own resolution, which needs `dv_kms` below 1.3 km/s for an exact
   grid compensation; they are broader than most APF exposures, which are smoothed to them.
-- **Memory of the label stage.** The label stage evaluates every library node on the model
-  grid at once. With the 455-node `bosz2024-fgk-r20000` box it held about 12 GB on the
-  620 A PEPSI window and passed 11 GB on the 1200 A APF window before it was stopped for
-  lack of memory on a 31 GB machine running other jobs. A library restricted to the stars'
-  range keeps it at 4-5 GB: build it from the nodes of the registered box
-  (`SpectralLibrary` with the selected `nodes`, `normalized` and `log_continuum` rows, then
-  `albireo.save_library`) and declare the file as `[labels] library`.
+- **Memory of the label stage.** In the runs above the label stage evaluated every library
+  node on the model grid at once. With the 455-node `bosz2024-fgk-r20000` box it held about
+  12 GB on the 620 A PEPSI window and passed 11 GB on the 1200 A APF window before it was
+  stopped for lack of memory on a 31 GB machine running other jobs. Since 2026-10-20 the node
+  scan evaluates the nodes in blocks of 32, and on simulated windows of the same two sizes
+  the stage peaks at 4.1 and 5.3 GB of commit with that box. A library restricted to the
+  stars' range is smaller to project and to scan: build it from the nodes of the registered
+  box (`SpectralLibrary` with the selected `nodes`, `normalized` and `log_continuum` rows,
+  then `albireo.save_library`) and declare the file as `[labels] library`. A file saved this
+  way before 2026-10-21 stores its label names in a form that `load_library` no longer
+  reads, and raises an error until it is converted once:
+  `albireo.save_library(albireo.load_library(path, label_names=("teff", "logg", "mh")), path)`.
 - **Scattered light.** PEPSI spectra are not sky-subtracted, and the APF T decker
   (2 x 3 arcsec) leaves no room for a sky measurement. Scattered moonlight or twilight adds
   a solar spectrum at the topocentric rest velocity, which the model does not contain; such

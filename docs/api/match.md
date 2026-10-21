@@ -131,14 +131,38 @@ returned 119 K, 0.180 dex, 0.024 dex, 6.9 km/s and 0.035. In epochs mode `chi2`,
 pixels, so the report's nulls keep their meaning.
 
 The warm-start scan's default *v* sin *i* trials are 1, 5 and 10 km/s and a fifth and a
-half of the prior's upper bound, in every mode. The previous default started every fit at
-37.5 km/s or more on a 0 to 150 km/s prior.
+half of the upper bound of each component's own *v* sin *i* prior, clipped to that prior, in
+every mode. The previous default started every fit at 37.5 km/s or more on a 0 to 150 km/s
+prior. A held *v* sin *i* is its only trial. The default velocity trials span each
+component's own `v_kms` prior, or two standard deviations either side of the mean of a
+`Known` prior. The scan evaluates only the library nodes that the label priors allow.
+
+## Label priors and the library box
+
+A box library is extrapolated beyond its nodes without a barrier, and a label there is not
+a measurement. A uniform label prior that extends beyond a box library is narrowed to the
+box, with a `UserWarning` and a record under
+`assumptions["label_priors_narrowed_to_library"]`. The epoch comparison also bounds every
+label of a box library by the box (`assumptions["label_bounds_from_library"]`). The
+comparisons against $`\hat d`$ cannot bound a prior that is not uniform, and they warn where
+its reach extends past the box: three standard deviations either side of the mean of a
+`Known` prior, the bounds of a bounded one. A held value outside the box is warned of in
+every mode.
+
+## Weights and exclusions against the components
+
+In the comparisons against $`\hat d`$, an infinite value of `std` gives its pixel zero
+weight, and NaN or negative values raise an error. In `"matched"` mode the convolution of
+$`\hat d`$ spreads the flux of a pixel into its neighbours, so each range of
+`exclude_angstrom`, and each pixel of infinite `std`, is widened by the half-width of the
+instrument kernel on either side.
 
 ## The summary report
 
 `LabelMatch.summary()` begins with the caveats, which are part of the result. Every number
 is quoted against a null: the chi-square against a fit with no template and against the best
-raw grid node, each label's posterior width against its prior width, and the formal error
+raw grid node (with a shared [M/H], the best pair of nodes on one metallicity slice, which
+the model can represent), each label's posterior width against its prior width, and the formal error
 against the spread of the draws. A Teff–log g correlation near 0.98 with both free is
 expected and is labelled as expected. The remedy is to fix log g from the eclipsing
 solution, not to disregard the correlation.

@@ -74,8 +74,10 @@ Assumed, not measured:
       weights, but which optimum it finds depends on where tau starts.
 ```
 
-The injected values are *P* = 6.0 d, *K* = 42.0 and 63.0 km/s, *e* = 0.15, ω = 0.7. The
-fit takes one to three minutes on one CPU, much of it JAX compilation on the first call.
+The injected values are *P* = 6.0 d, *K* = 42.0 and 63.0 km/s, *e* = 0.15, ω = 0.7. On
+the desktop CPU of the [benchmark record](benchmarks.md#the-machine) the fit takes about one
+and a half minutes, almost all of it in the 300 L-BFGS steps; JAX compilation takes about
+6 s of it.
 "Stopped at the step cap" means that the optimizer's threshold, an absolute norm of the
 gradient, was not reached in 300 steps. It is not a failure here: the potential changed by
 less than 1e-10 nats over the last 30 steps, and the best-fit orbit agrees with the posterior
@@ -153,6 +155,11 @@ this plug-in approximation: the orbital intervals do not include the uncertainty
 smoothness weights. It also reports two convergence diagnostics per parameter, R-hat and
 the effective sample size; the [method overview](method.md#8-uncertainties-on-the-orbit)
 describes the stages and the [glossary](method.md#14-glossary) defines the terms.
+
+The summary above was recorded before 2026-10-21, when the Hessian behind the mass matrix
+came to be evaluated in one compiled program. The mass matrix now differs from the one used
+then in the last bits, so a rerun can differ from these numbers within the Monte Carlo
+error. The chains were not rerun.
 
 ## Inspect the component spectra
 

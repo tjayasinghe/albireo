@@ -66,7 +66,9 @@ directory records what its chunks were made from (`run.json`: a digest of the sy
 configuration and the chunk size), and a call with other systems, another configuration or
 another chunk size is refused. The systems are compared by their content, since the names
 of a drawn population are positional. The manifest that `collect` writes gives the commit
-and whether the package or the scripts had changes that the commit does not hold.
+and whether the package or the scripts had changes that the commit does not hold, where the
+package lies at `src/albireo` of a git checkout. Elsewhere the commit is `"unknown"` and the
+flag `null`.
 
 ## The chain for one system
 
@@ -134,7 +136,7 @@ transit.
 | `sum_d1`, `sum_d2`, `med_d2` | detection statistics summed over the usable transits |
 | `f_ok`, `f_converged`, `f_passes`, `f_exchanged`, `f_chi2` | under a fitted declaration: whether the template fit was made (the declaration it starts from is kept where it was not); whether its velocities converged; the number of alternations; whether the fit continued from the solution with the two stars exchanged, as the declared priors name them; its reduced chi-square |
 | `f_teff1`, `f_teff2`, `f_logg1`, `f_logg2`, `f_mh`, `f_vsini1`, `f_vsini2`, `f_light2`, and `f_teff1_err`, `f_teff2_err`, `f_vsini1_err`, `f_vsini2_err`, `f_light2_err` | the fitted labels, rotation and light fraction of the first and of the second template, and their errors |
-| `t_sim`, `t_todcor`, `t_fit`, `t_orbit` | wall-clock seconds of the stages; `t_todcor` includes `t_fit` |
+| `t_sim`, `t_todcor`, `t_fit`, `t_orbit` | wall-clock seconds of the stages; `t_todcor` includes `t_fit`, and a correlation that a fitted declaration shares with the declaration its fit starts from is measured once and counted in the row that measured it |
 
 ## Cost and memory
 

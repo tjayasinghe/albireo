@@ -202,7 +202,10 @@ potential there was taken with the weights held, as for the mass matrix of `Fit.
 with the weights free under their hyperpriors. The orbital block of the free covariance is
 the Laplace approximation marginalized over the weights, and the held covariance is the
 plug-in. The held covariance equals the conditional of the free one to 9 × 10⁻¹⁴. The
-harness is `scripts/plug_in_bench.py`.
+harness is `scripts/plug_in_bench.py`. Its Hessians were evaluated operation by operation.
+Since 2026-10-21 `laplace_check` evaluates them in one compiled program, so a rerun can
+give another value at the level of rounding for this agreement; the ratios of the table
+are not expected to change at the printed precision. The script was not rerun.
 
 | sampled coordinate | free / held standard deviation | largest correlation with a weight |
 |---|---|---|
@@ -1509,7 +1512,10 @@ with the problem embedded. The fix uses numpyro's own mechanism for this case:
 * the model takes the base problem as an optional argument and exposes it through a
   `model_args` attribute on the returned closure;
 * `run_map` and `laplace_inverse_mass` build the potential with
-  `initialize_model(..., dynamic_args=True, model_args=...)`;
+  `initialize_model(..., dynamic_args=True, model_args=...)`. Since 2026-10-21 they build it
+  with numpyro's `get_potential_fn(..., dynamic_args=True)`, from the supports that an
+  abstract trace of the model gives, and use `initialize_model` only where that trace does
+  not apply. The model arguments are traced as before;
 * `run_nuts` runs `MCMC(..., jit_model_args=True)`, which regenerates the potential from
   the traced arguments inside the jitted sample loop (`hmc.py`'s `_potential_fn_gen`).
 
@@ -1556,8 +1562,10 @@ Two qualifications apply:
   problem-sized constants in the closure build, which confirms that the check detects
   them.
 * `test_run_map_closure_and_argument_paths_agree` (float tolerance, different graphs) and
-  `test_laplace_closure_and_argument_paths_agree` (exact, same eager ops) compare the two
-  paths.
+  `test_laplace_closure_and_argument_paths_agree` compare the two paths. The Laplace
+  comparison was exact while the Hessian was evaluated operation by operation. Since
+  2026-10-21 both paths compile it, as two different graphs, and they agree to rounding:
+  1.1e-12 at most on entries of order 1e-5.
 * The NUTS acceptance test now runs through `jit_model_args=True` by default, so it also
   regression-tests the traced sample loop.
 
@@ -2327,6 +2335,13 @@ already removed it one stage later (`_solve_stage` is a `custom_vjp`, which is w
 `laplace_inverse_mass` uses reverse-over-reverse). Second derivatives remain available, and
 tested, through reverse-over-reverse.
 
+Since 2026-10-21 `sensitivity_forecast` does not take this derivative. It contracts the
+diagonal and first subdiagonal blocks of `Sigma`, which the Takahashi sweep for the pointwise
+band forms one at a time, against those of `A^T W A`. The two routes agree to 1.2e-13
+relative on the designs of `examples/08_forecast.py`, and to 3e-13 on the configurations of
+the tests, which include jitter, AR(1) noise and a telluric component. `forecast._effective_parameters`, the route above, is kept as the
+reference of the tests and for `scripts/aiphe_k1k2_map.py`.
+
 ### Rejected optimizations
 
 Four candidates looked correct in analysis and were rejected on measurement. They bound the
@@ -2602,7 +2617,12 @@ Chi-square is 1835.8 for 2020 pixels at all three signal-to-noise levels, as exp
 quoted sigma matches the injected noise and the seed is fixed, so residual/sigma is the
 same array and the reduced chi-square is 0.909 at every noise scale. The null chi-squares
 change as expected: the nearest-node null is 7.6e3 / 3.8e4 / 1.5e5 and the no-template null
-1.7e5 / 1.1e6 / 4.2e6, both in units of the decreasing sigma.
+1.7e5 / 1.1e6 / 4.2e6, both in units of the decreasing sigma. The nearest-node null was then
+the sum of each star's best node, which with a shared [M/H] can combine nodes on different
+metallicity slices. Since 2026-10-21 it is the best scan candidate, a pair on one slice. On
+the example's own configuration that raises the null from 10,810 to 12,070. The three
+values above were not regenerated; the no-template null and the chi-square are not
+affected.
 
 ### Wall clock
 
@@ -3044,12 +3064,18 @@ over the cores. The extra processes therefore overlap only the serial remainder 
 (compilation, the Python loop of the 41-point conjunction scan, the orbit fit, the writing),
 which bounds the gain.
 
-The thread cap made no measurable difference. The pipeline caps each worker's XLA and
-BLAS threads at `cpu_count // jobs`, but eight workers each allowed all 32 threads finished
-the same batch in 54.7 s against 54.1 s capped: on this workload the operating system's
-scheduler handles the oversubscription. The cap is kept as a precaution with no measurable
-cost here, because oversubscription has been observed on this machine in BLAS-heavy stages
-(the re-run's 32-thread OpenBLAS). It is not the source of the speedup.
+The one thread setting that the comparison varied made no measurable difference. The
+pipeline caps each worker's BLAS and OpenMP threads at `cpu_count // jobs`
+(`OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`) and sets
+`--xla_cpu_multi_thread_eigen=false`. The run labelled "32 (cap off)" set that flag to true
+and kept the BLAS and OpenMP caps, which were 4 threads per worker in both eight-worker
+runs; it finished the same batch in 54.7 s against 54.1 s.
+XLA's own thread pool was capped in neither run: the `intra_op_parallelism_threads` token
+that the pipeline also set is not an XLA flag and was ignored. This paragraph stated before
+2026-10-21 that the run compared XLA and BLAS thread caps, which it did not; the token is no
+longer set. The BLAS and OpenMP caps are kept as a precaution, because oversubscription has
+been observed on this machine in BLAS-heavy stages (the re-run's 32-thread OpenBLAS). Their
+effect on this workload has not been measured.
 
 `jobs="auto"` is `cpu_count // 4`, eight on this machine, the last capped row. More workers
 than cores gain nothing on a CPU: once the serial remainder is overlapped the batch is
@@ -3070,6 +3096,18 @@ as a user runs it, through `run_pipeline` from a `StarConfig`, and every metric 
 the pipeline's truth block, so the harness adds nothing the pipeline does not report.
 Research notes cited by file name in this section are in the repository under
 `internal/research/2026-09-09-gaia-rvs-benchmark/`.
+
+**Systems recovered in the other order (note of 2026-10-21).** Two defects of the
+comparison with the injected values, fixed on 2026-10-21, affect the tables of this section through the runs whose
+components came out in the other order (the row "components recovered in the other order",
+up to 26 percent of the orbit and blind tiers). The orbital elements were not exchanged
+with the components, so the conjunction of such a run was compared with the other star's,
+an error of 0.39 to 0.5 of a phase. `benchmark.collect` divided the semi-amplitude
+difference of each component of such a run by the injected semi-amplitude of the star it
+was not compared with, so each relative error was off by a factor of about q or 1/q. The rows "abs(d t_conj) [phase]",
+"abs(dK1 / K1)", "abs(dK2 / K2)" and "K1 and K2 within 5%" include these errors and were
+not recomputed. The pulls of the semi-amplitudes and the velocities, and the other rows, are
+not affected.
 
 **Simulation.** Each system's two components are BOSZ 2024 spectra (`bosz2024-fgk-rvs`,
 R = 20,000) at the labels the dwarf sequence gives for the masses, rotationally broadened,
@@ -3111,7 +3149,13 @@ Fourteen systems ran (46 runs). One run failed on the first pass at a starting v
 range's bound and completed on the rerun after a guard was added. The quartiles are
 P 3.1 / 5.9 / 8.6 d, e 0.013 / 0.068 / 0.36, K1 + K2 105 / 141 / 187 km/s,
 q 0.93 / 0.96 / 0.98, F2/F1 0.76 / 0.85 / 0.96, Teff1 5800 / 6200 / 6700 K,
-G_RVS 7.4 / 8.5 / 9.7 and transits 12 / 15 / 16. Four eclipse.
+G_RVS 7.4 / 8.5 / 9.7 and transits 12 / 15 / 16. Four eclipse. Where the catalogue lists
+the less massive star first, the components are exchanged. Until 2026-10-21 the new first
+component kept the other star's argument of periastron, which mirrors its velocity curve.
+Four eccentric systems of this population (e = 0.013, 0.050, 0.087 and 0.468) were built
+that way. Their injected values are self-consistent, so the scores below stand, but their
+curve shapes differ from the catalogue's, materially at e = 0.468; a population rebuilt
+from the archive gives them ω + π.
 
 **Tiers.** Every system is simulated once and analysed under four declarations, each a
 `StarConfig` in the pipeline's own vocabulary:
@@ -3711,7 +3755,10 @@ centred on the phase scan's best. That put the start on the window's edge, where
 unconstraining transform is infinite. With the window centred on the start of the fit, the
 star converges to within 0.2 and 0.1 km/s of the injected values. The blind run of the
 553-day pair had failed at the same window check and was run again with the zero points
-dropped.
+dropped. Since 2026-10-21 the final phase scan runs whenever either scan pass moved the
+start, so this run and any other of this and the later runs that took the same path would
+start the fit elsewhere on a rerun. They were not rerun, and the size of the effect is not
+known.
 
 | quantity | oracle (19) | eclipsing (2) | orbit (19) | blind (19) |
 |---|---|---|---|---|
@@ -4801,6 +4848,13 @@ median, 8.5 and 11.5 s at the 90th percentile and 27 s at most, with the eight p
 running. The alternation ends after two passes for 50 and 45 percent of the fits and runs
 its four for 29 and 36 percent.
 
+**A defect at the seams of the library boxes (note of 2026-10-21).** For a star within 5 K
+below the temperature that two library boxes share (4000 and 7000 K here), `fit_templates`
+rendered the upper side of the temperature difference from the next box, with the other
+labels at that box's edges, so the temperature derivative was in part a difference in
+gravity. The fits of this run took that path for any star that came within 5 K below a
+seam. The defect was fixed on 2026-10-21; its effect on these numbers was not measured.
+
 ## Gaia RVS: the detection gate on faint pairs (2026-10-13)
 
 Machine: the same desktop, CPU only, float64, shared with other work during the runs. The
@@ -5251,7 +5305,9 @@ differ by `(sum k^2)^-1/2` = 4.7 (`sum k^2` = 0.045 on APF, 0.126 on PEPSI), and
 chi-squares by 22. Route (a) on PEPSI with the registered FGK box, whose [M/H] axis ends at
 -1.0 (the fit extrapolated to -1.24), and with the low-metallicity box gave systemic
 velocities 0.011 km/s apart, while the primary's Teff differed by 410 K and its [M/H] by
-0.43 dex.
+0.43 dex. Since 2026-10-21 a uniform label prior that extends beyond a box library is
+narrowed to the box with a warning, and the epoch comparison bounds every label of a box
+library by the box, so the same declaration would now stop at -1.0.
 
 ### Cost
 
@@ -5260,8 +5316,10 @@ smoothing takes under 15 s. The label stage took 200-560 s for route (a) and 650
 route (c). Its peak memory was about 12 GB with the 455-node FGK box on the 18,739-pixel PEPSI
 grid and 4-5 GB with boxes of 60-126 nodes. With the 455-node box on the 36,085-pixel APF
 grid it passed 11 GB within half a minute and was stopped when the machine, which was
-running other jobs, ran out of memory. The label stage evaluates every node of the library
-on the model grid at once, so its memory grows with both. `fit_templates` took 15 s (PEPSI) and 230 s
+running other jobs, ran out of memory. The label stage then evaluated every node of the
+library on the model grid at once, so its memory grew with both. Since 2026-10-20 the node
+scan evaluates the nodes in blocks of 32, and on simulated cases of 18,739 and 36,085
+pixels with the 455-node box the stage peaks at 4.1 and 5.3 GB of commit (`CHANGELOG.md`). `fit_templates` took 15 s (PEPSI) and 230 s
 (APF). The R = 50,000 boxes are 1371 MB (FGK) and 1140 MB (hot) to download; the
 original-resolution files are 12.5 MB per node, about 5.7 GB for the FGK box.
 

@@ -120,8 +120,9 @@ took 269 s and reached a peak working set of 5061 MB. With both compiled once th
 26 s and 446 MB, and the whole 33-table rerun peaked at 697 MB.
 
 **Selection of velocities.** A velocity enters the search and the fit where its own
-component was measured: a finite velocity and error, off that component's search edge, at an
-epoch that is not blended. The relative velocity needs both components. A component
+component was measured: a finite velocity and a positive finite error, off that component's
+search edge, at an epoch that is not blended. A zero error, which gave the velocity an
+infinite weight in the search, excludes it. The relative velocity needs both components. A component
 searched alone (`components=[name]`), or fitted jointly with the others, keeps every epoch
 at which it was measured, whatever the state of the others there. Neither function
 intersects this test with `VelocityTable.good`, which requires every component to be
@@ -150,7 +151,11 @@ is the caller's decision, and the pipeline's detection gate does so. $`\sqrt{2}`
 weighted standard deviation was tested in its place and rejected. Sampled evenly in time it
 is 0.34 to 0.51 of $`K`$ at $`e = 0.9`$, and it changed the chi-square ranking on six
 benchmark tables whose components were all usable. The only bound the fit places on a
-semi-amplitude is zero, and the start is held at or above 1e-3 km/s.
+semi-amplitude is zero, and the start is held at or above 1e-3 km/s. A starting `k` that is
+not finite, or that does not broadcast to one value per fitted component, raises an error. So do a
+starting eccentricity of zero without `circular=True`, since the origin of
+$`(\sqrt{e} \cos \omega, \sqrt{e} \sin \omega)`$ is singular, and a start outside the bounds
+of ±0.95 on either of those coordinates.
 
 `n_peaks` sets how many distinct peaks are reported: the best and `n_peaks - 1` aliases. Two
 peaks are distinct when their periods differ by more than 2%. With `n_harmonics = 2`
@@ -195,7 +200,9 @@ components were interchanged), `alternative` (the other minimum was taken) and `
 (the epoch was flagged for a second minimum and has been decided, so it is no longer
 `blended`). `Assignment.apply` makes the same decisions on another table with the same
 epochs, which is how the [pipeline](pipeline.md) decides on a copy of a table and delivers
-the table as measured.
+the table as measured. For a table of two components, `reassign_by_orbit` and
+`assign_by_orbit` raise an error where the predicted velocities are not of shape
+`(2, n_epochs)`.
 
 ```python
 from albireo.rvorbit import assign_by_orbit, assign_components
