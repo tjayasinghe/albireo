@@ -552,14 +552,22 @@ def _prior_diagonals(prior: SmoothnessPrior, n_pix: int):
 
 
 def _add_prior_band(band, prior: SmoothnessPrior, n_pix: int, p: int, nc: int):
-    """Add the (component-diagonal, pentadiagonal) prior band to the band tensor."""
-    off0, _ = _band_offsets(p, nc)
+    """Add the (component-diagonal, pentadiagonal) prior band to the band tensor.
+
+    A prior diagonal whose slot lies outside the band, which happens only for a stacked
+    bandwidth ``p`` below ``2 nc``, is not stored. A negative slot index would otherwise
+    wrap to the far end of the slot axis: at ``nc = 2`` and ``p = 1`` the second prior
+    diagonal was added to the main diagonal. Slots beyond the band end were already
+    dropped by the scatter. :func:`band_block_tridiagonal` rejects such bandwidths.
+    """
+    off0, n_k = _band_offsets(p, nc)
     d0, d1, d2 = _prior_diagonals(prior, n_pix)
     band = band.at[:, :, off0, 0].add(d0.T)
-    band = band.at[: n_pix - 1, :, off0 + 1, 0].add(d1.T)
-    band = band.at[1:, :, off0 - 1, 0].add(d1.T)
-    band = band.at[: n_pix - 2, :, off0 + 2, 0].add(d2.T)
-    band = band.at[2:, :, off0 - 2, 0].add(d2.T)
+    for s, d in ((1, d1), (2, d2)):
+        if off0 + s < n_k:
+            band = band.at[: n_pix - s, :, off0 + s, 0].add(d.T)
+        if off0 - s >= 0:
+            band = band.at[s:, :, off0 - s, 0].add(d.T)
     return band
 
 
@@ -653,7 +661,8 @@ def band_block_tridiagonal(
     prior
         Spectral prior (one component per problem component).
     half_bandwidth
-        Static per-component half-bandwidth bound ``b_nat``.
+        Static per-component half-bandwidth bound ``b_nat``, at least
+        ``prior.half_bandwidth``.
     block_size
         Solver block size ``B >= p`` (default ``p``).
     remat
@@ -668,6 +677,12 @@ def band_block_tridiagonal(
         lower it if the gradient does not fit.
     """
     nc, n_pix = problem.n_components, problem.grid.n
+    if int(half_bandwidth) < prior.half_bandwidth:
+        raise ValueError(
+            f"half_bandwidth ({int(half_bandwidth)}) is below the prior's own half-bandwidth "
+            f"({prior.half_bandwidth}): the band cannot hold the prior's diagonals. Use "
+            "max(Problem.natural_half_bandwidth, prior.half_bandwidth)."
+        )
     p = nc * int(half_bandwidth) + nc - 1
     bs = int(block_size) if block_size is not None else max(p, 8)
     if bs < p:

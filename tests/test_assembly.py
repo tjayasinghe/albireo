@@ -21,7 +21,9 @@ import pytest
 
 import albireo as ab
 from albireo.assembly import (
+    _add_prior_band,
     _band_accumulate,
+    _band_offsets,
     _prior_diagonals,
     band_block_tridiagonal,
     prior_block_tridiagonal,
@@ -610,6 +612,36 @@ def test_band_rejects_too_small_half_bandwidth():
     with pytest.raises(ValueError, match="half_bandwidth too small"):
         band_block_tridiagonal(PROBLEM, PRIOR2, floor - 1)
     band_block_tridiagonal(PROBLEM, PRIOR2, floor)  # the floor itself fits
+
+
+def test_band_rejects_a_half_bandwidth_below_the_priors():
+    """A band narrower than the prior's own half-bandwidth cannot hold the prior."""
+    wide = SmoothnessPrior(tau=PRIOR2.tau, eta=PRIOR2.eta, half_bandwidth=B_NAT + 1)
+    with pytest.raises(ValueError, match="below the prior's own half-bandwidth"):
+        band_block_tridiagonal(PROBLEM, wide, B_NAT)
+    band_block_tridiagonal(PROBLEM, wide, B_NAT + 1)
+
+
+@pytest.mark.parametrize("n_comp, b_nat", [(2, 0), (1, 0), (1, 1)])
+def test_a_band_narrower_than_the_prior_does_not_wrap_its_diagonals(n_comp, b_nat):
+    """Each slot of the band tensor holds only its own prior diagonal.
+
+    Below a stacked bandwidth of ``2 n_comp`` the slot of a lower prior diagonal is
+    negative. It wrapped to the far end of the slot axis: at two components and
+    ``b_nat = 0`` the second diagonal was added to the main diagonal, and at one component
+    and ``b_nat = 1`` it was added to the first upper diagonal.
+    """
+    n_pix = 9
+    prior = SmoothnessPrior(tau=np.linspace(5e2, 2e3, n_comp), eta=np.full(n_comp, 1e-2))
+    p = n_comp * b_nat + n_comp - 1
+    off0, n_k = _band_offsets(p, n_comp)
+    band = np.asarray(
+        _add_prior_band(jnp.zeros((n_pix, n_comp, n_k, n_comp)), prior, n_pix, p, n_comp)
+    )
+    d0, d1, _ = (np.asarray(d).T for d in _prior_diagonals(prior, n_pix))
+    assert np.array_equal(band[:, :, off0, 0], d0)
+    if off0 + 1 < n_k:
+        assert np.array_equal(band[: n_pix - 1, :, off0 + 1, 0], d1)
 
 
 def test_deleted_native_samples_warn_about_bandwidth():
