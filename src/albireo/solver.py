@@ -131,9 +131,9 @@ def probe_block_tridiagonal(
 ):
     """Assemble a banded SPD operator into a :class:`BlockTridiagonal` by comb probing.
 
-    Probes are applied in sequential batches of ``probe_chunk`` under ``lax.map``, with
+    Probes are applied in sequential batches of ``probe_chunk`` by a ``lax.scan``, with
     the combs generated from their offsets inside the loop body, and the block storage is
-    read out of the probe outputs with per-block gathers, also under ``lax.map``.
+    read out of the probe outputs with per-block gathers in a second ``lax.scan``.
     Sequential batching bounds the memory: unrolled probe batches have no data
     dependence, so XLA schedules them with overlapping live ranges and the
     temporary-buffer plan grows with the total probe count (about 80 GB at survey scale,
