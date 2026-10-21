@@ -1530,6 +1530,49 @@ def test_the_amplitude_profile_keeps_the_sites_of_the_scans(dataset, monkeypatch
 # -- the accessors of a fit and the free velocity table -------------------------------
 
 
+def test_the_accessors_of_a_fit_share_one_solve(dataset, truth, monkeypatch):
+    """The pipeline read the solve at the MAP about ten times per star, each one a solve.
+
+    The values are those of one solve each, bit for bit, and a copy made with
+    ``dataclasses.replace`` solves again.
+    """
+    from dataclasses import replace
+
+    import jax.numpy as jnp
+
+    from albireo.forward import data_residual_zscores
+    from albireo.likelihood import spectra_std
+
+    fit = _fit_at_injected(_dis(dataset), truth, [100.0] * 5)
+    marginal = fit.marginal()
+    d_hat, std = np.asarray(marginal.d_hat), np.asarray(spectra_std(marginal))
+    z = np.asarray(data_residual_zscores(fit.dis.model.problem_at(fit.theta), marginal.d_hat))
+    z_rms = float(np.sqrt(np.mean(np.square(z[np.isfinite(z)]))))
+    solves = []
+    solve = ab.Fit.marginal
+
+    def counted(self):
+        solves.append(self)
+        return solve(self)
+
+    monkeypatch.setattr(ab.Fit, "marginal", counted)
+    shared = fit._spectra_and_std()
+    assert fit.z_rms == z_rms and fit.z_rms == z_rms
+    fit.composite(), fit.templates(), fit.summary()
+    assert len(solves) == 1
+    np.testing.assert_array_equal(shared[0], d_hat)
+    np.testing.assert_array_equal(shared[1], std)
+    np.testing.assert_array_equal(fit.spectra(), d_hat)
+    np.testing.assert_array_equal(fit.std(), std)
+    np.testing.assert_array_equal(fit.residual_zscores(), z)
+    assert not fit.spectra().flags.writeable and not fit.std().flags.writeable
+    # A copy may change the declaration or the parameters.
+    moved = dict(fit.result.params, k=jnp.asarray(fit.result.params["k"]) + 1.0)
+    copy = replace(fit, result=replace(fit.result, params=moved))
+    assert not np.array_equal(copy.spectra(), d_hat)
+    assert len(solves) == 2
+
+
 def _stub_the_optimizer(monkeypatch):
     """Replace `run_map` with one that returns its start and records its arguments."""
     from albireo.inference import MAPResult
@@ -1692,3 +1735,14 @@ def test_a_scan_with_a_failed_trial_keeps_a_finite_contrast():
         start_value=-np.inf,
     )
     assert np.isnan(amplitude.contrast)
+
+
+def test_the_scan_declaration_is_built_once(dataset):
+    """A repeated fit reuses the coarse declaration, its model and its compiled programs."""
+    from dataclasses import replace
+
+    dis = _dis(dataset)
+    scanner = dis._scan_declaration()
+    assert dis._scan_declaration() is scanner
+    assert scanner.grid.dv_kms == pytest.approx(2.0 * dis.grid.dv_kms)
+    assert replace(dis)._scan_declaration() is not scanner

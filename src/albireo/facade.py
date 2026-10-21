@@ -1996,8 +1996,13 @@ class Disentangler:
         size halves the pixel count and the solver bandwidth, and a marginal solve costs a
         quarter to an eighth of the full model's, which makes a joint scan over the
         semi-amplitudes and the phase affordable.
+
+        The copy is built once and kept with this declaration, so a repeated :meth:`fit`
+        reuses its model and the programs compiled for it.
         """
-        return replace(self, dv_kms=2.0 * float(self.grid.dv_kms))
+        return self._cached(
+            "scan_declaration", lambda: replace(self, dv_kms=2.0 * float(self.grid.dv_kms))
+        )
 
     def _scan_batch(self) -> int:
         """Trials per compiled batch of the semi-amplitude scan: 16, or fewer above 1 GiB.
@@ -2725,6 +2730,11 @@ class Fit:
     smoothing: tuple | None = None
     max_steps: int | None = None
 
+    # The conditional mean and standard deviation at the MAP, and the residual z-score
+    # RMS, computed once (_solved). init=False so that dataclasses.replace() starts the new
+    # fit with an empty cache: it may change the declaration or the parameters.
+    _cache: dict = field(default_factory=dict, repr=False, compare=False, init=False)
+
     @property
     def params(self) -> dict:
         """The MAP site values, as returned by :func:`albireo.run_map`."""
@@ -2859,36 +2869,57 @@ class Fit:
         return dict.fromkeys(instruments, float(declared))
 
     def marginal(self):
-        """The conditional solve at the MAP: spectra, precision, and log-likelihood."""
+        """The conditional solve at the MAP: spectra, precision, and log-likelihood.
+
+        Every call solves again. :meth:`spectra`, :meth:`std` and :attr:`z_rms` keep their
+        results instead.
+        """
         return self.dis.model.marginal(self.theta)
+
+    def _solved(self, *, std: bool = False) -> dict:
+        """The cache, holding ``d_hat`` (and ``std`` if asked) from one solve at the MAP.
+
+        The accessors of a fit all read the solve at one ``theta``, and the pipeline calls
+        them about ten times per star. The arrays are kept, read-only; the
+        :class:`~albireo.inference.MarginalResult`, whose precision band is large, is not.
+        Repeated solves at one ``theta`` give the same arrays bit for bit.
+        """
+        cache = self._cache
+        if "d_hat" not in cache or (std and "std" not in cache):
+            marginal = self.marginal()
+            cache.setdefault("d_hat", np.asarray(marginal.d_hat))
+            if std:
+                cache["std"] = np.asarray(spectra_std(marginal))
+        return cache
 
     def spectra(self) -> np.ndarray:
         """Conditional-mean component spectra ``d``, shape ``(n_comp, n_pix)``.
 
         These are deviations from a unit continuum, so the component spectrum is ``1 + d``
-        and the observable is ``l_i * d_i``; see :meth:`Disentangler.assumptions`.
+        and the observable is ``l_i * d_i``; see :meth:`Disentangler.assumptions`. The
+        array is computed once per fit and is read-only.
         """
-        return np.asarray(self.marginal().d_hat)
+        return self._solved()["d_hat"]
 
     def std(self) -> np.ndarray:
         """Pointwise standard deviation of :meth:`spectra`, of the same shape.
 
         It is large wherever the prior rather than the data sets the spectrum, which
         covers most of the continuum, and is therefore exported alongside the spectrum.
+        The array is computed once per fit and is read-only.
         """
-        return np.asarray(spectra_std(self.marginal()))
+        return self._solved(std=True)["std"]
 
     def _spectra_and_std(self) -> tuple[np.ndarray, np.ndarray]:
         """:meth:`spectra` and :meth:`std` from one solve of the marginal.
 
-        Each of the two methods solves the marginal at the MAP. Called in succession, the
-        second solve allocates its buffers before those of the first are released, and the
-        selected inverse of :meth:`std` adds its own. At 36,085 model pixels the pair reached
-        7.1 GB of commit, against 5.1 GB for one solve with its selected inverse. The arrays
-        are those of the two methods, bit for bit.
+        Two solves in succession allocate the second's buffers before those of the first
+        are released, and the selected inverse of :meth:`std` adds its own. At 36,085 model
+        pixels a pair of solves reached 7.1 GB of commit, against 5.1 GB for one solve with
+        its selected inverse. When neither array is cached yet, both come from one solve.
         """
-        marginal = self.marginal()
-        return np.asarray(marginal.d_hat), np.asarray(spectra_std(marginal))
+        cache = self._solved(std=True)
+        return cache["d_hat"], cache["std"]
 
     def composite(self) -> np.ndarray:
         """The light-weighted stellar sum ``sum_i l_i d_i``, the observed quantity.
@@ -2903,14 +2934,18 @@ class Fit:
     def residual_zscores(self) -> np.ndarray:
         """Whitened data residuals. Their RMS is close to 1 when the noise model is correct."""
         return np.asarray(
-            data_residual_zscores(self.dis.model.problem_at(self.theta), self.marginal().d_hat)
+            data_residual_zscores(
+                self.dis.model.problem_at(self.theta), jnp.asarray(self.spectra())
+            )
         )
 
     @property
     def z_rms(self) -> float:
         """RMS of :meth:`residual_zscores`, the check to make before adding jitter."""
-        z = self.residual_zscores()
-        return float(np.sqrt(np.mean(np.square(z[np.isfinite(z)]))))
+        if "z_rms" not in self._cache:
+            z = self.residual_zscores()
+            self._cache["z_rms"] = float(np.sqrt(np.mean(np.square(z[np.isfinite(z)]))))
+        return self._cache["z_rms"]
 
     def summary(self) -> str:
         """Report the fit: convergence, orbit or velocities, ML-II, residuals, assumptions.
@@ -3007,11 +3042,12 @@ class Fit:
                     f"{span:.3f} km/s (zero point removed per component)"
                 )
         lines += ["", self._hyper_report(), ""]
+        z_rms = self.z_rms
         lines.append(
-            f"  residual z-score RMS {self.z_rms:.3f}"
+            f"  residual z-score RMS {z_rms:.3f}"
             + (
                 ""
-                if abs(self.z_rms - 1.0) < 0.2
+                if abs(z_rms - 1.0) < 0.2
                 else "   <- the noise model is not describing these data; read "
                 "docs/benchmarks.md before adding a jitter term"
             )
@@ -3530,7 +3566,7 @@ class Fit:
         names = self.dis.component_names
         conditioned = tuple(names[n_stellar:])
         if conditioned:
-            d_hat = np.asarray(model.marginal(theta).d_hat)
+            d_hat = self.spectra()
             others = np.zeros_like(d_hat)
             others[n_stellar:] = d_hat[n_stellar:]
             predicted = apply_model(problem, jnp.asarray(others))
@@ -3879,6 +3915,11 @@ class Fit:
                 targets = self.smoothing_widths(resolving, smoothing)
                 if targets:
                     return self.smoothed(targets).match_labels(stars, **kwargs)
+            if len(self.dis.component_names) > self.dis.n_stellar:
+                # The statistics hold a telluric or nebular row at its posterior mean, and
+                # the components passed on below need the same solve with its errors, so
+                # one solve serves both.
+                self._solved(std=True)
             kwargs["statistics"] = self.epoch_statistics(resolving_power=resolving)
         spectra, std = self._spectra_and_std()
         rows = [self.dis.component_names.index(name) for name in names]

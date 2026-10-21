@@ -729,14 +729,19 @@ class _LabelFitReached(Exception):
     """Raised in place of the label fit, once ``Fit.match_labels`` has prepared its input."""
 
 
-def test_the_spectra_and_their_errors_come_from_one_solve(plain, library, monkeypatch):
+def test_the_spectra_and_their_errors_come_from_one_solve(
+    plain, correlated_telluric, library, monkeypatch
+):
     """``Fit.match_labels`` solves the marginal at the MAP once for the spectra and the errors.
 
-    ``Fit.spectra()`` and ``Fit.std()`` solve it once each. Called in succession, the second
-    solve allocated before the first was released, and the stage reached 7.1 GB of commit
-    at 36,085 model pixels against 5.1 GB for one solve with its selected inverse. The
-    arrays passed on are those of the two methods.
+    Two solves in succession allocated the second's buffers before those of the first were
+    released, and the stage reached 7.1 GB of commit at 36,085 model pixels against 5.1 GB
+    for one solve with its selected inverse. The arrays passed on are those of
+    ``Fit.spectra()`` and ``Fit.std()``, which a fit computes once and keeps; a copy made
+    with ``dataclasses.replace`` starts without them.
     """
+    from dataclasses import replace
+
     fit, _ = plain
     spectra, std = fit.spectra(), fit.std()
     solves = []
@@ -747,10 +752,13 @@ def test_the_spectra_and_their_errors_come_from_one_solve(plain, library, monkey
         return solve(self)
 
     monkeypatch.setattr(ab.Fit, "marginal", counted)
-    shared = fit._spectra_and_std()
+    fresh = replace(fit)
+    shared = fresh._spectra_and_std()
     assert len(solves) == 1
     np.testing.assert_array_equal(shared[0], spectra)
     np.testing.assert_array_equal(shared[1], std)
+    fresh.spectra(), fresh.std(), fresh._spectra_and_std()
+    assert len(solves) == 1
 
     passed = {}
 
@@ -761,8 +769,23 @@ def test_the_spectra_and_their_errors_come_from_one_solve(plain, library, monkey
     monkeypatch.setattr(match_mod, "match_labels", label_fit)
     solves.clear()
     with pytest.raises(_LabelFitReached):
-        fit.match_labels(_stars(library))
+        replace(fit).match_labels(_stars(library))
     assert len(solves) == 1
     rows = [fit.dis.component_names.index(name) for name in ("A", "B")]
     np.testing.assert_array_equal(passed["d_hat"], spectra[rows])
     np.testing.assert_array_equal(passed["std"], std[rows])
+
+    # A telluric row is held at its posterior mean in the statistics, which solved the
+    # model once more before the components were solved for the label fit.
+    telluric, _ = correlated_telluric
+    model_solves = []
+    model_solve = ab.MarginalOrbitModel.marginal
+
+    def counted_model(self, theta):
+        model_solves.append(self)
+        return model_solve(self, theta)
+
+    monkeypatch.setattr(ab.MarginalOrbitModel, "marginal", counted_model)
+    with pytest.raises(_LabelFitReached):
+        replace(telluric).match_labels(_stars(library))
+    assert len(model_solves) == 1
