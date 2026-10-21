@@ -412,3 +412,6 @@ def test_the_continuum_correction_rejects_too_few_pixels_and_bad_input():
         continuum_correction(wave, flux[:-1], ivar, model)
     with pytest.raises(ValueError, match="knot_spacing"):
         continuum_correction(wave, flux, ivar, model, knot_spacing_angstrom=0.0)
+    # A reversed range excluded nothing, without an error, in an earlier version.
+    with pytest.raises(ValueError, match="lo < hi"):
+        continuum_correction(wave, flux, ivar, model, exclude=[(4710.0, 4700.0)])

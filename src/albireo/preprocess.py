@@ -53,6 +53,8 @@ __all__ = [
     "smooth_epoch",
 ]
 
+_C_KMS = 299_792.458
+
 
 # Main telluric absorption complexes in the optical, as (lambda_min, lambda_max) in
 # Angstrom (air). The O2 gamma, B and A bands are sharp and deep. The H2O complexes are
@@ -613,13 +615,15 @@ def continuum_correction(
         ``(n,)``. Pixels with ``ivar = 0``, a non-finite value, or a model flux below 0.2
         (deep line cores) are not used.
     knot_spacing_angstrom : float, optional
-        Spacing of the interior knots per angstrom of covered wavelength. Default 12.
+        Spacing of the interior knots in angstroms of covered wavelength, in which a gap
+        between used pixels counts as at most 1 A. Default 12.
     clip : float, optional
         Rejection threshold in robust standard deviations of the weighted residuals.
         Default 3.
     exclude : iterable of (float, float), optional
-        Wavelength ranges left out of the fit (lines whose shape the model does not
-        follow, telluric bands); the spline is interpolated across them.
+        Wavelength ranges ``(lo, hi)`` with ``lo < hi`` left out of the fit (lines whose
+        shape the model does not follow, telluric bands); the spline is interpolated
+        across them.
     max_iterations : int, optional
         Largest number of rejection passes. Default 5.
 
@@ -632,8 +636,8 @@ def continuum_correction(
     Raises
     ------
     ValueError
-        If the arrays differ in shape, a parameter is out of range, or too few pixels
-        remain to fit a spline with at least one interior knot.
+        If the arrays differ in shape, a parameter or an excluded range is out of range,
+        or too few pixels remain to fit a spline with at least one interior knot.
     """
     from scipy.interpolate import LSQUnivariateSpline
 
@@ -659,6 +663,8 @@ def continuum_correction(
         & (model > _MIN_MODEL_FLUX)
     )
     for lo, hi in exclude:
+        if not float(hi) > float(lo):
+            raise ValueError(f"each excluded range must be (lo, hi) with lo < hi; got {(lo, hi)!r}")
         use &= ~((wave >= float(lo)) & (wave <= float(hi)))
     x = wave[use]
     y = flux[use] / model[use]
@@ -688,6 +694,7 @@ def continuum_correction(
         if np.array_equal(new, keep):
             break
         keep = new
+    assert spline is not None  # the first pass fits it or raises
     correction = np.asarray(spline(wave), dtype=np.float64)
     if not np.all(np.isfinite(correction) & (correction > 0.0)):
         raise ValueError("the correction spline is not positive and finite everywhere")
@@ -838,7 +845,7 @@ def mask_tellurics(
         band overlaps this epoch.
     """
     bands = TELLURIC_BANDS if bands is None else bands
-    pad = float(velocity_pad_kms) / 299_792.458
+    pad = float(velocity_pad_kms) / _C_KMS
     padded = [(lo * (1.0 - pad), hi * (1.0 + pad)) for lo, hi in (tuple(b) for b in bands)]
     overlapping = [(lo, hi) for lo, hi in padded if hi >= epoch.wave[0] and lo <= epoch.wave[-1]]
     if not overlapping:
@@ -909,6 +916,12 @@ def mask_spikes(
     return _replace(epoch, ivar=ivar)
 
 
+def _masked_runs(bad: np.ndarray) -> list[tuple[int, int]]:
+    """``(start, stop)`` of each run of True values, ``stop`` exclusive."""
+    edges = np.diff(np.concatenate([[0], bad.astype(np.int8), [0]]))
+    return list(zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1), strict=True))
+
+
 def mask_flux_gaps(epoch: EpochData, *, min_run: int = 8, warn: bool = True) -> EpochData:
     """Zero the inverse variance across contiguous runs of non-positive flux.
 
@@ -947,19 +960,16 @@ def mask_flux_gaps(epoch: EpochData, *, min_run: int = 8, warn: bool = True) -> 
     if not nonpositive.any():
         return epoch
 
-    # Contiguous-run labelling without scipy: the cumulative count of "run starts".
-    starts = np.flatnonzero(nonpositive & ~np.r_[False, nonpositive[:-1]])
-    ends = np.flatnonzero(nonpositive & ~np.r_[nonpositive[1:], False])
-    keep = (ends - starts + 1) >= int(min_run)
-    if not keep.any():
+    runs = [(a, b) for a, b in _masked_runs(nonpositive) if b - a >= int(min_run)]
+    if not runs:
         return epoch
 
     wave = np.asarray(epoch.wave)
     gap = np.zeros_like(nonpositive)
     ranges = []
-    for lo, hi in zip(starts[keep], ends[keep], strict=True):
-        gap[lo : hi + 1] = True
-        ranges.append((float(wave[lo]), float(wave[hi])))
+    for start, stop in runs:
+        gap[start:stop] = True
+        ranges.append((float(wave[start]), float(wave[stop - 1])))
 
     ivar = np.where(gap, 0.0, epoch.ivar)
     if not np.any(ivar > 0):
@@ -1066,7 +1076,7 @@ def share_wavelength_grid(
     """
     if len(epochs) == 0:
         raise ValueError("share_wavelength_grid needs at least one epoch")
-    tol_factor = float(atol_kms) / 299_792.458
+    tol_factor = float(atol_kms) / _C_KMS
     out: list[EpochData | None] = [None] * len(epochs)
 
     by_instrument: dict[str, list[int]] = {}
@@ -1100,7 +1110,7 @@ def share_wavelength_grid(
         if worst > tol_factor * shared[0]:
             raise ValueError(
                 f"instrument {instrument!r}: epoch {worst_epoch} differs from the shared grid "
-                f"by up to {worst:.3e} A ({worst / shared[0] * 299_792.458:.4f} km/s), more "
+                f"by up to {worst:.3e} A ({worst / shared[0] * _C_KMS:.4f} km/s), more "
                 f"than atol_kms={atol_kms}. These are genuinely different wavelength "
                 "solutions, not sub-pixel offsets: leave them unaligned (albireo gives each "
                 "its own rebin operator) rather than relabelling real differences away."
@@ -1118,8 +1128,6 @@ def share_wavelength_grid(
     return [e for e in out if e is not None]
 
 
-_C_KMS = 299_792.458
-
 _SMOOTHING_REACH = 5.0
 """Truncation of the smoothing kernel, in kernel sigmas. A pixel closer than this to a long
 masked run or to an end of the epoch is masked in the result, so every kept pixel has the
@@ -1127,12 +1135,6 @@ whole kernel. The Gaussian weight beyond five sigma is 6e-7 of the total. At fou
 weight at the edge, 3e-5 of the total, entered or left a row's kernel with the rounding of
 the pixel velocities wherever the edge fell on a pixel, and the equivalent width of a line
 changed by 2e-6."""
-
-
-def _masked_runs(bad: np.ndarray) -> list[tuple[int, int]]:
-    """``(start, stop)`` of each run of True values, ``stop`` exclusive."""
-    edges = np.diff(np.concatenate([[0], bad.astype(np.int8), [0]]))
-    return list(zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1), strict=True))
 
 
 def _smoothed(
