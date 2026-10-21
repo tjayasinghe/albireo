@@ -152,6 +152,17 @@ def _threshold_at(null_peaks: np.ndarray, false_alarm: float) -> float:
     return float(ordered[min(c, ordered.size - 1)])
 
 
+def _check_peaks_finite(peaks: np.ndarray, kind: str) -> None:
+    """Raise if a trial's peak ``D`` is not finite, naming how many of ``kind`` failed."""
+    failed = int(np.size(peaks) - np.count_nonzero(np.isfinite(peaks)))
+    if failed:
+        raise ValueError(
+            f"{failed} of {np.size(peaks)} {kind} trials returned a non-finite peak D; the "
+            "scan failed on them, and a threshold or completeness from the others would "
+            "not describe the search"
+        )
+
+
 def _interpolate_limit(
     ell2: np.ndarray, completeness: np.ndarray, confidence: float
 ) -> tuple[float, bool]:
@@ -277,6 +288,13 @@ def detection_limit(
     -------
     DetectionLimit
 
+    Raises
+    ------
+    ValueError
+        If an argument is malformed, an injected template is not finite, or the scan of a
+        trial returns a non-finite peak. The null trials are checked before the injected
+        ones are run.
+
     Examples
     --------
     >>> lim = detection_limit(grid, ds, ell2_grid=np.linspace(0.01, 0.1, 5), ...)  # doctest: +SKIP
@@ -324,6 +342,7 @@ def detection_limit(
         prior.eta[null_idx],
         None if prior.tau_profile is None else prior.tau_profile[null_idx],
         None if prior.eta_profile is None else prior.eta_profile[null_idx],
+        half_bandwidth=prior.half_bandwidth,
     )
     null_model = MarginalOrbitModel(
         grid,
@@ -365,6 +384,20 @@ def detection_limit(
             )
     else:
         extras = np.zeros((0, grid.n))
+    # One non-finite pixel that the instrument observes makes the peak of every trial nan,
+    # the companion-free ones included (zero light times nan), and the threshold with them.
+    # A deviation spectrum is zero at the continuum, so a pixel without a value is zero.
+    for name, template in (
+        ("primary_template", primary_template),
+        ("companion_template", companion_template),
+        ("extra_templates", extras),
+    ):
+        if not np.all(np.isfinite(template)):
+            raise ValueError(
+                f"{name} has {int(np.size(template) - np.isfinite(template).sum())} "
+                "non-finite values; every injected deviation spectrum must be finite (zero "
+                "is the continuum)"
+            )
 
     # Injection problem: the two-component model at the true orbit. Only its light
     # fractions change between rungs; the companion's amplitude is the ladder variable.
@@ -395,7 +428,10 @@ def detection_limit(
         ll_null = float(_logsumexp(k1_log_w + ll_null_grid, axis=0))
         return float(np.max(2.0 * (ll - ll_null)))
 
-    # Distinct seed streams per rung, so adding a rung never perturbs the others.
+    # One row of seeds for the null trials and one per rung, in the order of the ladder.
+    # A rung appended above the ladder leaves the seeds of the others unchanged when n_null
+    # and n_trials are unchanged. Inserting a rung moves the rows of the rungs above it, and
+    # a change of max(n_null, n_trials) changes every row.
     rng = np.random.default_rng(seed)
     seeds = rng.integers(0, 2**31 - 1, size=(ell2_grid.size + 1, max(n_null, n_trials)))
 
@@ -405,6 +441,8 @@ def detection_limit(
         done += 1
         if progress is not None:
             progress(done, total)
+    # A nan peak (a failed scan) sorts above every other and would become the threshold.
+    _check_peaks_finite(null_peaks, "companion-free")
 
     signal_peaks = np.empty((ell2_grid.size, n_trials))
     for i, ell2 in enumerate(ell2_grid):
@@ -413,6 +451,7 @@ def detection_limit(
             done += 1
             if progress is not None:
                 progress(done, total)
+    _check_peaks_finite(signal_peaks, "injected")
 
     threshold = _threshold_at(null_peaks, float(false_alarm))
     completeness = np.mean(signal_peaks > threshold, axis=1)

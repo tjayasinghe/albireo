@@ -554,6 +554,14 @@ def test_detection_limit_rejects_malformed_input(sb1):
         ab.detection_limit(GRID, ds, **{**kwargs, "primary_template": np.zeros(3)})
     with pytest.raises(ValueError, match="companion_template must have shape"):
         ab.detection_limit(GRID, ds, **{**kwargs, "companion_template": np.zeros(3)})
+    # One non-finite pixel would make every peak nan, the injected ones included.
+    blemished = np.zeros(GRID.n)
+    blemished[GRID.n // 2] = np.nan
+    finite = {**kwargs, "primary_template": np.zeros(GRID.n)}
+    with pytest.raises(ValueError, match="companion_template has 1 non-finite"):
+        ab.detection_limit(GRID, ds, **{**finite, "companion_template": blemished})
+    with pytest.raises(ValueError, match="primary_template has 1 non-finite"):
+        ab.detection_limit(GRID, ds, **{**finite, "primary_template": blemished})
     # A calibration and the scan it calibrates take the same arguments, so they must
     # reject the same mistakes with the same messages (scan._check_search).
     with pytest.raises(ValueError, match="orbit is missing sites"):
@@ -585,6 +593,44 @@ def test_progress_callback_counts_every_trial(sb1):
         progress=lambda done, total: seen.append((done, total)),
     )
     assert seen == [(1, 4), (2, 4), (3, 4), (4, 4)]
+
+
+@pytest.mark.parametrize(("failing_call", "kind"), [(2, "companion-free"), (4, "injected")])
+def test_a_trial_whose_scan_fails_is_reported(sb1, monkeypatch, failing_call, kind):
+    """A nan peak is reported, and does not become the threshold.
+
+    Sorted in descending order a nan comes first, so with the default false-alarm rate and
+    fewer than 200 null trials one failed null trial was the threshold. Every injected
+    trial then fell below it, the completeness was zero and the limit nan.
+    """
+    import albireo.calibrate as calibrate
+
+    k2_grid = K2_GRID[:3]
+    calls = []
+
+    def scan(*args, **kwargs):
+        calls.append(None)
+        value = np.nan if len(calls) == failing_call else 0.0
+        return np.full((1, k2_grid.size), value), np.zeros(1)
+
+    monkeypatch.setattr(calibrate, "_scan_grids", scan)
+    with pytest.raises(ValueError, match=f"1 of [0-9]+ {kind} trials returned a non-finite"):
+        ab.detection_limit(
+            GRID,
+            sb1[0],
+            orbit=_orbit(),
+            k1=K1,
+            k2_true=K2_TRUE,
+            k2_grid=k2_grid,
+            light_fractions=ELL,
+            lsf_sigma_v=LSF,
+            prior=PRIOR,
+            v_rel_max_kms=V_REL_MAX,
+            ell2_grid=np.array([0.02]),
+            primary_template=np.zeros(GRID.n),
+            n_null=3,
+            n_trials=2,
+        )
 
 
 def test_interpolated_limit_takes_the_first_upcrossing():
