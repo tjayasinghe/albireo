@@ -352,6 +352,36 @@ def test_the_declarations_are_checked(binary, library):
         fit_templates(dataset, odd, **options)
 
 
+def test_a_rejected_declaration_names_its_parameter(binary, library):
+    """A declaration that the specification rejects is reported with the parameter.
+
+    The error of a ``Known`` with zero width named the declaration but not the star and
+    the label it was declared for.
+    """
+    import numpyro.distributions as dist
+
+    dataset, _, grid = binary
+    stars, mh = _declared(library)
+    options = {
+        "grid": grid,
+        "medium": "vacuum",
+        "mh": mh,
+        "v_range": V_RANGE,
+        "lsf_sigma_v": {"a": LSF_KMS},
+    }
+    zero = {**stars, "B": dataclasses.replace(stars["B"], logg=ab.Known(4.3, 0.0))}
+    with pytest.raises(ValueError, match=r"logg of 'B': Known\(4.3, 0.0\): sigma must be"):
+        fit_templates(dataset, zero, **options)
+    empty = {**stars, "A": dataclasses.replace(stars["A"], vsini=ab.Between(30.0, 10.0))}
+    with pytest.raises(ValueError, match=r"vsini of 'A': Between\(30.0, 10.0\): the lower"):
+        fit_templates(dataset, empty, **options)
+    # numpyro does not validate the arguments of a distribution declared through Sampled.
+    flat = ab.Sampled(dist.Normal(5800.0, 0.0), start_at=5800.0)
+    unchecked = {**stars, "A": dataclasses.replace(stars["A"], teff=flat)}
+    with pytest.raises(ValueError, match="teff of 'A': the prior width must be positive"):
+        fit_templates(dataset, unchecked, **options)
+
+
 def test_a_line_deviation_has_the_area_of_its_strengths():
     grid = ab.LogGrid.from_wavelength_range(5000.0, 5100.0, dv_kms=1.0)
     vector = line_deviation(grid, (5030.0, 5060.0), 0.4, strengths=(1.0, 0.5))

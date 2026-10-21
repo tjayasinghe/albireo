@@ -361,6 +361,22 @@ class _State:
         )
 
 
+def _declared_spec(value, where: str, default=None):
+    """The specification of a declared parameter, checked where it is declared.
+
+    A declaration that the specification itself rejects, such as ``Known`` with a zero
+    width or ``Between`` with ``lo >= hi``, raises its ``ValueError`` prefixed with
+    ``where``, so that the message names the parameter as well as the declaration.
+    """
+    spec = _as_spec(value, where, default)
+    try:
+        spec.distribution()
+        spec.start()
+    except ValueError as exc:
+        raise ValueError(f"{where}: {exc}") from exc
+    return spec
+
+
 def _prior_of(spec, where: str):
     """``(start, lower, upper, (mean, sigma) or None)`` of a free specification."""
     distribution = spec.distribution()
@@ -375,6 +391,8 @@ def _prior_of(spec, where: str):
     if isinstance(distribution, dist.Normal):
         mean = float(np.asarray(distribution.loc))
         sigma = float(np.asarray(distribution.scale))
+        # Known checks its own width. A Normal declared through Sampled is not checked by
+        # numpyro (its arguments are not validated by default) and reaches this test.
         if not sigma > 0.0:
             raise ValueError(f"{where}: the prior width must be positive")
         return start, -np.inf, np.inf, (mean, sigma)
@@ -1425,7 +1443,7 @@ def fit_templates(
         if space is None:
             space = spaces[shared] = _LabelSpace(boxes, grid, medium, f"star {name!r}")
         teff_range = space.range("teff", 0.0, 0.0)
-        teff_spec = _as_spec(declared.teff, f"teff of {name!r}", Between(*teff_range))
+        teff_spec = _declared_spec(declared.teff, f"teff of {name!r}", Between(*teff_range))
         if _is_fixed(teff_spec):
             value = _held(teff_spec, teff_range, f"teff of {name!r}")
             span = (value, value)
@@ -1450,7 +1468,7 @@ def fit_templates(
                 )
             held.labels[i]["logg"] = float("nan")
         else:
-            spec = _as_spec(declared.logg, f"logg of {name!r}", Between(*logg_range))
+            spec = _declared_spec(declared.logg, f"logg of {name!r}", Between(*logg_range))
             if _is_fixed(spec):
                 held.labels[i]["logg"] = _held(spec, logg_range, f"logg of {name!r}")
             else:
@@ -1461,7 +1479,7 @@ def fit_templates(
                 )
                 held.labels[i]["logg"] = float(np.clip(value, lower, upper))
 
-        spec = _as_spec(declared.vsini, f"vsini of {name!r}", Between(0.0, _VSINI_MAX_KMS))
+        spec = _declared_spec(declared.vsini, f"vsini of {name!r}", Between(0.0, _VSINI_MAX_KMS))
         if _is_fixed(spec):
             held.labels[i]["vsini"] = float(np.asarray(spec.start()))
         else:
@@ -1493,7 +1511,7 @@ def fit_templates(
                     None,
                 )
                 continue
-            spec = _as_spec(deviation.amplitude, f"amplitude {key!r}")
+            spec = _declared_spec(deviation.amplitude, f"amplitude {key!r}")
             if _is_fixed(spec):
                 held.amplitudes[i][k] = float(np.asarray(spec.start()))
             else:
@@ -1528,7 +1546,7 @@ def fit_templates(
             continue
         covered = [r for r in (mh_ranges[i] for i in having) if r is not None]
         available = (max(lo for lo, _ in covered), min(hi for _, hi in covered))
-        spec = _as_spec(declared_mh, key, Between(*available))
+        spec = _declared_spec(declared_mh, key, Between(*available))
         if _is_fixed(spec):
             for i in having:
                 held.labels[i]["mh"] = _held(spec, available, key)
