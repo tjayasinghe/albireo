@@ -2004,16 +2004,21 @@ class Disentangler:
         One trial of the sweep holds about ``_SCAN_BYTES_PER_BAND_ENTRY`` bytes for each
         entry of the ``(n, half_bandwidth)`` band per component, with ``n`` the number of
         components times the grid size (measured from XLA's buffer assignment). The batch
-        is cut so that its temporaries stay within the sweep budget of
-        :mod:`albireo.inference`. On a problem of a few thousand model pixels it is 16, the
-        size the scan has always used; on a coarse grid of 4,309 pixels at half-bandwidth
-        156 it is 7.
+        is halved from 16 until its temporaries fit the sweep budget of
+        :mod:`albireo.inference`. A divisor of 16 pads the last chunk of a sweep to no more
+        trials than 16 would: on a 2,509-pixel coarse grid the 13 trials that would fit
+        evaluated 273 trials for the scan's 208, and 8 evaluate 224, as 16 do. On a problem
+        of a few thousand model pixels the batch is 16, the size the scan has always used;
+        on a coarse grid of 4,309 pixels at half-bandwidth 156 it is 4.
         """
         problem = self.model.problem
         n_components = int(problem.n_components)
         band = n_components * int(problem.grid.n) * max(int(self.model.half_bandwidth), 1)
         per_trial = _SCAN_BYTES_PER_BAND_ENTRY * n_components * band
-        return max(1, min(_SCAN_BATCH, _SWEEP_BATCH_BYTES // per_trial))
+        batch = _SCAN_BATCH
+        while batch > 1 and batch * per_trial > _SWEEP_BATCH_BYTES:
+            batch //= 2
+        return batch
 
     def _has_ranged_k(self) -> bool:
         if self.orbit is None:

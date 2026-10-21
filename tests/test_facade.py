@@ -1445,9 +1445,12 @@ def test_the_scan_batch_is_sixteen_unless_a_batch_would_exceed_its_memory_budget
         model = SimpleNamespace(problem=problem, half_bandwidth=half_bandwidth)
         return Disentangler._scan_batch(SimpleNamespace(model=model))
 
-    # A coarse echelle grid of 4,309 pixels at half-bandwidth 156 needs 140 MB per trial.
-    assert batch(2, 4309, 156) == 7
-    assert batch(3, 4309, 156) == 3
+    # A coarse echelle grid of 4,309 pixels at half-bandwidth 156 needs 140 MB per trial,
+    # so 7 trials fit in 1 GiB; the batch is a divisor of 16, so that the padding of a
+    # sweep's last chunk never exceeds what a batch of 16 evaluates.
+    assert batch(2, 4309, 156) == 4
+    assert batch(2, 2509, 156) == 8
+    assert batch(3, 4309, 156) == 2
     assert batch(2, 1000, 50) == 16
     assert batch(2, 200_000, 400) == 1
 
