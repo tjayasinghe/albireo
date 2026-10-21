@@ -66,9 +66,6 @@ import numpy as np
 from jax.scipy.linalg import solve_triangular
 
 from albireo.assembly import (
-    _add_prior_band,
-    _band_offsets,
-    _pack_band,
     _prior_diagonals,
     band_block_tridiagonal,
     prior_block_tridiagonal,
@@ -119,7 +116,10 @@ def plan_epochs(
         :func:`albireo.simulate.simulate_dataset` records it). The recorded width is what
         an instrument declared with a per-epoch LSF
         (:data:`albireo.forward.PER_EPOCH`) reads, so planned epochs can be forecast with
-        that declaration.
+        that declaration. The width of an :class:`~albireo.data.EpochData` template is
+        kept only under the template's own instrument key. Planned epochs given another
+        key through ``instrument`` record no width, and a ``PER_EPOCH`` declaration for
+        that key then raises instead of modelling them at the template's resolution.
     bjd
         Planned mid-exposure times, ``(n_new,)`` BJD_TDB. These set the orbital phases,
         hence the shifts, hence the covariance.
@@ -138,7 +138,10 @@ def plan_epochs(
         target and dates are known.
     instrument
         Instrument key; default is the template's (``"default"`` for an
-        :class:`~albireo.simulate.InstrumentSpec`, whose specs are not named).
+        :class:`~albireo.simulate.InstrumentSpec`, whose specs are not named). A key
+        other than an :class:`~albireo.data.EpochData` template's drops its recorded LSF
+        width (see ``template``). An :class:`~albireo.simulate.InstrumentSpec` describes
+        the planned instrument itself, so its width is kept under any key.
     medium
         Wavelength scale, as in :class:`~albireo.data.EpochData`. Default is the
         template's, which keeps a planned epoch combinable with the real ones in one
@@ -168,7 +171,10 @@ def plan_epochs(
         ivar = template.ivar if snr is None else np.where(template.ivar > 0.0, float(snr) ** 2, 0.0)
         mask = template.mask
         base_instrument, base_medium = template.instrument, template.medium
-        lsf = template.lsf_sigma_kms
+        # The recorded width belongs to the template's instrument. Under another key it
+        # would be read as that instrument's width, so it is not copied.
+        relabelled = instrument is not None and str(instrument) != base_instrument
+        lsf = None if relabelled else template.lsf_sigma_kms
     else:
         raise ValueError(
             "template must be an EpochData (plan more of what you already have) or an "
@@ -340,9 +346,12 @@ def _takahashi_trace_step(carry, inputs):
     :func:`albireo.solver.selected_inverse_diag`, ``(W^T S_{k+1}) W``, so the emitted
     diagonal is the same. ``W^T S_{k+1}`` is ``-Sigma_{k,k+1}``, the transpose of the
     subdiagonal block, so the off-diagonal part of the trace needs no further product.
+    The prior blocks are rebuilt here from their diagonals (:func:`_prior_block_pair`),
+    so only one pair of them exists at a time.
     """
     s_next, acc = carry
-    lk, llk, dk, pk, ek, qk = inputs
+    lk, llk, dk, ek, prior_k = inputs
+    pk, qk = _prior_block_pair(*prior_k)
     inv_lk = solve_triangular(lk, jnp.eye(lk.shape[0], dtype=lk.dtype), lower=True)
     w = llk @ inv_lk
     ws = w.T @ s_next
@@ -353,17 +362,18 @@ def _takahashi_trace_step(carry, inputs):
     return (s_k, acc), jnp.diagonal(s_k)
 
 
-def _selected_inverse_diag_and_trace(chol: BlockCholesky, precision, prior_blocks):
+def _selected_inverse_diag_and_trace(chol: BlockCholesky, precision, prior_rows):
     """``diag(Sigma)`` and ``p_eff = tr[Sigma A^T W A]`` from one Takahashi sweep.
 
     ``Sigma = (L L^T)^{-1}`` with ``L`` the factor of ``precision``, and ``A^T W A`` is
-    ``precision`` minus ``prior_blocks``, the prior precision in the same block layout.
-    Both matrices are block tridiagonal, so the trace contracts the diagonal and first
-    subdiagonal blocks of ``Sigma``, which the sweep for the diagonal produces one block
-    at a time (``docs/math.md`` §5.5). Each block is consumed at the step that forms it,
-    so the selected inverse is never stored. The difference is formed per block, which
-    avoids the cancellation of ``n - tr[Sigma Lambda_p]`` when the data determine
-    little. The pad block is the identity in both matrices and contributes exactly 0.
+    ``precision`` minus the prior precision, given as ``prior_rows`` from
+    :func:`_prior_block_diagonals` in the same block layout. Both matrices are block
+    tridiagonal, so the trace contracts the diagonal and first subdiagonal blocks of
+    ``Sigma``, which the sweep for the diagonal produces one block at a time
+    (``docs/math.md`` §5.5). Each block is consumed at the step that forms it, so the
+    selected inverse is never stored. The difference is formed per block, which avoids
+    the cancellation of ``n - tr[Sigma Lambda_p]`` when the data determine little. The
+    pad block is the identity in both matrices and contributes exactly 0.
 
     The diagonal equals :func:`albireo.solver.selected_inverse_diag` bit for bit. The
     trace agrees with the directional derivative of :func:`_effective_parameters` to
@@ -372,7 +382,8 @@ def _selected_inverse_diag_and_trace(chol: BlockCholesky, precision, prior_block
     eye = jnp.eye(chol.block_size)
     inv_last = solve_triangular(chol.diag[-1], eye, lower=True)
     s_last = inv_last.T @ inv_last
-    acc_last = jnp.sum(s_last * (precision.diag[-1] - prior_blocks.diag[-1]))
+    p_last, _ = _prior_block_pair(*jax.tree_util.tree_map(lambda a: a[-1], prior_rows))
+    acc_last = jnp.sum(s_last * (precision.diag[-1] - p_last))
     if chol.num_blocks == 1:
         return jnp.diagonal(s_last)[: chol.n], acc_last
     (_, acc), diags = jax.lax.scan(
@@ -382,27 +393,70 @@ def _selected_inverse_diag_and_trace(chol: BlockCholesky, precision, prior_block
             chol.diag[:-1],
             chol.lower,
             precision.diag[:-1],
-            prior_blocks.diag[:-1],
             precision.lower,
-            prior_blocks.lower,
+            jax.tree_util.tree_map(lambda a: a[:-1], prior_rows),
         ),
         reverse=True,
     )
     return jnp.concatenate([diags.reshape(-1), jnp.diagonal(s_last)])[: chol.n], acc
 
 
-def _prior_blocks(prior: SmoothnessPrior, n_pix: int, n_comp: int, b_nat: int, block_size: int):
-    """The prior precision in the layout :func:`albireo.assembly.band_block_tridiagonal` uses.
+def _prior_block_diagonals(
+    prior: SmoothnessPrior, n_pix: int, n_comp: int, b_nat: int, num_blocks: int, block_size: int
+):
+    """The nonzero diagonals of ``Lambda_p``, cut to the block layout of the precision.
 
-    The band is built at the same stacked bandwidth as the posterior precision and
-    packed at its block size, so the prior entries occupy the same positions and are the
-    same floats as the ones the assembly added. ``precision - prior_blocks`` is then the
-    data term, to the rounding of one addition, at every entry.
+    ``Lambda_p`` is block diagonal over components and pentadiagonal within each, so in
+    the interleaved layout (index ``q * n_comp + i``) its entries lie at column offsets
+    0, ``n_comp`` and ``2 n_comp``. The result is ``(g0, ((inner, outer), ...))``, each
+    array with a leading ``num_blocks`` axis. ``g0`` is the main diagonal, 1 on the
+    identity pad rows. For an offset ``s``, row ``k`` of the flattened array holds
+    ``Lambda_p[i, i + s]`` for the ``block_size`` rows ``i`` of block ``k``: ``inner``
+    is the part inside the diagonal block and ``outer`` the part that falls in the
+    subdiagonal block ``(k + 1, k)``. Their lengths fix the offset, so
+    :func:`_prior_block_pair` needs no static argument. An offset beyond the stacked
+    bandwidth ``p = n_comp b_nat + n_comp - 1`` is omitted, as
+    :func:`albireo.assembly.band_block_tridiagonal` omits it.
+
+    The values are the floats the assembly adds to the band
+    (:func:`albireo.assembly._prior_diagonals`). Each block that
+    :func:`_prior_block_pair` rebuilds therefore equals the corresponding block of the
+    packed prior entry for entry, and ``precision - prior`` is the data term to the
+    rounding of one subtraction. The arrays hold ``O(n)`` values, where the packed prior
+    is as large as the precision.
     """
+    d0, d1, d2 = _prior_diagonals(prior, n_pix)  # (nc, n), (nc, n-1), (nc, n-2)
     p = n_comp * int(b_nat) + n_comp - 1
-    _, n_k = _band_offsets(p, n_comp)
-    band = _add_prior_band(jnp.zeros((n_pix, n_comp, n_k, n_comp)), prior, n_pix, p, n_comp)
-    return _pack_band(band, n_pix, n_comp, p, int(block_size))
+    bs = int(block_size)
+    total = num_blocks * bs
+
+    def rows(flat, fill=0.0):
+        return jnp.pad(flat, (0, total - flat.size), constant_values=fill).reshape(num_blocks, bs)
+
+    g0 = rows(d0.T.reshape(-1), fill=1.0)
+    offdiagonals = []
+    for s, d in ((n_comp, d1), (2 * n_comp, d2)):
+        if s > p:
+            continue
+        g = rows(d.T.reshape(-1))  # entry i is Lambda_p[i, i + s], zero beyond the matrix
+        offdiagonals.append((g[:, : bs - s], g[:, bs - s :]))
+    return g0, tuple(offdiagonals)
+
+
+def _prior_block_pair(g0, offdiagonals):
+    """Diagonal and subdiagonal blocks of ``Lambda_p`` for one block row, densely.
+
+    The inputs are one row of :func:`_prior_block_diagonals`. Every entry of either
+    block receives at most one nonzero term, so the sums are exact.
+    """
+    bs = g0.shape[-1]
+    diag = jnp.diag(g0)
+    lower = jnp.zeros_like(diag)
+    for inner, outer in offdiagonals:
+        s = bs - inner.shape[-1]
+        diag = diag + jnp.diag(inner, s) + jnp.diag(inner, -s)
+        lower = lower + jnp.diag(outer, bs - s)
+    return diag, lower
 
 
 def _prior_factor(prior: SmoothnessPrior, n_pix: int, n_comp: int) -> BlockCholesky:
@@ -1112,9 +1166,10 @@ def sensitivity_forecast(
         )
         precision = band_block_tridiagonal(problem, prior, b_nat, block_size)
         chol = block_cholesky(precision)
-        variance, trace = _selected_inverse_diag_and_trace(
-            chol, precision, _prior_blocks(prior, grid.n, n_comp, b_nat, precision.block_size)
+        prior_rows = _prior_block_diagonals(
+            prior, grid.n, n_comp, b_nat, precision.num_blocks, precision.block_size
         )
+        variance, trace = _selected_inverse_diag_and_trace(chol, precision, prior_rows)
         std = np.asarray(jnp.sqrt(variance)).reshape(grid.n, n_comp).T
 
         if reference is None:

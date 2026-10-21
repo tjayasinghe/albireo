@@ -19,17 +19,19 @@ been taken, so it is asserted with ``==`` rather than a tolerance.
 
 from __future__ import annotations
 
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
 import albireo as ab
-from albireo.assembly import band_block_tridiagonal
+from albireo.assembly import _add_prior_band, _band_offsets, _pack_band, band_block_tridiagonal
 from albireo.data import Dataset, EpochData
 from albireo.forecast import (
     _data_diagonal,
     _default_scales,
     _effective_parameters,
-    _prior_blocks,
+    _prior_block_diagonals,
+    _prior_block_pair,
     _selected_inverse_diag_and_trace,
     _separation_diagnostics,
     _top_eigenpairs,
@@ -204,16 +206,46 @@ def test_sweep_and_mode_iteration_reuse_their_programs(grid, dataset, prior, com
     b_nat = max(problem.natural_half_bandwidth, prior.half_bandwidth)
     precision = band_block_tridiagonal(problem, prior, b_nat, None)
     chol = block_cholesky(precision)
-    blocks = _prior_blocks(prior, grid.n, 2, b_nat, precision.block_size)
-    variance, _ = _selected_inverse_diag_and_trace(chol, precision, blocks)
+    rows = _prior_block_diagonals(
+        prior, grid.n, 2, b_nat, precision.num_blocks, precision.block_size
+    )
+    variance, _ = _selected_inverse_diag_and_trace(chol, precision, rows)
     assert np.array_equal(np.asarray(variance), np.asarray(selected_inverse_diag(chol)))
-    assert compilations(lambda: _selected_inverse_diag_and_trace(chol, precision, blocks)) == 0
+    assert compilations(lambda: _selected_inverse_diag_and_trace(chol, precision, rows)) == 0
 
     keep = np.ones(chol.n, dtype=bool)
     first = _top_eigenpairs(chol, 2, keep, iterations=10, seed=0)
     assert compilations(lambda: _top_eigenpairs(chol, 2, keep, iterations=10, seed=0)) == 0
     again = _top_eigenpairs(chol, 2, keep, iterations=10, seed=0)
     assert np.array_equal(first[0], again[0]) and np.array_equal(first[1], again[1])
+
+
+@pytest.mark.parametrize(
+    ("n_comp", "b_nat", "block_size"),
+    [(2, 14, 29), (2, 14, 64), (3, 2, 8), (1, 2, 2), (2, 1, 4), (1, 1, 1)],
+)
+def test_prior_rows_rebuild_the_packed_prior(n_comp, b_nat, block_size):
+    """The prior blocks rebuilt inside the sweep are the assembly's, entry for entry.
+
+    The reference packs the prior band at the stacked bandwidth ``p`` and block size of
+    a posterior precision, as the assembly does. The cases cover a block size that is
+    not a multiple of ``n_comp``, a single block, a block of exactly ``2 n_comp``, and
+    bandwidths that omit the offset ``2 n_comp`` from the band.
+    """
+    n_pix = 23
+    prior = SmoothnessPrior(tau=np.linspace(5e2, 2e3, n_comp), eta=np.full(n_comp, 1e-2))
+    p = n_comp * b_nat + n_comp - 1
+    _, n_k = _band_offsets(p, n_comp)
+    band = _add_prior_band(jnp.zeros((n_pix, n_comp, n_k, n_comp)), prior, n_pix, p, n_comp)
+    want = _pack_band(band, n_pix, n_comp, p, block_size)
+    g0, offdiagonals = _prior_block_diagonals(
+        prior, n_pix, n_comp, b_nat, want.num_blocks, want.block_size
+    )
+    for k in range(want.num_blocks):
+        diag, lower = _prior_block_pair(g0[k], tuple((i[k], o[k]) for i, o in offdiagonals))
+        assert np.array_equal(diag, want.diag[k])
+        if k + 1 < want.num_blocks:
+            assert np.array_equal(lower, want.lower[k])
 
 
 def test_modes_match_dense_submatrix(grid, dataset, prior):
@@ -534,6 +566,26 @@ def test_plan_epochs_keep_the_lsf_width(grid, dataset, prior):
     scalar = forecast(grid, design, prior, n_modes=0, baseline=have)
     assert per_epoch.logdet_posterior == scalar.logdet_posterior
     assert per_epoch.baseline.logdet_posterior == scalar.baseline.logdet_posterior
+
+
+def test_plan_epochs_drop_the_width_under_another_instrument_key(grid, dataset, prior):
+    """An EpochData template's width is not carried to planned epochs under another key.
+
+    The width belongs to the template's instrument. Copied under a new key, a
+    ``PER_EPOCH`` declaration for that key would model the planned epochs at the
+    template's resolution without a message. An InstrumentSpec is the planned
+    instrument itself, so its width is kept under any key.
+    """
+    assert dataset[0].instrument == "A"
+    assert ab.plan_epochs(dataset[0], bjd=[1.4], instrument="A")[0].lsf_sigma_kms == 8.25
+    other = ab.plan_epochs(dataset[0], bjd=[1.4, 3.6], instrument="B")
+    assert [ep.lsf_sigma_kms for ep in other] == [None, None]
+    spec = InstrumentSpec(wave=np.linspace(4500.0, 4510.0, 128), sigma_v_lsf=5.0, snr=50.0)
+    assert ab.plan_epochs(spec, bjd=[0.0], instrument="B")[0].lsf_sigma_kms == 5.0
+
+    design = Dataset([*dataset, *other], frame=dataset.frame)
+    with pytest.raises(ValueError, match="declare none"):
+        forecast(grid, design, prior, n_modes=0, lsf_sigma_v={"A": 8.25, "B": ab.PER_EPOCH})
 
 
 def test_plan_epochs_rejects_nonsense(dataset):
