@@ -558,7 +558,9 @@ def _add_prior_band(band, prior: SmoothnessPrior, n_pix: int, p: int, nc: int):
     bandwidth ``p`` below ``2 nc``, is not stored. A negative slot index would otherwise
     wrap to the far end of the slot axis: at ``nc = 2`` and ``p = 1`` the second prior
     diagonal was added to the main diagonal. Slots beyond the band end were already
-    dropped by the scatter. :func:`band_block_tridiagonal` rejects such bandwidths.
+    dropped by the scatter. :func:`band_block_tridiagonal` never assembles such a band: it
+    requires ``b_nat`` of at least ``prior.half_bandwidth``, which is at least 2, so
+    ``p >= 2 nc``.
     """
     off0, n_k = _band_offsets(p, nc)
     d0, d1, d2 = _prior_diagonals(prior, n_pix)
@@ -661,8 +663,8 @@ def band_block_tridiagonal(
     prior
         Spectral prior (one component per problem component).
     half_bandwidth
-        Static per-component half-bandwidth bound ``b_nat``, at least
-        ``prior.half_bandwidth``.
+        Static per-component half-bandwidth bound ``b_nat``. It must be at least
+        ``prior.half_bandwidth``, the band width the prior declares.
     block_size
         Solver block size ``B >= p`` (default ``p``).
     remat
@@ -679,9 +681,9 @@ def band_block_tridiagonal(
     nc, n_pix = problem.n_components, problem.grid.n
     if int(half_bandwidth) < prior.half_bandwidth:
         raise ValueError(
-            f"half_bandwidth ({int(half_bandwidth)}) is below the prior's own half-bandwidth "
-            f"({prior.half_bandwidth}): the band cannot hold the prior's diagonals. Use "
-            "max(Problem.natural_half_bandwidth, prior.half_bandwidth)."
+            f"half_bandwidth ({int(half_bandwidth)}) is below the prior's declared "
+            f"half-bandwidth ({prior.half_bandwidth}); the band must be at least as wide as "
+            "the prior declares. Use max(Problem.natural_half_bandwidth, prior.half_bandwidth)."
         )
     p = nc * int(half_bandwidth) + nc - 1
     bs = int(block_size) if block_size is not None else max(p, 8)

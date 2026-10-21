@@ -615,9 +615,13 @@ def test_band_rejects_too_small_half_bandwidth():
 
 
 def test_band_rejects_a_half_bandwidth_below_the_priors():
-    """A band narrower than the prior's own half-bandwidth cannot hold the prior."""
+    """A band narrower than the prior's declared half-bandwidth is rejected.
+
+    The prior's own diagonals reach two pixels and fit in this band. The guard enforces
+    the width the prior declares, which the likelihood also assembles.
+    """
     wide = SmoothnessPrior(tau=PRIOR2.tau, eta=PRIOR2.eta, half_bandwidth=B_NAT + 1)
-    with pytest.raises(ValueError, match="below the prior's own half-bandwidth"):
+    with pytest.raises(ValueError, match="below the prior's declared half-bandwidth"):
         band_block_tridiagonal(PROBLEM, wide, B_NAT)
     band_block_tridiagonal(PROBLEM, wide, B_NAT + 1)
 
