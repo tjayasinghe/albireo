@@ -574,6 +574,27 @@ def rebin_operator(
     Provide either pixel centers (``x_in``/``x_out``, whose edges are taken at midpoints
     via :func:`bin_edges_from_centers`) or explicit ``edges_in``/``edges_out``.
     """
+    rows, cols, vals, coverage, n_out, n_in = _rebin_arrays(
+        x_in, x_out, edges_in=edges_in, edges_out=edges_out
+    )
+    return RebinOperator(
+        rows=jnp.asarray(rows),
+        cols=jnp.asarray(cols),
+        vals=jnp.asarray(vals),
+        coverage=jnp.asarray(coverage),
+        n_out=n_out,
+        n_in=n_in,
+    )
+
+
+def _rebin_arrays(x_in=None, x_out=None, *, edges_in=None, edges_out=None):
+    """The arrays of :func:`rebin_operator` as NumPy arrays, without JAX.
+
+    Returns ``(rows, cols, vals, coverage, n_out, n_in)``, with ``rows`` and ``cols`` as
+    int32. The values are those of the operator. A caller that needs them on the host,
+    such as the TODCOR epoch preparation, avoids the conversion to JAX arrays, which is
+    compiled once for every new number of entries or output pixels.
+    """
     if edges_in is None:
         if x_in is None:
             raise ValueError("provide x_in or edges_in")
@@ -609,15 +630,7 @@ def rebin_operator(
     width_out = np.diff(edges_out)
     vals = overlap / width_out[rows]
     coverage = np.bincount(rows, weights=vals, minlength=n_out)
-
-    return RebinOperator(
-        rows=jnp.asarray(rows, dtype=jnp.int32),
-        cols=jnp.asarray(cols, dtype=jnp.int32),
-        vals=jnp.asarray(vals),
-        coverage=jnp.asarray(coverage),
-        n_out=n_out,
-        n_in=n_in,
-    )
+    return rows.astype(np.int32), cols.astype(np.int32), vals, coverage, n_out, n_in
 
 
 def rebin_pair_tables(rebin: RebinOperator):

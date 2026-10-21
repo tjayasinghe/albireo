@@ -62,7 +62,7 @@ import numpy as np
 from albireo.archive import _part_path
 from albireo.examples import _download_with_retries, _sha256, cache_dir
 from albireo.grids import LogGrid, air_to_vacuum, vacuum_to_air
-from albireo.operators import rebin_operator
+from albireo.operators import _rebin_arrays
 
 __all__ = [
     "SUPPORTED_MEDIA",
@@ -372,13 +372,15 @@ class SpectralLibrary:
             return kept[key]
         library = self.in_medium(medium)
         target = np.asarray(grid.wave, dtype=np.float64)
-        operator = rebin_operator(library.wave, target)
+        # The operator's arrays are built in NumPy, so that no conversion to JAX arrays is
+        # compiled for a new grid length.
+        rows, cols, vals, coverage, n_out, n_in = _rebin_arrays(library.wave, target)
         # The operator divides each overlap by the width of the model pixel, so a model pixel
         # that the library covers in part would come out scaled by its coverage: a false
         # line in the normalized flux and a continuum too low. The outer edges of the
         # grid's end pixels, not their centres, must lie inside the library. A pixel that
         # is covered sums its overlaps to 1 within rounding (1 - 1e-16 measured).
-        if np.any(np.asarray(operator.coverage) < 1.0 - 1e-10):
+        if np.any(coverage < 1.0 - 1e-10):
             raise ValueError(
                 f"library spans [{library.wave[0]:.2f}, {library.wave[-1]:.2f}] Angstrom in "
                 f"{medium} and cannot cover the model grid "
@@ -389,10 +391,7 @@ class SpectralLibrary:
 
         # The operator as a matrix, one row per model pixel. A row sums its entries in the
         # order of the input pixels, as the segment sum of `RebinOperator.__call__` does.
-        matrix = csr_matrix(
-            (np.asarray(operator.vals), (np.asarray(operator.rows), np.asarray(operator.cols))),
-            shape=(operator.n_out, operator.n_in),
-        )
+        matrix = csr_matrix((vals, (rows, cols)), shape=(n_out, n_in))
 
         def project(values: np.ndarray) -> np.ndarray:
             # In blocks of nodes written into the result. SciPy multiplies a sparse matrix

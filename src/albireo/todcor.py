@@ -78,12 +78,12 @@ from albireo.forward import _is_per_epoch
 from albireo.grids import C_KMS, LogGrid, _in_epoch_blocks, log_doppler_shift
 from albireo.operators import (
     _gaussian_kernel_numpy,
+    _rebin_arrays,
     _rotational_kernel_numpy,
     convolve_spectrum,
     convolve_varying,
     gaussian_kernel,
     gaussian_lsf_profiles,
-    rebin_operator,
 )
 
 __all__ = [
@@ -1163,15 +1163,13 @@ class _EpochWork:
 
 
 def _prepare_epoch(index: int, epoch: EpochData, grid: LogGrid, nuisance_order) -> _EpochWork:
-    rebin = rebin_operator(x_in=grid.wave, x_out=epoch.wave)
-    coverage = np.asarray(rebin.coverage)
+    # The rebin operator is built on the host. As JAX arrays its entries were converted by
+    # programs compiled once for every new epoch length, and then copied back.
+    rows, cols, vals, coverage, _, _ = _rebin_arrays(x_in=grid.wave, x_out=epoch.wave)
     w = epoch.effective_ivar * (coverage >= 1.0 - 1e-10)
     z = np.where(w > 0.0, epoch.flux - 1.0, 0.0)
     n_native = epoch.n_pixels
     n_pad = _round_up(n_native, _ROW_BUCKET)
-    rows = np.asarray(rebin.rows)
-    cols = np.asarray(rebin.cols)
-    vals = np.asarray(rebin.vals)
     nnz_pad = _round_up(rows.size, _ROW_BUCKET)
     rows_p = np.full(nnz_pad, n_pad - 1, dtype=np.int32)
     cols_p = np.zeros(nnz_pad, dtype=np.int32)
