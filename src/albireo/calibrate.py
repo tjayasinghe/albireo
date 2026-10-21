@@ -55,7 +55,7 @@ from albireo.grids import LogGrid
 from albireo.inference import MarginalOrbitModel
 from albireo.priors import SmoothnessPrior
 from albireo.scan import _check_search, _k1_quadrature, _logsumexp, _scan_grids
-from albireo.simulate import resimulate
+from albireo.simulate import _model_applier, resimulate
 
 __all__ = ["DetectionLimit", "detection_limit"]
 
@@ -152,15 +152,35 @@ def _threshold_at(null_peaks: np.ndarray, false_alarm: float) -> float:
     return float(ordered[min(c, ordered.size - 1)])
 
 
-def _check_peaks_finite(peaks: np.ndarray, kind: str) -> None:
-    """Raise if a trial's peak ``D`` is not finite, naming how many of ``kind`` failed."""
-    failed = int(np.size(peaks) - np.count_nonzero(np.isfinite(peaks)))
-    if failed:
+def _check_peak_finite(peak: float, trial: str, seed: int) -> None:
+    """Raise if the peak ``D`` of one trial is not finite, naming the trial and its seed.
+
+    In descending order a nan sorts first, so a failed null trial would become the
+    threshold. A failed injected trial would count as a non-detection and lower the
+    completeness without notice. The seed is the one passed to
+    :func:`albireo.simulate.resimulate`, so the failed trial can be drawn again alone.
+    """
+    if not np.isfinite(peak):
         raise ValueError(
-            f"{failed} of {np.size(peaks)} {kind} trials returned a non-finite peak D; the "
-            "scan failed on them, and a threshold or completeness from the others would "
-            "not describe the search"
+            f"the {trial} (seed {seed}) returned a non-finite peak D: its scan failed, and a "
+            "threshold or completeness from the other trials would not describe the search"
         )
+
+
+def _data_not_finite(problem, d_stack) -> bool:
+    """Whether the noise-free data drawn from ``d_stack`` are non-finite at a good pixel.
+
+    The trial data of :func:`albireo.simulate.resimulate` are the response times this
+    model plus noise, and :func:`albireo.forward.with_data` sets the masked pixels to
+    zero, so only pixels with ``w > 0`` are tested. The model is the compiled one that
+    :func:`albireo.simulate.resimulate` evaluates.
+    """
+    model = _model_applier()(problem, jnp.asarray(d_stack))
+    for g, model_dev in zip(problem.groups, model, strict=True):
+        data = np.asarray(g.r) * np.asarray(model_dev)
+        if not np.all(np.isfinite(data[np.asarray(g.w) > 0.0])):
+            return True
+    return False
 
 
 def _interpolate_limit(
@@ -267,6 +287,11 @@ def detection_limit(
         in the order telluric, nebular, for whichever are enabled. Default: their rows of
         the same no-companion fit, so the trials contain these components at their
         observed strength.
+
+        An injected template may hold non-finite values only at pixels that the
+        observations do not sample at the injected orbit, such as padding beyond the
+        coverage of a synthetic library. Elsewhere zero, the continuum, stands for a
+        pixel without a value.
     n_null, n_trials
         Number of companion-free trials, and of trials per rung. ``n_null`` sets the
         resolution floor on the false-alarm probability at ``1 / (n_null + 1)``: 100
@@ -291,9 +316,11 @@ def detection_limit(
     Raises
     ------
     ValueError
-        If an argument is malformed, an injected template is not finite, or the scan of a
-        trial returns a non-finite peak. The null trials are checked before the injected
-        ones are run.
+        If an argument is malformed, or an injected template is non-finite at a pixel the
+        observations sample. Also if the scan of a trial returns a non-finite peak ``D``.
+        That trial stops the calibration when it occurs, and the message names it and its
+        seed. A failed trial is not counted, neither as a null peak nor as a
+        non-detection.
 
     Examples
     --------
@@ -384,25 +411,35 @@ def detection_limit(
             )
     else:
         extras = np.zeros((0, grid.n))
-    # One non-finite pixel that the instrument observes makes the peak of every trial nan,
-    # the companion-free ones included (zero light times nan), and the threshold with them.
-    # A deviation spectrum is zero at the continuum, so a pixel without a value is zero.
-    for name, template in (
-        ("primary_template", primary_template),
-        ("companion_template", companion_template),
-        ("extra_templates", extras),
-    ):
-        if not np.all(np.isfinite(template)):
-            raise ValueError(
-                f"{name} has {int(np.size(template) - np.isfinite(template).sum())} "
-                "non-finite values; every injected deviation spectrum must be finite (zero "
-                "is the continuum)"
-            )
 
     # Injection problem: the two-component model at the true orbit. Only its light
     # fractions change between rungs; the companion's amplitude is the ladder variable.
     d_inject = np.concatenate([primary_template[None], companion_template[None], extras], axis=0)
     inject_at = model.problem_at({**orbit, "k": jnp.asarray([k1, float(k2_true)])})
+
+    # A non-finite template pixel that the observations sample makes the data, and the peak,
+    # of every trial non-finite, the companion-free ones included (zero light times nan).
+    # One outside the sampled range, such as nan padding beyond a library's coverage, never
+    # reaches the data and is accepted. Each template with a non-finite value is drawn
+    # alone, at positive light fractions and at the injected orbit, where every trial
+    # draws it.
+    names = ["primary_template", "companion_template"]
+    names += [f"extra_templates[{j}] ({name})" for j, name in enumerate(extra)]
+    probe = None
+    for row, name in enumerate(names):
+        n_bad = int(d_inject[row].size - np.count_nonzero(np.isfinite(d_inject[row])))
+        if n_bad == 0:
+            continue
+        if probe is None:
+            probe = with_light_fractions(inject_at, jnp.asarray([0.5, 0.5]))
+        alone = np.zeros_like(d_inject)
+        alone[row] = d_inject[row]
+        if _data_not_finite(probe, alone):
+            raise ValueError(
+                f"{name} has {n_bad} non-finite values, and the observations sample at least "
+                "one of them at the injected orbit. A deviation spectrum is zero at the "
+                "continuum, so a pixel without a value should be set to zero"
+            )
 
     total = n_null + n_trials * ell2_grid.size
     done = 0
@@ -428,30 +465,37 @@ def detection_limit(
         ll_null = float(_logsumexp(k1_log_w + ll_null_grid, axis=0))
         return float(np.max(2.0 * (ll - ll_null)))
 
-    # One row of seeds for the null trials and one per rung, in the order of the ladder.
-    # A rung appended above the ladder leaves the seeds of the others unchanged when n_null
-    # and n_trials are unchanged. Inserting a rung moves the rows of the rungs above it, and
-    # a change of max(n_null, n_trials) changes every row.
+    # One row of seeds for the null trials and one per rung, in the order of the ladder,
+    # each max(n_null, n_trials) wide and drawn in row order from one stream. A rung
+    # appended above the ladder leaves every other row unchanged while that width is
+    # unchanged. Inserting a rung moves the rows of the rungs above it. A change of the
+    # width moves the rows of every rung, and the null row keeps only its leading seeds.
     rng = np.random.default_rng(seed)
     seeds = rng.integers(0, 2**31 - 1, size=(ell2_grid.size + 1, max(n_null, n_trials)))
 
+    # A trial whose scan fails stops the calibration at once (_check_peak_finite).
     null_peaks = np.empty(n_null)
     for t in range(n_null):
         null_peaks[t] = run(0.0, int(seeds[0, t]))
+        _check_peak_finite(
+            null_peaks[t], f"companion-free trial {t + 1} of {n_null}", int(seeds[0, t])
+        )
         done += 1
         if progress is not None:
             progress(done, total)
-    # A nan peak (a failed scan) sorts above every other and would become the threshold.
-    _check_peaks_finite(null_peaks, "companion-free")
 
     signal_peaks = np.empty((ell2_grid.size, n_trials))
     for i, ell2 in enumerate(ell2_grid):
         for t in range(n_trials):
             signal_peaks[i, t] = run(float(ell2), int(seeds[i + 1, t]))
+            _check_peak_finite(
+                signal_peaks[i, t],
+                f"injected trial {t + 1} of {n_trials} at ell2 = {ell2:.6g}",
+                int(seeds[i + 1, t]),
+            )
             done += 1
             if progress is not None:
                 progress(done, total)
-    _check_peaks_finite(signal_peaks, "injected")
 
     threshold = _threshold_at(null_peaks, float(false_alarm))
     completeness = np.mean(signal_peaks > threshold, axis=1)

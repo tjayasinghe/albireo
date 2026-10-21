@@ -595,13 +595,22 @@ def test_progress_callback_counts_every_trial(sb1):
     assert seen == [(1, 4), (2, 4), (3, 4), (4, 4)]
 
 
-@pytest.mark.parametrize(("failing_call", "kind"), [(2, "companion-free"), (4, "injected")])
-def test_a_trial_whose_scan_fails_is_reported(sb1, monkeypatch, failing_call, kind):
-    """A nan peak is reported, and does not become the threshold.
+@pytest.mark.parametrize(
+    ("failing_call", "trial", "row", "column"),
+    [
+        (2, "companion-free trial 2 of 3", 0, 1),
+        (4, "injected trial 1 of 2 at ell2 = 0.02", 1, 0),
+    ],
+)
+def test_a_trial_whose_scan_fails_stops_the_calibration(
+    sb1, monkeypatch, failing_call, trial, row, column
+):
+    """A nan peak stops the calibration at that trial and names the trial and its seed.
 
     Sorted in descending order a nan comes first, so with the default false-alarm rate and
-    fewer than 200 null trials one failed null trial was the threshold. Every injected
-    trial then fell below it, the completeness was zero and the limit nan.
+    up to 198 null trials one failed null trial was the threshold. Every injected trial then
+    fell below it, the completeness was zero and the limit nan. A failed injected trial
+    counted as a non-detection.
     """
     import albireo.calibrate as calibrate
 
@@ -614,7 +623,9 @@ def test_a_trial_whose_scan_fails_is_reported(sb1, monkeypatch, failing_call, ki
         return np.full((1, k2_grid.size), value), np.zeros(1)
 
     monkeypatch.setattr(calibrate, "_scan_grids", scan)
-    with pytest.raises(ValueError, match=f"1 of [0-9]+ {kind} trials returned a non-finite"):
+    # The seeds of detection_limit at seed=0: one row for the null trials, one per rung.
+    seed = np.random.default_rng(0).integers(0, 2**31 - 1, size=(2, 3))[row, column]
+    with pytest.raises(ValueError, match=rf"the {trial} \(seed {seed}\) returned a non-finite"):
         ab.detection_limit(
             GRID,
             sb1[0],
@@ -631,6 +642,53 @@ def test_a_trial_whose_scan_fails_is_reported(sb1, monkeypatch, failing_call, ki
             n_null=3,
             n_trials=2,
         )
+    assert len(calls) == failing_call  # no trial after the failed one was run
+
+
+def test_nan_padding_that_the_observations_never_sample_is_accepted(sb1, monkeypatch):
+    """A template padded with nan beyond the sampled range draws the trials of zero padding.
+
+    The instrument samples 5003-5037 A of the 5000-5040 A grid. The outer 10 pixels at each
+    end lie more than 100 km/s beyond that range, farther than the injected velocities and
+    the LSF reach, so they never enter the data.
+    """
+    import albireo.calibrate as calibrate
+
+    drawn = []
+
+    def scan(*args, problem, **kwargs):
+        drawn.append([np.asarray(g.z) for g in problem.groups])
+        return np.zeros((1, 3)), np.zeros(1)
+
+    monkeypatch.setattr(calibrate, "_scan_grids", scan)
+    primary = np.asarray(sb1[2], dtype=np.float64)
+    for fill in (np.nan, 0.0):
+        template = primary.copy()
+        template[:10] = fill
+        template[-10:] = fill
+        ab.detection_limit(
+            GRID,
+            sb1[0],
+            orbit=_orbit(),
+            k1=K1,
+            k2_true=K2_TRUE,
+            k2_grid=K2_GRID[:3],
+            light_fractions=ELL,
+            lsf_sigma_v=LSF,
+            prior=PRIOR,
+            v_rel_max_kms=V_REL_MAX,
+            ell2_grid=np.array([0.02]),
+            primary_template=template,
+            n_null=1,
+            n_trials=1,
+        )
+    padded, zeroed = drawn[:2], drawn[2:]
+    assert len(padded) == len(zeroed) == 2
+    for a, b in zip(padded, zeroed, strict=True):
+        for z_nan, z_zero in zip(a, b, strict=True):
+            assert np.all(np.isfinite(z_nan))
+            np.testing.assert_array_equal(z_nan, z_zero)
+    # A nan inside the sampled range is refused (test_detection_limit_rejects_malformed_input).
 
 
 def test_interpolated_limit_takes_the_first_upcrossing():
