@@ -179,14 +179,31 @@ def telluric_model(
     """
     lines = telluric_lines() if lines is None else lines
     wave = np.asarray(wave, dtype=float)
-    out = np.zeros_like(wave)
+    # Each line is evaluated only on the samples within 6 sigma of its centre, found by a
+    # binary search on the sorted wavelengths with a 1 per cent margin. The samples, the
+    # operations and the order in which the lines are added are those of a loop over the
+    # whole array, so the result is identical to it.
+    flat = wave.ravel()
+    order = None
+    if not np.all(flat[1:] >= flat[:-1]):
+        order = np.argsort(flat, kind="stable")
+        flat = flat[order]
+    acc = np.zeros_like(flat)
     centres = lines.wave * (1.0 + shift_kms / _C_KMS)
     sigmas = lines.fwhm_kms / _FWHM_PER_SIGMA
     for centre, depth, sigma in zip(centres, lines.depth, sigmas, strict=True):
-        v = (wave / centre - 1.0) * _C_KMS
+        half = 1.01 * 6.0 * sigma / _C_KMS
+        i0, i1 = np.searchsorted(flat, (centre * (1.0 - half), centre * (1.0 + half)))
+        v = (flat[i0:i1] / centre - 1.0) * _C_KMS
         near = np.abs(v) < 6.0 * sigma
-        out[near] -= depth * np.exp(-0.5 * (v[near] / sigma) ** 2)
-    return np.maximum(out, -0.98)
+        window = acc[i0:i1]
+        window[near] -= depth * np.exp(-0.5 * (v[near] / sigma) ** 2)
+    if order is None:
+        out = acc
+    else:
+        out = np.empty_like(acc)
+        out[order] = acc
+    return np.maximum(out.reshape(wave.shape), -0.98)
 
 
 @dataclass(frozen=True)

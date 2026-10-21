@@ -78,6 +78,31 @@ def test_the_model_is_a_sum_of_lines():
     assert lag * 0.25 == pytest.approx(10.0, abs=0.5)
 
 
+def test_the_model_equals_a_sum_over_every_sample():
+    """Each line is evaluated only near its centre; the sum is that over every sample."""
+    lines = telluric_lines()
+
+    def every_sample(wave, shift_kms):
+        out = np.zeros_like(wave)
+        centres = lines.wave * (1.0 + shift_kms / C_KMS)
+        for centre, depth, sigma in zip(
+            centres, lines.depth, lines.fwhm_kms / FWHM_PER_SIGMA, strict=True
+        ):
+            v = (wave / centre - 1.0) * C_KMS
+            near = np.abs(v) < 6.0 * sigma
+            out[near] -= depth * np.exp(-0.5 * (v[near] / sigma) ** 2)
+        return np.maximum(out, -0.98)
+
+    rng = np.random.default_rng(2)
+    increasing = np.exp(np.arange(math.log(6250.0), math.log(7350.0), 0.6 / C_KMS))
+    # Overlapping rows, as in an echelle wavelength solution, and an undefined sample.
+    rows = np.stack([increasing[k * 19_000 : k * 19_000 + 21_000] for k in range(4)])
+    rows[1, 17] = np.nan
+    for wave, shift in ((increasing, 0.0), (rows, -37.3), (rng.permutation(increasing), 12.9)):
+        expected = every_sample(wave, shift)
+        np.testing.assert_array_equal(telluric_model(wave, shift_kms=shift), expected)
+
+
 @pytest.mark.parametrize("displacement", [2.5, -4.0, 31.0])
 def test_the_shift_puts_the_lines_back_at_rest(displacement):
     found = telluric_shift(spectrum(displacement), lsf_sigma_kms=7.3 / FWHM_PER_SIGMA)
