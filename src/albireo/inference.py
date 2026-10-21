@@ -115,7 +115,6 @@ Phan, D., Pradhan, N. & Jankowiak, M. 2019, arXiv:1912.11554
 
 from __future__ import annotations
 
-import inspect
 import warnings
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import nullcontext
@@ -136,9 +135,11 @@ from numpyro.infer import MCMC, NUTS, init_to_value
 from numpyro.infer.util import get_potential_fn, initialize_model
 from numpyro.util import is_prng_key
 
-try:  # numpyro's initialize_model wraps the model in this before building the potential
+# numpyro's initialize_model wraps the model in this before building the potential. Without
+# it, every model takes numpyro's initializer.
+try:
     from numpyro.infer.util import _substitute_default_key
-except ImportError:  # pragma: no cover - every model then takes numpyro's initializer
+except ImportError:  # pragma: no cover
     _substitute_default_key = None
 
 from albireo.data import Dataset
@@ -1122,8 +1123,6 @@ def _resolve_model_args(model, model_args) -> tuple:
 # Rows of the Hessian evaluated together in laplace_check. One row at a time keeps the
 # temporaries of one reverse pass of the gradient in memory instead of one per coordinate.
 _HESSIAN_BATCH = 1
-# The attribute of a model under which its compiled programs are kept (_compiled).
-_PROGRAMS = "_albireo_programs"
 
 
 def _strong(tree):
@@ -1146,13 +1145,15 @@ class _Start:
     ``potential_fn(*model_args)`` and ``postprocess_fn(*model_args)`` return the potential
     and the map to constrained values. ``sites`` holds the name and support of every latent
     site when the start was found without evaluating the model, and is ``None`` when
-    numpyro's initializer found it.
+    numpyro's initializer found it. ``reduced`` is true when the map to constrained values
+    runs the model's ``postprocess_model`` instead of the model.
     """
 
     z: dict
     potential_fn: Callable
     postprocess_fn: Callable
     sites: tuple | None
+    reduced: bool = False
 
 
 def _latent_sites(model, values: Mapping, rng_key, model_args: tuple):
@@ -1162,10 +1163,11 @@ def _latent_sites(model, values: Mapping, rng_key, model_args: tuple):
     or compiled, with its sample sites substituted from ``values`` as numpyro's
     ``init_to_value`` substitutes them. Where a support is built inside the model, the
     trace is repeated with the operations on constants evaluated
-    (:func:`jax.ensure_compile_time_eval`). Returns ``(sites, replay)``: ``sites`` holds
-    ``(name, support)`` for every latent site in the order of the trace, and ``replay`` is
+    (:func:`jax.ensure_compile_time_eval`). Returns ``(sites, replay, outputs)``: ``sites``
+    holds ``(name, support)`` for every latent site in the order of the trace, ``replay`` is
     numpyro's condition for a map to constrained values that runs the model (a
-    deterministic site, or a bound that is not a number). Returns ``None`` when the start
+    deterministic site, or a bound that is not a number), and ``outputs`` describes the
+    sites that this map returns (:func:`_traced_sites`). Returns ``None`` when the start
     is not determined by ``values`` alone or the fast path does not apply: a latent site
     without a value (numpyro draws it), a discrete or ``Delta`` site, a ``param``, plate or
     other site type, a support that depends on the model arguments, or a trace that
@@ -1189,8 +1191,13 @@ _TRACED_SUPPORT = object()
 
 
 def _traced_sites(model, values: Mapping, rng_key, model_args: tuple, evaluate_constants: bool):
-    """One abstract trace of :func:`_latent_sites`: ``(sites, replay)``, ``None`` or
-    ``_TRACED_SUPPORT``."""
+    """One abstract trace of :func:`_latent_sites`: ``(sites, replay, outputs)``, ``None``
+    or ``_TRACED_SUPPORT``.
+
+    ``outputs`` holds ``(name, support, shape)`` for every latent site and
+    ``(name, None, shape)`` for every deterministic site, in the order of the trace. These
+    are the sites of numpyro's map to constrained values, in its order.
+    """
     recorded: dict = {}
 
     def probe(*args):
@@ -1200,10 +1207,11 @@ def _traced_sites(model, values: Mapping, rng_key, model_args: tuple, evaluate_c
 
     try:
         jax.eval_shape(probe, *model_args)
-        sites, replay = [], False
+        sites, outputs, replay = [], [], False
         for name, site in recorded.items():
             if site["type"] == "deterministic":
                 replay = True
+                outputs.append((name, None, jnp.shape(site["value"])))
                 continue
             if site["type"] != "sample":
                 return None
@@ -1223,9 +1231,10 @@ def _traced_sites(model, values: Mapping, rng_key, model_args: tuple, evaluate_c
                 bounds = (support.lower_bound, support.upper_bound)
             replay = replay or any(not isinstance(b, (int, float)) for b in bounds)
             sites.append((name, support))
+            outputs.append((name, support, jnp.shape(site["value"])))
     except Exception:
         return None
-    return tuple(sites), replay
+    return tuple(sites), replay, tuple(outputs)
 
 
 def _numpyro_start(model, values: Mapping, rng_key, model_args: tuple):
@@ -1256,21 +1265,18 @@ def _initialize(model, values: Mapping, rng_key, model_args: tuple) -> _Start:
     numpyro wraps it. ``z`` and the potential are therefore those of numpyro's initializer.
     The potential is not evaluated here. The caller evaluates it, and calls
     :func:`_numpyro_start` for numpyro's error when the value or the gradient is not
-    finite. The constrained values of a model with a ``postprocess_model`` attribute are
-    taken from that model, which records the same sites without the likelihood
-    (:meth:`MarginalOrbitModel.model`).
+    finite. Starts that :func:`_unconstrained` declines are also left to numpyro's
+    initializer, with its errors. The constrained values of a model whose
+    ``postprocess_model`` records the same sites without the likelihood
+    (:meth:`MarginalOrbitModel.model`, :func:`_reduced_model`) are taken from that model.
     """
     found = _latent_sites(model, values, rng_key, model_args)
-    if found is not None:
-        sites, replay = found
-        try:
-            transforms = {name: biject_to(support) for name, support in sites}
-            z = {name: transforms[name].inv(values[name]) for name, _ in sites}
-        except Exception:
-            found = None
-    if found is None:
+    unconstrained = None if found is None else _unconstrained(found[0], values)
+    if found is None or unconstrained is None:
         info = _numpyro_start(model, values, rng_key, model_args)
         return _Start(info.param_info.z, info.potential_fn, info.postprocess_fn, None)
+    sites, replay, outputs = found
+    transforms, z = unconstrained
     potential_fn, postprocess_fn = get_potential_fn(
         _substitute_default_key(substitute(model, data={})),
         transforms,
@@ -1278,8 +1284,8 @@ def _initialize(model, values: Mapping, rng_key, model_args: tuple) -> _Start:
         replay_model=replay,
         dynamic_args=True,
     )
-    reduced = getattr(model, "postprocess_model", None)
-    if replay and callable(reduced):
+    reduced = _reduced_model(model, outputs, values, rng_key, model_args) if replay else None
+    if reduced is not None:
         _, postprocess_fn = get_potential_fn(
             _substitute_default_key(substitute(reduced, data={})),
             transforms,
@@ -1287,42 +1293,67 @@ def _initialize(model, values: Mapping, rng_key, model_args: tuple) -> _Start:
             replay_model=True,
             dynamic_args=True,
         )
-    return _Start(z, potential_fn, postprocess_fn, sites)
+    return _Start(z, potential_fn, postprocess_fn, sites, reduced is not None)
 
 
-def _same_sites(held: tuple, sites: tuple) -> bool:
-    """Whether two ``(name, support)`` tuples name the same sites with equal supports."""
-    if len(held) != len(sites):
+# The starts that the fast path accepts: numbers and arrays. numpyro's initializer rejects
+# other containers, such as a list for a site on the real line.
+_START_TYPES = (int, float, np.ndarray, np.generic, jax.Array)
+
+
+def _unconstrained(sites: tuple, values: Mapping):
+    """``(transforms, z)`` with ``z = biject_to(support).inv(value)``, as numpyro computes it.
+
+    Returns ``None`` for a start that is left to numpyro's initializer: a value that is
+    neither a number nor an array, a support without a transform, and a coordinate of
+    ``z`` that is not floating point. The last arises from an integer start of a site on
+    the real line, and JAX rejects its gradient.
+    """
+    if not all(isinstance(values[name], _START_TYPES) for name, _ in sites):
+        return None
+    try:
+        transforms = {name: biject_to(support) for name, support in sites}
+        z = {name: transforms[name].inv(values[name]) for name, _ in sites}
+        inexact = all(jnp.issubdtype(jnp.result_type(x), jnp.inexact) for x in jax.tree.leaves(z))
+    except Exception:
+        return None
+    return (transforms, z) if inexact else None
+
+
+def _reduced_model(model, outputs: tuple, values: Mapping, rng_key, model_args: tuple):
+    """The ``postprocess_model`` of ``model`` if it records the sites the model returns.
+
+    numpyro's map to constrained values returns the latent and the deterministic sites of
+    the model's trace, in its order (``outputs`` of :func:`_traced_sites`). The attribute
+    is traced abstractly and accepted only when it records the same sites, in the same
+    order, with equal supports and shapes. A wrapper of the model made with
+    :func:`functools.wraps` inherits the attribute without the wrapper's own sites, and
+    its constrained values then come from the wrapper itself. Returns ``None`` when the
+    attribute is absent or does not match.
+    """
+    reduced = getattr(model, "postprocess_model", None)
+    if not callable(reduced):
+        return None
+    found = _latent_sites(reduced, values, rng_key, model_args)
+    if found is None or not _same_outputs(found[2], outputs):
+        return None
+    return reduced
+
+
+def _same_outputs(first: tuple, second: tuple) -> bool:
+    """Whether two ``outputs`` of :func:`_traced_sites` name the same sites in the same
+    order, with equal supports and shapes."""
+    if len(first) != len(second):
         return False
     try:
-        return all(a == b and s == t for (a, s), (b, t) in zip(held, sites, strict=True))
+        return all(
+            a == b
+            and shape_a == shape_b
+            and ((s is None and t is None) or (s is not None and t is not None and s == t))
+            for (a, s, shape_a), (b, t, shape_b) in zip(first, second, strict=True)
+        )
     except Exception:
         return False
-
-
-def _compiled(model, name: str, sites: tuple | None, build: Callable):
-    """A compiled program of ``model``, kept on the model so that later calls reuse it.
-
-    The programs depend only on the model, and are kept in an attribute of it, so they are
-    freed with it. A program is rebuilt when the latent sites or their supports differ from
-    those it was built for. As for any jitted function, a change made to the model's
-    closure after compilation is not detected. Starts found by numpyro's initializer
-    (``sites`` is ``None``) are not cached, since their potential can depend on the start
-    through ``param`` sites, and neither are bound methods, which share their function's
-    attributes between instances.
-    """
-    if sites is None or inspect.ismethod(model):
-        return build()
-    try:
-        store = vars(model).setdefault(_PROGRAMS, {})
-    except TypeError:
-        return build()
-    held = store.get(name)
-    if held is not None and _same_sites(held[0], sites):
-        return held[1]
-    program = build()
-    store[name] = (sites, program)
-    return program
 
 
 def _lbfgs_program(potential_gen) -> tuple:
@@ -1343,13 +1374,13 @@ def _lbfgs_program(potential_gen) -> tuple:
 def _derivatives_program(potential_gen, batch_size: int):
     """The potential, its gradient and its Hessian at ``z``, jitted with the arguments traced.
 
-    Reverse-over-reverse is used, not jax.hessian (forward-over-reverse). Forward-over-
-    reverse runs here, since it differentiates the custom rule's backward pass, which
-    consists of plain operations. However, it was measured to return an appreciably
-    asymmetric Hessian on this stack, on the plain-autodiff path as well, so the cause is
-    the solver scans rather than the custom VJP. Reverse-over-reverse matches central
-    finite differences of the gradient to 8 digits where forward-over-reverse does not
-    (D28). Forward mode applied directly to the marginal is not possible, because JAX
+    Reverse-over-reverse is used, not jax.hessian (forward-over-reverse).
+    Forward-over-reverse runs here, since it differentiates the custom rule's backward
+    pass, which consists of plain operations. However, it was measured to return an
+    appreciably asymmetric Hessian on this stack, on the plain-autodiff path as well, so
+    the cause is the solver scans rather than the custom VJP. Reverse-over-reverse matches
+    central finite differences of the gradient to 8 digits where forward-over-reverse does
+    not (D28). Forward mode applied directly to the marginal is not possible, because JAX
     rejects jvp of a custom_vjp function. The rows of the Hessian are the VJPs of the
     gradient with the rows of the identity, ``batch_size`` rows at a time.
     """
@@ -1479,11 +1510,12 @@ def run_map(
     potential are numpyro's (``z = biject_to(support).inv(value)``). Otherwise numpyro's
     ``initialize_model`` finds it. A model may expose a ``postprocess_model`` attribute, a
     callable with the model's positional signature that records the same sample and
-    deterministic sites without the likelihood factors. The constrained values of the
-    result, and those passed to ``callback``, are then computed from it.
+    deterministic sites without the likelihood factors. It is traced abstractly, and where
+    it records the same latent and deterministic sites as the model, in the same order and
+    with equal supports and shapes, the constrained values of the result, and those passed
+    to ``callback``, are computed from it. Otherwise they come from a replay of the model.
     :meth:`MarginalOrbitModel.model` provides one, which omits the marginal likelihood.
-    The compiled L-BFGS step is kept on the model object and reused by a later call with
-    the same model.
+    The L-BFGS step is compiled once per call.
 
     Parameters
     ----------
@@ -1540,7 +1572,7 @@ def run_map(
     values = dict(init)
     start = _initialize(model, values, rng_key, model_args)
     postprocess = start.postprocess_fn(*model_args)
-    opt, step = _compiled(model, "lbfgs", start.sites, lambda: _lbfgs_program(start.potential_fn))
+    opt, step = _lbfgs_program(start.potential_fn)
     # numpyro may return python-float leaves for scalar sites; optax needs arrays. Strong
     # types keep the step to one compilation (see _strong).
     params = _strong(jax.tree.map(jnp.asarray, start.z))
@@ -1797,8 +1829,8 @@ def laplace_check(
     (:class:`LaplaceCheck`). The potential, its gradient and its Hessian are evaluated in
     one compiled program, with the model arguments traced, at the cost of one reverse pass
     of the gradient per coordinate. The evaluations cost one compilation of the potential
-    and two evaluations per coordinate. Both programs are kept on the model object and
-    reused by a later call with the same model. The start is found as in :func:`run_map`.
+    and two evaluations per coordinate. Both programs are compiled once per call. The
+    start is found as in :func:`run_map`.
 
     Parameters
     ----------
@@ -1823,12 +1855,7 @@ def laplace_check(
     start = _initialize(model, point, rng_key, model_args)
     z = _strong(jax.tree.map(jnp.asarray, start.z))
     flat, unravel = ravel_pytree(z)
-    derivatives = _compiled(
-        model,
-        "derivatives",
-        start.sites,
-        lambda: _derivatives_program(start.potential_fn, _HESSIAN_BATCH),
-    )
+    derivatives = _derivatives_program(start.potential_fn, _HESSIAN_BATCH)
     value, grad, hess = derivatives(z, model_args)
     gradient = np.asarray(grad, dtype=np.float64)
     finite = bool(np.isfinite(float(value)) and np.all(np.isfinite(gradient)))
@@ -1878,9 +1905,7 @@ def laplace_check(
     )
     if not probe:
         return check
-    evaluate = _compiled(
-        model, "potential", start.sites, lambda: _potential_program(start.potential_fn)
-    )
+    evaluate = _potential_program(start.potential_fn)
     drop, drop_at, rise = _probe_potential(
         lambda zf: evaluate(zf, z, model_args),
         np.asarray(flat, dtype=np.float64),

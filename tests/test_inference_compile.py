@@ -1,12 +1,15 @@
-"""The start, the compiled programs and their reuse in `run_map` and `laplace_check`.
+"""The start and the compiled programs of `run_map` and `laplace_check`.
 
 numpyro's `initialize_model` evaluates the model eagerly, one operation at a time, to find
 the start, and the map to constrained values replays the whole model, the marginal
 likelihood included. On a marginal-likelihood model both cost hundreds of compilations
 and about a gigabyte. The start is instead found by an abstract trace, and the constrained
 values come from the model without its likelihood. These tests hold both to numpyro's
-results bit for bit, and count the compilations that remain.
+results bit for bit, and count the compilations that remain. The programs are compiled
+once per call and are not kept between calls, so a later call sees a model that changed.
 """
+
+import functools
 
 import jax
 import jax.numpy as jnp
@@ -19,7 +22,6 @@ from numpyro.infer.util import initialize_model
 
 from albireo.inference import (
     MarginalOrbitModel,
-    _compiled,
     _initialize,
     laplace_check,
     run_map,
@@ -73,6 +75,7 @@ def test_the_start_and_the_potential_are_numpyros(marginal_model):
     )
     start = _initialize(model, INIT, key, args)
     assert start.sites is not None, "every site has a value, so numpyro is not needed"
+    assert start.reduced, "the model without the likelihood records the same sites"
     assert list(start.z) == list(info.param_info.z)
     for site, value in info.param_info.z.items():
         assert _same(start.z[site], value), site
@@ -148,25 +151,120 @@ def test_an_invalid_start_raises_numpyros_error():
     assert run_map(model, init={"x": 1.0}, max_steps=5).num_steps >= 1
 
 
-def test_run_map_compiles_its_step_once_and_keeps_it_on_the_model(marginal_model, compilations):
+def test_run_map_compiles_its_step_once_per_call(marginal_model, compilations):
     """Weakly typed starts used to compile the step at the first three iterations."""
     warm = run_map(marginal_model.model(PRIORS), init=INIT, max_steps=5, tol=0.0)
     model = marginal_model.model(PRIORS)
     assert compilations(lambda: run_map(model, init=INIT, max_steps=5, tol=0.0)) == 1
     again = []
-    assert compilations(lambda: again.append(run_map(model, init=INIT, max_steps=5))) == 0
+    assert compilations(lambda: again.append(run_map(model, init=INIT, max_steps=5))) == 1
     for site, value in warm.unconstrained.items():
         assert _same(again[0].unconstrained[site], value), site
     assert again[0].potential_trace == warm.potential_trace
 
 
-def test_laplace_check_keeps_its_programs_on_the_model(marginal_model, compilations):
+def test_laplace_check_compiles_two_programs_per_call(marginal_model, compilations):
+    """The derivatives in one program and the potential of the probes in another."""
     model = marginal_model.model(PRIORS)
     first = laplace_check(model, INIT)
     second = []
-    assert compilations(lambda: second.append(laplace_check(model, INIT))) == 0
+    assert compilations(lambda: second.append(laplace_check(model, INIT))) == 2
     np.testing.assert_array_equal(second[0].covariance, first.covariance)
     assert second[0].drop == first.drop
+
+
+def test_run_map_sees_a_prior_changed_after_a_first_call(marginal_model):
+    """The model reads the caller's priors when it is traced, as numpyro's models do."""
+    priors = dict(PRIORS)
+    model = marginal_model.model(priors)
+    first = run_map(model, init=INIT, max_steps=10)
+    priors["period"] = dist.Normal(6.2, 0.0005)  # the same support, a different density
+    again = run_map(model, init=INIT, max_steps=10)
+    fresh = run_map(marginal_model.model(dict(priors)), init=INIT, max_steps=10)
+    assert again.potential_trace != first.potential_trace
+    assert again.potential_trace == fresh.potential_trace
+    for site, value in fresh.params.items():
+        assert _same(again.params[site], value), site
+
+
+def test_a_wrapper_of_a_fitted_model_is_fitted_as_itself():
+    """`functools.wraps` copies the attributes of the wrapped model to the wrapper."""
+
+    def base():
+        return numpyro.sample("x", dist.Normal(0.0, 1.0))
+
+    assert abs(float(run_map(base, init={"x": 0.5}, max_steps=50, tol=1e-8).params["x"])) < 1e-8
+    laplace_check(base, {"x": 0.0})
+
+    @functools.wraps(base)
+    def wrapper():
+        x = base()
+        numpyro.factor("extra", -0.5 * ((x - 3.0) / 0.1) ** 2)
+
+    # The posterior is normal with precision 1 + 100 and mean 300 / 101.
+    result = run_map(wrapper, init={"x": 0.5}, max_steps=50, tol=1e-8)
+    assert float(result.params["x"]) == pytest.approx(300.0 / 101.0, abs=1e-8)
+    check = laplace_check(wrapper, {"x": 300.0 / 101.0})
+    np.testing.assert_allclose(check.covariance, [[1.0 / 101.0]], rtol=1e-10)
+
+
+def test_a_postprocess_model_with_other_sites_is_not_used():
+    """A wrapper inherits the wrapped model's `postprocess_model`, which lacks its sites."""
+
+    def base():
+        x = numpyro.sample("x", dist.Normal(0.0, 1.0))
+        numpyro.deterministic("x2", 2.0 * x)
+        return x
+
+    base.postprocess_model = base
+
+    @functools.wraps(base)
+    def with_site():
+        y = numpyro.sample("y", dist.Normal(base(), 1.0))
+        numpyro.deterministic("y2", 2.0 * y)
+
+    @functools.wraps(base)
+    def with_deterministic():
+        numpyro.deterministic("x3", 3.0 * base())
+
+    @functools.wraps(base)
+    def with_factor():
+        numpyro.factor("prior", -0.5 * base() ** 2)
+
+    key = jax.random.PRNGKey(0)
+    for model, values, reduced in (
+        (base, {"x": 0.5}, True),
+        (with_site, {"x": 0.5, "y": 0.2}, False),
+        (with_deterministic, {"x": 0.5}, False),
+        (with_factor, {"x": 0.5}, True),
+    ):
+        assert _initialize(model, values, key, ()).reduced is reduced, model.__name__
+        result = run_map(model, init=values, max_steps=20)
+        info = initialize_model(
+            key, model, init_strategy=init_to_value(values=values), dynamic_args=True
+        )
+        expected = info.postprocess_fn()(jax.tree.map(jnp.asarray, result.unconstrained))
+        assert list(result.params) == list(expected), model.__name__
+        for site, value in expected.items():
+            assert _same(result.params[site], value), (model.__name__, site)
+
+
+def test_an_integer_start_is_left_to_numpyro():
+    """An integer start on the real line has no gradient; inside a bound it is a float."""
+
+    def model():
+        numpyro.sample("x", dist.Normal(0.0, 1.0))
+        numpyro.sample("u", dist.Uniform(0.0, 4.0))
+
+    with pytest.raises(TypeError, match="grad requires real- or complex-valued inputs"):
+        run_map(model, init={"x": 1, "u": 2.0}, max_steps=5)
+    key = jax.random.PRNGKey(0)
+    values = {"x": 0.5, "u": 1}
+    start = _initialize(model, values, key, ())
+    info = initialize_model(key, model, init_strategy=init_to_value(values=values))
+    assert start.sites is not None
+    for site, value in info.param_info.z.items():
+        assert _same(start.z[site], value), site
 
 
 def test_the_log_likelihood_does_not_recompile_for_python_floats(marginal_model):
@@ -176,24 +274,3 @@ def test_the_log_likelihood_does_not_recompile_for_python_floats(marginal_model)
     programs = marginal_model._marginal_jit._cache_size()
     assert float(marginal_model.log_likelihood(dict(INIT))) == reference
     assert marginal_model._marginal_jit._cache_size() == programs
-
-
-def test_programs_are_not_shared_through_a_bound_method():
-    """A bound method shares its function's attributes with every instance of the class."""
-
-    class Holder:
-        def model(self):
-            numpyro.sample("x", dist.Normal(0.0, 1.0))
-
-    built = []
-    sites = (("x", dist.Normal(0.0, 1.0).support),)
-    for holder in (Holder(), Holder()):
-        _compiled(holder.model, "probe", sites, lambda: built.append(1))
-    assert len(built) == 2
-
-    def plain():
-        numpyro.sample("x", dist.Normal(0.0, 1.0))
-
-    for _ in range(2):
-        _compiled(plain, "probe", sites, lambda: built.append(1) or len(built))
-    assert len(built) == 3
