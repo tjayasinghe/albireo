@@ -625,9 +625,14 @@ def test_the_map_records_its_potential_and_how_far_it_fell_at_the_end():
 
 @pytest.mark.slow
 def test_laplace_closure_and_argument_paths_agree(gate_data, map_fit):
-    """Both paths run the same eager ops on the same arrays, so they agree exactly."""
+    """The Hessian is compiled, with the problem as arguments or as embedded constants.
+
+    The two builds compile different graphs, so they agree to rounding, not bitwise: the
+    largest difference measured is 1.1e-12 on entries of order 1e-5.
+    """
     _, _, model = gate_data
     numpyro_model = model.model(PRIORS)
     via_args = laplace_inverse_mass(numpyro_model, map_fit.params)
     via_closure = laplace_inverse_mass(numpyro_model, map_fit.params, model_args=())
-    np.testing.assert_array_equal(via_args, via_closure)
+    scale = float(np.max(np.abs(via_args)))
+    np.testing.assert_allclose(via_args, via_closure, rtol=0.0, atol=1e-8 * scale)

@@ -115,9 +115,12 @@ Phan, D., Pradhan, N. & Jankowiak, M. 2019, arXiv:1912.11554
 
 from __future__ import annotations
 
+import inspect
 import warnings
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
+from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -126,8 +129,17 @@ import numpyro
 import numpyro.distributions as dist
 import optax
 from jax.flatten_util import ravel_pytree
+from numpyro.distributions import constraints
+from numpyro.distributions.transforms import biject_to
+from numpyro.handlers import seed, substitute, trace
 from numpyro.infer import MCMC, NUTS, init_to_value
-from numpyro.infer.util import initialize_model
+from numpyro.infer.util import get_potential_fn, initialize_model
+from numpyro.util import is_prng_key
+
+try:  # numpyro's initialize_model wraps the model in this before building the potential
+    from numpyro.infer.util import _substitute_default_key
+except ImportError:  # pragma: no cover - every model then takes numpyro's initializer
+    _substitute_default_key = None
 
 from albireo.data import Dataset
 from albireo.forward import (
@@ -192,6 +204,8 @@ _LOG_TAU_ETA_MAX = 30.0
 _LAPLACE_DROP_NATS = 0.5
 _LAPLACE_RISE_RANGE = (0.5, 2.0)
 _OUTER_SITES = ("period_out", "t_conj_out", "secosw_out", "sesinw_out", "k_out")
+# The sites of the Keplerian orbits, which a free-velocity table replaces.
+_KEPLER_SITES = ("period", "t_conj", "secosw", "sesinw", "k", *_OUTER_SITES)
 _THETA_SITES = (
     "period",
     "t_conj",
@@ -705,8 +719,7 @@ class MarginalOrbitModel:
         if "velocity" in theta:
             # Free per-epoch velocities: no Keplerian (D42). The zero point is removed
             # here, in pixel space, where the removal is exact.
-            clash = [s for s in ("period", "t_conj", "secosw", "sesinw", "k", *_OUTER_SITES)]
-            present = [s for s in clash if s in theta]
+            present = [s for s in _KEPLER_SITES if s in theta]
             if present:
                 raise ValueError(
                     f"theta carries both a free-velocity site and Keplerian sites {present}. "
@@ -855,7 +868,8 @@ class MarginalOrbitModel:
 
     def marginal(self, theta: Mapping) -> MarginalResult:
         """Jit-compiled marginal result (log-likelihood and conditional spectra) at ``theta``."""
-        return self._marginal_jit(self.problem, dict(theta))
+        # Strong types, so that a theta of Python floats and one of arrays share a program.
+        return self._marginal_jit(self.problem, _strong(dict(theta)))
 
     def log_likelihood(self, theta: Mapping):
         """Jit-compiled marginal log-likelihood at ``theta`` (differentiable)."""
@@ -942,7 +956,7 @@ class MarginalOrbitModel:
             )
         batch_size = max(1, min(int(batch_size), n_trials))
         base = self.problem if problem is None else problem
-        return self._sweep_jit(base, dict(theta), sweep, batch_size)
+        return self._sweep_jit(base, _strong(dict(theta)), _strong(sweep), batch_size)
 
     def model(self, priors: Mapping[str, dist.Distribution], *, fixed: Mapping | None = None):
         """Build a numpyro model that samples ``priors`` and adds the marginal likelihood.
@@ -977,7 +991,10 @@ class MarginalOrbitModel:
             XLA constants, whose compile-time folding allocates multi-GB temporaries at
             survey scale. Calling the model with no argument (as plain numpyro utilities
             such as ``log_density`` do) falls back to the closure, which is correct but
-            not compile-safe at scale.
+            not compile-safe at scale. A ``postprocess_model`` attribute holds the same
+            model without the bandwidth guard and the marginal likelihood. It records the
+            same sample and deterministic sites, and :func:`run_map` reads its constrained
+            values from it.
 
         Raises
         ------
@@ -995,8 +1012,7 @@ class MarginalOrbitModel:
 
         free_velocity = "velocity" in priors or "velocity" in fixed
         if free_velocity:
-            keplerian = [s for s in ("period", "t_conj", "secosw", "sesinw", "k", *_OUTER_SITES)]
-            clash = [s for s in keplerian if s in priors or s in fixed]
+            clash = [s for s in _KEPLER_SITES if s in priors or s in fixed]
             if clash:
                 raise ValueError(
                     f"a free-velocity model cannot also carry Keplerian sites {clash}: "
@@ -1013,7 +1029,7 @@ class MarginalOrbitModel:
                 "free-velocity model instead by giving a 'velocity' site."
             )
 
-        def _model(base=None):
+        def _model(base=None, *, _likelihood=True):
             theta = {name: numpyro.sample(name, d) for name, d in priors.items()}
             theta.update({name: jnp.asarray(v) for name, v in fixed.items()})
             if free_velocity:
@@ -1072,6 +1088,10 @@ class MarginalOrbitModel:
                 # to an additive constant (nebular_amplitudes centers it), so the raw
                 # samples are not the applied amplitudes.
                 numpyro.deterministic("nebular_amp", nebular_amplitudes(theta))
+            if not _likelihood:
+                # Every sample and deterministic site has been recorded. The constrained
+                # values of a fit need nothing below, which is the whole marginal.
+                return
             problem = self._theta_problem(theta, base=base)
             # Reject configurations whose relative shifts exceed the static bandwidth;
             # the assembled marginal likelihood is wrong beyond it (docs/math.md 7.1).
@@ -1084,6 +1104,9 @@ class MarginalOrbitModel:
         # Expose the problem as a model argument (read by run_map /
         # laplace_inverse_mass / run_nuts) so numpyro traces it instead of folding it.
         _model.model_args = (self.problem,)  # type: ignore[attr-defined]
+        # The same sites without the likelihood, from which run_map takes the constrained
+        # values and deterministics of its result (see run_map, postprocess_model).
+        _model.postprocess_model = partial(_model, _likelihood=False)  # type: ignore[attr-defined]
         return _model
 
 
@@ -1094,6 +1117,268 @@ def _resolve_model_args(model, model_args) -> tuple:
     if model_args is None:
         model_args = getattr(model, "model_args", ())
     return tuple(model_args)
+
+
+# Rows of the Hessian evaluated together in laplace_check. One row at a time keeps the
+# temporaries of one reverse pass of the gradient in memory instead of one per coordinate.
+_HESSIAN_BATCH = 1
+# The attribute of a model under which its compiled programs are kept (_compiled).
+_PROGRAMS = "_albireo_programs"
+
+
+def _strong(tree):
+    """``tree`` with every leaf a strongly typed array of its own dtype; values unchanged.
+
+    A weakly typed leaf (a Python scalar, and some of the values that numpyro's and optax's
+    initializers return) is part of the key of a compiled program and becomes strongly
+    typed after one update, so a jitted step would be compiled again at the second and
+    third iterations.
+    """
+    return jax.tree.map(lambda x: jax.lax.convert_element_type(x, jnp.asarray(x).dtype), tree)
+
+
+@dataclass(frozen=True)
+class _Start:
+    """A model's start in numpyro's unconstrained space, with its potential.
+
+    ``z``, ``potential_fn`` and ``postprocess_fn`` are those of
+    :func:`numpyro.infer.util.initialize_model` with ``dynamic_args=True``.
+    ``potential_fn(*model_args)`` and ``postprocess_fn(*model_args)`` return the potential
+    and the map to constrained values. ``sites`` holds the name and support of every latent
+    site when the start was found without evaluating the model, and is ``None`` when
+    numpyro's initializer found it.
+    """
+
+    z: dict
+    potential_fn: Callable
+    postprocess_fn: Callable
+    sites: tuple | None
+
+
+def _latent_sites(model, values: Mapping, rng_key, model_args: tuple):
+    """The latent sites of ``model``, and whether its constrained values need a replay.
+
+    The model is traced abstractly (:func:`jax.eval_shape`), so that nothing is evaluated
+    or compiled, with its sample sites substituted from ``values`` as numpyro's
+    ``init_to_value`` substitutes them. Where a support is built inside the model, the
+    trace is repeated with the operations on constants evaluated
+    (:func:`jax.ensure_compile_time_eval`). Returns ``(sites, replay)``: ``sites`` holds
+    ``(name, support)`` for every latent site in the order of the trace, and ``replay`` is
+    numpyro's condition for a map to constrained values that runs the model (a
+    deterministic site, or a bound that is not a number). Returns ``None`` when the start
+    is not determined by ``values`` alone or the fast path does not apply: a latent site
+    without a value (numpyro draws it), a discrete or ``Delta`` site, a ``param``, plate or
+    other site type, a support that depends on the model arguments, or a trace that
+    raises. numpyro's initializer then finds the start and raises its own errors.
+    """
+    if _substitute_default_key is None or not is_prng_key(rng_key):
+        return None
+    # A distribution built inside the model, from constants, has bounds that the abstract
+    # trace turns into tracers. The trace is then repeated with the operations that do not
+    # depend on the model arguments evaluated as they are traced, as numpyro's eager trace
+    # evaluates them, so that those bounds are the same arrays.
+    for evaluate_constants in (False, True):
+        found = _traced_sites(model, values, rng_key, model_args, evaluate_constants)
+        if found is not _TRACED_SUPPORT:
+            return found
+    return None
+
+
+# Returned by _traced_sites when a support depends on a tracer of the abstract trace.
+_TRACED_SUPPORT = object()
+
+
+def _traced_sites(model, values: Mapping, rng_key, model_args: tuple, evaluate_constants: bool):
+    """One abstract trace of :func:`_latent_sites`: ``(sites, replay)``, ``None`` or
+    ``_TRACED_SUPPORT``."""
+    recorded: dict = {}
+
+    def probe(*args):
+        seeded = substitute(seed(model, rng_key), substitute_fn=init_to_value(values=values))
+        with jax.ensure_compile_time_eval() if evaluate_constants else nullcontext():
+            recorded.update(trace(seeded).get_trace(*args))
+
+    try:
+        jax.eval_shape(probe, *model_args)
+        sites, replay = [], False
+        for name, site in recorded.items():
+            if site["type"] == "deterministic":
+                replay = True
+                continue
+            if site["type"] != "sample":
+                return None
+            if site["is_observed"]:
+                continue
+            support = site["fn"].support
+            if name not in values or support.is_discrete or isinstance(site["fn"], dist.Delta):
+                return None
+            if any(isinstance(leaf, jax.core.Tracer) for leaf in jax.tree.leaves(support)):
+                return _TRACED_SUPPORT
+            # numpyro.infer.util._get_model_transforms: a bound that is an array, rather
+            # than a number, makes the map to constrained values run the model.
+            bounds: tuple = ()
+            if isinstance(support, constraints._GreaterThan):
+                bounds = (support.lower_bound,)
+            elif isinstance(support, constraints._Interval):
+                bounds = (support.lower_bound, support.upper_bound)
+            replay = replay or any(not isinstance(b, (int, float)) for b in bounds)
+            sites.append((name, support))
+    except Exception:
+        return None
+    return tuple(sites), replay
+
+
+def _numpyro_start(model, values: Mapping, rng_key, model_args: tuple):
+    """numpyro's initializer at ``values``: the fallback of :func:`_initialize`.
+
+    It evaluates the potential and its gradient at the start and raises numpyro's
+    ``RuntimeError`` when either is not finite, so it also supplies that error where the
+    fast path finds a start that is not valid.
+    """
+    return initialize_model(
+        rng_key,
+        model,
+        init_strategy=init_to_value(values=dict(values)),
+        dynamic_args=True,
+        model_args=model_args,
+    )
+
+
+def _initialize(model, values: Mapping, rng_key, model_args: tuple) -> _Start:
+    """The start of ``model`` at the constrained ``values``, as numpyro's initializer finds it.
+
+    :func:`numpyro.infer.util.initialize_model` traces the model and evaluates the potential
+    and its gradient eagerly, one operation at a time. On a marginal-likelihood model that
+    costs hundreds of compilations and about a gigabyte of memory. Where
+    :func:`_latent_sites` applies, the start is computed as numpyro computes it,
+    ``z = biject_to(support).inv(value)`` for every latent site, and the potential is
+    numpyro's own (:func:`numpyro.infer.util.get_potential_fn`) for the model wrapped as
+    numpyro wraps it. ``z`` and the potential are therefore those of numpyro's initializer.
+    The potential is not evaluated here. The caller evaluates it, and calls
+    :func:`_numpyro_start` for numpyro's error when the value or the gradient is not
+    finite. The constrained values of a model with a ``postprocess_model`` attribute are
+    taken from that model, which records the same sites without the likelihood
+    (:meth:`MarginalOrbitModel.model`).
+    """
+    found = _latent_sites(model, values, rng_key, model_args)
+    if found is not None:
+        sites, replay = found
+        try:
+            transforms = {name: biject_to(support) for name, support in sites}
+            z = {name: transforms[name].inv(values[name]) for name, _ in sites}
+        except Exception:
+            found = None
+    if found is None:
+        info = _numpyro_start(model, values, rng_key, model_args)
+        return _Start(info.param_info.z, info.potential_fn, info.postprocess_fn, None)
+    potential_fn, postprocess_fn = get_potential_fn(
+        _substitute_default_key(substitute(model, data={})),
+        transforms,
+        enum=False,
+        replay_model=replay,
+        dynamic_args=True,
+    )
+    reduced = getattr(model, "postprocess_model", None)
+    if replay and callable(reduced):
+        _, postprocess_fn = get_potential_fn(
+            _substitute_default_key(substitute(reduced, data={})),
+            transforms,
+            enum=False,
+            replay_model=True,
+            dynamic_args=True,
+        )
+    return _Start(z, potential_fn, postprocess_fn, sites)
+
+
+def _same_sites(held: tuple, sites: tuple) -> bool:
+    """Whether two ``(name, support)`` tuples name the same sites with equal supports."""
+    if len(held) != len(sites):
+        return False
+    try:
+        return all(a == b and s == t for (a, s), (b, t) in zip(held, sites, strict=True))
+    except Exception:
+        return False
+
+
+def _compiled(model, name: str, sites: tuple | None, build: Callable):
+    """A compiled program of ``model``, kept on the model so that later calls reuse it.
+
+    The programs depend only on the model, and are kept in an attribute of it, so they are
+    freed with it. A program is rebuilt when the latent sites or their supports differ from
+    those it was built for. As for any jitted function, a change made to the model's
+    closure after compilation is not detected. Starts found by numpyro's initializer
+    (``sites`` is ``None``) are not cached, since their potential can depend on the start
+    through ``param`` sites, and neither are bound methods, which share their function's
+    attributes between instances.
+    """
+    if sites is None or inspect.ismethod(model):
+        return build()
+    try:
+        store = vars(model).setdefault(_PROGRAMS, {})
+    except TypeError:
+        return build()
+    held = store.get(name)
+    if held is not None and _same_sites(held[0], sites):
+        return held[1]
+    program = build()
+    store[name] = (sites, program)
+    return program
+
+
+def _lbfgs_program(potential_gen) -> tuple:
+    """``(opt, step)``: optax's L-BFGS with a zoom line search, and its jitted step."""
+    opt = optax.lbfgs()
+
+    @jax.jit
+    def step(params, state, args):
+        potential = potential_gen(*args)
+        value, grad = optax.value_and_grad_from_state(potential)(params, state=state)
+        updates, state = opt.update(grad, state, params, value=value, grad=grad, value_fn=potential)
+        params = optax.apply_updates(params, updates)
+        return params, state, value, grad
+
+    return opt, step
+
+
+def _derivatives_program(potential_gen, batch_size: int):
+    """The potential, its gradient and its Hessian at ``z``, jitted with the arguments traced.
+
+    Reverse-over-reverse is used, not jax.hessian (forward-over-reverse). Forward-over-
+    reverse runs here, since it differentiates the custom rule's backward pass, which
+    consists of plain operations. However, it was measured to return an appreciably
+    asymmetric Hessian on this stack, on the plain-autodiff path as well, so the cause is
+    the solver scans rather than the custom VJP. Reverse-over-reverse matches central
+    finite differences of the gradient to 8 digits where forward-over-reverse does not
+    (D28). Forward mode applied directly to the marginal is not possible, because JAX
+    rejects jvp of a custom_vjp function. The rows of the Hessian are the VJPs of the
+    gradient with the rows of the identity, ``batch_size`` rows at a time.
+    """
+
+    def derivatives(z, args):
+        flat, unravel = ravel_pytree(z)
+        potential = potential_gen(*args)
+
+        def gradient(zf):
+            value, grad = jax.value_and_grad(lambda x: potential(unravel(x)))(zf)
+            return grad, value
+
+        grad, vjp, value = jax.vjp(gradient, flat, has_aux=True)
+        identity = jnp.eye(flat.size, dtype=flat.dtype)
+        batch = batch_size if batch_size > 1 else None
+        rows = jax.lax.map(lambda e: vjp(e)[0], identity, batch_size=batch)
+        return value, grad, rows
+
+    return jax.jit(derivatives)
+
+
+def _potential_program(potential_gen):
+    """The potential at a flat vector laid out as ``like``, jitted with the arguments traced."""
+
+    def evaluate(zf, like, args):
+        _, unravel = ravel_pytree(like)
+        return potential_gen(*args)(unravel(zf))
+
+    return jax.jit(evaluate)
 
 
 @dataclass(frozen=True)
@@ -1189,6 +1474,17 @@ def run_map(
     (empirical Bayes) hyperparameter fit, since the spectra are marginalized out of the
     likelihood (``docs/math.md`` §7.3).
 
+    The start is found without evaluating the model where every latent site has a value
+    in ``init``: the model is traced abstractly for its sites, and the start and the
+    potential are numpyro's (``z = biject_to(support).inv(value)``). Otherwise numpyro's
+    ``initialize_model`` finds it. A model may expose a ``postprocess_model`` attribute, a
+    callable with the model's positional signature that records the same sample and
+    deterministic sites without the likelihood factors. The constrained values of the
+    result, and those passed to ``callback``, are then computed from it.
+    :meth:`MarginalOrbitModel.model` provides one, which omits the marginal likelihood.
+    The compiled L-BFGS step is kept on the model object and reused by a later call with
+    the same model.
+
     Parameters
     ----------
     model
@@ -1197,7 +1493,8 @@ def run_map(
         Constrained initial values for every sampled site. Circular orbits should start
         at small nonzero ``(secosw, sesinw)``; the origin is the one non-smooth point.
     rng_key
-        JAX PRNG key for numpyro's model initialization; default ``PRNGKey(0)``.
+        JAX PRNG key for numpyro's model initialization, which draws the start of a site
+        missing from ``init``; default ``PRNGKey(0)``.
     max_steps
         Maximum number of L-BFGS steps.
     tol
@@ -1227,6 +1524,9 @@ def run_map(
 
     Raises
     ------
+    RuntimeError
+        numpyro's "Cannot find valid initial parameters", if the potential or its gradient
+        is not finite at the start.
     FloatingPointError
         If the gradient becomes non-finite.
 
@@ -1237,34 +1537,28 @@ def run_map(
     """
     rng_key = jax.random.PRNGKey(0) if rng_key is None else rng_key
     model_args = _resolve_model_args(model, model_args)
-    model_info = initialize_model(
-        rng_key,
-        model,
-        init_strategy=init_to_value(values=dict(init)),
-        dynamic_args=True,
-        model_args=model_args,
-    )
-    potential_gen = model_info.potential_fn  # potential_gen(*model_args) -> z -> potential
-    postprocess = model_info.postprocess_fn(*model_args)
-    opt = optax.lbfgs()
-
-    @jax.jit
-    def step(params, state, args):
-        potential = potential_gen(*args)
-        value, grad = optax.value_and_grad_from_state(potential)(params, state=state)
-        updates, state = opt.update(grad, state, params, value=value, grad=grad, value_fn=potential)
-        params = optax.apply_updates(params, updates)
-        return params, state, value, grad
-
-    # numpyro may return python-float leaves for scalar sites; optax needs arrays
-    params = jax.tree.map(jnp.asarray, model_info.param_info.z)
-    state = opt.init(params)
+    values = dict(init)
+    start = _initialize(model, values, rng_key, model_args)
+    postprocess = start.postprocess_fn(*model_args)
+    opt, step = _compiled(model, "lbfgs", start.sites, lambda: _lbfgs_program(start.potential_fn))
+    # numpyro may return python-float leaves for scalar sites; optax needs arrays. Strong
+    # types keep the step to one compilation (see _strong).
+    params = _strong(jax.tree.map(jnp.asarray, start.z))
+    state = _strong(opt.init(params))
     value, grad_norm, steps_taken = np.inf, np.inf, 0
-    trace: list[float] = []
+    potentials: list[float] = []
+    if max_steps < 1 and start.sites is not None:
+        # No step evaluates the start, so numpyro's initializer tests it.
+        _numpyro_start(model, values, rng_key, model_args)
     for steps_taken in range(1, max_steps + 1):
         params, state, value, grad = step(params, state, model_args)
         grad_norm = float(optax.tree.norm(grad))
-        trace.append(float(value))
+        potentials.append(float(value))
+        if steps_taken == 1 and start.sites is not None:
+            if not (np.isfinite(potentials[0]) and np.isfinite(grad_norm)):
+                # The first step evaluates the potential and its gradient at the start.
+                # numpyro's initializer tests them there and raises its error.
+                _numpyro_start(model, values, rng_key, model_args)
         if not np.isfinite(grad_norm):
             raise FloatingPointError(
                 f"non-finite gradient at L-BFGS step {steps_taken} (potential {float(value)})"
@@ -1277,13 +1571,13 @@ def run_map(
             break
     constrained = postprocess(params)
     return MAPResult(
-        params={k: v for k, v in constrained.items()},
+        params=dict(constrained),
         unconstrained=dict(params),
         potential=float(value),
         grad_norm=grad_norm,
         converged=grad_norm < tol,
         num_steps=steps_taken,
-        potential_trace=tuple(trace),
+        potential_trace=tuple(potentials),
     )
 
 
@@ -1500,8 +1794,11 @@ def laplace_check(
     evaluated at the Newton step, at half of it, and at plus and minus one standard
     deviation along every eigenvector of positive curvature, which tests whether the
     point is the maximum and whether the potential is quadratic around it
-    (:class:`LaplaceCheck`). The gradient costs one reverse pass beside the Hessian's one
-    per coordinate, and the evaluations one compilation and two per coordinate.
+    (:class:`LaplaceCheck`). The potential, its gradient and its Hessian are evaluated in
+    one compiled program, with the model arguments traced, at the cost of one reverse pass
+    of the gradient per coordinate. The evaluations cost one compilation of the potential
+    and two evaluations per coordinate. Both programs are kept on the model object and
+    reused by a later call with the same model. The start is found as in :func:`run_map`.
 
     Parameters
     ----------
@@ -1513,34 +1810,33 @@ def laplace_check(
     Returns
     -------
     LaplaceCheck
+
+    Raises
+    ------
+    RuntimeError
+        numpyro's "Cannot find valid initial parameters", if the potential or its gradient
+        is not finite at ``params``.
     """
     rng_key = jax.random.PRNGKey(0) if rng_key is None else rng_key
     model_args = _resolve_model_args(model, model_args)
-    model_info = initialize_model(
-        rng_key,
-        model,
-        init_strategy=init_to_value(values=dict(params)),
-        dynamic_args=True,
-        model_args=model_args,
-    )
-    potential = model_info.potential_fn(*model_args)
-    z = jax.tree.map(jnp.asarray, model_info.param_info.z)
+    point = dict(params)
+    start = _initialize(model, point, rng_key, model_args)
+    z = _strong(jax.tree.map(jnp.asarray, start.z))
     flat, unravel = ravel_pytree(z)
-
-    def flat_potential(zf):
-        return potential(unravel(zf))
-
-    # Reverse-over-reverse is used, not jax.hessian (forward-over-reverse).
-    # Forward-over-reverse runs here, since it differentiates the custom rule's backward
-    # pass, which consists of plain operations. However, it was measured to return an
-    # appreciably asymmetric Hessian on this stack, on the plain-autodiff path as well,
-    # so the cause is the solver scans rather than the custom VJP. jacrev(jacrev(...))
-    # matches central finite differences of the gradient to 8 digits where
-    # forward-over-reverse does not (D28). Forward mode applied directly to the marginal
-    # is not possible, because JAX rejects jvp of a custom_vjp function.
-    hess = jax.jacrev(jax.jacrev(flat_potential))(flat)
+    derivatives = _compiled(
+        model,
+        "derivatives",
+        start.sites,
+        lambda: _derivatives_program(start.potential_fn, _HESSIAN_BATCH),
+    )
+    value, grad, hess = derivatives(z, model_args)
+    gradient = np.asarray(grad, dtype=np.float64)
+    finite = bool(np.isfinite(float(value)) and np.all(np.isfinite(gradient)))
+    if start.sites is not None and not finite:
+        # numpyro's initializer tests the potential and its gradient at the point and
+        # raises its error when either is not finite.
+        _numpyro_start(model, point, rng_key, model_args)
     hess = 0.5 * (hess + hess.T)
-    gradient = np.asarray(jax.grad(flat_potential)(flat), dtype=np.float64)
     eigval, eigvec = jnp.linalg.eigh(hess)
     threshold = floor * jnp.max(eigval)
     floored = jnp.maximum(eigval, threshold)
@@ -1582,30 +1878,31 @@ def laplace_check(
     )
     if not probe:
         return check
+    evaluate = _compiled(
+        model, "potential", start.sites, lambda: _potential_program(start.potential_fn)
+    )
     drop, drop_at, rise = _probe_potential(
-        model_info, unravel, np.asarray(flat, dtype=np.float64), check, keep, model_args
+        lambda zf: evaluate(zf, z, model_args),
+        np.asarray(flat, dtype=np.float64),
+        check,
+        keep,
     )
     return replace(check, probed=True, drop=drop, drop_at=drop_at, rise=rise)
 
 
-def _probe_potential(model_info, unravel, flat, check: LaplaceCheck, keep, model_args):
+def _probe_potential(evaluate, flat, check: LaplaceCheck, keep):
     """The evaluations of :class:`LaplaceCheck`, conditions 2 and 3: ``(drop, where, rise)``.
 
-    The potential is compiled once, with the problem as a traced argument as in
-    :func:`run_map`, and evaluated at the Newton step, at half of it, and at plus and minus
-    one standard deviation along every eigenvector of positive curvature. Along an
-    eigenvector of negative curvature it is evaluated at plus and minus
+    ``evaluate(zf)`` is the potential at a flat vector, compiled once with the problem as a
+    traced argument as in :func:`run_map`. It is evaluated at the Newton step, at half of
+    it, and at plus and minus one standard deviation along every eigenvector of positive
+    curvature. Along an eigenvector of negative curvature it is evaluated at plus and minus
     ``1 / sqrt(|lambda|)``, where a saddle falls by half a nat each way. A value that is not
     finite (a bound of the model) counts as infinitely high.
     """
 
-    def potential_at(zf, args):
-        return model_info.potential_fn(*args)(unravel(zf))
-
-    evaluate = jax.jit(potential_at)
-
     def value(zf) -> float:
-        result = float(evaluate(jnp.asarray(zf), model_args))
+        result = float(evaluate(jnp.asarray(zf)))
         return result if np.isfinite(result) else np.inf
 
     base = value(flat)
@@ -1761,8 +2058,8 @@ def run_nuts(
     -------
     MCMC
         The numpyro ``MCMC`` object (``.get_samples()``, ``.print_summary()``).
-        Divergences and tree depths are collected as the extra fields ``diverging`` and
-        ``num_steps``.
+        Divergences and the number of leapfrog steps of each draw are collected as the
+        extra fields ``diverging`` and ``num_steps``.
 
     References
     ----------
@@ -1837,9 +2134,10 @@ def posterior_spectra(
     n_samples = np.asarray(samples[site_names[0]]).shape[0]
     key_idx, key_draw = jax.random.split(jnp.asarray(key))
     idx = np.asarray(jax.random.randint(key_idx, (num_draws,), 0, n_samples))
+    arrays = {name: jnp.asarray(samples[name]) for name in site_names}
     out = []
     for j, i in enumerate(idx):
-        theta = {name: jnp.asarray(samples[name])[i] for name in site_names}
+        theta = {name: values[i] for name, values in arrays.items()}
         theta.update(extra)
         result = model.marginal(theta)
         out.append(draw_spectra(result, jax.random.fold_in(key_draw, j), 1)[0])
