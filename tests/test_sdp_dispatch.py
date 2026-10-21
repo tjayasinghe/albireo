@@ -507,6 +507,50 @@ def test_a_spectrum_table_with_no_flux_says_so(tmp_path):
         read_spectrum(write_sdp(tmp_path / "h.fits", headless))
 
 
+def test_a_table_whose_columns_differ_in_length_says_so(tmp_path):
+    """A fall-back to the image reader would read the variance plane as the spectrum."""
+    uneven = [
+        ("WAVE", WAVE_V2, AIR, "angstrom", 4350.0 + 0.05 * np.arange(200)),
+        ("FLUX", FLUX_V2, RAW_FLUX, "adu", np.ones(150)),
+    ]
+    path = write_sdp(tmp_path / "u.fits", uneven)
+    variance = fits.ImageHDU(np.full(50, 7.0), name="VARIANCE")
+    variance.header["CRVAL1"] = 6000.0
+    variance.header["CDELT1"] = 0.02
+    fits.append(path, variance.data, variance.header)
+    with pytest.raises(ValueError, match="200 values in its wavelength column 'WAVE' and 150"):
+        read_spectrum(path)
+
+
+def test_a_quality_column_of_another_length_is_reported(tmp_path):
+    """The error column of the wrong length is reported, and so is the flag column."""
+    layout = [*BLOEM[:3], ("QUAL_REDUCED", QUAL_V2, "meta.code.qual", "", np.zeros(100, int))]
+    with pytest.warns(RuntimeWarning, match="has 100 values for 3000 pixels"):
+        raw = read_spectrum(write_sdp(tmp_path / "q.fits", layout, lo=435.0, step=0.005))
+    assert raw.quality is None and "quality" not in raw.columns
+
+
+def test_a_flag_column_keeps_its_integer_type(tmp_path):
+    """Read as float64 a flag column takes as much memory as the flux, for one bit per pixel."""
+    quality = np.zeros(3000, dtype=np.int32)
+    quality[10:20] = 4
+    layout = [*BLOEM[:3], ("QUAL_REDUCED", QUAL_V2, "meta.code.qual", "", quality)]
+    raw = read_spectrum(write_sdp(tmp_path / "i.fits", layout, lo=435.0, step=0.005))
+    assert raw.quality.dtype == np.dtype(np.int32)
+    assert np.array_equal(raw.bad_pixels, quality != 0)
+
+
+def test_wavelengths_padded_with_nan_are_left_out(tmp_path):
+    """The NaN samples pass a test on np.diff(wave) <= 0 and fail far from their cause."""
+    wave = 4350.0 + 0.05 * np.arange(3000)
+    wave[-3:] = np.nan
+    layout = [(*HARPS[0][:4], wave), HARPS[1], (*HARPS[2][:4], "err")]
+    with pytest.warns(RuntimeWarning, match="3 of 3000 samples have a non-finite wavelength"):
+        raw = read_spectrum(write_sdp(tmp_path / "pad.fits", layout))
+    assert raw.n_pixels == 2997 and np.all(np.isfinite(raw.wave))
+    assert to_epoch(raw, smooth_angstrom=60.0).n_pixels == 2997
+
+
 def test_an_error_column_belonging_to_the_other_flux_is_rejected(tmp_path):
     """A cgs flux weighted by an adu error is wrong by the whole flux calibration."""
     mixed = [

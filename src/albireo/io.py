@@ -48,11 +48,13 @@ Requires ``astropy`` (``pip install "albireo[io]"``); the rest of albireo does n
 
 from __future__ import annotations
 
+import dataclasses
 import glob
 import math
 import os
+import re
 import warnings
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -90,8 +92,6 @@ _BARYCORR_KEYS: tuple[str, ...] = (
     "ESO DRS BERV",  # HARPS, HARPS-N
     "ESO QC BERV",  # ESPRESSO
     "ESO QC VRAD BARYCOR",  # UVES, X-shooter
-    "HIERARCH ESO DRS BARYCORR",
-    "HIERARCH ESO DRS BERV",
     "BERV",
     "BVCORR",
     "BARYCORR",  # GIRAFFE, including BLOeM
@@ -231,7 +231,8 @@ class RawSpectrum:
     header : Mapping
         The primary FITS header, for anything this class does not model.
     quality : numpy.ndarray or None
-        The per-pixel quality flag column, if the file has one (nonzero means bad).
+        The per-pixel quality flag column, if the file has one (nonzero means bad). An
+        integer column keeps its integer type; any other is read as float64.
     specsys : str
         The raw ``SPECSYS`` value, kept even when it names a frame albireo does not model.
     v_bary_source : str
@@ -318,15 +319,25 @@ class RawSpectrum:
         )
 
 
-def _header_get(header, keys: Iterable[str], default=None):
-    """First present value among ``keys`` (case-insensitive, HIERARCH-tolerant)."""
+def _header_lookup(header, keys: Iterable[str]) -> tuple[str, Any] | None:
+    """``(key, value)`` of the first key present with a non-empty value, else ``None``.
+
+    The lookup is case-insensitive and HIERARCH-tolerant; the key is returned without its
+    ``HIERARCH`` prefix.
+    """
     for key in keys:
         stripped = key[9:] if key.upper().startswith("HIERARCH ") else key
         if stripped in header:
             value = header[stripped]
             if value is not None and value != "":
-                return value
-    return default
+                return stripped, value
+    return None
+
+
+def _header_get(header, keys: Iterable[str], default=None):
+    """First present value among ``keys`` (case-insensitive, HIERARCH-tolerant)."""
+    found = _header_lookup(header, keys)
+    return default if found is None else found[1]
 
 
 def _wave_scale(unit: str | None, path: str) -> float:
@@ -605,17 +616,29 @@ def _read_bintable(hdulist, path: str, wave_scale: float | None) -> _TableRead |
             stacklevel=4,
         )
 
-    def read(column: _Column | None) -> np.ndarray | None:
+    def read(column: _Column | None, *, keep_integer: bool = False) -> np.ndarray | None:
         if column is None:
             return None
         values = np.asarray(hdu.data[column.name])
-        cell = values[0] if vector else values
+        cell = np.asarray(values[0] if vector else values)
+        if keep_integer and np.issubdtype(cell.dtype, np.integer):
+            # A flag column is kept in its own integer type, in native byte order: as
+            # float64 it would take eight bytes per pixel, as much as the flux.
+            return cell.astype(cell.dtype.newbyteorder("="), copy=False).ravel()
         return np.asarray(cell, dtype=np.float64).ravel()
 
     wave = read(wave_col)
     flux = read(flux_col)
     if wave is None or flux is None or wave.size != flux.size or wave.size < 2:
-        return None
+        # The table was selected as the spectrum, so a fall-back to the image reader could
+        # return another array in the same file, as for a missing column above.
+        raise ValueError(
+            f"{path}: the spectrum table {str(hdu.header.get('EXTNAME', '?'))!r} has "
+            f"{0 if wave is None else wave.size} values in its wavelength column "
+            f"{wave_col.name!r} and {0 if flux is None else flux.size} in its flux column "
+            f"{flux_col.name!r}; a spectrum needs equal numbers, and at least two. Read the "
+            "arrays yourself and build an EpochData directly."
+        )
 
     err_col = _pick_err(columns, flux_col)
     err_note, err_rejected = "no error column in the file", False
@@ -648,9 +671,16 @@ def _read_bintable(hdulist, path: str, wave_scale: float | None) -> _TableRead |
             err_note = f"the {err_col.name} column"
 
     quality_col = _pick_quality(columns)
-    quality = read(quality_col)
+    quality = read(quality_col, keep_integer=True)
     if quality is not None and quality.size != wave.size:
-        quality = None
+        warnings.warn(
+            f"{path}: the quality column {quality_col.name!r} has {quality.size} values for "  # type: ignore[union-attr]
+            f"{wave.size} pixels, so it cannot be matched to the pixels and is ignored. Mask "
+            "the flagged pixels yourself with albireo.mask_ranges if they matter.",
+            RuntimeWarning,
+            stacklevel=4,
+        )
+        quality, quality_col = None, None
     elif quality is not None and not np.any(quality == 0.0):
         # The SDP convention is 0 = good, so a flag column in which zero never occurs does
         # not follow it. UVES_SQUAD's STATUS takes the values {-5, 1}; read under that
@@ -687,6 +717,108 @@ def _read_bintable(hdulist, path: str, wave_scale: float | None) -> _TableRead |
     )
 
 
+# Wavelengths, in Angstrom, that a reading of an image axis must give to be accepted. A
+# logarithmic axis read with the wrong base, a pixel index or a length in an unstated unit
+# falls outside this range.
+_PLAUSIBLE_ANGSTROM = (1e2, 1e6)
+
+
+def _dc_flag(header, path: str) -> int:
+    """The IRAF ``DC-FLAG``: 0 linear (also when absent), 1 log-linear, -1 no dispersion."""
+    value = header.get("DC-FLAG")
+    text = "" if value is None else str(value).strip()
+    if text in ("", "0", "0.0", "False", "F"):
+        return 0
+    if text in ("True", "T"):
+        return 1
+    try:
+        flag = float(text)
+    except ValueError:
+        flag = math.nan
+    if flag not in (-1.0, 0.0, 1.0):
+        raise ValueError(
+            f"{path}: DC-FLAG = {value!r} is not a dispersion type albireo reads (0 linear, "
+            "1 log-linear). Read the arrays yourself and build an EpochData directly."
+        )
+    return int(flag)
+
+
+def _span(wave: np.ndarray) -> str:
+    finite = wave[np.isfinite(wave)]
+    if finite.size < wave.size:
+        return f"{wave.size - finite.size} non-finite values"
+    return f"{finite.min():.4g} to {finite.max():.4g} A"
+
+
+def _wcs_wavelengths(
+    header, crval: float, cdelt: float, crpix: float, n: int, scale: float, path: str
+) -> np.ndarray:
+    """Wavelengths in Angstrom along a 1-D image axis, linear or logarithmic.
+
+    A linear axis gives ``w = CRVAL1 + CDELT1 (p - CRPIX1)`` at pixel ``p``. Three
+    logarithmic conventions occur. IRAF marks a log-linear axis with ``DC-FLAG = 1`` and
+    gives ``w`` as log10 of the wavelength. FITS WCS Paper III (Greisen et al. 2006) marks
+    it with the ``-LOG`` suffix on ``CTYPE1`` and gives ``CRVAL1`` as a wavelength, so that
+    ``lambda = CRVAL1 exp(CDELT1 (p - CRPIX1) / CRVAL1)``. Other headers put ``LOG`` in
+    ``CTYPE1`` without the base (the Mercator HERMES pipeline writes ``log(wavelength)``
+    with natural logarithms). There the base-10 reading is taken when it gives wavelengths
+    between 100 A and 1e6 A, and the natural-logarithm reading otherwise, with a warning.
+
+    Raises
+    ------
+    ValueError
+        For ``DC-FLAG = -1`` (no dispersion solution), and when no reading gives finite
+        wavelengths between 100 A and 1e6 A after the unit conversion.
+    """
+    pixels = np.arange(n) + 1.0 - crpix
+    w = crval + cdelt * pixels
+    flag = _dc_flag(header, path)
+    ctype = str(header.get("CTYPE1", "")).strip().upper()
+    if flag == -1:
+        raise ValueError(
+            f"{path}: DC-FLAG = -1, so the IRAF header records no dispersion solution and "
+            "CRVAL1/CDELT1 do not give wavelengths. Calibrate the spectrum in wavelength, or "
+            "read the arrays yourself and build an EpochData directly."
+        )
+    readings: list[tuple[str, Callable[[], np.ndarray]]]
+    if flag == 1:
+        readings = [("log10 (DC-FLAG = 1)", lambda: np.power(10.0, w))]
+    elif ctype.endswith("-LOG"):
+        readings = [
+            (
+                "logarithmic with CRVAL1 a wavelength (FITS -LOG)",
+                lambda: crval * np.exp(cdelt * pixels / crval),
+            ),
+            ("log10", lambda: np.power(10.0, w)),
+        ]
+    elif "LOG" in ctype:
+        readings = [("log10", lambda: np.power(10.0, w)), ("natural logarithm", lambda: np.exp(w))]
+    else:
+        readings = [("linear", lambda: w)]
+    lo, hi = _PLAUSIBLE_ANGSTROM
+    tried = []
+    for index, (name, compute) in enumerate(readings):
+        with np.errstate(over="ignore", invalid="ignore"):
+            wave = compute() * scale
+        if np.all(np.isfinite(wave)) and wave.min() >= lo and wave.max() <= hi:
+            if index > 0:
+                warnings.warn(
+                    f"{path}: CTYPE1 = {ctype!r} with CRVAL1 = {crval:g} is read as {name}, "
+                    f"the first reading that gives wavelengths between {lo:g} and {hi:g} A "
+                    f"({_span(wave)}).",
+                    RuntimeWarning,
+                    stacklevel=5,
+                )
+            return wave
+        tried.append(f"{name}, {_span(wave)}")
+    raise ValueError(
+        f"{path}: the wavelength axis (CTYPE1 = {ctype!r}, CRVAL1 = {crval:g}, CDELT1 = "
+        f"{cdelt:g}) gives no wavelengths between {lo:g} and {hi:g} A: read as "
+        f"{'; as '.join(tried)}. Pass wave_scale= to read_spectrum if the unit is wrong, or "
+        "read the arrays yourself and build an EpochData directly."
+    )
+
+
 def _read_wcs_image(hdulist, path: str, wave_scale: float | None) -> _TableRead | None:
     """A 1-D image HDU with a linear or log dispersion in ``CRVAL1``/``CDELT1``."""
     for hdu in hdulist:
@@ -700,15 +832,14 @@ def _read_wcs_image(hdulist, path: str, wave_scale: float | None) -> _TableRead 
             continue
         crpix = float(header.get("CRPIX1", 1.0))
         flux = np.asarray(data, dtype=np.float64)
-        wave = float(crval) + float(cdelt) * (np.arange(flux.size) + 1.0 - crpix)
         ctype = str(header.get("CTYPE1", "")).upper()
-        if "LOG" in ctype or str(header.get("DC-FLAG", "0")) not in ("0", "0.0", "False"):
-            wave = np.power(10.0, wave)
         scale = wave_scale if wave_scale is not None else _wave_scale(header.get("CUNIT1"), path)
         # The image-WCS convention for the medium that SDP tables record in the UCD.
         medium = "air" if ctype.startswith("AWAV") else "vacuum" if ctype.startswith("WAVE") else ""
         return _TableRead(
-            wave=wave * scale,
+            wave=_wcs_wavelengths(
+                header, float(crval), float(cdelt), crpix, flux.size, scale, path
+            ),
             flux=flux,
             err=None,
             quality=None,
@@ -720,25 +851,57 @@ def _read_wcs_image(hdulist, path: str, wave_scale: float | None) -> _TableRead 
     return None
 
 
+def _degrees(value: object) -> float | None:
+    """Degrees from a header value: a number, or a sexagesimal string such as ``'31:57:30'``."""
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        pass
+    from astropy import units as u
+    from astropy.coordinates import Angle
+
+    try:
+        return float(Angle(str(value).strip(), unit=u.deg).degree)
+    except (TypeError, ValueError):
+        return None
+
+
 def _observatory_location(header, path: str):
-    """An astropy ``EarthLocation`` from the header, or ``None`` if it gives none."""
+    """An astropy ``EarthLocation`` from the header, or ``None`` if it gives none.
+
+    The site coordinates may be numbers or sexagesimal strings (``LONGITUD = '111:36:00'``)
+    and are read as east-positive degrees. Some observatories write a west-positive
+    longitude, which the value does not reveal; for such files pass ``bjd=`` and
+    ``v_bary=`` to :func:`read_spectrum`. A value that cannot be parsed counts as absent.
+    """
     from astropy import units as u
     from astropy.coordinates import EarthLocation
 
-    lon = _header_get(header, ("ESO TEL GEOLON", "GEOLON", "OBS-LONG", "LONGITUD", "TELLONG"))
-    lat = _header_get(header, ("ESO TEL GEOLAT", "GEOLAT", "OBS-LAT", "LATITUDE", "TELLAT"))
+    lon = _degrees(
+        _header_get(header, ("ESO TEL GEOLON", "GEOLON", "OBS-LONG", "LONGITUD", "TELLONG"))
+    )
+    lat = _degrees(
+        _header_get(header, ("ESO TEL GEOLAT", "GEOLAT", "OBS-LAT", "LATITUDE", "TELLAT"))
+    )
     elev = _header_get(
         header, ("ESO TEL GEOELEV", "GEOELEV", "OBS-ELEV", "ALTITUDE", "TELALT"), 0.0
     )
-    if lon is not None and lat is not None:
-        return EarthLocation.from_geodetic(
-            lon=float(lon) * u.deg, lat=float(lat) * u.deg, height=float(elev) * u.m
-        )
-    x = header.get("OBSGEO-X")
-    y = header.get("OBSGEO-Y")
-    z = header.get("OBSGEO-Z")
-    if x is not None and y is not None and z is not None:
-        return EarthLocation.from_geocentric(float(x) * u.m, float(y) * u.m, float(z) * u.m)
+    try:
+        height = float(elev)
+    except (TypeError, ValueError):
+        height = 0.0
+    try:
+        if lon is not None and lat is not None:
+            return EarthLocation.from_geodetic(
+                lon=lon * u.deg, lat=lat * u.deg, height=height * u.m
+            )
+        x = header.get("OBSGEO-X")
+        y = header.get("OBSGEO-Y")
+        z = header.get("OBSGEO-Z")
+        if x is not None and y is not None and z is not None:
+            return EarthLocation.from_geocentric(float(x) * u.m, float(y) * u.m, float(z) * u.m)
+    except (TypeError, ValueError):
+        return None
     return None
 
 
@@ -761,25 +924,94 @@ def _sexagesimal(value: object) -> float | None:
     return sign * (degrees + minutes / 60.0 + seconds / 3600.0)
 
 
-def _sky_coord(header, path: str):
-    """An astropy ``SkyCoord`` from the header, or ``None``."""
-    from astropy import units as u
-    from astropy.coordinates import SkyCoord
+def _target_coord(ra: object, dec: object):
+    """A ``SkyCoord`` from header values, or ``None`` when they cannot be parsed.
 
-    ra = _header_get(header, ("RA", "CRVAL1_OBJ", "OBJRA"))
-    dec = _header_get(header, ("DEC", "OBJDEC"))
-    if ra is None or dec is None:
-        # The telescope keywords are the fallback and use a different unit: RA is packed
-        # sexagesimal hours, declination packed sexagesimal degrees.
-        packed_ra = _sexagesimal(_header_get(header, ("ESO TEL TARG ALPHA",)))
-        packed_dec = _sexagesimal(_header_get(header, ("ESO TEL TARG DELTA",)))
-        if packed_ra is None or packed_dec is None:
-            return None
-        ra, dec = packed_ra * 15.0, packed_dec
+    Numbers are degrees. Strings with colons or spaces are sexagesimal, the right ascension
+    in hours (``RA = '18:27:03.5'``, as NOAO and Lick headers write it) and the declination
+    in degrees.
+    """
+    from astropy import units as u
+    from astropy.coordinates import Angle, SkyCoord
+
     try:
-        return SkyCoord(ra=float(ra) * u.deg, dec=float(dec) * u.deg, frame="icrs")
+        return SkyCoord(ra=float(ra) * u.deg, dec=float(dec) * u.deg, frame="icrs")  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        pass
+    try:
+        ra_angle = Angle(str(ra).strip(), unit=u.hourangle)
+        if not 0.0 <= float(ra_angle.hour) < 24.0:
+            return None
+        return SkyCoord(ra=ra_angle, dec=Angle(str(dec).strip(), unit=u.deg), frame="icrs")
     except (TypeError, ValueError):
         return None
+
+
+def _sky_coord(header, path: str):
+    """An astropy ``SkyCoord`` from the header, or ``None``.
+
+    The target keywords are read first. When they are absent or cannot be parsed, the ESO
+    telescope keywords are the fallback.
+    """
+    ra = _header_get(header, ("RA", "CRVAL1_OBJ", "OBJRA"))
+    dec = _header_get(header, ("DEC", "OBJDEC"))
+    if ra is not None and dec is not None:
+        coord = _target_coord(ra, dec)
+        if coord is not None:
+            return coord
+    # The telescope keywords use a different unit: RA is packed sexagesimal hours,
+    # declination packed sexagesimal degrees.
+    packed_ra = _sexagesimal(_header_get(header, ("ESO TEL TARG ALPHA",)))
+    packed_dec = _sexagesimal(_header_get(header, ("ESO TEL TARG DELTA",)))
+    if packed_ra is None or packed_dec is None:
+        return None
+    return _target_coord(packed_ra * 15.0, packed_dec)
+
+
+# Keywords that older headers use for the start of the exposure when DATE-OBS holds only the
+# date, in order of precedence. A mid-exposure keyword is not among them.
+_START_TIME_KEYS = ("TIME-OBS", "UTSTART", "UT-START", "UT")
+
+
+def _date_obs_mjd_utc(date_obs: object, header, path: str) -> tuple[float, str]:
+    """``(mjd_utc, keywords)`` at the start of the exposure, from ``DATE-OBS``.
+
+    A ``DATE-OBS`` of the form ``YYYY-MM-DD`` holds the date only, and astropy reads it as
+    midnight. The time is then taken from the first of ``TIME-OBS``, ``UTSTART``,
+    ``UT-START`` and ``UT`` that holds ``hh:mm:ss``, and an error is raised when none does.
+    The form ``DD/MM/YY``, which the FITS standard allowed before 1999, denotes 19YY.
+    """
+    from astropy.time import Time
+
+    text = str(date_obs).strip()
+    if "T" in text:
+        return float(Time(str(date_obs), format="isot", scale="utc").mjd), "DATE-OBS"
+    old = re.fullmatch(r"(\d{2})/(\d{2})/(\d{2})", text)
+    if old is not None:
+        day, month, year = old.groups()
+        text = f"19{year}-{month}-{day}"
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text) is None:
+        raise ValueError(
+            f"{path}: DATE-OBS = {date_obs!r} is not a date albireo can read "
+            "(YYYY-MM-DDThh:mm:ss). Pass bjd= to read_spectrum with the mid-exposure time."
+        )
+    for key in _START_TIME_KEYS:
+        value = _header_get(header, (key,))
+        clock = (
+            re.fullmatch(r"(\d{1,2}):(\d{2}):(\d{2}(?:\.\d*)?)", value.strip())
+            if isinstance(value, str)
+            else None
+        )
+        if clock is not None:
+            hours, minutes, seconds = clock.groups()
+            stamp = f"{text}T{int(hours):02d}:{minutes}:{seconds}"
+            return float(Time(stamp, format="isot", scale="utc").mjd), f"DATE-OBS + {key}"
+    raise ValueError(
+        f"{path}: DATE-OBS = {date_obs!r} gives the date of the observation but not the time, "
+        f"and none of {', '.join(_START_TIME_KEYS)} gives it as hh:mm:ss. Read as midnight, "
+        "the epoch could be up to 24 hours wrong. Pass bjd= to read_spectrum with the "
+        "mid-exposure time."
+    )
 
 
 def _mid_exposure_mjd_utc(header, table_header, path: str) -> tuple[float, str]:
@@ -824,13 +1056,8 @@ def _mid_exposure_mjd_utc(header, table_header, path: str) -> tuple[float, str]:
         return float(jd) - 2400000.5 + 0.5 * float(exptime) / 86400.0, "JD + EXPTIME/2"
     date_obs = _header_get(header, ("DATE-OBS",))
     if date_obs is not None:
-        from astropy.time import Time
-
-        return (
-            float(Time(str(date_obs), format="isot", scale="utc").mjd)
-            + 0.5 * float(exptime) / 86400.0,
-            "DATE-OBS + EXPTIME/2",
-        )
+        start, keys = _date_obs_mjd_utc(date_obs, header, path)
+        return start + 0.5 * float(exptime) / 86400.0, f"{keys} + EXPTIME/2"
     raise ValueError(
         "cannot determine the observation time: none of TMID, MJD-OBS, JD or DATE-OBS is "
         "present. Pass bjd= to read_spectrum to supply it yourself."
@@ -857,10 +1084,10 @@ def _barycentric_time(mjd_utc: float, header, path: str) -> tuple[float, str]:
     if location is None or coord is None:
         missing = "observatory location" if location is None else "target coordinates"
         warnings.warn(
-            f"{path}: no {missing} in the header, so the time cannot be put on the "
+            f"{path}: no usable {missing} in the header, so the time cannot be put on the "
             "barycentre. Using JD_UTC at mid-exposure, which carries a periodic error of "
-            "up to 8.3 minutes: enough to bias a short-period orbit. Pass bjd= "
-            "explicitly, or location=/coord= to read_spectrum.",
+            "up to 8.3 minutes: enough to bias a short-period orbit. Pass bjd= (and "
+            "v_bary=) to read_spectrum.",
             RuntimeWarning,
             stacklevel=4,
         )
@@ -883,23 +1110,20 @@ def _barycentric_velocity(header, mjd_utc: float, path: str) -> tuple[float, str
     ----------
     .. [1] Wright, J. T. & Eastman, J. D. 2014, PASP, 126, 838
     """
-    for key in _BARYCORR_KEYS:
-        stripped = key[9:] if key.upper().startswith("HIERARCH ") else key
-        if stripped in header:
-            value = header[stripped]
-            if value is None or value == "":
-                continue
-            # HELICORR and 'ESO QC VRAD HELICOR' are heliocentric too, and neither contains
-            # the substring HELIO; testing for that alone would accept them as barycentric.
-            if any(mark in stripped.upper() for mark in ("HELIO", "HELICOR", "VHELIO")):
-                warnings.warn(
-                    f"{path}: only a heliocentric velocity ({stripped}) is available; using it "
-                    "as the barycentric one. The two differ by up to ~10 m/s, which matters "
-                    "only for sub-10 m/s work.",
-                    RuntimeWarning,
-                    stacklevel=4,
-                )
-            return float(value), f"header {stripped}"
+    found = _header_lookup(header, _BARYCORR_KEYS)
+    if found is not None:
+        key, value = found
+        # HELICORR and 'ESO QC VRAD HELICOR' are heliocentric too, and neither contains the
+        # substring HELIO; testing for that alone would accept them as barycentric.
+        if any(mark in key.upper() for mark in ("HELIO", "HELICOR")):
+            warnings.warn(
+                f"{path}: only a heliocentric velocity ({key}) is available; using it as the "
+                "barycentric one. The two differ by up to ~10 m/s, which matters only for "
+                "sub-10 m/s work.",
+                RuntimeWarning,
+                stacklevel=4,
+            )
+        return float(value), f"header {key}"
     location = _observatory_location(header, path)
     coord = _sky_coord(header, path)
     if location is None or coord is None:
@@ -938,9 +1162,11 @@ def _frame_from_specsys(header, table_header, path: str, declared: bool = False)
         specsys = str(_header_get(source, ("SPECSYS", "SPECSYSA"), "") or "").strip().upper()
         if not specsys:
             continue
-        if specsys.startswith(("BARYCENT", "BARY")):
+        # The prefixes match both the FITS values (BARYCENT, HELIOCEN, TOPOCENT) and the
+        # shorter forms some pipelines write.
+        if specsys.startswith("BARY"):
             return "barycentric", specsys
-        if specsys.startswith(("HELIOCEN", "HELIO")):
+        if specsys.startswith("HELIO"):
             if not declared:
                 warnings.warn(
                     f"{path}: SPECSYS={specsys!r}; treating heliocentric as barycentric. The "
@@ -949,7 +1175,7 @@ def _frame_from_specsys(header, table_header, path: str, declared: bool = False)
                     stacklevel=4,
                 )
             return "barycentric", specsys
-        if specsys.startswith(("TOPOCENT", "TOPO")):
+        if specsys.startswith("TOPO"):
             return "topocentric", specsys
         # A frame albireo does not model (LSRK, GEOCENT, CMBDIPOL). Topocentric is assumed,
         # but the declared value is kept rather than reported as a missing keyword.
@@ -1030,8 +1256,11 @@ def read_spectrum(
     ImportError
         If astropy is not installed.
     ValueError
-        If no recognizable spectrum is found in the file, or the wavelengths are not
-        strictly increasing after unit conversion.
+        If no recognizable spectrum is found in the file, the wavelength and flux columns
+        differ in length, an image's wavelength axis gives no wavelengths between 100 A and
+        1e6 A, fewer than two wavelengths are finite, or the wavelengths are not strictly
+        increasing after unit conversion. Also when the header gives only the date of the
+        observation; pass ``bjd=`` then.
 
     Notes
     -----
@@ -1052,8 +1281,15 @@ def read_spectrum(
 barycentric, v_bary=-21.708 km/s, bjd=2453243.51... (BJD_TDB)
     """
     fits = _require_astropy()
+    # One open serves the format test and the generic read; the instrument readers open the
+    # file themselves.
     with fits.open(path, memmap=False) as hdulist:
         kind = _instrument_format(hdulist)
+        if kind is None:
+            parsed = _read_bintable(hdulist, path, wave_scale) or _read_wcs_image(
+                hdulist, path, wave_scale
+            )
+            header = hdulist[0].header.copy()
     if kind is not None:
         return _read_instrument(
             kind,
@@ -1065,21 +1301,35 @@ barycentric, v_bary=-21.708 km/s, bjd=2453243.51... (BJD_TDB)
             resolving_power=resolving_power,
             apf=apf,
         )
-    with fits.open(path, memmap=False) as hdulist:
-        parsed = _read_bintable(hdulist, path, wave_scale) or _read_wcs_image(
-            hdulist, path, wave_scale
+    if parsed is None:
+        raise ValueError(
+            f"{path}: no 1-D spectrum found. Expected either a binary table with "
+            f"{_WAVE_COLUMNS[0]}/{_FLUX_COLUMNS[0]} columns (or the IVOA utypes that "
+            "name them), or a 1-D image with CRVAL1/CDELT1. Read the arrays yourself "
+            "and build an EpochData directly if the file uses another layout."
         )
-        if parsed is None:
-            raise ValueError(
-                f"{path}: no 1-D spectrum found. Expected either a binary table with "
-                f"{_WAVE_COLUMNS[0]}/{_FLUX_COLUMNS[0]} columns (or the IVOA utypes that "
-                "name them), or a 1-D image with CRVAL1/CDELT1. Read the arrays yourself "
-                "and build an EpochData directly if the file uses another layout."
-            )
-        header = hdulist[0].header.copy()
 
     wave, flux, err, quality = parsed.wave, parsed.flux, parsed.err, parsed.quality
     table_header = parsed.header
+    finite = np.isfinite(wave)
+    if not finite.all():
+        # A sample with no wavelength has no place on the grid: a NaN-padded table row, for
+        # example. Such samples are left out, and every other sample is kept as it is.
+        n_finite = int(finite.sum())
+        if n_finite < 2:
+            raise ValueError(
+                f"{path}: {wave.size - n_finite} of {wave.size} wavelengths are not finite, "
+                "which leaves no spectrum."
+            )
+        warnings.warn(
+            f"{path}: {wave.size - n_finite} of {wave.size} samples have a non-finite "
+            "wavelength (padding in the table, for example) and are left out.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        wave, flux = wave[finite], flux[finite]
+        err = None if err is None else err[finite]
+        quality = None if quality is None else quality[finite]
     order = np.argsort(wave)
     if not np.array_equal(order, np.arange(wave.size)):
         wave, flux = wave[order], flux[order]
@@ -1164,11 +1414,14 @@ def _instrument_format(hdulist) -> str | None:
     from albireo.apf import is_apf_exposure
     from albireo.pepsi import is_pepsi
 
-    primary = hdulist[0]
-    if is_pepsi(primary.header):
+    header = hdulist[0].header
+    if is_pepsi(header):
         return "pepsi"
-    data = getattr(primary, "data", None)
-    if data is not None and is_apf_exposure(primary.header, np.shape(data)):
+    # The shape is taken from the header: reading the data for it would load the whole
+    # primary array of every generic file.
+    naxis = int(header.get("NAXIS", 0) or 0)
+    shape = tuple(int(header.get(f"NAXIS{axis}", 0) or 0) for axis in range(naxis, 0, -1))
+    if naxis and is_apf_exposure(header, shape):
         return "apf"
     return None
 
@@ -1230,11 +1483,9 @@ def _read_instrument(
         )
     exposure = read_apf_exposure(path)
     spectrum = extract(exposure, options.pop("wavelengths"), **options)
-    bjd_value, v_bary_value, time_source = (
-        apf_barycentric(exposure.header, path=str(path))
-        if bjd is None or v_bary is None
-        else (float(bjd), float(v_bary), "supplied by the caller")
-    )
+    # The site and the header's time give whichever of the two the caller did not supply.
+    if bjd is None or v_bary is None:
+        bjd_value, v_bary_value, time_source = apf_barycentric(exposure.header, path=str(path))
     if bjd is not None:
         bjd_value, time_source = float(bjd), "supplied by the caller"
     if v_bary is not None:
@@ -1274,6 +1525,43 @@ def _read_instrument(
             "target": exposure.target,
             "notes": list(spectrum.notes),
         },
+    )
+
+
+def _padded_bounds(
+    region: Sequence[float], region_pad_angstrom: float | None, smooth_angstrom: float | None
+) -> tuple[float, float, float]:
+    """``(lo, hi, pad)`` of the range :func:`to_epoch` keeps for the continuum fit."""
+    lo, hi = (float(v) for v in region)
+    if not hi > lo:
+        raise ValueError(f"region must be (wave_min, wave_max) with min < max; got {region!r}")
+    pad = region_pad_angstrom
+    if pad is None:
+        pad = smooth_angstrom if smooth_angstrom is not None else (hi - lo) / 8.0
+    return lo, hi, float(pad)
+
+
+def _padded_selection(wave: np.ndarray, lo: float, hi: float, pad: float) -> np.ndarray:
+    """The samples of ``wave`` inside ``[lo - pad, hi + pad]``."""
+    return (wave >= lo - pad) & (wave <= hi + pad)
+
+
+def _trimmed(raw: RawSpectrum, bounds: tuple[float, float, float]) -> RawSpectrum:
+    """``raw`` cut to the padded range :func:`to_epoch` will keep, so the rest can be freed.
+
+    The cut uses the selection :func:`to_epoch` makes, so the epoch built from the cut
+    spectrum is identical bit for bit. A spectrum with fewer than five samples in the range
+    is returned whole, so that :func:`to_epoch` reports its full span in the error.
+    """
+    sel = _padded_selection(raw.wave, *bounds)
+    if sel.sum() < 5 or sel.all():
+        return raw
+    return dataclasses.replace(
+        raw,
+        wave=raw.wave[sel],
+        flux=raw.flux[sel],
+        err=None if raw.err is None else raw.err[sel],
+        quality=None if raw.quality is None else raw.quality[sel],
     )
 
 
@@ -1347,16 +1635,11 @@ def to_epoch(
         normalize_continuum = not raw.continuum_normalized
 
     if region is not None:
-        lo, hi = (float(v) for v in region)
-        if not hi > lo:
-            raise ValueError(f"region must be (wave_min, wave_max) with min < max; got {region!r}")
-        pad = region_pad_angstrom
-        if pad is None:
-            pad = smooth_angstrom if smooth_angstrom is not None else (hi - lo) / 8.0
-        sel = (wave >= lo - float(pad)) & (wave <= hi + float(pad))
+        lo, hi, pad = _padded_bounds(region, region_pad_angstrom, smooth_angstrom)
+        sel = _padded_selection(wave, lo, hi, pad)
         if sel.sum() < 5:
             raise ValueError(
-                f"{raw.path}: the region [{lo}, {hi}] (padded by {float(pad):g} A) contains "
+                f"{raw.path}: the region [{lo}, {hi}] (padded by {pad:g} A) contains "
                 f"{int(sel.sum())} pixels; the spectrum spans {wave[0]:.2f} to {wave[-1]:.2f} A"
             )
         wave, flux, bad = wave[sel], flux[sel], bad[sel]
@@ -1435,30 +1718,48 @@ def to_epoch(
     return epoch
 
 
-def _read_many(paths: Sequence[str], *, instrument, frame, options) -> list[RawSpectrum]:
+def _read_many(
+    paths: Sequence[str], *, instrument, frame, options, trim_to=None
+) -> list[RawSpectrum]:
     """Read every file, collapsing warnings that repeat across files into one each.
 
     Every warning in this module names its file, so a set of files repeats it: the 51
     FEROS epochs of HR 6819 would emit the same "no usable error array" warning 51 times,
     differing only in the path. Each distinct warning is therefore reported once, naming
-    the first file it applied to and the number of others.
-    """
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        raws = [read_spectrum(p, instrument=instrument, frame=frame, **options) for p in paths]
+    the first file it applied to and the number of other files it applied to. The
+    warnings are also reported when a file raises, since those of the files before it
+    often explain the failure.
 
-    collapsed: dict[tuple, list] = {}
-    for entry in caught:
-        text = str(entry.message)
-        # Messages are formatted "<path>: <complaint>"; the complaint identifies the warning.
-        _, _, complaint = text.partition(": ")
-        key = (entry.category, complaint or text)
-        collapsed.setdefault(key, [0, text])[0] += 1
-    for (category, _), (count, first) in collapsed.items():
-        message = first
-        if count > 1:
-            message = f"{first}\n(the same for {count - 1} more of the {len(paths)} files.)"
-        warnings.warn(message, category, stacklevel=3)
+    ``trim_to`` is the ``(lo, hi, pad)`` of :func:`_padded_bounds`, or ``None``; each
+    spectrum is cut to it as soon as it is read (:func:`_trimmed`).
+    """
+    raws: list[RawSpectrum] = []
+    owners: list[int] = []  # the file each recorded warning came from, by index
+    caught: list = []
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            for index, path in enumerate(paths):
+                raw = read_spectrum(path, instrument=instrument, frame=frame, **options)
+                raws.append(raw if trim_to is None else _trimmed(raw, trim_to))
+                owners.extend([index] * (len(caught) - len(owners)))
+    finally:
+        owners.extend([len(raws)] * (len(caught) - len(owners)))
+        collapsed: dict[tuple, list] = {}
+        for entry, owner in zip(caught, owners, strict=True):
+            text = str(entry.message)
+            # Messages are formatted "<path>: <complaint>"; the complaint identifies the
+            # warning.
+            _, _, complaint = text.partition(": ")
+            key = (entry.category, complaint or text)
+            collapsed.setdefault(key, [set(), text])[0].add(owner)
+        for (category, _), (files, first) in collapsed.items():
+            message = first
+            if len(files) > 1:
+                message = (
+                    f"{first}\n(the same for {len(files) - 1} more of the {len(paths)} files.)"
+                )
+            warnings.warn(message, category, stacklevel=3)
     return raws
 
 
@@ -1480,6 +1781,10 @@ def _expand_paths(paths: str | Iterable[str]) -> list[str]:
                 if os.path.isfile(path)
             }
             expanded = sorted(seen.values())
+        elif os.path.isfile(paths):
+            # An existing file is taken literally: in 'HD 1234 [1].fits' the brackets would
+            # otherwise be read as a glob character class that does not match the name.
+            expanded = [paths]
         else:
             expanded = sorted(glob.glob(paths))
     else:
@@ -1523,6 +1828,7 @@ def read_raw_spectra(
     instrument: str | None = None,
     frame: str | None = None,
     read_kwargs: Mapping[str, Any] | None = None,
+    epoch_kwargs: Mapping[str, Any] | None = None,
 ) -> list[RawSpectrum]:
     """Read a set of FITS spectra as :class:`RawSpectrum` objects, in path order.
 
@@ -1537,9 +1843,19 @@ def read_raw_spectra(
     paths : str or iterable of str
         A glob pattern, a directory, or an explicit iterable of paths.
     instrument, frame : str, optional
-        Overrides for every file, as :func:`read_spectrum` takes them.
+        Overrides for every file, as :func:`read_spectrum` takes them. They may also be
+        given in ``read_kwargs`` (the ``[read]`` table of a pipeline configuration); a
+        value given here takes precedence.
     read_kwargs : mapping, optional
         Extra keyword arguments for :func:`read_spectrum`.
+    epoch_kwargs : mapping, optional
+        The keyword arguments the spectra will be passed to :func:`to_epoch` with. When
+        they include a ``region``, each spectrum is cut to the padded range
+        :func:`to_epoch` keeps (``region_pad_angstrom``, else ``smooth_angstrom``, else
+        one eighth of the region) as soon as it is read, so that one full-band file at a
+        time is held in memory. The epochs built from the cut spectra are identical bit for
+        bit; :attr:`RawSpectrum.n_pixels` and :meth:`RawSpectrum.summary` describe the cut.
+        A spectrum with fewer than five samples in the range is kept whole.
 
     Returns
     -------
@@ -1553,9 +1869,26 @@ def read_raw_spectra(
     """
     expanded = _expand_paths(paths)
     options = dict(read_kwargs or {})
-    options.pop("instrument", None)
-    options.pop("frame", None)
-    return _read_many(expanded, instrument=instrument, frame=frame, options=options)
+    # read_spectrum takes the two as arguments, so they are removed from the options either
+    # way; a value in read_kwargs is used when the argument is not given.
+    instrument_option = options.pop("instrument", None)
+    frame_option = options.pop("frame", None)
+    instrument = instrument if instrument is not None else instrument_option
+    frame = frame if frame is not None else frame_option
+    trim_to = None
+    region = (epoch_kwargs or {}).get("region")
+    if region is not None:
+        try:
+            trim_to = _padded_bounds(
+                region,
+                (epoch_kwargs or {}).get("region_pad_angstrom"),
+                (epoch_kwargs or {}).get("smooth_angstrom"),
+            )
+        except (TypeError, ValueError):
+            trim_to = None  # an invalid region is reported by to_epoch
+    return _read_many(
+        expanded, instrument=instrument, frame=frame, options=options, trim_to=trim_to
+    )
 
 
 def region_coverage(raw: RawSpectrum, region: Sequence[float]) -> float:
@@ -1722,7 +2055,15 @@ def read_dataset(
     ... )
     >>> print(ds.summary())  # doctest: +SKIP
     """
-    raws = read_raw_spectra(paths, instrument=instrument, frame=frame, read_kwargs=read_kwargs)
+    # Each spectrum is cut to the padded region as it is read, so that the full band of
+    # one file at a time is held; the epochs are unchanged.
+    raws = read_raw_spectra(
+        paths,
+        instrument=instrument,
+        frame=frame,
+        read_kwargs=read_kwargs,
+        epoch_kwargs=epoch_kwargs,
+    )
     return dataset_from_raw(raws, medium=medium, sort_by_time=sort_by_time, **epoch_kwargs)
 
 

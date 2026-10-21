@@ -9,6 +9,8 @@ columns, ``TMID`` in the extension header rather than the primary,
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -17,7 +19,14 @@ from albireo.data import Dataset
 pytest.importorskip("astropy")
 from astropy.io import fits
 
-from albireo.io import RawSpectrum, read_dataset, read_spectrum, to_epoch
+from albireo.io import (
+    RawSpectrum,
+    dataset_from_raw,
+    read_dataset,
+    read_raw_spectra,
+    read_spectrum,
+    to_epoch,
+)
 
 # La Silla, as the FEROS headers give it.
 GEOLON, GEOLAT, GEOELEV = -70.7346, -29.2543, 2335.0
@@ -311,3 +320,65 @@ def test_read_dataset_rejects_mixed_frames(tmp_path):
 def test_read_dataset_with_no_matches_raises(tmp_path):
     with pytest.raises(ValueError, match="no files matched"):
         read_dataset(str(tmp_path / "nothing*.fits"))
+
+
+def test_read_dataset_with_a_glob_character_in_a_file_name(tmp_path):
+    """A literal path is not a pattern: '[1]' would be a character class matching '1' only."""
+    path = write_eso_phase3(tmp_path / "HD 1234 [1].fits")
+    assert len(read_raw_spectra(str(path))) == 1
+
+
+# ------------------------------------------------------------------------ read_raw_spectra
+
+
+def test_read_kwargs_declare_the_frame_and_the_instrument(tmp_path):
+    """A pipeline's [read] table reaches read_spectrum only through read_kwargs."""
+    path = write_eso_phase3(tmp_path / "a.fits", specsys=None, err=5.0)
+    # The call the pipeline makes: the instrument argument is None, the table has the frame.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        (raw,) = read_raw_spectra(
+            [str(path)], instrument=None, read_kwargs={"frame": "barycentric"}
+        )
+    assert raw.frame == "barycentric"
+    (raw,) = read_raw_spectra(
+        [str(path)], read_kwargs={"instrument": "HERMES", "frame": "barycentric"}
+    )
+    assert raw.instrument == "HERMES"
+    # An argument takes precedence over the same key in read_kwargs, and is not passed twice.
+    (raw,) = read_raw_spectra(
+        [str(path)],
+        instrument="FEROS-2",
+        frame="topocentric",
+        read_kwargs={"instrument": "HERMES", "frame": "barycentric"},
+    )
+    assert (raw.instrument, raw.frame) == ("FEROS-2", "topocentric")
+
+
+def test_the_warnings_of_earlier_files_survive_a_file_that_fails(tmp_path):
+    """The warnings of the files read before a failure often explain it."""
+    good = write_eso_phase3(tmp_path / "a.fits", specsys=None)
+    empty = tmp_path / "b.fits"
+    fits.PrimaryHDU().writeto(empty)
+    with pytest.warns(RuntimeWarning, match="no SPECSYS"):
+        with pytest.raises(ValueError, match="no 1-D spectrum found"):
+            read_raw_spectra([str(good), str(empty)])
+
+
+def test_cutting_to_the_region_as_the_files_are_read_leaves_the_epochs_unchanged(tmp_path):
+    """Only the padded region is kept from each file, and every epoch is the same bit for bit."""
+    for k, t in enumerate((53243.5, 53200.5)):
+        write_eso_phase3(tmp_path / f"s{k}.fits", mjd_obs=t, tmid=t + 0.001, err=5.0)
+    options = {"region": (4400.0, 4450.0), "smooth_angstrom": 20.0}
+    whole = read_raw_spectra(str(tmp_path / "*.fits"))
+    cut = read_raw_spectra(str(tmp_path / "*.fits"), epoch_kwargs=options)
+    assert all(c.n_pixels < w.n_pixels for c, w in zip(cut, whole, strict=True))
+    assert all(c.wave[0] >= 4380.0 and c.wave[-1] <= 4470.0 for c in cut)
+    expected = dataset_from_raw(whole, **options)
+    for dataset in (dataset_from_raw(cut, **options), read_dataset(str(tmp_path), **options)):
+        for epoch, reference in zip(dataset, expected, strict=True):
+            for name in ("wave", "flux", "ivar", "mask"):
+                assert np.array_equal(getattr(epoch, name), getattr(reference, name)), name
+    # A file that misses the region is kept whole, so the error still names its span.
+    with pytest.raises(ValueError, match=r"spectrum spans 4350\.00 to 4529\.97 A"):
+        read_dataset(str(tmp_path), region=(9000.0, 9100.0))
