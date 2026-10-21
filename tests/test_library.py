@@ -15,6 +15,7 @@ import dataclasses
 import gc
 import gzip
 import io
+import os
 import urllib.error
 from pathlib import Path
 
@@ -25,6 +26,7 @@ import pytest
 from scipy.interpolate import LinearNDInterpolator, RegularGridInterpolator
 
 import albireo as ab
+from albireo import examples as examples_mod
 from albireo import library as lib_mod
 from albireo.library import (
     BoxInterpolator,
@@ -1201,11 +1203,22 @@ def test_a_corrupted_cache_is_caught_and_named(offline_registry):
 
 
 def test_an_interrupted_download_never_becomes_a_cache_entry(offline_registry, monkeypatch):
-    def explode(url, destination, attempts=4):
+    """A shard transfer cut off part way leaves no file where a build would use it.
+
+    Only the transfer is replaced, so the temporary file, its removal and the rename are
+    those of the library. The wavelength grid arrives whole and the shards are cut.
+    """
+    serve = lib_mod._download_with_retries  # the fixture's in-memory server
+
+    def explode(url, destination, *, timeout, user_agent):
+        if url.endswith(".txt"):
+            serve(url, destination)
+            return destination.stat().st_size
         destination.write_bytes(b"half a fi")
         raise RuntimeError("connection reset")
 
-    monkeypatch.setattr(lib_mod, "_download_with_retries", explode)
+    monkeypatch.setattr(lib_mod, "_download_with_retries", examples_mod._download_with_retries)
+    monkeypatch.setattr(examples_mod, "_transfer", explode)
     with pytest.raises(RuntimeError, match="connection reset"):
         ab.fetch_library("test-grid", progress=False)
 
@@ -1213,6 +1226,8 @@ def test_an_interrupted_download_never_becomes_a_cache_entry(offline_registry, m
     assert not path.is_file()
     raw = lib_mod._raw_dir()
     assert not list(raw.glob("*.gz")), "a partial transfer was left where a build would use it"
+    assert not list(raw.glob("*.part")), "a temporary file was left behind"
+    assert list(raw.glob("*.txt")), "the wavelength grid was not fetched"
 
 
 def test_a_failed_download_cancels_the_queued_ones(offline_registry, monkeypatch):
@@ -1346,28 +1361,85 @@ def test_a_single_valued_axis_is_constant_rather_than_nan():
     np.testing.assert_allclose(out, 0.9)
 
 
-def test_two_writers_of_one_shard_do_not_share_a_temporary_file(tmp_path, monkeypatch):
-    """A second process that completes a shard while the first is between its download
-    and its rename leaves the first one's file alone.
+@pytest.mark.parametrize("second_writer", ["during_transfer", "after_first_rename"])
+def test_two_writers_of_one_shard_do_not_share_a_temporary_file(
+    tmp_path, monkeypatch, second_writer
+):
+    """A second process that fetches a shard while the first one fetches it leaves the
+    first one's file alone.
 
-    Both wrote ``<name>.part`` and renamed it. The second rename moved the first writer's
-    file into place, and the first writer's own rename then raised FileNotFoundError. Here
-    the second writer runs inside the first one's download.
+    Both wrote ``<name>.part``. A second writer that completed between the first one's
+    download into that file and its rename moved the first writer's file into place, and
+    the first writer's own rename then raised FileNotFoundError. The second writer runs
+    here inside the first one's transfer, or just after its first rename. Only the
+    transfer is replaced, so the temporary names and the renames are those of the library.
     """
     destination = tmp_path / "shard.gz"
+    url = "https://example.invalid/shard.gz"
     targets: list[Path] = []
+    replace = os.replace
+    n_renames = 0
 
-    def download(url, target, attempts=4):
+    def transfer(url, target, *, timeout, user_agent):
         targets.append(target)
         target.write_bytes(b"shard %d" % len(targets))
-        if len(targets) == 1:
+        if second_writer == "during_transfer" and len(targets) == 1:
+            lib_mod._fetch_shard(url, destination)
+        return target.stat().st_size
+
+    def interleaved(src, dst):
+        nonlocal n_renames
+        n_renames += 1
+        replace(src, dst)
+        if second_writer == "after_first_rename" and n_renames == 1:
             lib_mod._fetch_shard(url, destination)
 
-    monkeypatch.setattr(lib_mod, "_download_with_retries", download)
-    assert lib_mod._fetch_shard("https://example.invalid/shard.gz", destination) == destination
-    assert targets[0] != targets[1]
+    monkeypatch.setattr(lib_mod, "_download_with_retries", examples_mod._download_with_retries)
+    monkeypatch.setattr(examples_mod, "_transfer", transfer)
+    monkeypatch.setattr(os, "replace", interleaved)
+    assert lib_mod._fetch_shard(url, destination) == destination
+    if second_writer == "during_transfer":
+        assert len(targets) == 2 and targets[0] != targets[1]
     assert destination.read_bytes() in (b"shard 1", b"shard 2")
     assert [p.name for p in tmp_path.iterdir()] == ["shard.gz"]
+
+
+@pytest.mark.parametrize("put_in_place", [True, False])
+def test_a_refused_shard_rename_keeps_a_complete_shard_in_place(
+    tmp_path, monkeypatch, put_in_place
+):
+    """On Windows a file that another process holds open cannot be replaced.
+
+    A shard that another process has put in place is kept, and the call returns it.
+    Without one the PermissionError is raised. The temporary file is removed in both
+    cases.
+    """
+    destination = tmp_path / "shard.gz"
+    replace = os.replace
+
+    def transfer(url, target, *, timeout, user_agent):
+        target.write_bytes(b"ours")
+        return 4
+
+    def refused(src, dst):
+        if Path(dst) == destination:
+            if put_in_place:
+                destination.write_bytes(b"theirs")
+            raise PermissionError(13, "Access is denied", str(dst))
+        replace(src, dst)
+
+    monkeypatch.setattr(lib_mod, "_download_with_retries", examples_mod._download_with_retries)
+    monkeypatch.setattr(examples_mod, "_transfer", transfer)
+    monkeypatch.setattr(os, "replace", refused)
+    url = "https://example.invalid/shard.gz"
+    if put_in_place:
+        assert lib_mod._fetch_shard(url, destination) == destination
+        assert destination.read_bytes() == b"theirs"
+        assert [p.name for p in tmp_path.iterdir()] == ["shard.gz"]
+    else:
+        with pytest.raises(PermissionError):
+            lib_mod._fetch_shard(url, destination)
+        assert not list(tmp_path.iterdir())
 
 
 def test_two_writers_of_one_library_do_not_share_a_temporary_file(tmp_path, monkeypatch):

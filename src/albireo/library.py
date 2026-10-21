@@ -1705,25 +1705,21 @@ def _raw_dir() -> Path:
 def _fetch_shard(url: str, destination: Path) -> Path:
     """Download one file unless it is already present, atomically.
 
-    The download goes to a temporary name unique to the call and is renamed onto
-    ``destination`` when complete, so that two processes fetching one shard do not rename
-    one temporary file. Where the rename is refused because another process holds the
-    file it has put in place open (Windows), that file is kept: only a complete download
-    is renamed onto ``destination``.
+    :func:`albireo.examples._download_with_retries` writes the transfer to a temporary name
+    beside ``destination`` that is unique to the call and renames it onto ``destination``
+    when complete, so that two processes fetching one shard do not share a temporary file.
+    Where the rename is refused because another process holds the file it has put in place
+    open (Windows), that file is kept: only a complete download is renamed onto
+    ``destination``.
     """
     if destination.is_file() and destination.stat().st_size > 0:
         return destination
     destination.parent.mkdir(parents=True, exist_ok=True)
-    tmp = _part_path(destination)
     try:
-        _download_with_retries(url, tmp)
-        try:
-            os.replace(tmp, destination)
-        except PermissionError:
-            if not (destination.is_file() and destination.stat().st_size > 0):
-                raise
-    finally:
-        tmp.unlink(missing_ok=True)
+        _download_with_retries(url, destination)
+    except PermissionError:
+        if not (destination.is_file() and destination.stat().st_size > 0):
+            raise
     return destination
 
 
