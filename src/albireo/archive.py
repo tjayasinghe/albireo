@@ -770,7 +770,8 @@ def _binary_classes(timeout: float) -> dict[str, str]:
     if not rows:
         raise RuntimeError(
             f"VizieR returned no rows for {_BLOEM_BINARY_TABLE}. The table has 309; an "
-            "empty result means the table was renamed or the service is degraded."
+            "empty result means the table was renamed or the service is degraded. "
+            "with_classification=False resolves targets without the class table."
         )
     out: dict[str, str] = {}
     for row in rows:
@@ -822,6 +823,14 @@ def bloem_catalogue(
     -------
     list of BloemTarget
         Ordered by identifier.
+
+    Raises
+    ------
+    RuntimeError
+        If VizieR returns no rows for the identifier table, or for the classification
+        table when the classes are fetched.
+    ValueError
+        If no target has ``binary_class``.
 
     Notes
     -----
@@ -890,6 +899,9 @@ def resolve_bloem(
     ------
     ValueError
         If the identifier is malformed, or names no star in the catalogue.
+    RuntimeError
+        If ``with_classification`` is set and VizieR returns no rows for the
+        classification table.
 
     References
     ----------

@@ -412,12 +412,24 @@ def test_an_interrupt_cancels_the_queued_files(tmp_path, monkeypatch):
         pass
 
     def progress(done, total, line):
-        # The worker may have taken the second file, which then waits on the gate. The gate
-        # opens shortly after the interrupt, by which time the queued files must have been
-        # cancelled.
-        threading.Timer(0.3, gate.set).start()
         raise Stop
 
+    class GatedPool(archive.ThreadPoolExecutor):
+        """An executor that opens the gate at shutdown.
+
+        The worker may have taken the second file, which waits on the gate. The gate opens
+        after a shutdown without waiting, which cancels the queued files, and before a
+        waiting shutdown, the exit of the ``with`` block. The test therefore does not
+        depend on timing.
+        """
+
+        def shutdown(self, wait=True, *, cancel_futures=False):
+            if wait:
+                gate.set()
+            super().shutdown(wait=wait, cancel_futures=cancel_futures)
+            gate.set()
+
+    monkeypatch.setattr(archive, "ThreadPoolExecutor", GatedPool)
     monkeypatch.setattr(urllib.request, "urlopen", fake)
     records = [_record(f"ADP.{i}") for i in range(10)]
     with pytest.raises(Stop):
@@ -465,8 +477,12 @@ def test_an_empty_classification_table_is_reported_and_not_cached(monkeypatch):
     rows, issued = _fake_vizier([])
     monkeypatch.setattr(archive, "_vizier_rows", rows)
     for _ in range(2):
-        with pytest.raises(RuntimeError, match="returned no rows"):
+        with pytest.raises(RuntimeError, match=r"returned no rows.*with_classification=False"):
             archive.bloem_catalogue(binary_class="SB2")
+    assert sum(archive._BLOEM_BINARY_TABLE in q for q in issued) == 2
+    # The workaround the message names does not query the class table.
+    star = archive.resolve_bloem("1-001", with_classification=False)
+    assert (star.gaia_dr3, star.binary_class) == ("1", None)
     assert sum(archive._BLOEM_BINARY_TABLE in q for q in issued) == 2
 
 

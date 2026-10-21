@@ -278,10 +278,12 @@ def _fetch(example: _Example, progress: bool) -> Path:
         try:
             os.replace(tmp, path)
         except PermissionError:
-            # On Windows a file that another process holds open cannot be replaced. That
-            # process downloaded the same file, checked against the same digest where one
-            # is recorded, so its copy is kept.
-            if not path.is_file():
+            # On Windows a file that another process holds open, or a read-only file,
+            # cannot be replaced. The file in place is kept only if it passes the same
+            # check as a cached file, as when another process has put a verified copy
+            # there. A file that fails it, such as a corrupt copy held open by a reader,
+            # raises the error.
+            if not (path.is_file() and (example.sha256 is None or _sha256(path) == example.sha256)):
                 raise
     finally:
         tmp.unlink(missing_ok=True)

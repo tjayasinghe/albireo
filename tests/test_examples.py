@@ -234,6 +234,39 @@ def test_an_example_without_a_digest_is_downloaded_once(monkeypatch, tmp_path):
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize("in_place", ["verified", "corrupt"])
+def test_a_file_that_cannot_be_replaced_is_kept_only_if_it_verifies(
+    monkeypatch, tmp_path, in_place
+):
+    """On Windows the final rename fails while another process holds the file in place.
+
+    That file was kept on the assumption that another writer had put a verified copy
+    there. A reader holding a corrupt copy open fails the same rename, and that copy was
+    returned as the example.
+    """
+    monkeypatch.setenv("ALBIREO_DATA_DIR", str(tmp_path))
+    payload = b"the example bytes"
+    example = _fixture_example(payload, hashlib.sha256(payload).hexdigest())
+    path = tmp_path / "examples" / "fake.npz"
+
+    def fake_download(url, destination, attempts=4):
+        destination.write_bytes(payload)
+        # The file another process put in place during this download.
+        path.write_bytes(payload if in_place == "verified" else b"a corrupt copy")
+
+    def held_open(src, dst):
+        raise PermissionError(13, "the file is held open by another process", str(dst))
+
+    monkeypatch.setattr(examples, "_download_with_retries", fake_download)
+    monkeypatch.setattr(examples.os, "replace", held_open)
+    if in_place == "verified":
+        assert examples._fetch(example, progress=False) == path
+    else:
+        with pytest.raises(PermissionError):
+            examples._fetch(example, progress=False)
+    assert not list(path.parent.glob("*.part"))
+
+
 # ---------------------------------------------------------------------------
 # the download helper shared with albireo.library
 # ---------------------------------------------------------------------------
