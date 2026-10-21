@@ -168,6 +168,30 @@ def test_a_product_covering_both_arms_is_labelled_so(tmp_path):
     assert pepsi.read_pepsi(path).arm == "both"
 
 
+def test_a_pixel_without_a_wavelength_is_bad_and_does_not_change_the_arm(tmp_path):
+    """A non-finite wavelength sorts to the end; the arm follows the finite ones."""
+    both = (4800.0, 7419.0, "Blue", "3: 4800 - 5441")
+    path = tmp_path / "pepsib.20240101.002.dxt.all"
+    write_product(path, arm=both, n=20_000)
+    with fits.open(path, mode="update") as hdulist:
+        hdulist[1].data["Arg"][-1] = np.nan
+    product = pepsi.read_pepsi(path)
+    assert product.arm == "both"
+    assert np.isnan(product.wave[-1]) and product.bad[-1] and not product.bad[:-1].any()
+    assert np.all(np.diff(product.wave[:-1]) > 0)
+
+
+def test_a_repeated_wavelength_is_refused(tmp_path):
+    """Overlapping samples would reach the epoch with two values at one wavelength."""
+    path = tmp_path / "pepsib.20240101.003.dxt.bwl"
+    write_product(path)
+    with fits.open(path, mode="update") as hdulist:
+        wave = hdulist[1].data["Arg"]
+        wave[3001] = wave[3000]
+    with pytest.raises(ValueError, match="not strictly increasing"):
+        pepsi.read_pepsi(path)
+
+
 @pytest.fixture
 def two_arms(tmp_path):
     """Three exposures, each as a blue-arm and a red-arm file, in one directory."""

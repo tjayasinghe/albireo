@@ -62,7 +62,8 @@ class PepsiSpectrum:
     Attributes
     ----------
     wave : numpy.ndarray
-        Air wavelengths, barycentric, Angstrom, strictly increasing.
+        Air wavelengths, barycentric, Angstrom, strictly increasing over the finite values.
+        A pixel without a finite wavelength is bad.
     flux : numpy.ndarray
         Continuum-normalised flux.
     err : numpy.ndarray
@@ -138,8 +139,8 @@ def read_pepsi(path: str | Path, *, resolving_power: float | None = None) -> Pep
     Raises
     ------
     ValueError
-        If the file is not a PEPSI product, has no ``Arg``/``Fun``/``Var`` table, or lacks
-        ``JD-TDB`` or ``SSBVEL``.
+        If the file is not a PEPSI product, has no ``Arg``/``Fun``/``Var`` table, lacks
+        ``JD-TDB`` or ``SSBVEL``, or repeats a wavelength.
     """
     from astropy.io import fits
 
@@ -167,6 +168,12 @@ def read_pepsi(path: str | Path, *, resolving_power: float | None = None) -> Pep
             raise ValueError(f"{path}: {key} is missing from the header")
     order = np.argsort(wave)
     wave, flux, var = wave[order], flux[order], var[order]
+    finite = np.isfinite(wave)
+    if np.any(np.diff(wave[finite]) <= 0):
+        raise ValueError(
+            f"{path}: wavelengths are not strictly increasing even after sorting "
+            "(duplicated samples?). albireo never resamples, so the grid must be clean."
+        )
     bad = ~(np.isfinite(wave) & np.isfinite(flux) & np.isfinite(var) & (var > 0))
     if mask is not None:
         flagged = np.asarray(mask, dtype=bool)[order]
@@ -203,7 +210,7 @@ def read_pepsi(path: str | Path, *, resolving_power: float | None = None) -> Pep
     arm = (
         "blue" if name.startswith("pepsib") else "red" if name.startswith("pepsir") else arm_header
     )
-    if kind == "all" and wave.size and wave[0] < 6000.0 < wave[-1]:
+    if kind == "all" and finite.any() and wave[finite][0] < 6000.0 < wave[finite][-1]:
         arm = "both"
     return PepsiSpectrum(
         wave=wave,
