@@ -137,11 +137,12 @@ class SurveyConfig:
         ``"survey"``: one model grid for every system, eclipses, a zero-point offset and a
         resolving power per transit. ``"recorded"``: the simulation of
         :func:`albireo.benchmark.simulate_system`, with no eclipse, for systems of recorded
-        runs.
+        runs. It has no variant, and ``variant`` must be ``"baseline"``.
     period_fit
         The declarations under which the orbit is also fitted with the period known and
-        the conjunction free (:func:`albireo.rvorbit.assign_components`). A fitted
-        declaration follows the declaration its fit starts from.
+        the conjunction free (:func:`albireo.rvorbit.assign_components`), from the first
+        three of :data:`DECLARATIONS`. A fitted declaration follows the declaration its fit
+        starts from.
     v_search_kms
         Half-width of the velocity range searched for each component.
     v_max_kms, vsini_max_kms
@@ -203,6 +204,16 @@ class SurveyConfig:
             raise ValueError(f"variant must be one of {VARIANTS}; got {self.variant!r}")
         if self.simulation not in ("survey", "recorded"):
             raise ValueError("simulation must be 'survey' or 'recorded'")
+        if self.simulation == "recorded" and self.variant != "baseline":
+            raise ValueError(
+                f"simulation='recorded' simulates the baseline alone; got variant {self.variant!r}"
+            )
+        for name in self.period_fit:
+            if name not in DECLARATIONS[:3]:
+                raise ValueError(
+                    f"period_fit takes declarations from {DECLARATIONS[:3]}; got {name!r}. A "
+                    "fitted declaration follows the declaration its fit starts from"
+                )
         if not self.v_search_kms > 0.0:
             raise ValueError("v_search_kms must be positive")
 
@@ -437,6 +448,13 @@ def _simulate(system: BinarySystem, config: SurveyConfig, ctx: _Context):
         }
         return dataset, truth, injected
 
+    # The transit times, the CCD rows of the resolving powers and the simulated spectra are
+    # drawn from three generators seeded with the same integer, so they read one stream:
+    # the row of every second transit is a function of the deviate that places a
+    # visibility period in the time draw, and the first deviates of the spectra reuse the
+    # same words. Each draw has its intended distribution. Seeds derived from the system
+    # seed, as for `aux` below, would make them independent but would change every recorded
+    # table, so they wait for a recorded re-run.
     aux = np.random.default_rng([seed, 1])
     bjd = rvs_transit_times(system.n_transits, span_days=config.span_days, seed=seed)
     n = bjd.size
@@ -603,25 +621,10 @@ def _fit_declared(system, declaration, declared, table, dataset, grid, config, c
     """
     from albireo.facade import Between, Known
     from albireo.match import StarLabels
-    from albireo.rvorbit import assign_by_ephemeris
     from albireo.templatefit import TemplateDeviation, fit_templates, line_deviation
 
-    start = table
-    best = None
-    for candidate in (table, _exchange_all(table)):
-        try:
-            fitted = assign_by_ephemeris(
-                candidate,
-                period=system.period,
-                t_conj=system.t_conj,
-                fit_eccentricity=system.ecc > 0.0 or config.simulation == "recorded",
-            )
-        except (ValueError, np.linalg.LinAlgError):
-            continue
-        if best is None or fitted[1].chi2 < best[1].chi2:
-            best = fitted
-    if best is not None:
-        start = best[0]
+    best = _best_by_ephemeris(table, system, config.simulation == "recorded")
+    start = table if best is None else best[1][0]
     widths = (
         config.classification if _FITTED[declaration] == "classified" else config.catalogue_errors
     )
@@ -732,6 +735,52 @@ def _exchange_all(table):
     return _exchanged(table, np.ones(table.n_epochs, dtype=bool))
 
 
+def _best_by_ephemeris(table, system: BinarySystem, recorded: bool, *, exchanged: bool = True):
+    """The orbit at the held ephemeris, in the order of the components that fits it better.
+
+    :func:`albireo.rvorbit.assign_by_ephemeris` is fitted to ``table`` and, where
+    ``exchanged`` is true, to the table with its components interchanged as a whole, with
+    the period and the time of the primary's eclipse held and the eccentricity fitted
+    where the injected orbit is eccentric or the simulation is a recorded one.
+
+    Returns
+    -------
+    tuple or None
+        ``(swapped, (assigned, orbit, decided))`` of the fit of the lower chi-square, with
+        ``swapped`` true for the interchanged table, or ``None`` where neither order can
+        be fitted.
+    """
+    from albireo.rvorbit import assign_by_ephemeris
+
+    candidates = [(False, table)]
+    if exchanged:
+        candidates.append((True, _exchange_all(table)))
+    best = None
+    for swapped, candidate in candidates:
+        try:
+            fitted = assign_by_ephemeris(
+                candidate,
+                period=system.period,
+                t_conj=system.t_conj,
+                fit_eccentricity=system.ecc > 0.0 or recorded,
+            )
+        except (ValueError, np.linalg.LinAlgError):
+            continue
+        if best is None or fitted[1].chi2 < best[1][1].chi2:
+            best = (swapped, fitted)
+    return best
+
+
+def _nanmedian(values) -> float:
+    """The median of the values that are not ``nan``; ``nan``, without a warning, where
+    there is none."""
+    values = np.asarray(values, dtype=np.float64)
+    if np.isnan(values).all():
+        return math.nan
+    with np.errstate(invalid="ignore"):
+        return float(np.nanmedian(values))
+
+
 def _better_order(table, v_true: np.ndarray) -> bool:
     """Whether the table matches the injected velocities better with its components
     interchanged as a whole, over its usable epochs."""
@@ -778,7 +827,9 @@ def run_system(system: BinarySystem, config: SurveyConfig | None = None) -> dict
        out of eclipse (:func:`albireo.fit_templates`), started from that table put in
        order by the ephemeris, and every later step uses the fitted templates and the
        velocities measured with them. Where the fit cannot be made, the declaration it
-       starts from is kept and ``f_ok`` is zero.
+       starts from is kept and ``f_ok`` is zero. What a fitted declaration and the
+       declaration it starts from both measure with the declared templates is measured
+       once, and ``t_todcor`` counts it in the row that measured it.
     3. *Orbit.* :func:`albireo.rvorbit.assign_by_ephemeris` fits the semi-amplitudes and the
        systemic velocity with the period and the time of the primary's eclipse held, and
        the eccentricity fitted where the injected orbit is eccentric. Under the
@@ -817,7 +868,6 @@ def run_system(system: BinarySystem, config: SurveyConfig | None = None) -> dict
     from albireo.rvorbit import (
         Assignment,
         _epoch_blocks,
-        assign_by_ephemeris,
         assign_components,
         fit_rv_ephemeris,
     )
@@ -899,32 +949,47 @@ def run_system(system: BinarySystem, config: SurveyConfig | None = None) -> dict
         subsets.append((index, subset))
     (index_out, data_out), (index_in, data_in) = subsets
 
+    # The declared templates and what is measured with them, by the declaration that
+    # declares them. A fitted declaration declares the templates of the declaration its fit
+    # starts from (`declare`), so it reuses them and the table out of eclipse measured with
+    # them, and, where its fit cannot be made, the tables of the transits in eclipse and of
+    # the first template alone. A table measured with fitted templates is not shared.
+    shared: dict[str, dict[str, Any]] = {}
     for row, declaration in enumerate(config.declarations):
-        declared = declare(system, declaration, ctx.libraries, config)
-        if recorded:
-            declared["epsilon"] = [0.6, 0.6]
-        pair = []
-        for name, labels, vsini, epsilon in zip(
-            ("A", "B"), declared["labels"], declared["vsini"], declared["epsilon"], strict=True
-        ):
-            library, labels, _ = ctx.libraries.labels(labels["teff"], labels["logg"], labels["mh"])
-            pair.append(
-                Template.from_library(
-                    name,
-                    library,
-                    labels,
-                    grid=grid,
-                    medium="vacuum",
-                    vsini_kms=float(vsini),
-                    epsilon=epsilon,
-                    resolving_power=library_power,
+        base = _FITTED.get(declaration, declaration)
+        if base not in shared:
+            declared = declare(system, declaration, ctx.libraries, config)
+            if recorded:
+                declared["epsilon"] = [0.6, 0.6]
+            pair = []
+            for name, labels, vsini, epsilon in zip(
+                ("A", "B"), declared["labels"], declared["vsini"], declared["epsilon"], strict=True
+            ):
+                library, labels, _ = ctx.libraries.labels(
+                    labels["teff"], labels["logg"], labels["mh"]
                 )
-            )
+                pair.append(
+                    Template.from_library(
+                        name,
+                        library,
+                        labels,
+                        grid=grid,
+                        medium="vacuum",
+                        vsini_kms=float(vsini),
+                        epsilon=epsilon,
+                        resolving_power=library_power,
+                    )
+                )
+            shared[base] = {"declared": declared, "pair": pair}
+        store = shared[base]
+        declared, pair = store["declared"], store["pair"]
         t0 = time.perf_counter()
         table = None
         fallback = False
         if data_out is not None:
-            table, fallback = _correlate(data_out, pair, declared["light"], config, ctx, lag1)
+            if "table" not in store:
+                store["table"] = _correlate(data_out, pair, declared["light"], config, ctx, lag1)
+            table, fallback = store["table"]
             if declaration in _FITTED:
                 t_fit = time.perf_counter()
                 fit = _fit_declared(
@@ -936,15 +1001,19 @@ def run_system(system: BinarySystem, config: SurveyConfig | None = None) -> dict
                     # A fit started from one template for both stars does not name the
                     # stars either: ``identical`` stays set, and the ephemeris does.
                     pair, table = list(fit.templates), fit.table
+                    store = {}
                     _fit_record(fit, record, row)
             _fill(epochs, row, index_out, table)
         if data_in is not None:
-            eclipsed, _ = _correlate(data_in, pair, "free", config, ctx, lag1)
-            _fill(epochs, row, index_in, eclipsed)
+            if "eclipsed" not in store:
+                store["eclipsed"] = _correlate(data_in, pair, "free", config, ctx, lag1)[0]
+            _fill(epochs, row, index_in, store["eclipsed"])
         # The first template alone, as an analysis that takes the system as single-lined.
         single = None
         if data_out is not None:
-            single, _ = _correlate(data_out, pair[:1], "global", config, ctx, lag1)
+            if "single" not in store:
+                store["single"] = _correlate(data_out, pair[:1], "global", config, ctx, lag1)[0]
+            single = store["single"]
             epochs["vs"][row, index_out] = single.velocity[0]
             epochs["ss"][row, index_out] = single.sigma[0]
             epochs["gs"][row, index_out] = single.good
@@ -954,9 +1023,8 @@ def run_system(system: BinarySystem, config: SurveyConfig | None = None) -> dict
         if table is None:
             continue
         record["n_good"][row] = float(table.good.sum())
-        with np.errstate(invalid="ignore"), contextlib.suppress(ValueError):
-            record["light1"][row] = float(np.nanmedian(table.light[0]))
-            record["light2"][row] = float(np.nanmedian(table.light[1]))
+        record["light1"][row] = _nanmedian(table.light[0])
+        record["light2"][row] = _nanmedian(table.light[1])
         use = table.good
         if use.any():
             record["sum_d1"][row] = float(np.sum(table.delta_chi2[0, use]))
@@ -980,27 +1048,17 @@ def run_system(system: BinarySystem, config: SurveyConfig | None = None) -> dict
             record["s_gamma_err"][row] = float(orbit.errors["gamma"][0])
             record["s_chi2"][row] = float(orbit.chi2)
             record["s_npts"][row] = float(orbit.n_points)
-            with np.errstate(invalid="ignore"):
-                record["s_light"][row] = float(np.nanmedian(single.light[0]))
+            record["s_light"][row] = _nanmedian(single.light[0])
         # The orbit at the held ephemeris. One template for both stars does not name them,
         # and a fit of the templates ends with them in the order of its starting table
         # where the declared labels do not tell them apart: the ephemeris names them.
-        candidates = [(False, table)]
-        if declared["identical"] or (declaration in _FITTED and record["f_ok"][row] == 1.0):
-            candidates.append((True, _exchange_all(table)))
-        best = None
-        for swapped, candidate in candidates:
-            try:
-                fitted = assign_by_ephemeris(
-                    candidate,
-                    period=system.period,
-                    t_conj=t_conj,
-                    fit_eccentricity=system.ecc > 0.0 or recorded,
-                )
-            except (ValueError, np.linalg.LinAlgError):
-                continue
-            if best is None or fitted[1].chi2 < best[1][1].chi2:
-                best = (swapped, fitted)
+        best = _best_by_ephemeris(
+            table,
+            system,
+            recorded,
+            exchanged=declared["identical"]
+            or (declaration in _FITTED and record["f_ok"][row] == 1.0),
+        )
         record["e_ok"][row] = 0.0
         if best is not None:
             swapped, (assigned, orbit, decided) = best
@@ -1011,9 +1069,8 @@ def run_system(system: BinarySystem, config: SurveyConfig | None = None) -> dict
                 record[key][row] = value
             record["swapped"][row] = float(swapped)
             record["e_nx"][row] = float(np.sum(decided.exchanged ^ swapped))
-            with np.errstate(invalid="ignore"), contextlib.suppress(ValueError):
-                record["e_light1"][row] = float(np.nanmedian(assigned.light[0]))
-                record["e_light2"][row] = float(np.nanmedian(assigned.light[1]))
+            record["e_light1"][row] = _nanmedian(assigned.light[0])
+            record["e_light2"][row] = _nanmedian(assigned.light[1])
             epochs["ve1"][row, index_out] = assigned.velocity[0]
             epochs["ve2"][row, index_out] = assigned.velocity[1]
             epochs["se1"][row, index_out] = assigned.sigma[0]
@@ -1191,9 +1248,12 @@ def run_survey(
     chunk_size
         Systems per chunk.
     chunks_per_worker
-        A worker is replaced after this many chunks. The orbit fit with a free conjunction
-        compiles one array program for every number of usable epochs, and a process that
-        runs a few hundred systems holds a few hundred of them.
+        A worker is replaced after this many chunks, which bounds the array programs that
+        a process compiles and keeps. A survey simulation fits the orbit with a free
+        conjunction on epochs padded to blocks, and its systems share a few programs. A
+        recorded simulation fits it as the recorded runs did, with one program for every
+        number of usable epochs, so a process that runs a few hundred of its systems
+        holds a few hundred programs.
     min_free_gb
         No chunk is started while less memory than this is available.
     progress
@@ -1313,6 +1373,23 @@ def _machine() -> str:
     return f"{platform.system()} {platform.release()}, {cpu}, {os.cpu_count()} threads"
 
 
+def _sorted_table(parts: dict[str, list], keys: Sequence[str]) -> dict[str, np.ndarray]:
+    """Join the per-chunk parts of a table's columns and sort its rows by ``keys``, the
+    last key the primary one (:func:`numpy.lexsort`).
+
+    The columns are joined and sorted one at a time, and the parts of each are released
+    as it is done, so the table is held about once and not three times.
+    """
+    index = {key: np.concatenate(parts[key]) for key in keys}
+    order = np.lexsort(tuple(index[key] for key in keys))
+    out: dict[str, np.ndarray] = {}
+    for name in list(parts):
+        column = index.pop(name) if name in index else np.concatenate(parts[name])
+        del parts[name]
+        out[name] = column[order]
+    return out
+
+
 def collect(directory) -> dict[str, Any]:
     """Join the chunks of a run into its two tables and write its manifest.
 
@@ -1340,14 +1417,8 @@ def collect(directory) -> dict[str, Any]:
             for key in data.files:
                 if key[:2] in ("s_", "e_"):
                     tables[key[0]].setdefault(key[2:], []).append(data[key])
-    joined = {
-        kind: {name: np.concatenate(parts) for name, parts in table.items()}
-        for kind, table in tables.items()
-    }
-    order = np.lexsort((joined["s"]["decl"], joined["s"]["system"]))
-    systems = {name: value[order] for name, value in joined["s"].items()}
-    order = np.lexsort((joined["e"]["epoch"], joined["e"]["decl"], joined["e"]["system"]))
-    epochs = {name: value[order] for name, value in joined["e"].items()}
+    systems = _sorted_table(tables["s"], ("decl", "system"))
+    epochs = _sorted_table(tables["e"], ("epoch", "decl", "system"))
     checksums = {}
     for name, table in (("systems", systems), ("epochs", epochs)):
         target = directory / f"{name}.npz"
@@ -1372,9 +1443,13 @@ def collect(directory) -> dict[str, Any]:
                 cwd=Path(__file__).parent,
             ).stdout.strip()
 
-        commit = git("rev-parse", "HEAD")
-        # Changes to the package or the scripts that the commit does not hold.
-        uncommitted = bool(git("status", "--porcelain", "--", "../../src", "../../scripts"))
+        # The commit is albireo's only where the package lies at src/albireo of the work
+        # tree that git finds. An installed package can lie inside the work tree of another
+        # project, whose commit says nothing about albireo.
+        if git("rev-parse", "--show-prefix") == "src/albireo/":
+            commit = git("rev-parse", "HEAD")
+            # Changes to the package or the scripts that the commit does not hold.
+            uncommitted = bool(git("status", "--porcelain", "--", "../../src", "../../scripts"))
     config = json.loads((directory / "config.json").read_text(encoding="utf-8"))
     manifest = {
         "albireo": __version__,

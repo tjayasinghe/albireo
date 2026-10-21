@@ -12,6 +12,9 @@ from __future__ import annotations
 import dataclasses
 import json
 import math
+import shutil
+import subprocess
+import warnings
 
 import numpy as np
 import pytest
@@ -99,6 +102,24 @@ def test_the_configuration_validates_and_round_trips():
         SurveyConfig(variant="spots")
     with pytest.raises(ValueError, match="simulation"):
         SurveyConfig(simulation="other")
+    # The recorded simulation has no variant, and a run is not labelled with one it ignores.
+    assert SurveyConfig(simulation="recorded").variant == "baseline"
+    for variant in ("null", "instrument"):
+        with pytest.raises(ValueError, match="baseline"):
+            SurveyConfig(simulation="recorded", variant=variant)
+    # A fitted declaration follows its base, so period_fit names the base.
+    for name in ("classified-fitted", "typo"):
+        with pytest.raises(ValueError, match="period_fit"):
+            SurveyConfig(period_fit=(name,))
+    assert SurveyConfig(period_fit=("catalogue",)).period_fit == ("catalogue",)
+
+
+def test_the_median_of_a_column_without_values_is_nan_without_a_warning():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert math.isnan(survey._nanmedian([np.nan, np.nan]))
+        assert math.isnan(survey._nanmedian(np.zeros(0)))
+    assert survey._nanmedian([1.0, np.nan, 3.0, 4.0]) == 3.0
 
 
 def test_the_three_declarations(libraries, systems):
@@ -220,6 +241,40 @@ def test_the_ephemeris_names_the_stars_of_a_fitted_table(libraries, monkeypatch)
     assert np.isnan(other["swapped"][0]) or other["swapped"][0] == 0.0
 
 
+def test_a_fitted_declaration_reuses_what_its_base_measured(libraries, monkeypatch):
+    """A fitted declaration declares the templates of the declaration its fit starts from.
+    Where the fit cannot be made, its row is that of the base, which is measured once, in
+    either order of the two declarations."""
+    system = _system("eclipsed", 21, period=1.3, incl=math.radians(89.9), n_transits=40)
+    correlate = survey._correlate
+    calls = []
+
+    def counted(*args, **kwargs):
+        calls.append(len(args[1]))
+        return correlate(*args, **kwargs)
+
+    monkeypatch.setattr(survey, "_correlate", counted)
+    monkeypatch.setattr(survey, "_fit_declared", lambda *args, **kwargs: None)
+    one = run_system(system, dataclasses.replace(CONFIG, declarations=("classified",)))
+    assert one["system"]["n_in_eclipse"] > 0 and calls == [2, 2, 1]
+    calls.clear()
+    names = ("classified-fitted", "classified")
+    both = run_system(system, dataclasses.replace(CONFIG, declarations=names))
+    assert calls == [2, 2, 1]
+    assert both["system"]["f_ok"][0] == 0.0 and np.isnan(both["system"]["f_ok"][1])
+    for row in (0, 1):
+        for name, value in both["epochs"].items():
+            expected = one["epochs"][name]
+            np.testing.assert_array_equal(
+                value[row] if value.ndim == 2 else value,
+                expected[0] if expected.ndim == 2 else expected,
+                err_msg=name,
+            )
+        for name, value in both["system"].items():
+            if np.ndim(value) and not name.startswith(("t_", "f_")):
+                np.testing.assert_array_equal(value[row], one["system"][name][0], err_msg=name)
+
+
 def test_a_fitted_declaration_can_fit_the_emission_of_the_activity_variant(libraries, systems):
     active = dataclasses.replace(systems[0], meta={**systems[0].meta, "activity_ew": [0.0, 0.6]})
     config = dataclasses.replace(
@@ -337,6 +392,41 @@ def test_a_run_is_collected_and_does_not_depend_on_its_chunks(libraries, systems
     assert "uncommitted_changes" in manifest and len(manifest["commit"]) >= 7
     with pytest.raises(FileNotFoundError):
         collect(tmp_path / "empty")
+
+
+def test_the_manifest_names_no_commit_outside_a_checkout_of_albireo(tmp_path, monkeypatch):
+    """A package installed inside the work tree of another project does not record that
+    project's commit, or its state, as its own."""
+    git = shutil.which("git")
+    if git is None:
+        pytest.skip("git is not installed")
+    project = tmp_path / "project"
+    package = project / ".venv" / "Lib" / "site-packages" / "albireo"
+    package.mkdir(parents=True)
+    (project / "code.py").write_text("x = 1\n", encoding="utf-8")
+
+    def run(*arguments: str) -> None:
+        subprocess.run([git, *arguments], cwd=project, check=True, capture_output=True)
+
+    run("init", "-q")
+    run("add", "code.py")
+    identity = ("-c", "user.name=test", "-c", "user.email=test@example.org")
+    run(*identity, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "first")
+    (project / "code.py").write_text("x = 2\n", encoding="utf-8")
+    directory = tmp_path / "run"
+    (directory / "chunks").mkdir(parents=True)
+    zeros = np.zeros(2, dtype=np.int32)
+    survey._write_chunk(
+        directory / "chunks" / "chunk_00000.npz",
+        {"system": zeros[:1], "decl": zeros[:1]},
+        {"system": zeros, "decl": zeros, "epoch": np.arange(2, dtype=np.int32)},
+        [],
+    )
+    (directory / "config.json").write_text(json.dumps(CONFIG.to_dict()), encoding="utf-8")
+    monkeypatch.setattr(survey, "__file__", str(package / "survey.py"))
+    manifest = collect(directory)
+    assert manifest["commit"] == "unknown" and manifest["uncommitted_changes"] is None
+    assert manifest["n_systems"] == 1 and manifest["n_epoch_rows"] == 2
 
 
 def test_a_failing_system_is_recorded_and_does_not_lose_its_chunk(libraries, systems, tmp_path):
