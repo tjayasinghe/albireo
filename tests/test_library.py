@@ -238,6 +238,18 @@ def test_resampled_to_refuses_a_grid_whose_end_pixels_overhang_the_library(libra
     # A grid whose end pixels lie inside the library to their outer edges is projected.
     inside = ab.LogGrid.from_wavelength_range(float(WAVE[0]) + 0.2, 5200.0, dv_kms=8.0)
     assert library.resampled_to(inside, medium="air").n_pix == inside.n
+    # The library's end bin extends half a step beyond its end sample, so a narrow pixel
+    # centred below the first sample but within that bin is covered. It takes the first
+    # sample's values. The comparison of centres used before refused this grid.
+    edge = ab.LogGrid.from_wavelength_range(float(WAVE[0]) - 0.02, 5200.0, dv_kms=1.0)
+    half_step = 0.5 * (WAVE[1] - WAVE[0])
+    width = edge.wave[1] - edge.wave[0]
+    assert edge.wave[0] < WAVE[0] and edge.wave[0] - 0.5 * width > WAVE[0] - half_step
+    projected = library.resampled_to(edge, medium="air")
+    np.testing.assert_allclose(projected.normalized[:, 0], library.normalized[:, 0], rtol=1e-12)
+    np.testing.assert_allclose(
+        projected.log_continuum[:, 0], library.log_continuum[:, 0], rtol=1e-12
+    )
 
 
 def test_resampled_to_converts_medium_before_rebinning(library):
@@ -543,6 +555,31 @@ def test_the_cubic_on_unequal_steps_is_exact_on_linear_data_and_smooth():
     below = np.asarray(slope(jnp.asarray([4200.0 - 1e-6])))[:, 0]
     above = np.asarray(slope(jnp.asarray([4200.0 + 1e-6])))[:, 0]
     np.testing.assert_allclose(below, above, rtol=1e-6, atol=1e-12)
+
+
+def test_box_interpolator_takes_one_uniform_flag_or_one_per_axis(library):
+    """``BoxInterpolator`` is public, so its flags are checked where it is built rather than
+    where it is first called."""
+    interpolator = library_interpolator(library, method="cubic")
+    assert interpolator.uniform == (True, True, True)
+
+    every = dataclasses.replace(interpolator, uniform=True)
+    assert every.uniform == (True, True, True)
+    point = jnp.asarray([4712.0, 3.83, -0.17])
+    assert np.array_equal(np.asarray(every(point)[0]), np.asarray(interpolator(point)[0]))
+    # On equal steps the parabola's tangent is Catmull-Rom's, to rounding.
+    unequal = dataclasses.replace(interpolator, uniform=np.False_)
+    assert unequal.uniform == (False, False, False)
+    assert all(type(flag) is bool for flag in unequal.uniform)
+    np.testing.assert_allclose(
+        np.asarray(unequal(point)[0]), np.asarray(interpolator(point)[0]), rtol=0, atol=1e-13
+    )
+    assert dataclasses.replace(interpolator, uniform=None).uniform is None
+    with pytest.raises(ValueError, match="2 flags for 3 label axes"):
+        dataclasses.replace(interpolator, uniform=(True, False))
+    # The flags pass through a pytree round trip unchanged.
+    leaves, treedef = jax.tree_util.tree_flatten(unequal)
+    assert jax.tree_util.tree_unflatten(treedef, leaves).uniform == (False, False, False)
 
 
 def test_box_interpolator_gradient_matches_finite_differences(library):
@@ -1180,8 +1217,14 @@ def test_an_interrupted_download_never_becomes_a_cache_entry(offline_registry, m
 
 def test_a_failed_download_cancels_the_queued_ones(offline_registry, monkeypatch):
     """An error other than a 404 ends the build without first running every queued
-    download, each of which would retry with a back-off on a network that is down."""
-    import time
+    download, each of which would retry with a back-off on a network that is down.
+
+    The download that starts after the failure is held until the error has reached the
+    caller, so that the count does not depend on how quickly the build reacts. Without the
+    cancellation the build waits for that download, which is released by its timeout, and
+    then runs the 16 queued after it.
+    """
+    import threading
 
     entry, _ = offline_registry
     many = dataclasses.replace(
@@ -1190,23 +1233,34 @@ def test_a_failed_download_cancels_the_queued_ones(offline_registry, monkeypatch
     monkeypatch.setitem(lib_mod._LIBRARIES, "test-grid", many)
     wave = np.linspace(4000.0, 7000.0, 400)
     calls: list[str] = []
+    released = threading.Event()
+    finished = threading.Event()
 
     def failing(url, destination, attempts=4):
         calls.append(url)
         if url.endswith(".txt"):
             destination.write_text("\n".join(f"{w:.7e}" for w in wave))
             return
-        time.sleep(0.05)
         if len(calls) == 2:
             raise urllib.error.HTTPError(url, 503, "service unavailable", {}, None)
+        if len(calls) == 3:
+            released.wait(timeout=20.0)
         destination.write_bytes(_fake_bosz_shard(wave.size, seed=len(calls)))
+        finished.set()
 
     monkeypatch.setattr(lib_mod, "_download_with_retries", failing)
-    with pytest.raises(urllib.error.HTTPError):
-        lib_mod.ingest_bosz("test-grid", jobs=1, progress=False)
-    # The wavelength file, the shard that failed, and at most the one in progress, of the
-    # wavelength file and 18 shards.
-    assert len(calls) <= 3
+    try:
+        with pytest.raises(urllib.error.HTTPError):
+            lib_mod.ingest_bosz("test-grid", jobs=1, progress=False)
+        # The wavelength file, the shard that failed, and at most the one held, of the
+        # wavelength file and 18 shards.
+        n_calls = len(calls)
+    finally:
+        released.set()
+    if n_calls == 3:
+        # Let the held download end before the cache directory is torn down.
+        assert finished.wait(timeout=20.0)
+    assert n_calls <= 3
 
 
 def test_a_band_can_be_narrowed_but_not_widened(offline_registry):
@@ -1366,6 +1420,46 @@ def test_a_library_in_the_earlier_form_is_read_with_its_label_names(tmp_path, of
     again = ab.fetch_library("test-grid", progress=False)
     assert again.label_names == built.label_names
     assert np.array_equal(again.normalized, built.normalized)
+
+
+def test_the_refusal_of_the_earlier_form_gives_the_conversion(tmp_path):
+    """A file named in a pipeline configuration is read by load_library alone, so the
+    message carries the one call that rewrites the file."""
+    lib = build_library(teff=TEFF[:2], logg=LOGG[:2], mh=MH[:2])
+    path = lib_mod.save_library(lib, tmp_path / "earlier.npz")
+    _earlier_form(path, lib.label_names)
+    with pytest.raises(ValueError, match="pickled object array") as caught:
+        lib_mod.load_library(path)
+    call = (
+        f"albireo.save_library(albireo.load_library({str(path)!r}, label_names=(...)), "
+        f"{str(path)!r})"
+    )
+    assert call in str(caught.value)
+    # The call runs as written once the names are filled in, and the file is then current.
+    eval(call.replace("(...)", repr(lib.label_names)), {"albireo": ab})
+    assert lib_mod.load_library(path).label_names == lib.label_names
+
+
+def test_a_cache_that_disagrees_with_the_registry_names_the_remedy(offline_registry, monkeypatch):
+    """Label names stored as text that differ from the registry's, whether written under
+    another definition of the entry or edited afterwards, are refused by fetch_library
+    with the instruction to clear the cache, as a corrupted file is."""
+    entry, _ = offline_registry
+    ab.fetch_library("test-grid", progress=False)
+    cache = lib_mod._library_cache_path(entry)
+
+    renamed = dataclasses.replace(entry, label_names=("teff", "logg", "feh"))
+    monkeypatch.setitem(lib_mod._LIBRARIES, "test-grid", renamed)
+    with pytest.raises(RuntimeError, match=r"registry declares .*clear_library_cache"):
+        ab.fetch_library("test-grid", progress=False)
+
+    monkeypatch.setitem(lib_mod._LIBRARIES, "test-grid", entry)
+    with np.load(cache, allow_pickle=False) as handle:
+        contents = {key: handle[key] for key in handle.files}
+    contents["label_names"] = np.asarray(("teff", "logg", "feh"), dtype=np.str_)
+    np.savez_compressed(cache, **contents)
+    with pytest.raises(RuntimeError, match=r"hashes to .*clear_library_cache"):
+        ab.fetch_library("test-grid", progress=False)
 
 
 @pytest.mark.network

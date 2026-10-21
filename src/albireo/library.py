@@ -348,9 +348,12 @@ class SpectralLibrary:
         operator (:meth:`albireo.Fit.epoch_statistics`). Left in, it alone would reduce a
         fitted ``(v sin i)^2`` by about 8 km^2/s^2 (``docs/math.md`` §9.2a).
 
-        This moves the model onto the data's grid. The data are never resampled. The library
-        must cover the grid to the outer edges of its end pixels, since a pixel covered in
-        part would be scaled by the fraction covered; a ``ValueError`` is raised otherwise.
+        This moves the model onto the data's grid. The data are never resampled. Each library
+        sample is taken as a bin about its wavelength, the end bins extending half a step
+        beyond the end samples, and the bins must cover every model pixel to its outer
+        edges: a pixel covered in part would be scaled by the fraction covered, and a
+        ``ValueError`` is raised. A model pixel centred beyond the library's end sample but
+        lying within its end bin is covered.
 
         The projection is a sparse matrix product in NumPy and SciPy, so its cost does not
         depend on whether a grid of that length has been used before. For a library whose
@@ -568,8 +571,8 @@ class BoxInterpolator:
     Catmull-Rom assumes equal steps along an axis. ``uniform`` states per axis whether
     they are equal; along an axis where they are not, the cubic takes the tangent of the
     parabola through each node and its two neighbours (:func:`_axis_weights`), which keeps
-    it C^1 and exact on linear data. ``None`` declares every axis uniform.
-    :func:`library_interpolator` measures the steps.
+    it C^1 and exact on linear data. ``None`` declares every axis uniform, and a single
+    ``bool`` applies to every axis. :func:`library_interpolator` measures the steps.
 
     Call with a label vector; returns ``(normalized, log_continuum)``, each ``(n_pix,)``.
 
@@ -583,6 +586,23 @@ class BoxInterpolator:
     log_continuum: jax.Array
     cubic: bool = True
     uniform: tuple[bool, ...] | None = None
+
+    def __post_init__(self):
+        # One flag per axis, as Python bools, so that the auxiliary data of the pytree is
+        # hashable and compares equal across constructions. None is kept as it is.
+        if self.uniform is None:
+            return
+        n_axes = len(self.axes)
+        if isinstance(self.uniform, bool | np.bool_):
+            flags = (bool(self.uniform),) * n_axes
+        else:
+            flags = tuple(bool(flag) for flag in self.uniform)
+            if len(flags) != n_axes:
+                raise ValueError(
+                    f"uniform has {len(flags)} flags for {n_axes} label axes; give one per "
+                    "axis, a single bool, or None"
+                )
+        object.__setattr__(self, "uniform", flags)
 
     def __call__(self, labels):
         labels = jnp.atleast_1d(jnp.asarray(labels, dtype=jnp.float64))
@@ -1572,11 +1592,17 @@ def load_library(path, *, label_names: Sequence[str] | None = None) -> SpectralL
 
 
 def _read_library(
-    path, label_names: Sequence[str] | None = None, *, digest: bool = False
+    path,
+    label_names: Sequence[str] | None = None,
+    *,
+    digest: bool = False,
+    check_names: bool = True,
 ) -> tuple[SpectralLibrary, str | None]:
     """The library of :func:`load_library`, and with ``digest`` its :func:`_content_digest`.
 
     The digest is taken over the arrays as stored, before the fluxes are cast to float64.
+    With ``check_names`` false, ``label_names`` serves only to read a file in the earlier
+    form, and readable names that differ from it are returned as stored.
     """
     path = Path(path)
     with np.load(path, allow_pickle=False) as handle:
@@ -1588,12 +1614,18 @@ def _read_library(
                 raise ValueError(
                     f"{path} stores its label names as a pickled object array, the form an "
                     "earlier version of save_library wrote. It is not unpickled, because "
-                    "unpickling a file can execute code. If the file is trusted, read it with "
-                    "load_library(path, label_names=(...)) and save_library() the result to "
-                    "rewrite it."
+                    "unpickling a file can execute code. A trusted file is rewritten once in "
+                    "the current form by albireo.save_library(albireo.load_library("
+                    f"{str(path)!r}, label_names=(...)), {str(path)!r}), with the names of its "
+                    "label axes in order; load_library and a pipeline configuration that "
+                    "names the file then read it."
                 ) from None
             names = tuple(str(name) for name in label_names)
-        if label_names is not None and names != tuple(str(name) for name in label_names):
+        if (
+            check_names
+            and label_names is not None
+            and names != tuple(str(name) for name in label_names)
+        ):
             raise ValueError(
                 f"{path} has the label names {names}, not the {tuple(label_names)} declared"
             )
@@ -2021,8 +2053,9 @@ def fetch_library(
 
     if path.is_file():
         # The registry's label names read a cache written before they were stored as text;
-        # the digest below covers them.
-        library, digest = _read_library(path, lib.label_names, digest=True)
+        # the digest below covers them. Names stored as text are compared with the
+        # registry's after the digest, so that either disagreement names the remedy.
+        library, digest = _read_library(path, lib.label_names, digest=True, check_names=False)
         recorded = library.meta.get("content_sha256")
         if recorded:
             if digest != recorded:
@@ -2031,6 +2064,13 @@ def fetch_library(
                     f"{recorded}. The file was corrupted or edited after it was written; "
                     f"clear_library_cache({name!r}) and rebuild."
                 )
+        if library.label_names != tuple(lib.label_names):
+            raise RuntimeError(
+                f"cached library {name!r} at {path} has the label names "
+                f"{library.label_names}, but the registry declares {tuple(lib.label_names)}. "
+                f"The file was built under another definition; clear_library_cache({name!r}) "
+                "and rebuild."
+            )
         return _subset(library, wave_range, lib)
 
     if lib.source == "bosz2024":
