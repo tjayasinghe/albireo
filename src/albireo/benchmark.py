@@ -266,7 +266,9 @@ class BenchmarkConfig:
     plots
         Write the pipeline's per-star figures.
     resume
-        Skip stars that already have a result in ``output``.
+        Skip stars that already have a result in ``output`` recorded under the same system,
+        simulation seed and settings. A result recorded under other values is run again
+        (:func:`run_benchmark`).
     seed
         Seed for the simulation noise.
     analysis
@@ -823,7 +825,10 @@ def run_benchmark(config: BenchmarkConfig, *, progress: bool = True) -> Benchmar
     text = json.dumps(manifest, indent=1)
     (directory / "manifest.json").write_text(text, encoding="utf-8")
     population = _population_records(directory / "population.json")
-    keys = {star.name: _run_key(json.loads(text), population, star.name) for star in stars}
+    # The manifest is parsed once: the keys share its parts and are only read and written.
+    # Parsed per star, the cost would grow as the square of the number of stars.
+    written = json.loads(text)
+    keys = {star.name: _run_key(written, population, star.name) for star in stars}
 
     todo = stars
     if config.resume:
@@ -932,11 +937,23 @@ def _keys_differ(old: Mapping[str, Any], new: Mapping[str, Any]) -> bool:
         if before is None or value is None:
             continue
         if isinstance(before, Mapping) and isinstance(value, Mapping):
-            if any(k in before and before[k] != v for k, v in value.items()):
+            if any(k in before and _json_values_differ(before[k], v) for k, v in value.items()):
                 return True
-        elif before != value:
+        elif _json_values_differ(before, value):
             return True
     return False
+
+
+def _json_values_differ(a: Any, b: Any) -> bool:
+    """Whether two JSON values differ, with NaN equal to NaN.
+
+    ``NaN != NaN``, so a record with a NaN field compares unequal to the same record read
+    back from a file. Values that compare unequal are therefore compared again as canonical
+    JSON text, in which every NaN is written alike.
+    """
+    if a == b:
+        return False
+    return json.dumps(a, sort_keys=True) != json.dumps(b, sort_keys=True)
 
 
 def _check_results(

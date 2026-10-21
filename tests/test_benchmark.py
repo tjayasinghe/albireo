@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import warnings
 
 import numpy as np
 import pytest
 
+from albireo import benchmark
 from albireo.benchmark import (
     TIERS,
     BenchmarkConfig,
@@ -675,6 +677,39 @@ def test_resume_reruns_the_stars_whose_simulation_or_settings_changed(
     with pytest.warns(RuntimeWarning, match="are run again"):
         run(min_transits=15, max_steps=50)
     assert ran == [f"{s.name}__orbit" for s in systems[1:]]
+
+
+def test_a_record_holding_nan_leaves_its_result_current(systems, library, tmp_path, monkeypatch):
+    """NaN != NaN, so a key compared value by value would differ from its own copy on disk."""
+    with_nan = [
+        BinarySystem.from_dict(
+            {**s.to_dict(), "g_mag": float("nan"), "meta": {"parallax_mas": float("nan")}}
+        )
+        for s in systems
+    ]
+    run, ran = _fake_benchmark(with_nan, library, tmp_path, monkeypatch)
+    run()
+    assert ran == [f"{s.name}__orbit" for s in with_nan]
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", message=".*are run again")
+        run()
+    assert ran == []
+
+
+def test_the_manifest_is_parsed_once_for_every_key(systems, library, tmp_path, monkeypatch):
+    """Parsed once per star, the keys would cost time growing as the square of the run."""
+    manifests: list[int] = []
+    original = benchmark._run_key
+
+    def run_key(manifest, population, name):
+        manifests.append(id(manifest))
+        return original(manifest, population, name)
+
+    monkeypatch.setattr(benchmark, "_run_key", run_key)
+    run, ran = _fake_benchmark(systems, library, tmp_path, monkeypatch)
+    run(tiers=("orbit", "blind"))
+    assert len(ran) == len(manifests) == 2 * len(systems)
+    assert len(set(manifests)) == 1
 
 
 @pytest.mark.slow
