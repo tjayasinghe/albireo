@@ -69,6 +69,10 @@ from albireo.preprocess import fit_continuum
 from albireo.telluric import (
     TelluricLines,
     TelluricShift,
+    _correlation,
+    _parabola_peak,
+    _shifted_templates,
+    _smooth,
     telluric_lines,
     telluric_lsf,
     telluric_model,
@@ -325,36 +329,59 @@ def _envelope(counts: np.ndarray, bad: np.ndarray, smooth_pix: float = 500.0) ->
     )
 
 
-def _normalised_order(exposure: ApfExposure, row: int, gain: float, read_term: float):
-    """``(flux, good)`` of one order divided by its envelope, cosmic rays masked."""
-    counts = exposure.counts[row]
-    var = _noise_variance(counts, gain, read_term)
-    bad = _cosmic_rays(counts, var)
-    envelope = _envelope(counts, bad)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        flux = counts / envelope
-    good = ~bad & np.isfinite(flux) & (envelope > 0.03 * np.nanmax(envelope))
-    return np.where(good, flux, 1.0), good
+class _Orders:
+    """The noise variance, cosmic-ray mask and envelope of the orders of one exposure.
+
+    Each is computed once per order: the telluric rows 49-61 are normalised for the zero
+    point and the line-spread width, and most of them are merged as well.
+    """
+
+    def __init__(self, exposure: ApfExposure, gain: float, read_term: float) -> None:
+        self._counts = exposure.counts
+        self._gain = gain
+        self._read_term = read_term
+        self._noise: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+        self._envelopes: dict[int, np.ndarray] = {}
+
+    def noise(self, row: int) -> tuple[np.ndarray, np.ndarray]:
+        """``(var, bad)`` of one order: the noise variance and the cosmic-ray mask."""
+        if row not in self._noise:
+            counts = self._counts[row]
+            var = _noise_variance(counts, self._gain, self._read_term)
+            self._noise[row] = (var, _cosmic_rays(counts, var))
+        return self._noise[row]
+
+    def envelope(self, row: int) -> np.ndarray:
+        """The upper envelope of one order (:func:`_envelope`)."""
+        if row not in self._envelopes:
+            self._envelopes[row] = _envelope(self._counts[row], self.noise(row)[1])
+        return self._envelopes[row]
+
+    def normalised(self, row: int) -> tuple[np.ndarray, np.ndarray]:
+        """``(flux, good)`` of one order divided by its envelope, cosmic rays masked."""
+        counts = self._counts[row]
+        bad = self.noise(row)[1]
+        envelope = self.envelope(row)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            flux = counts / envelope
+        good = ~bad & np.isfinite(flux) & (envelope > 0.03 * np.nanmax(envelope))
+        return np.where(good, flux, 1.0), good
 
 
-def _telluric_segments(exposure, wave: np.ndarray, gain: float, read_term: float):
+def _telluric_segments(
+    orders: _Orders, wave: np.ndarray
+) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
     segments = []
     for row in _TELLURIC_ROWS:
-        flux, good = _normalised_order(exposure, row, gain, read_term)
+        flux, good = orders.normalised(row)
         segments.append((wave[row], flux, good))
     return segments
 
 
-def _balmer_mask(wave: np.ndarray, halfwidth_kms: float) -> np.ndarray:
+def _line_mask(wave: np.ndarray, centres: Sequence[float], halfwidth_kms: float) -> np.ndarray:
+    """``True`` within ``halfwidth_kms`` of any of the ``centres``."""
     mask = np.zeros(wave.shape, dtype=bool)
-    for centre in _BALMER_AIR:
-        mask |= np.abs(wave / centre - 1.0) * _C_KMS < halfwidth_kms
-    return mask
-
-
-def _sky_mask(wave: np.ndarray, halfwidth_kms: float = 12.0) -> np.ndarray:
-    mask = np.zeros(wave.shape, dtype=bool)
-    for centre in SKY_LINES_AIR:
+    for centre in centres:
         mask |= np.abs(wave / centre - 1.0) * _C_KMS < halfwidth_kms
     return mask
 
@@ -411,7 +438,7 @@ def build_blaze(
             failed.append(row)
             continue
         median = np.nanmedian(np.array(stack[row]), axis=0)
-        free = ~_balmer_mask(waves[row], 2200.0)
+        free = ~_line_mask(waves[row], _BALMER_AIR, 2200.0)
         ok = np.isfinite(median) & free & (median > 0.02)
         if free.mean() < 0.35 or ok.sum() < 400:
             failed.append(row)
@@ -507,7 +534,10 @@ class ApfSpectrum:
     wave : numpy.ndarray
         Air wavelengths, topocentric, with the zero-point shift applied, Angstrom.
     flux : numpy.ndarray
-        Blaze-removed flux, near 1 at the continuum.
+        Blaze-removed flux, ``nan`` where ``bad``. With the default envelope it is near 1 at
+        the continuum. With a supplied blaze array it keeps the level of the counts (the
+        blaze of :func:`build_blaze` is near 1 at the centre of each order) and is not
+        continuum-normalised; :func:`albireo.io.to_epoch` normalises it.
     err : numpy.ndarray
         One-sigma uncertainties of ``flux``.
     bad : numpy.ndarray
@@ -601,11 +631,12 @@ def extract(
     rows = list(_DEFAULT_ROWS if rows is None else rows)
     notes: list[str] = [f"wavelengths: {solution.source}"]
     decker_fwhm = DECKER_LSF_FWHM_KMS.get(exposure.decker)
+    orders = _Orders(exposure, gain, read_term)
 
     shift: TelluricShift | None = None
-    segments = None
+    segments = []
     if zero_point == "telluric" or lsf == "telluric":
-        segments = _telluric_segments(exposure, solution.wave, gain, read_term)
+        segments = _telluric_segments(orders, solution.wave)
     if isinstance(zero_point, str):
         if zero_point == "telluric":
             sigma_guess = (decker_fwhm or 4.5) / _FWHM_PER_SIGMA
@@ -661,10 +692,9 @@ def extract(
         raise ValueError(f"blaze must have shape {APF_SHAPE}; got {blaze_array.shape}")
     for row in rows:
         counts = exposure.counts[row]
-        var = _noise_variance(counts, gain, read_term)
-        bad = _cosmic_rays(counts, var)
+        var, bad = orders.noise(row)
         n_cosmic += int(bad.sum())
-        shape = _envelope(counts, bad) if blaze_array is None else blaze_array[row]
+        shape = orders.envelope(row) if blaze_array is None else blaze_array[row]
         usable = ~bad & np.isfinite(shape) & (shape > 0.04 * np.nanmax(shape))
         with np.errstate(invalid="ignore", divide="ignore"):
             fluxes[row] = np.where(usable, counts / shape, 0.0)
@@ -675,7 +705,7 @@ def extract(
     w_m, f_m, i_m = _merge_orders(wave, fluxes, ivars, rows)
     bad_m = ~(i_m > 0)
     if mask_sky:
-        bad_m |= _sky_mask(w_m)
+        bad_m |= _line_mask(w_m, SKY_LINES_AIR, 12.0)
     if exposure.iodine_in and iodine == "mask":
         bad_m |= (w_m > _IODINE_BAND[0]) & (w_m < _IODINE_BAND[1])
         notes.append("iodine band 5000-6200 A masked")
@@ -778,20 +808,6 @@ class RefinedWavelengths:
         )
 
 
-def _smoothed(flux, good, sigma_pix: float):
-    deviation = np.where(good, flux - 1.0, 0.0)
-    if sigma_pix < 0.3:
-        return deviation, good
-    half = max(math.ceil(5.0 * sigma_pix), 1)
-    x = np.arange(-half, half + 1, dtype=float)
-    kernel = np.exp(-0.5 * (x / sigma_pix) ** 2)
-    kernel /= kernel.sum()
-    num = np.convolve(deviation, kernel, mode="same")
-    den = np.convolve(good.astype(float), kernel, mode="same")
-    with np.errstate(invalid="ignore", divide="ignore"):
-        return np.where(den > 0.5, num / den, 0.0), den > 0.5
-
-
 def _chunk_lag(
     data, ok, lnw, template_lnw, template, lags, *, nuisance=None, min_good=0.8, min_rms=0.004
 ):
@@ -804,8 +820,7 @@ def _chunk_lag(
     if ok.mean() < min_good:
         return float("nan"), 0.0
     d = data - data.mean()
-    tm = np.interp(lnw[None, :] + lags[:, None] / _C_KMS, template_lnw, template)
-    tm = tm - tm.mean(axis=1, keepdims=True)
+    tm = _shifted_templates(lnw, lags, template_lnw, template)
     if nuisance is not None:
         s = nuisance - nuisance.mean()
         ss = float(s @ s)
@@ -814,15 +829,12 @@ def _chunk_lag(
             tm = tm - np.outer(tm @ s / ss, s)
     if np.std(d) < min_rms:
         return float("nan"), 0.0
-    r = (tm @ d) / (np.sqrt((tm * tm).sum(axis=1) * (d * d).sum()) + 1e-30)
+    r = _correlation(tm, d)
     j = int(np.argmax(r))
     if j == 0 or j == lags.size - 1:
         return float("nan"), float(r[j])
-    y0, y1, y2 = r[j - 1], r[j], r[j + 1]
-    den = y0 - 2.0 * y1 + y2
-    frac = 0.5 * (y0 - y2) / den if den != 0 else 0.0
     step = float(lags[1] - lags[0])
-    return float(lags[j] + frac * step), float(r[j])
+    return float(lags[j] + _parabola_peak(r, j) * step), float(r[j])
 
 
 def _locally_consistent(chunks: np.ndarray, tolerance_kms: float = 2.0, half: int = 3):
@@ -958,36 +970,36 @@ def refine_wavelengths(
     if not rows:
         raise ValueError("the template covers none of the orders")
 
+    orders = _Orders(exposure, gain, read_term)
     prepared = {}
-    for row in sorted(set(rows) | set(_TELLURIC_ROWS)):
-        flux, good = _normalised_order(exposure, row, gain, read_term)
+    for row in rows:
+        flux, good = orders.normalised(row)
         step_kms = float(np.median(np.diff(np.log(waves[row])))) * _C_KMS
-        prepared[row] = (*_smoothed(flux, good, smooth_kms / step_kms), step_kms)
+        prepared[row] = (*_smooth(flux, good, smooth_kms / step_kms), step_kms)
 
-    # The star's bulk velocity: whole-order correlations, summed.
+    # The template shift that best matches the data, from whole-order correlations summed:
+    # a lag, about minus the star's velocity relative to the template.
     coarse = np.arange(-search_kms, search_kms + 0.5, 1.0)
     total = np.zeros(coarse.size)
     for row in rows:
         data, ok, _ = prepared[row]
         if ok.mean() < 0.5:
             continue
-        lnw = np.log(waves[row][ok])
         d = data[ok] - data[ok].mean()
-        tm = np.interp(lnw[None, :] + coarse[:, None] / _C_KMS, t_lnw, t_dev)
-        tm = tm - tm.mean(axis=1, keepdims=True)
-        total += np.clip((tm @ d) / (np.sqrt((tm * tm).sum(1) * (d * d).sum()) + 1e-30), 0, None)
-    v_bulk = float(coarse[int(np.argmax(total))])
+        tm = _shifted_templates(np.log(waves[row][ok]), coarse, t_lnw, t_dev)
+        total += np.clip(_correlation(tm, d), 0, None)
+    bulk_lag_kms = float(coarse[int(np.argmax(total))])
 
     fine = np.arange(-15.0, 15.0 + 0.125, 0.25)
-    stellar = []  # (row, x, measured dv-offset lag, r)
+    stellar = []  # (row, x, lag of the chunk, r)
     for row in rows:
         data, ok, _ = prepared[row]
-        lnw_all = np.log(waves[row]) + v_bulk / _C_KMS
+        lnw_all = np.log(waves[row]) + bulk_lag_kms / _C_KMS
         for c0 in range(64, _N_PIX - 64 - 256 + 1, 128):
             sl = slice(c0, c0 + 256)
             lag, r = _chunk_lag(data[sl], ok[sl], lnw_all[sl], t_lnw, t_dev, fine)
             if np.isfinite(lag) and r > 0.3:
-                stellar.append((row, c0 + 128.0, lag + v_bulk, r))
+                stellar.append((row, c0 + 128.0, lag + bulk_lag_kms, r))
     stellar_arr = _locally_consistent(np.array(stellar, dtype=float).reshape(-1, 4))
     tell_lnw = np.arange(math.log(6200.0), math.log(7500.0), 0.25 / _C_KMS)
     tell_dev = telluric_model(np.exp(tell_lnw), lines)
@@ -999,10 +1011,10 @@ def refine_wavelengths(
     # before the correlation (_chunk_lag).
     star_smooth_kms = math.sqrt(max(reference_sigma**2 - template_sigma**2, 0.0))
     for row in _TELLURIC_ROWS:
-        flux, good = _normalised_order(exposure, row, gain, read_term)
+        flux, good = orders.normalised(row)
         step_kms = float(np.median(np.diff(np.log(waves[row])))) * _C_KMS
         smooth = math.sqrt(max(reference_sigma**2 - data_sigma**2, 0.0)) / step_kms
-        data, ok = _smoothed(flux, good, smooth)
+        data, ok = _smooth(flux, good, smooth)
         lnw_all = np.log(waves[row])
         own = stellar_arr[stellar_arr[:, 0] == row]
         star = None
@@ -1010,7 +1022,7 @@ def refine_wavelengths(
             by_x = np.argsort(own[:, 1])
             shift = np.interp(np.arange(_N_PIX, dtype=float), own[by_x, 1], own[by_x, 2])
             star_dev = np.interp(lnw_all + shift / _C_KMS, t_lnw, t_dev, left=0.0, right=0.0)
-            star, _ = _smoothed(
+            star, _ = _smooth(
                 1.0 + star_dev, np.ones(_N_PIX, dtype=bool), star_smooth_kms / step_kms
             )
         for c0 in range(32, _N_PIX - 32 - 256 + 1, 128):

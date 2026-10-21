@@ -268,9 +268,23 @@ def _smooth(flux, good, sigma_pix: float):
 
 
 def _parabola_peak(values: np.ndarray, j: int) -> float:
+    """Offset of the vertex of the parabola through ``values[j - 1 : j + 2]``, in samples."""
     y0, y1, y2 = values[j - 1], values[j], values[j + 1]
     den = y0 - 2.0 * y1 + y2
     return 0.5 * (y0 - y2) / den if den != 0 else 0.0
+
+
+def _shifted_templates(
+    lnw: np.ndarray, lags: np.ndarray, template_lnw: np.ndarray, template: np.ndarray
+) -> np.ndarray:
+    """Rows of the template at ``lnw + lag / c``, one per lag (km/s), each less its mean."""
+    tm = np.interp(lnw[None, :] + lags[:, None] / _C_KMS, template_lnw, template)
+    return tm - tm.mean(axis=1, keepdims=True)
+
+
+def _correlation(tm: np.ndarray, data: np.ndarray) -> np.ndarray:
+    """Correlation coefficient of mean-free ``data`` with each mean-free row of ``tm``."""
+    return (tm @ data) / (np.sqrt((tm * tm).sum(axis=1) * (data * data).sum()) + 1e-30)
 
 
 def telluric_shift(
@@ -344,12 +358,8 @@ def telluric_shift(
         sel = ok & (wave > lo) & (wave < hi)
         if sel.sum() < min_pixels:
             continue
-        lnw = np.log(wave[sel])
-        tm = np.interp(lnw[None, :] + lags[:, None] / _C_KMS, grid_lnw, template)
-        tm = tm - tm.mean(axis=1, keepdims=True)
-        data = smoothed[sel] - smoothed[sel].mean()
-        denom = np.sqrt((tm * tm).sum(axis=1) * (data * data).sum()) + 1e-30
-        curves[name] = (tm @ data) / denom
+        tm = _shifted_templates(np.log(wave[sel]), lags, grid_lnw, template)
+        curves[name] = _correlation(tm, smoothed[sel] - smoothed[sel].mean())
         total += np.clip(curves[name], 0.0, None)
     if not curves:
         raise ValueError(
