@@ -357,7 +357,7 @@ def simulate_dataset(
     ar1_phi: float = 0.0,
     gap_fraction: float = 0.0,
     cosmic_fraction: float = 0.0,
-    epoch_snr: Sequence[float] | None = None,
+    epoch_snr: Sequence[float] | np.ndarray | None = None,
     seed: int = 0,
 ) -> tuple[Dataset, SimulationTruth]:
     """Generate a synthetic multi-epoch dataset plus the injected truth.
