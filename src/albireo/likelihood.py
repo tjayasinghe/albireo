@@ -101,24 +101,28 @@ def _solve_stage(bt: BlockTridiagonal, b_pad):
     gradient is the same. The off-diagonal blocks are stored once for two triangles,
     hence their factor of 2.
     """
-    chol = block_cholesky(bt)
-    y = solve_lower(chol, b_pad)
-    quad = jnp.sum(y * y)
-    d_pad = solve_upper(chol, y)
+    chol, quad, d_pad = _factor_and_solve(bt, b_pad)
     return logdet(chol), quad, d_pad
 
 
-def _solve_stage_fwd(bt, b_pad):
-    # Recompute inline rather than calling _solve_stage: the forward trace must contain
-    # only plain operations, so that a second reverse differentiation (Hessians by
-    # jacrev-of-jacrev, as in laplace_inverse_mass) traverses ordinary graphs instead of
-    # re-entering the custom boundary. There the chol cotangent is dropped by contract,
-    # and second derivatives would lose the chol-mediated terms without warning
-    # (measured: 8e-3 relative with the custom call, equal to plain autodiff inline).
+def _factor_and_solve(bt: BlockTridiagonal, b_pad):
+    """The primal of :func:`_solve_stage`: the factor, ``b^T Lt^{-1} b`` and ``Lt^{-1} b``."""
     chol = block_cholesky(bt)
     y = solve_lower(chol, b_pad)
     quad = jnp.sum(y * y)
     d_pad = solve_upper(chol, y)
+    return chol, quad, d_pad
+
+
+def _solve_stage_fwd(bt, b_pad):
+    # Recompute through the plain helper rather than calling _solve_stage: the forward
+    # trace must contain only plain operations, so that a second reverse differentiation
+    # (Hessians by jacrev-of-jacrev, as in laplace_inverse_mass) traverses ordinary
+    # graphs instead of re-entering the custom boundary. There the chol cotangent is
+    # dropped by contract, and second derivatives would lose the chol-mediated terms
+    # without warning (measured: 8e-3 relative with the custom call, equal to plain
+    # autodiff inline).
+    chol, quad, d_pad = _factor_and_solve(bt, b_pad)
     return (logdet(chol), quad, d_pad), (chol, d_pad, bt.n)
 
 

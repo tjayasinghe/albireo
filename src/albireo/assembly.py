@@ -67,7 +67,8 @@ matrix against the matrix-free operator.
 
 from __future__ import annotations
 
-from functools import partial
+from functools import cache, partial
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -112,6 +113,11 @@ def _band_accumulate(band, f, start, comp: int, d: int):
     counters), hence static. Only ``start`` is traced, and being an integer it takes a
     ``float0`` cotangent.
     """
+    return _band_place(band, f, start, comp, d)
+
+
+def _band_place(band, f, start, comp: int, d: int):
+    """The primal of :func:`_band_accumulate` as plain operations."""
     idx = (jnp.int32(0), jnp.int32(comp), start, jnp.int32(d))
     return jax.lax.dynamic_update_slice(
         band,
@@ -121,20 +127,14 @@ def _band_accumulate(band, f, start, comp: int, d: int):
 
 
 def _band_accumulate_fwd(band, f, start, comp: int, d: int):
-    # Recompute inline rather than calling _band_accumulate: the forward trace must
-    # contain only plain operations, so that a second reverse differentiation
-    # (jacrev-of-jacrev, as in laplace_inverse_mass) traverses an ordinary graph instead
-    # of re-entering the custom boundary. Calling the custom function here is
-    # first-order exact but returns the transpose of the true Hessian (measured by
-    # test_second_order_reverse_matches_plain_autodiff), the same re-entry defect
-    # that _solve_stage_fwd avoids (D28).
-    idx = (jnp.int32(0), jnp.int32(comp), start, jnp.int32(d))
-    out = jax.lax.dynamic_update_slice(
-        band,
-        jax.lax.dynamic_slice(band, idx, (band.shape[0], 1, f.shape[1], 1)) + f[:, None, :, None],
-        idx,
-    )
-    return out, (band.shape[0], f.shape[1], start)
+    # Recompute through the plain helper rather than calling _band_accumulate: the
+    # forward trace must contain only plain operations, so that a second reverse
+    # differentiation (jacrev-of-jacrev, as in laplace_inverse_mass) traverses an
+    # ordinary graph instead of re-entering the custom boundary. Calling the custom
+    # function here is first-order exact but returns the transpose of the true Hessian
+    # (measured by test_second_order_reverse_matches_plain_autodiff), the same re-entry
+    # defect that _solve_stage_fwd avoids (D28).
+    return _band_place(band, f, start, comp, d), (band.shape[0], f.shape[1], start)
 
 
 def _band_accumulate_bwd(comp: int, d: int, res, g):
@@ -178,6 +178,233 @@ def _epoch_chunk_default(n_ep: int, n_pix: int, w_gp: int, n_groups: int = 1) ->
     return max(1, min(n_ep, _GP_CHUNK_BYTES // groups // max(per_epoch, 1)))
 
 
+class _EpochLayout(NamedTuple):
+    """Static sizes of one group's band assembly (hashable, so it keys the body cache).
+
+    ``h`` is the rebin row support, ``h_eff`` that plus the group's AR(1) step on a
+    correlated problem, ``r`` the kernel radius, ``varying`` whether the LSF bank has one
+    row per model pixel, and ``p`` the stacked half-bandwidth of the band tensor.
+    """
+
+    n_pix: int
+    nc: int
+    p: int
+    h: int
+    h_eff: int
+    r: int
+    varying: bool
+    correlated: bool
+
+    @property
+    def w_h(self) -> int:  # full H band width
+        return 2 * self.h_eff - 1
+
+    @property
+    def w_u(self) -> int:
+        return self.w_h + 2 * self.r
+
+    @property
+    def w_g(self) -> int:
+        return self.w_u + 2 * self.r
+
+    @property
+    def h_g(self) -> int:
+        return self.h_eff - 1 + 2 * self.r
+
+    @property
+    def h_f(self) -> int:
+        return self.h_g + 1
+
+    @property
+    def w_f(self) -> int:
+        return 2 * self.h_f + 1
+
+
+def _epoch_g(ws, tables, layout: _EpochLayout):
+    """G = K^T (R^T W' R) K for one epoch, as a band image (n_pix, w_g + 4).
+
+    It depends only on the weights and the LSF kernel, not on the velocities, so it is
+    computed in a ``vmap``ped pre-pass outside the accumulation body. The ``chunk``
+    policy of :func:`_epoch_chunk_default` sets how many epochs are live at once. The
+    weights are velocity-independent but traced: jitter, response and phi all enter
+    through them. ``tables`` holds the group's arrays that are shared by all epochs:
+    the rebin pair tables, the LSF bank, the off-grid column mask and, on a correlated
+    problem, the AR(1) link tables.
+    """
+    n_pix, h, h_eff, r = layout.n_pix, layout.h, layout.h_eff, layout.r
+    w_h, w_u, w_g = layout.w_h, layout.w_u, layout.w_g
+    pair_val, pair_sid, pair_row, kernel, gp_valid = tables[:5]
+    # 1. H = R^T W' R, upper diagonals (n_pix, h_eff): the diagonal part through the
+    # equal-row pair tables, plus, on a correlated problem, one symmetrized cross-row
+    # term per AR(1) link through the link tables. The gap test keeps each epoch's own
+    # realized links: the tables hold the union over epochs, because masks differ by
+    # epoch.
+    h_up = jax.ops.segment_sum(
+        pair_val * ws[0][pair_row], pair_sid, num_segments=n_pix * h
+    ).reshape(n_pix, h)
+    if layout.correlated:
+        link_val, link_sid, link_row, link_gap = tables[5:]
+        wl, gap_e = ws[1], ws[2]
+        lw = wl[link_row] * (gap_e[link_row] == link_gap)
+        h_up = (
+            jax.ops.segment_sum(link_val * lw, link_sid, num_segments=n_pix * h_eff)
+            .reshape(n_pix, h_eff)
+            .at[:, :h]
+            .add(h_up)
+        )
+
+    # 2. Mirror to the full band image B_H[c, (h_eff-1) + o] = H[c, c + o].
+    b_h = jnp.zeros((n_pix, w_h))
+    b_h = b_h.at[:, h_eff - 1 :].set(h_up)
+    for o in range(1, h_eff):
+        b_h = b_h.at[o:, h_eff - 1 - o].set(h_up[: n_pix - o, o])
+
+    # 3. G = K^T H K. Stationary: two unrolled shifted accumulations with scalar kernel
+    # taps (the v1 path, unchanged). Wavelength-dependent (D37): the left application
+    # K^T M generalizes tap by tap, the scalar becoming a row-shifted profile column,
+    # K[c + d, c] = P[c + d, d + r]. A right application's taps would vary along the
+    # band image's columns, which the row-major layout cannot broadcast. H (hence G) is
+    # symmetric, so compute G = K^T (K^T H)^T instead: band-transpose U = K^T H (a
+    # static column-slice shuffle) and run the same left application once more.
+    if not layout.varying:
+        bhp = jnp.pad(b_h, ((r, r), (0, 0)))
+        u = jnp.zeros((n_pix, w_u))
+        for d1 in range(-r, r + 1):
+            u = u.at[:, r + d1 : r + d1 + w_h].add(
+                kernel[0, d1 + r] * jax.lax.slice(bhp, (r + d1, 0), (r + d1 + n_pix, w_h))
+            )
+        # The second application translates columns only (unlike the first, it has no
+        # row shift), so it is a contraction of the band image against a static
+        # (w_u, w_g) banded matrix instead of 2r + 1 accumulate passes over the whole
+        # image. The loop form re-reads and rewrites the (n_pix, w_g) output once per
+        # tap, the largest block of memory traffic in the assembly at survey scale
+        # (measured 0.55 s of a 0.88 s G pre-pass at the first row of the benchmark
+        # ladder, against 0.03 s here; D49). Column k of the output collects tap
+        # s = k' + 2r - k. Equality is to summation order, as everywhere else in this
+        # module. Increasing k' is increasing s, so the ideal orders agree, but XLA may
+        # block a GEMM's accumulation arbitrarily (measured 0.5 ulp against the loop on
+        # a random kernel, and bit-identical log-likelihoods on the benchmark
+        # configurations).
+        tap = jnp.arange(w_u)[:, None] + 2 * r - jnp.arange(w_g)[None, :]
+        g = u @ jnp.where((tap >= 0) & (tap <= 2 * r), kernel[0, jnp.clip(tap, 0, 2 * r)], 0.0)
+    else:
+        kp = jnp.pad(kernel, ((r, r), (0, 0)))
+
+        def kt_left(img, w_in):
+            """(K^T M) band image from M's, widening w_in by 2r (zero-fill rows)."""
+            imgp = jnp.pad(img, ((r, r), (0, 0)))
+            out = jnp.zeros((n_pix, w_in + 2 * r))
+            for d in range(-r, r + 1):
+                tap = jax.lax.slice(kp, (r + d, d + r), (r + d + n_pix, d + r + 1))
+                out = out.at[:, r + d : r + d + w_in].add(
+                    tap * jax.lax.slice(imgp, (r + d, 0), (r + d + n_pix, w_in))
+                )
+            return out
+
+        u = kt_left(b_h, w_h)
+        hw_u = (w_u - 1) // 2
+        up = jnp.pad(u, ((hw_u, hw_u), (0, 0)))
+        ut = jnp.stack(
+            [jax.lax.slice(up, (j, w_u - 1 - j), (j + n_pix, w_u - j))[:, 0] for j in range(w_u)],
+            axis=1,
+        )
+        g = kt_left(ut, w_u)
+    return jnp.where(gp_valid, jnp.pad(g, ((0, 0), (2, 2))), 0.0)
+
+
+def _epoch_band(band, q_pix, xs, layout: _EpochLayout):
+    """Add one epoch's T-sandwiched ``G`` to the band tensor."""
+    gp, light, floor_e, frac_e = xs
+    n_pix, nc, p = layout.n_pix, layout.nc, layout.p
+    w_f, h_f = layout.w_f, layout.h_f
+    off0, n_k = _band_offsets(p, nc)
+
+    # 4. Row-translated copies for the T-sandwich, zero-filled outside the grid. A
+    # translation's adjoint is the opposite translation, so implement it as a clip-safe
+    # dynamic_slice of a zero-padded copy (with pads of n_pix rows any clamped start
+    # places the window in an all-zero region, reproducing zero-fill exactly for
+    # arbitrary shifts). Reverse mode then costs a contiguous copy instead of the
+    # general scatter that a gather-based translation would need.
+    gpp = jnp.pad(gp, ((n_pix, n_pix), (0, 0)))
+    w_gp = layout.w_g + 4
+
+    def shift_rows(start):
+        s = jnp.clip(start + n_pix, 0, gpp.shape[0] - n_pix).astype(jnp.int32)
+        return jax.lax.dynamic_slice(gpp, (s, jnp.int32(0)), (n_pix, w_gp))
+
+    g_rows = [[shift_rows(floor_e[i] + a) for a in (0, 1)] for i in range(nc)]
+    # int32 throughout: under x64 the default integer is int64, and the column index
+    # below is an (n_pix, w_f) array whose only use is a comparison.
+    t_idx = jnp.arange(w_f, dtype=jnp.int32) - jnp.int32(h_f)
+
+    for i in range(nc):
+        w_i = (1.0 - frac_e[i], frac_e[i])
+        for j in range(nc):
+            w_j = (1.0 - frac_e[j], frac_e[j])
+            delta = floor_e[i] - floor_e[j]
+            f = jnp.zeros((n_pix, w_f))
+            for a in (0, 1):
+                for b in (0, 1):
+                    f = f + (w_i[a] * w_j[b]) * jax.lax.slice(
+                        g_rows[i][a], (0, 1 + b - a), (n_pix, 1 + b - a + w_f)
+                    )
+            f = f * (light[i] * light[j])
+            # Column validity (T columns exist only on the grid) and band contract.
+            col = q_pix[:, None] + delta + t_idx[None, :]
+            m_off = (delta + t_idx) * nc + (j - i)
+            f = jnp.where((col >= 0) & (col < n_pix) & (jnp.abs(m_off) <= p)[None, :], f, 0.0)
+            d = (j - i) % nc
+            s0 = off0 + delta - h_f + ((j - i) - d) // nc
+            start = jnp.clip(s0, 0, n_k - w_f).astype(jnp.int32)
+            band = _band_accumulate(band, f, start, i, d)
+    return band
+
+
+# The scan bodies are built once per layout and kept. Outside jit, lax.scan reuses a
+# compiled program only for the same body object, so a body defined inside
+# _epoch_band_scan was compiled again on every eager call. Arrays enter through the
+# carry and are returned unchanged; lax.scan then passes them as loop constants, as it
+# does for values captured by a closure, so the traced program is unchanged.
+@cache
+def _epoch_scan_body(layout: _EpochLayout, remat: bool):
+    """Scan body over epochs, carry ``(band, q_pix)`` (rematerialized when ``remat``)."""
+    plain = partial(_epoch_band, layout=layout)
+    step = jax.checkpoint(plain) if remat else plain
+
+    def body(carry, xs):
+        band, q_pix = carry
+        return (step(band, q_pix, xs), q_pix), None
+
+    return body
+
+
+@cache
+def _chunk_scan_body(layout: _EpochLayout, remat: bool):
+    """Scan body over batches of epochs, carry ``(band, (tables, q_pix))``.
+
+    One batch computes its epochs' ``G`` and accumulates them. When ``remat``, the batch
+    is the unit of rematerialization.
+    """
+    epoch_body = _epoch_scan_body(layout, False)
+    epoch_g = partial(_epoch_g, layout=layout)
+
+    def step(band, consts, xs):
+        tables, q_pix = consts
+        ws_b, light_b, floor_b, frac_b = xs
+        gp_b = jax.vmap(epoch_g, in_axes=(0, None))(ws_b, tables)
+        (band, _), _ = jax.lax.scan(epoch_body, (band, q_pix), (gp_b, light_b, floor_b, frac_b))
+        return band
+
+    if remat:
+        step = jax.checkpoint(step)
+
+    def body(carry, xs):
+        band, consts = carry
+        return (step(band, consts, xs), consts), None
+
+    return body
+
+
 def _epoch_band_scan(
     group: EpochGroup,
     band,
@@ -190,7 +417,7 @@ def _epoch_band_scan(
     n_groups: int = 1,
 ):
     """Accumulate every epoch of one group into the band tensor via ``lax.scan``."""
-    off0, n_k = _band_offsets(p, nc)
+    _, n_k = _band_offsets(p, nc)
     h = group.row_support
     kernel = group.kernel
     r = (kernel.shape[-1] - 1) // 2
@@ -200,12 +427,17 @@ def _epoch_band_scan(
     # The AR(1) chain couples rebin rows across links, so H widens by the group's
     # static ar_step (Problem.natural_half_bandwidth reserves the same amount).
     h_eff = h + group.ar_step if correlated else h
-    w_h = 2 * h_eff - 1  # full H band width
-    w_u = w_h + 2 * r
-    w_g = w_u + 2 * r
-    h_g = h_eff - 1 + 2 * r
-    h_f = h_g + 1
-    w_f = 2 * h_f + 1
+    layout = _EpochLayout(
+        n_pix=n_pix,
+        nc=nc,
+        p=p,
+        h=h,
+        h_eff=h_eff,
+        r=r,
+        varying=bool(varying),
+        correlated=bool(correlated),
+    )
+    w_g, h_g, w_f = layout.w_g, layout.h_g, layout.w_f
     if n_k < w_f:
         raise ValueError(
             f"half_bandwidth too small for instrument {group.instrument!r}: the band has "
@@ -217,13 +449,10 @@ def _epoch_band_scan(
             "; use Problem.half_bandwidth_bound."
         )
 
-    pair_val, pair_sid, pair_row = group.pair_val, group.pair_sid, group.pair_row
     weights: tuple[jax.Array, ...]
     if correlated:
         wp_all, wl_all = ar1_band_weights(group)  # jitter folded into both
         weights = (wp_all, wl_all, group.ar_gap)
-        link_val, link_sid = group.link_val, group.link_sid
-        link_row, link_gap = group.link_row, group.link_gap
     else:
         weights = (group.effective_w * group.r**2,)  # (n_ep, n_native); jitter folded in
     floors = jnp.floor(group.shifts).astype(jnp.int32)  # (n_ep, nc)
@@ -242,138 +471,16 @@ def _epoch_band_scan(
     gp_offsets = jnp.arange(w_g + 4, dtype=jnp.int32) - jnp.int32(h_g + 2)
     y_of = q_pix[:, None] + gp_offsets[None, :]
     gp_valid = (y_of >= 0) & (y_of < n_pix)
-
-    def epoch_g(ws):
-        """G = K^T (R^T W' R) K for one epoch, as a band image (n_pix, w_g + 4).
-
-        It depends only on the weights and the LSF kernel, not on the velocities, so it
-        is computed in a ``vmap``ped pre-pass outside the accumulation body. The
-        ``chunk`` policy of :func:`_epoch_chunk_default` sets how many epochs are live
-        at once. The weights are velocity-independent but traced: jitter, response and
-        phi all enter through them.
-        """
-        # 1. H = R^T W' R, upper diagonals (n_pix, h_eff): the diagonal part through
-        # the equal-row pair tables, plus, on a correlated problem, one symmetrized
-        # cross-row term per AR(1) link through the link tables. The gap test keeps
-        # each epoch's own realized links: the tables hold the union over epochs,
-        # because masks differ by epoch.
-        h_up = jax.ops.segment_sum(
-            pair_val * ws[0][pair_row], pair_sid, num_segments=n_pix * h
-        ).reshape(n_pix, h)
-        if correlated:
-            wl, gap_e = ws[1], ws[2]
-            lw = wl[link_row] * (gap_e[link_row] == link_gap)
-            h_up = (
-                jax.ops.segment_sum(link_val * lw, link_sid, num_segments=n_pix * h_eff)
-                .reshape(n_pix, h_eff)
-                .at[:, :h]
-                .add(h_up)
-            )
-
-        # 2. Mirror to the full band image B_H[c, (h_eff-1) + o] = H[c, c + o].
-        b_h = jnp.zeros((n_pix, w_h))
-        b_h = b_h.at[:, h_eff - 1 :].set(h_up)
-        for o in range(1, h_eff):
-            b_h = b_h.at[o:, h_eff - 1 - o].set(h_up[: n_pix - o, o])
-
-        # 3. G = K^T H K. Stationary: two unrolled shifted accumulations with scalar
-        # kernel taps (the v1 path, unchanged). Wavelength-dependent (D37): the left
-        # application K^T M generalizes tap by tap, the scalar becoming a row-shifted
-        # profile column, K[c + d, c] = P[c + d, d + r]. A right application's taps
-        # would vary along the band image's columns, which the row-major layout
-        # cannot broadcast. H (hence G) is symmetric, so compute G = K^T (K^T H)^T
-        # instead: band-transpose U = K^T H (a static column-slice shuffle) and run
-        # the same left application once more.
-        if not varying:
-            bhp = jnp.pad(b_h, ((r, r), (0, 0)))
-            u = jnp.zeros((n_pix, w_u))
-            for d1 in range(-r, r + 1):
-                u = u.at[:, r + d1 : r + d1 + w_h].add(
-                    kernel[0, d1 + r] * jax.lax.slice(bhp, (r + d1, 0), (r + d1 + n_pix, w_h))
-                )
-            # The second application translates columns only (unlike the first, it has
-            # no row shift), so it is a contraction of the band image against a static
-            # (w_u, w_g) banded matrix instead of 2r + 1 accumulate passes over the
-            # whole image. The loop form re-reads and rewrites the (n_pix, w_g) output
-            # once per tap, the largest block of memory traffic in the assembly at
-            # survey scale (measured 0.55 s of a 0.88 s G pre-pass at the first row of
-            # the benchmark ladder, against 0.03 s here; D49). Column k of the output
-            # collects tap s = k' + 2r - k. Equality is to summation order, as
-            # everywhere else in this module. Increasing k' is increasing s, so the
-            # ideal orders agree, but XLA may block a GEMM's accumulation arbitrarily
-            # (measured 0.5 ulp against the loop on a random kernel, and bit-identical
-            # log-likelihoods on the benchmark configurations).
-            tap = jnp.arange(w_u)[:, None] + 2 * r - jnp.arange(w_g)[None, :]
-            g = u @ jnp.where((tap >= 0) & (tap <= 2 * r), kernel[0, jnp.clip(tap, 0, 2 * r)], 0.0)
-        else:
-            kp = jnp.pad(kernel, ((r, r), (0, 0)))
-
-            def kt_left(img, w_in):
-                """(K^T M) band image from M's, widening w_in by 2r (zero-fill rows)."""
-                imgp = jnp.pad(img, ((r, r), (0, 0)))
-                out = jnp.zeros((n_pix, w_in + 2 * r))
-                for d in range(-r, r + 1):
-                    tap = jax.lax.slice(kp, (r + d, d + r), (r + d + n_pix, d + r + 1))
-                    out = out.at[:, r + d : r + d + w_in].add(
-                        tap * jax.lax.slice(imgp, (r + d, 0), (r + d + n_pix, w_in))
-                    )
-                return out
-
-            u = kt_left(b_h, w_h)
-            hw_u = (w_u - 1) // 2
-            up = jnp.pad(u, ((hw_u, hw_u), (0, 0)))
-            ut = jnp.stack(
-                [
-                    jax.lax.slice(up, (j, w_u - 1 - j), (j + n_pix, w_u - j))[:, 0]
-                    for j in range(w_u)
-                ],
-                axis=1,
-            )
-            g = kt_left(ut, w_u)
-        return jnp.where(gp_valid, jnp.pad(g, ((0, 0), (2, 2))), 0.0)
-
-    def epoch_body(band, xs):
-        gp, light, floor_e, frac_e = xs
-
-        # 4. Row-translated copies for the T-sandwich, zero-filled outside the grid.
-        # A translation's adjoint is the opposite translation, so implement it as a
-        # clip-safe dynamic_slice of a zero-padded copy (with pads of n_pix rows any
-        # clamped start places the window in an all-zero region, reproducing zero-fill
-        # exactly for arbitrary shifts). Reverse mode then costs a contiguous copy
-        # instead of the general scatter that a gather-based translation would need.
-        gpp = jnp.pad(gp, ((n_pix, n_pix), (0, 0)))
-        w_gp = w_g + 4
-
-        def shift_rows(start):
-            s = jnp.clip(start + n_pix, 0, gpp.shape[0] - n_pix).astype(jnp.int32)
-            return jax.lax.dynamic_slice(gpp, (s, jnp.int32(0)), (n_pix, w_gp))
-
-        g_rows = [[shift_rows(floor_e[i] + a) for a in (0, 1)] for i in range(nc)]
-        # int32 throughout: under x64 the default integer is int64, and the column
-        # index below is an (n_pix, w_f) array whose only use is a comparison.
-        t_idx = jnp.arange(w_f, dtype=jnp.int32) - jnp.int32(h_f)
-
-        for i in range(nc):
-            w_i = (1.0 - frac_e[i], frac_e[i])
-            for j in range(nc):
-                w_j = (1.0 - frac_e[j], frac_e[j])
-                delta = floor_e[i] - floor_e[j]
-                f = jnp.zeros((n_pix, w_f))
-                for a in (0, 1):
-                    for b in (0, 1):
-                        f = f + (w_i[a] * w_j[b]) * jax.lax.slice(
-                            g_rows[i][a], (0, 1 + b - a), (n_pix, 1 + b - a + w_f)
-                        )
-                f = f * (light[i] * light[j])
-                # Column validity (T columns exist only on the grid) and band contract.
-                col = q_pix[:, None] + delta + t_idx[None, :]
-                m_off = (delta + t_idx) * nc + (j - i)
-                f = jnp.where((col >= 0) & (col < n_pix) & (jnp.abs(m_off) <= p)[None, :], f, 0.0)
-                d = (j - i) % nc
-                s0 = off0 + delta - h_f + ((j - i) - d) // nc
-                start = jnp.clip(s0, 0, n_k - w_f).astype(jnp.int32)
-                band = _band_accumulate(band, f, start, i, d)
-        return band, None
+    # The per-group arrays every epoch's G reads, in the order _epoch_g unpacks them.
+    tables: tuple[jax.Array, ...] = (
+        group.pair_val,
+        group.pair_sid,
+        group.pair_row,
+        kernel,
+        gp_valid,
+    )
+    if correlated:
+        tables = (*tables, group.link_val, group.link_sid, group.link_row, group.link_gap)
 
     n_ep = group.shifts.shape[0]
     if chunk is None:
@@ -383,9 +490,12 @@ def _epoch_band_scan(
     if chunk >= n_ep:
         # Hoisted: every epoch's G stays live, so the rematerialized backward pass never
         # recomputes it. This is cheapest in time and most expensive in memory.
-        gp_all = jax.vmap(epoch_g)(weights)
-        body = jax.checkpoint(epoch_body) if remat else epoch_body
-        band, _ = jax.lax.scan(body, band, (gp_all, group.light, floors, fracs))
+        gp_all = jax.vmap(partial(_epoch_g, layout=layout), in_axes=(0, None))(weights, tables)
+        (band, _), _ = jax.lax.scan(
+            _epoch_scan_body(layout, bool(remat)),
+            (band, q_pix),
+            (gp_all, group.light, floors, fracs),
+        )
         return band
 
     # Batched: only one chunk's G is live. The batch (not the epoch) is the unit of
@@ -399,22 +509,12 @@ def _epoch_band_scan(
     floor_c = jnp.pad(floors, zpad)
     frac_c = jnp.pad(fracs, zpad)
 
-    def chunk_body(band, xs):
-        ws_b, light_b, floor_b, frac_b = xs
-        band, _ = jax.lax.scan(
-            epoch_body, band, (jax.vmap(epoch_g)(ws_b), light_b, floor_b, frac_b)
-        )
-        return band, None
-
-    if remat:
-        chunk_body = jax.checkpoint(chunk_body)
-
     def batched(a):
         return a.reshape(n_chunks, chunk, *a.shape[1:])
 
-    band, _ = jax.lax.scan(
-        chunk_body,
-        band,
+    (band, _), _ = jax.lax.scan(
+        _chunk_scan_body(layout, bool(remat)),
+        (band, (tables, q_pix)),
         (jax.tree.map(batched, weights_c), batched(light_c), batched(floor_c), batched(frac_c)),
     )
     return band
@@ -485,29 +585,44 @@ def _pack_band(band, n_pix: int, nc: int, p: int, block_size: int) -> BlockTridi
     slot_l, dd_l, ok_l = band_coords(col - row - bs)  # lower block: rr is bs rows later
     eye_mask = row == col
 
-    def gather(rr, cc, slot, dd, ok):
-        """``band`` values for one block, given its (bs,) row/column indices."""
-        v = band[jnp.clip(rr // nc, 0, n_pix - 1)[:, None], (rr % nc)[:, None], slot, dd]
-        return jnp.where(ok & (rr < n)[:, None] & (cc < n)[None, :], v, 0.0)
-
-    # Rematerialized: what is left inside the body after the hoist is index arithmetic
-    # and one gather, but reverse mode would still stack the (B, B) validity mask over
-    # all K iterations. Recomputing it is negligible next to the block Cholesky it feeds.
-    @jax.checkpoint
-    def blocks_at(kk):
-        base = kk * bs
-        rr = base + jnp.arange(bs)
-        cc = base + jnp.arange(bs)
-        # Pad rows of the identity block: only the diagonal can reach them, and only
-        # within a diagonal block (a lower block's rows are bs beyond its columns).
-        pad_eye = (eye_mask & (rr >= n)[:, None]).astype(band.dtype)
-        diag_k = gather(rr, cc, slot_d, dd_d, ok_d) + pad_eye
-        lower_k = gather(rr + bs, cc, slot_l, dd_l, ok_l)
-        return diag_k, lower_k
-
-    diag, lower_all = jax.lax.map(blocks_at, jnp.arange(k_blocks))
+    coords = (slot_d, dd_d, ok_d, slot_l, dd_l, ok_l, eye_mask)
+    _, (diag, lower_all) = jax.lax.scan(_pack_band_step, (band, coords), jnp.arange(k_blocks))
     lower = lower_all[:-1] if k_blocks > 1 else lower_all[:0]
     return BlockTridiagonal(diag=diag, lower=lower, n=n)
+
+
+def _band_gather(band, rr, cc, slot, dd, ok):
+    """``band`` values for one block, given its (bs,) row/column indices."""
+    n_pix, nc = band.shape[0], band.shape[1]
+    n = nc * n_pix
+    v = band[jnp.clip(rr // nc, 0, n_pix - 1)[:, None], (rr % nc)[:, None], slot, dd]
+    return jnp.where(ok & (rr < n)[:, None] & (cc < n)[None, :], v, 0.0)
+
+
+# Rematerialized: what is left inside the body after the hoist is index arithmetic and
+# one gather, but reverse mode would still stack the (B, B) validity mask over all K
+# iterations. Recomputing it is negligible next to the block Cholesky it feeds.
+@jax.checkpoint
+def _pack_blocks_at(band, coords, kk):
+    """Diagonal block ``kk`` and the block below it, gathered from the band tensor."""
+    slot_d, dd_d, ok_d, slot_l, dd_l, ok_l, eye_mask = coords
+    bs = eye_mask.shape[0]
+    n = band.shape[0] * band.shape[1]
+    base = kk * bs
+    rr = base + jnp.arange(bs)
+    cc = base + jnp.arange(bs)
+    # Pad rows of the identity block: only the diagonal can reach them, and only within
+    # a diagonal block (a lower block's rows are bs beyond its columns).
+    pad_eye = (eye_mask & (rr >= n)[:, None]).astype(band.dtype)
+    diag_k = _band_gather(band, rr, cc, slot_d, dd_d, ok_d) + pad_eye
+    lower_k = _band_gather(band, rr + bs, cc, slot_l, dd_l, ok_l)
+    return diag_k, lower_k
+
+
+def _pack_band_step(carry, kk):
+    """Module-level scan body (see :func:`_epoch_scan_body`): ``carry`` is unchanged."""
+    band, coords = carry
+    return carry, _pack_blocks_at(band, coords, kk)
 
 
 def band_block_tridiagonal(
@@ -590,24 +705,25 @@ def prior_logdet(prior: SmoothnessPrior, n_pix: int):
     gamma = d0.T
     beta = jnp.pad(d1.T, ((1, 0), (0, 0)))
     alpha = jnp.pad(d2.T, ((2, 0), (0, 0)))
-
-    def step(carry, x):
-        c1, c2, b1, acc = carry
-        al, be, ga = x
-        a = al / c2
-        b = (be - a * b1) / c1
-        # The pivot is positive for any positive (tau, eta), but it is a difference of
-        # like-sized quantities: below eta/tau ~ 1e-13 it rounds to <= 0 and the sqrt
-        # returns nan, which makes the whole likelihood nan. ML-II reaches that region,
-        # since nothing bounds log_eta from below and nothing keeps a component with
-        # little signal in the data away from it. Flooring keeps the recursion finite and
-        # the value monotone, so the optimizer moves back instead of failing.
-        c = jnp.sqrt(jnp.maximum(ga - a * a - b * b, jnp.finfo(ga.dtype).tiny))
-        return (c, c1, b, acc + jnp.log(c)), None
-
     init = (jnp.ones(nc), jnp.ones(nc), jnp.zeros(nc), jnp.zeros(nc))
-    (_, _, _, acc), _ = jax.lax.scan(step, init, (alpha, beta, gamma))
+    (_, _, _, acc), _ = jax.lax.scan(_prior_logdet_step, init, (alpha, beta, gamma))
     return 2.0 * jnp.sum(acc)
+
+
+def _prior_logdet_step(carry, x):
+    """One row of the pentadiagonal Cholesky recursion of :func:`prior_logdet`."""
+    c1, c2, b1, acc = carry
+    al, be, ga = x
+    a = al / c2
+    b = (be - a * b1) / c1
+    # The pivot is positive for any positive (tau, eta), but it is a difference of
+    # like-sized quantities: below eta/tau ~ 1e-13 it rounds to <= 0 and the sqrt
+    # returns nan, which makes the whole likelihood nan. ML-II reaches that region,
+    # since nothing bounds log_eta from below and nothing keeps a component with
+    # little signal in the data away from it. Flooring keeps the recursion finite and
+    # the value monotone, so the optimizer moves back instead of failing.
+    c = jnp.sqrt(jnp.maximum(ga - a * a - b * b, jnp.finfo(ga.dtype).tiny))
+    return (c, c1, b, acc + jnp.log(c)), None
 
 
 def prior_block_tridiagonal(

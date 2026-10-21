@@ -35,7 +35,7 @@ from albireo.forward import (
     with_lsf,
     with_velocities,
 )
-from albireo.likelihood import _pack, marginal_loglikelihood, spectra_std
+from albireo.likelihood import _pack, draw_spectra, marginal_loglikelihood, spectra_std
 from albireo.operators import rebin_operator, rebin_pair_tables
 from albireo.priors import SmoothnessPrior
 from albireo.solver import (
@@ -358,18 +358,26 @@ def test_solve_stage_vjp_matches_autodiff():
     # The custom VJP must not perturb the primal: same operations, same order.
     assert float(ll_custom(VEL, log_tau, log_eta)[0]) == float(ll_ref(VEL, log_tau, log_eta)[0])
 
-    g_custom = jax.grad(lambda v, t, e: ll_custom(v, t, e)[0], argnums=(0, 1, 2))(
+    # The derivatives are compared under jit, which compiles each in one program instead
+    # of one per operation (the eager form took 15 s). Fusion moves them by about 1e-14
+    # relative, and the two routes then still agree to 8e-14 (d_hat branch 4e-12), far
+    # inside the 1e-9 tolerance.
+    g_custom = jax.jit(jax.grad(lambda v, t, e: ll_custom(v, t, e)[0], argnums=(0, 1, 2)))(
         VEL, log_tau, log_eta
     )
-    g_ref = jax.grad(lambda v, t, e: ll_ref(v, t, e)[0], argnums=(0, 1, 2))(VEL, log_tau, log_eta)
+    g_ref = jax.jit(jax.grad(lambda v, t, e: ll_ref(v, t, e)[0], argnums=(0, 1, 2)))(
+        VEL, log_tau, log_eta
+    )
     for name, a, b in zip(("velocities", "log_tau", "log_eta"), g_custom, g_ref, strict=True):
         assert float(jnp.max(jnp.abs(b))) > 0.0, name
         rel = float(jnp.max(jnp.abs(a - b)) / jnp.max(jnp.abs(b)))
         assert rel < 1e-9, f"{name} gradient relative difference {rel:.2e}"
 
     # Cotangents arriving through d_hat (the u-solve branch of the reverse rule).
-    gd_custom = jax.grad(lambda v: jnp.sum(jnp.sin(ll_custom(v, log_tau, log_eta)[1])))(VEL)
-    gd_ref = jax.grad(lambda v: jnp.sum(jnp.sin(ll_ref(v, log_tau, log_eta)[1])))(VEL)
+    gd_custom = jax.jit(jax.grad(lambda v: jnp.sum(jnp.sin(ll_custom(v, log_tau, log_eta)[1]))))(
+        VEL
+    )
+    gd_ref = jax.jit(jax.grad(lambda v: jnp.sum(jnp.sin(ll_ref(v, log_tau, log_eta)[1]))))(VEL)
     rel = float(jnp.max(jnp.abs(gd_custom - gd_ref)) / jnp.max(jnp.abs(gd_ref)))
     assert rel < 1e-9, f"d_hat-cotangent gradient relative difference {rel:.2e}"
 
@@ -704,8 +712,11 @@ def test_second_order_reverse_matches_plain_autodiff():
             - 0.5 * n_good * jnp.log(2.0 * jnp.pi)
         )
 
-    h_custom = np.asarray(jax.jacrev(jax.jacrev(f_custom))(v0))
-    h_ref = np.asarray(jax.jacrev(jax.jacrev(f_ref))(v0))
+    # Both Hessians are computed under jit, one program each instead of one per
+    # operation (17 s eagerly). Fusion moves them by about 2e-14 relative; the two routes
+    # then agree to 6e-15 and the Hessian is symmetric to 6e-16, inside the 1e-12 bound.
+    h_custom = np.asarray(jax.jit(jax.jacrev(jax.jacrev(f_custom)))(v0))
+    h_ref = np.asarray(jax.jit(jax.jacrev(jax.jacrev(f_ref)))(v0))
     assert np.max(np.abs(h_ref)) > 0.0
     np.testing.assert_allclose(h_custom, h_ref, rtol=1e-12, atol=0)
     np.testing.assert_allclose(h_custom, h_custom.T, rtol=1e-12, atol=0)  # symmetric
@@ -787,3 +798,31 @@ def test_column_application_is_a_contraction():
     lo, gm = np.asarray(loop), np.asarray(gemm)
     assert np.count_nonzero(lo) == lo.size  # not a trivial all-zero match
     np.testing.assert_allclose(gm, lo, rtol=0, atol=np.spacing(np.abs(lo).max()))
+
+
+@pytest.mark.parametrize("epoch_chunk", [None, 3], ids=["hoisted", "batched"])
+def test_a_repeated_eager_assembly_compiles_nothing(compilations, epoch_chunk):
+    """A second eager call with the same shapes reuses every compiled program.
+
+    Outside jit, ``lax.scan`` compiles once per body object. The epoch, batch, readout
+    and prior-recursion bodies are built once per static layout (or are module-level
+    functions), so eager callers (a fitted model's standard deviations and draws, the
+    initialization of a sampler) no longer compile them again on every call.
+    """
+
+    def run():
+        bt = band_block_tridiagonal(PROBLEM, PRIOR2, B_NAT, epoch_chunk=epoch_chunk)
+        jax.block_until_ready((bt.diag, bt.lower, prior_logdet(PRIOR2, GRID.n)))
+
+    run()
+    assert compilations(run) == 0
+
+
+def test_a_repeated_eager_marginal_compiles_nothing(compilations):
+    def run():
+        res = marginal_loglikelihood(PROBLEM, PRIOR2, half_bandwidth=B_NAT)
+        out = (res.log_likelihood, spectra_std(res), draw_spectra(res, jax.random.PRNGKey(1), 2))
+        jax.block_until_ready(out)
+
+    run()
+    assert compilations(run) == 0

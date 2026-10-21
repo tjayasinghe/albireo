@@ -11,6 +11,8 @@ from albireo.solver import (
     logdet,
     probe_block_tridiagonal,
     sample_standard,
+    selected_inverse_blocks,
+    selected_inverse_cotangent,
     selected_inverse_diag,
     solve,
     solve_lower,
@@ -100,3 +102,32 @@ def test_sampling_covariance_is_inverse():
     s = np.asarray(jax.vmap(lambda z: sample_standard(chol, z))(jnp.eye(n_pad))).T
     cov = (s @ s.T)[:N, :N]
     np.testing.assert_allclose(cov, np.linalg.inv(M_DENSE), rtol=1e-9, atol=1e-12)
+
+
+def test_a_repeated_eager_call_compiles_nothing(compilations):
+    """Outside jit, a scan is compiled once per body object and per shape.
+
+    The scan bodies are module-level functions, so a second eager call with the same
+    shapes reuses every program. A body defined inside the function was a new object on
+    each call and was compiled again every time (two to ten programs per call).
+    """
+    bt = probe_block_tridiagonal(matvec, N, P, P + 3)
+    k, b = bt.num_blocks, bt.block_size
+    rhs = jnp.asarray(RNG.standard_normal(k * b))
+    d = jnp.asarray(RNG.standard_normal((k, b)))
+    u = jnp.asarray(RNG.standard_normal((k, b)))
+
+    def run():
+        chol = block_cholesky(bt)
+        out = (
+            solve_lower(chol, rhs),
+            solve_upper(chol, rhs),
+            solve(chol, rhs),
+            selected_inverse_diag(chol),
+            selected_inverse_blocks(chol),
+            selected_inverse_cotangent(chol, d, u, 0.37, -1.9),
+        )
+        jax.block_until_ready(out)
+
+    run()
+    assert compilations(run) == 0

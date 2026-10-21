@@ -211,6 +211,8 @@ def probe_block_tridiagonal(
     n_batches = -(-stride // probe_chunk)
     all_offsets = jnp.arange(n_batches * probe_chunk).reshape(n_batches, probe_chunk)
 
+    # This body applies the caller's matvec, a new function on every call, so it cannot
+    # be a module-level function: an eager call compiles it again each time.
     def scan_body(carry, offsets):
         return carry, apply_batch(offsets)
 
@@ -227,17 +229,102 @@ def probe_block_tridiagonal(
     in_band_diag = jnp.abs(row - col) <= p
     in_band_lower = (row - col + b) <= p
 
-    def blocks_at(kk):
-        probe_of_col = (kk * b + col) % stride
-        diag_k = jnp.where(in_band_diag, outputs[probe_of_col, kk * b + row], 0.0)
-        q_low = (kk + 1) * b + row
-        valid = in_band_lower & (q_low < n_pad)
-        lower_k = jnp.where(valid, outputs[probe_of_col, jnp.minimum(q_low, n_pad - 1)], 0.0)
-        return diag_k, lower_k
-
-    diag, lower_all = jax.lax.map(blocks_at, jnp.arange(k))
+    readout = (outputs, row, col, in_band_diag, in_band_lower)
+    _, (diag, lower_all) = jax.lax.scan(_probe_readout_step, readout, jnp.arange(k))
     lower = lower_all[:-1] if k > 1 else lower_all[:0]
     return BlockTridiagonal(diag=diag, lower=lower, n=n)
+
+
+# The scan bodies below are module-level functions. Outside jit, ``lax.scan`` reuses a
+# compiled program only for the same body object, so a body defined inside the calling
+# function is compiled again on every eager call. Arrays the bodies need enter through
+# the carry and are returned unchanged; ``lax.scan`` then passes them as loop
+# constants, as it does for values captured by a closure, so the traced program and its
+# results are the same as with a closure.
+
+
+def _probe_readout_step(readout, kk):
+    """Diagonal block ``kk`` and the block below it, read out of the probe outputs."""
+    outputs, row, col, in_band_diag, in_band_lower = readout
+    stride, n_pad = outputs.shape
+    b = row.shape[0]
+    probe_of_col = (kk * b + col) % stride
+    diag_k = jnp.where(in_band_diag, outputs[probe_of_col, kk * b + row], 0.0)
+    q_low = (kk + 1) * b + row
+    valid = in_band_lower & (q_low < n_pad)
+    lower_k = jnp.where(valid, outputs[probe_of_col, jnp.minimum(q_low, n_pad - 1)], 0.0)
+    return readout, (diag_k, lower_k)
+
+
+def _cholesky_step(prev_l, inputs):
+    dk, ek = inputs
+    # L_{k,k-1} L_{k-1,k-1}^T = E_k
+    ll = solve_triangular(prev_l, ek.T, lower=True).T
+    lk = jnp.linalg.cholesky(dk - ll @ ll.T)
+    return lk, (lk, ll)
+
+
+def _forward_substitution_step(prev_y, inputs):
+    lk, llk, bk = inputs
+    y = solve_triangular(lk, bk - llk @ prev_y, lower=True)
+    return y, y
+
+
+def _back_substitution_step(next_x, inputs):
+    lk, llk, bk = inputs
+    x = solve_triangular(lk.T, bk - llk.T @ next_x, lower=False)
+    return x, x
+
+
+def _takahashi_last(chol: BlockCholesky, eye):
+    """``Sigma`` of the last diagonal block, ``L_KK^{-T} L_KK^{-1}``."""
+    inv_last = solve_triangular(chol.diag[-1], eye, lower=True)
+    return inv_last.T @ inv_last
+
+
+def _takahashi_step(s_next, lk, llk, eye):
+    """One backward Takahashi step: ``(Sigma_kk, t)`` with ``t = -Sigma_{k+1,k}``.
+
+    ``s_next`` is ``Sigma_{k+1,k+1}``, ``lk`` the diagonal factor block ``L_kk`` and
+    ``llk`` the subdiagonal block ``L_{k+1,k}``.
+    """
+    inv_lk = solve_triangular(lk, eye, lower=True)
+    w = llk @ inv_lk
+    t = s_next @ w
+    s_k = inv_lk.T @ inv_lk + w.T @ t
+    return s_k, t
+
+
+def _selected_inverse_diag_step(carry, inputs):
+    s_next, eye = carry
+    lk, llk = inputs
+    inv_lk = solve_triangular(lk, eye, lower=True)
+    w = llk @ inv_lk
+    # (w^T s_next) w, associated differently from _takahashi_step, which forms
+    # w^T (s_next w). The two agree in exact arithmetic. This order is kept so that the
+    # posterior standard deviations are unchanged to the last bit.
+    s_k = inv_lk.T @ inv_lk + w.T @ s_next @ w
+    return (s_k, eye), jnp.diagonal(s_k)
+
+
+def _selected_inverse_blocks_step(carry, inputs):
+    s_next, eye = carry
+    lk, llk = inputs
+    s_k, t = _takahashi_step(s_next, lk, llk, eye)
+    return (s_k, eye), (s_k, -t)
+
+
+def _outer(x, y):
+    return x[:, None] * y[None, :]
+
+
+def _selected_inverse_cotangent_step(carry, inputs):
+    s_next, eye, g_logdet, g_quad = carry
+    lk, llk, dk, uk, dn, un = inputs
+    s_k, t = _takahashi_step(s_next, lk, llk, eye)  # t = -Sigma[k+1, k]
+    diag_k = g_logdet * s_k - g_quad * _outer(dk, dk) - _outer(uk, dk)
+    sub_k = -2.0 * g_logdet * t - 2.0 * g_quad * _outer(dn, dk) - (_outer(un, dk) + _outer(dn, uk))
+    return (s_k, eye, g_logdet, g_quad), (diag_k, sub_k)
 
 
 def block_cholesky(bt: BlockTridiagonal) -> BlockCholesky:
@@ -251,15 +338,7 @@ def block_cholesky(bt: BlockTridiagonal) -> BlockCholesky:
     l0 = jnp.linalg.cholesky(d[0])
     if bt.num_blocks == 1:
         return BlockCholesky(diag=l0[None], lower=e, n=bt.n)
-
-    def step(prev_l, inputs):
-        dk, ek = inputs
-        # L_{k,k-1} L_{k-1,k-1}^T = E_k
-        ll = solve_triangular(prev_l, ek.T, lower=True).T
-        lk = jnp.linalg.cholesky(dk - ll @ ll.T)
-        return lk, (lk, ll)
-
-    _, (ls, lls) = jax.lax.scan(step, l0, (d[1:], e))
+    _, (ls, lls) = jax.lax.scan(_cholesky_step, l0, (d[1:], e))
     return BlockCholesky(diag=jnp.concatenate([l0[None], ls]), lower=lls, n=bt.n)
 
 
@@ -270,13 +349,7 @@ def solve_lower(chol: BlockCholesky, rhs):
     y0 = solve_triangular(chol.diag[0], rb[0], lower=True)
     if k == 1:
         return y0
-
-    def step(prev_y, inputs):
-        lk, llk, bk = inputs
-        y = solve_triangular(lk, bk - llk @ prev_y, lower=True)
-        return y, y
-
-    _, ys = jax.lax.scan(step, y0, (chol.diag[1:], chol.lower, rb[1:]))
+    _, ys = jax.lax.scan(_forward_substitution_step, y0, (chol.diag[1:], chol.lower, rb[1:]))
     return jnp.concatenate([y0[None], ys]).reshape(-1)
 
 
@@ -287,13 +360,9 @@ def solve_upper(chol: BlockCholesky, rhs):
     x_last = solve_triangular(chol.diag[-1].T, rb[-1], lower=False)
     if k == 1:
         return x_last
-
-    def step(next_x, inputs):
-        lk, llk, bk = inputs
-        x = solve_triangular(lk.T, bk - llk.T @ next_x, lower=False)
-        return x, x
-
-    _, xs = jax.lax.scan(step, x_last, (chol.diag[:-1], chol.lower, rb[:-1]), reverse=True)
+    _, xs = jax.lax.scan(
+        _back_substitution_step, x_last, (chol.diag[:-1], chol.lower, rb[:-1]), reverse=True
+    )
     return jnp.concatenate([xs, x_last[None]]).reshape(-1)
 
 
@@ -324,19 +393,12 @@ def selected_inverse_diag(chol: BlockCholesky):
     """
     k, b = chol.num_blocks, chol.block_size
     eye = jnp.eye(b)
-    inv_last = solve_triangular(chol.diag[-1], eye, lower=True)
-    s_last = inv_last.T @ inv_last
+    s_last = _takahashi_last(chol, eye)
     if k == 1:
         return jnp.diagonal(s_last)[: chol.n]
-
-    def step(s_next, inputs):
-        lk, llk = inputs
-        inv_lk = solve_triangular(lk, eye, lower=True)
-        w = llk @ inv_lk
-        s_k = inv_lk.T @ inv_lk + w.T @ s_next @ w
-        return s_k, jnp.diagonal(s_k)
-
-    _, diags = jax.lax.scan(step, s_last, (chol.diag[:-1], chol.lower), reverse=True)
+    _, diags = jax.lax.scan(
+        _selected_inverse_diag_step, (s_last, eye), (chol.diag[:-1], chol.lower), reverse=True
+    )
     return jnp.concatenate([diags.reshape(-1), jnp.diagonal(s_last)])[: chol.n]
 
 
@@ -362,20 +424,12 @@ def selected_inverse_blocks(chol: BlockCholesky):
     """
     k, b = chol.num_blocks, chol.block_size
     eye = jnp.eye(b)
-    inv_last = solve_triangular(chol.diag[-1], eye, lower=True)
-    s_last = inv_last.T @ inv_last
+    s_last = _takahashi_last(chol, eye)
     if k == 1:
         return s_last[None], chol.lower[:0]
-
-    def step(s_next, inputs):
-        lk, llk = inputs
-        inv_lk = solve_triangular(lk, eye, lower=True)
-        w = llk @ inv_lk
-        t = s_next @ w
-        s_k = inv_lk.T @ inv_lk + w.T @ t
-        return s_k, (s_k, -t)
-
-    _, (s_all, subs) = jax.lax.scan(step, s_last, (chol.diag[:-1], chol.lower), reverse=True)
+    _, (s_all, subs) = jax.lax.scan(
+        _selected_inverse_blocks_step, (s_last, eye), (chol.diag[:-1], chol.lower), reverse=True
+    )
     return jnp.concatenate([s_all, s_last[None]]), subs
 
 
@@ -419,29 +473,13 @@ def selected_inverse_cotangent(chol: BlockCholesky, d_blocks, u_blocks, g_logdet
     k, b = chol.num_blocks, chol.block_size
     eye = jnp.eye(b)
     d, u = d_blocks, u_blocks
-
-    def outer(x, y):
-        return x[:, None] * y[None, :]
-
-    inv_last = solve_triangular(chol.diag[-1], eye, lower=True)
-    s_last = inv_last.T @ inv_last
-    diag_last = g_logdet * s_last - g_quad * outer(d[-1], d[-1]) - outer(u[-1], d[-1])
+    s_last = _takahashi_last(chol, eye)
+    diag_last = g_logdet * s_last - g_quad * _outer(d[-1], d[-1]) - _outer(u[-1], d[-1])
     if k == 1:
         return diag_last[None], chol.lower[:0]
-
-    def step(s_next, inputs):
-        lk, llk, dk, uk, dn, un = inputs
-        inv_lk = solve_triangular(lk, eye, lower=True)
-        w = llk @ inv_lk
-        t = s_next @ w  # = -Sigma[k+1, k]
-        s_k = inv_lk.T @ inv_lk + w.T @ t
-        diag_k = g_logdet * s_k - g_quad * outer(dk, dk) - outer(uk, dk)
-        sub_k = -2.0 * g_logdet * t - 2.0 * g_quad * outer(dn, dk) - (outer(un, dk) + outer(dn, uk))
-        return s_k, (diag_k, sub_k)
-
     _, (diags, subs) = jax.lax.scan(
-        step,
-        s_last,
+        _selected_inverse_cotangent_step,
+        (s_last, eye, g_logdet, g_quad),
         (chol.diag[:-1], chol.lower, d[:-1], u[:-1], d[1:], u[1:]),
         reverse=True,
     )
