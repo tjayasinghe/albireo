@@ -961,6 +961,11 @@ class _ScalarView(Spec):
         return self.spec.start()
 
     def upper(self) -> float:
+        bounds = _range_bounds(self)
+        if bounds is not None:
+            # The largest magnitude of this star's range: |lo| for a range below zero, as
+            # in Between.upper, rather than |hi|.
+            return max(abs(bounds[0]), abs(bounds[1]))
         for attr in ("hi", "value", "values"):
             values = getattr(self.spec, attr, None)
             if values is None:
@@ -1782,6 +1787,7 @@ class Disentangler:
             scanner = self._scan_declaration() if ranged else self
             if self.orbit.t_conj == "scan":
                 scan = scanner._scan_phase(init)
+                _require_a_finite_trial(scan)
                 init["t_conj"] = scan.best
             if ranged:
                 amplitude_scan = scanner._scan_semi_amplitudes(init)
@@ -1848,6 +1854,7 @@ class Disentangler:
                         # The joint scan located the phase coarsely. The fine phase scan
                         # at the chosen semi-amplitudes refines it.
                         scan = scanner._scan_phase(init)
+                        _require_a_finite_trial(scan)
                         init["t_conj"] = scan.best
             if scan is not None:
                 # The prior is one period wide and centred on the conjunction the fit starts
@@ -1986,7 +1993,8 @@ class Disentangler:
         on one benchmark star the unsampled antipode was higher by 672 nats (D63).
 
         The marginal likelihood is sharply multimodal in phase, and L-BFGS does not cross
-        between the troughs.
+        between the troughs. A trial whose likelihood is not finite is chosen only when no
+        trial is finite.
         """
         period = self._start_period(init)
         trials = float(np.min(self.dataset.bjd)) + np.linspace(0.0, period, 42, endpoint=False)
@@ -1999,8 +2007,14 @@ class Disentangler:
         for t in trials:
             theta["t_conj"] = jnp.asarray(float(t))
             values.append(float(self.model.log_likelihood(theta)))
-        best = float(trials[int(np.argmax(values))])
-        return PhaseScan(period=period, trials=trials, values=np.asarray(values), best=best)
+        scanned = np.asarray(values)
+        # np.argmax takes the first NaN as the maximum, so a trial whose likelihood is not
+        # finite would become the start. Such trials rank below every finite one. With no
+        # finite trial the first is returned; fit() then raises (_require_a_finite_trial),
+        # and the pipeline's period comparison ranks the candidate last.
+        finite = np.where(np.isfinite(scanned), scanned, -np.inf)
+        best = float(trials[int(np.argmax(finite))])
+        return PhaseScan(period=period, trials=trials, values=scanned, best=best)
 
     def _scan_declaration(self) -> Disentangler:
         """This declaration on a model grid twice as coarse, for the scans that precede a fit.
@@ -2512,7 +2526,8 @@ class PhaseScan:
     values
         Marginal log-likelihood at each trial, in nats.
     best
-        Trial time with the highest marginal likelihood.
+        Trial time with the highest finite marginal likelihood, or the first trial when
+        none is finite.
     """
 
     period: float
@@ -2527,6 +2542,17 @@ class PhaseScan:
         Only finite trials enter (a failed solve is ``-inf``); NaN when there are none.
         """
         return _finite_range(self.values)
+
+
+def _require_a_finite_trial(scan: PhaseScan) -> None:
+    """Reject a conjunction scan none of whose trials has a finite marginal likelihood."""
+    if not np.any(np.isfinite(scan.values)):
+        raise ValueError(
+            f"the conjunction scan at period {scan.period:g} d has no finite marginal "
+            f"likelihood at any of its {np.size(scan.trials)} trials, so it cannot choose a "
+            "starting conjunction. The starting values of the other sites, the declared LSF "
+            "or the data give a likelihood that is not finite at every phase."
+        )
 
 
 @dataclass(frozen=True)
@@ -2598,6 +2624,15 @@ class SemiAmplitudeScan:
         return _finite_range(self.values)
 
 
+class _ZeroPointWindowError(ValueError):
+    """No default search window holds every component, because of the templates' zero points.
+
+    Raised by :func:`_default_v_range`. Dropping the zero points (``v_zero_kms=None``)
+    removes the cause, which is the remedy the pipeline applies to this error and to no
+    other.
+    """
+
+
 def _default_v_range(fitted: np.ndarray, templates, margin: float = 40.0):
     """One correlation search window per template, all covering the same velocities.
 
@@ -2614,7 +2649,7 @@ def _default_v_range(fitted: np.ndarray, templates, margin: float = 40.0):
     separately (``docs/math.md`` §9). When two disagree by more than the fitted velocities
     span, no interval of reported velocity contains every component's own velocities, and
     a search would return a table of velocities pinned to the edge of the search. This
-    case raises an error.
+    case raises :class:`_ZeroPointWindowError`, a ``ValueError``.
     """
     fitted = np.asarray(fitted, dtype=np.float64)
     zeros = np.array([0.0 if t.v_zero_kms is None else float(t.v_zero_kms) for t in templates])
@@ -2630,7 +2665,7 @@ def _default_v_range(fitted: np.ndarray, templates, margin: float = 40.0):
             declared = ", ".join(
                 f"{t.name}={z:+.3f}" for t, z in zip(templates, zeros, strict=True)
             )
-            raise ValueError(
+            raise _ZeroPointWindowError(
                 f"component {template.name!r}: the default search window "
                 f"({low:+.3f}, {high:+.3f}) km/s misses its own fitted velocities "
                 f"({float(own.min()):+.3f} to {float(own.max()):+.3f} km/s) by "
@@ -4061,7 +4096,8 @@ class Fit:
         Raises
         ------
         ValueError
-            If ``scale_angstrom`` is not positive or ``passes`` is below 1.
+            If ``scale_angstrom`` is not positive, ``passes`` is below 1, or a range of
+            ``exclude`` is not a pair ``(lo, hi)`` with ``lo < hi``.
 
         Warns
         -----
@@ -4075,6 +4111,20 @@ class Fit:
             raise ValueError(f"scale_angstrom must be positive; got {scale_angstrom}")
         if int(passes) < 1:
             raise ValueError(f"passes must be at least 1; got {passes}")
+        # Read once, so that every epoch of every pass leaves out the same ranges (a
+        # generator would be exhausted by the first epoch), and checked here, so that a
+        # malformed range fails the call rather than every epoch's correction.
+        try:
+            ranges = tuple((float(lo), float(hi)) for lo, hi in exclude)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"exclude must be a sequence of (lo, hi) wavelength ranges [A]; got {exclude!r}"
+            ) from exc
+        for lo, hi in ranges:
+            if not hi > lo:
+                raise ValueError(
+                    f"each excluded range must be (lo, hi) with lo < hi; got {(lo, hi)!r}"
+                )
         grid = self.dis.grid
         fit = self
         totals = [np.ones(epoch.wave.size) for epoch in self.dis.dataset]
@@ -4092,7 +4142,7 @@ class Fit:
                         models[j],
                         knot_spacing_angstrom=scale_angstrom,
                         clip=clip,
-                        exclude=exclude,
+                        exclude=ranges,
                     )
                 except ValueError as exc:
                     warnings.warn(
