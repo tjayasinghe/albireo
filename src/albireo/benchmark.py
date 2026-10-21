@@ -339,9 +339,13 @@ class BenchmarkConfig:
         return _release(self.product)
 
 
-def _release(product: RVSProduct) -> str:
-    """``"dr3"`` for a DR3 product, else ``"dr4"`` (:attr:`BenchmarkConfig.release`)."""
-    return "dr3" if str(product.name).startswith("dr3") else "dr4"
+def _release(product: str | RVSProduct) -> str:
+    """``"dr3"`` for a DR3 product, else ``"dr4"`` (:attr:`BenchmarkConfig.release`).
+
+    ``product`` is a product or its name.
+    """
+    name = product if isinstance(product, str) else product.name
+    return "dr3" if str(name).startswith("dr3") else "dr4"
 
 
 # ---------------------------------------------------------------------------
