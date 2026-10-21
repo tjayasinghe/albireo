@@ -777,9 +777,10 @@ This file records what changed. The reasons are recorded elsewhere:
     off.
   - `sensitivity_forecast` with `ar1_phi` outside (-1, 1), which was clipped to 0.999.
   - `SurveyConfig` with a variant of `simulation="recorded"`, which that simulation ignores.
-  - `resolve_bloem` with an empty classification table from VizieR, which gave targets
-    without a class; the pipeline's BLOeM fetch and `albireo fetch` raise it as well, and
-    the message names `with_classification=False`.
+  - `resolve_bloem` and `bloem_catalogue` with classification, when VizieR returns an
+    empty classification table, which gave targets without a class; the message names
+    `with_classification=False`. The pipeline resolves BLOeM stars without the class
+    table, and `albireo fetch` prints the stars unclassified (see Fixed).
 - **New keyword arguments and attributes.** `Problem.half_bandwidth_bound(..., ar1=True)`,
   `Fit.free_velocities(tol=...)`, `Fit.max_steps`, `rvs_transit_times(release=...)`,
   `query_gaia_sb2(order="random")` and `read_raw_spectra(epoch_kwargs=...)`.
@@ -1200,7 +1201,8 @@ This file records what changed. The reasons are recorded elsewhere:
   download of `fetch_library` wrote through a fixed `<name>.part`, so two processes
   finishing together could collide on the rename. Each write now goes to a temporary name
   of its own beside the destination and is moved into place with `os.replace`. A process
-  stopped during a write leaves its temporary file, which no later run removes.
+  stopped during a write leaves its temporary file; the next write of the same target
+  removes those not modified for a day.
 - **Messages and annotations.** A declaration that `fit_templates` rejects now names the
   star and the label (`logg of 'B': Known(4.3, 0.0): sigma must be positive`), and the
   annotation of `simulate_dataset` accepts an array for `epoch_snr`, as the function
@@ -1257,9 +1259,8 @@ This file records what changed. The reasons are recorded elsewhere:
 - **Truncated and concurrent downloads.** The helper with which `albireo.examples` and
   `albireo.library` fetch files did not check the body against its `Content-Length`, so a
   truncated BOSZ shard or wavelength grid was kept as complete. Each transfer is checked and
-  written to a temporary file of its own. A library shard then passes through the fixed name
-  `<name>.part` before its final rename, so two workers that fetch the same shard can still
-  collide in a short window. Caches built before this change are not checked again.
+  written to a temporary file of its own. Caches built before this change are not checked
+  again.
 - **`albireo.archive`.** An `ssl.SSLError` or `http.client.IncompleteRead` during `download`
   escaped the per-record handling, so no `manifest.json` was written; each failure is that
   record's `FAIL` line, and a record listed twice is downloaded once. `spectra_query` wrote

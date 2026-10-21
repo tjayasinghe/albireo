@@ -540,3 +540,29 @@ def test_the_cone_search_form_is_the_one_that_matches():
         "if this ever starts matching, ESO has changed s_region for spectra and the "
         "module docstring's advice needs revisiting"
     )
+
+
+def test_a_temporary_file_left_by_a_stopped_write_is_removed(tmp_path):
+    """Each write has a temporary name of its own, so a write that was stopped leaves a
+    file that no later write reuses. Such a file of the same target, not modified for a
+    day, is removed when the next write of that target starts; a recent one, which may
+    belong to a write in progress, and those of other targets are kept."""
+    import os
+    import time
+
+    target = tmp_path / "library.npz"
+    old = tmp_path / "library.npz.123-0123456789ab.part"
+    recent = tmp_path / "library.npz.456-ba9876543210.part"
+    other = tmp_path / "other.npz.123-0123456789ab.part"
+    for path in (old, recent, other):
+        path.write_bytes(b"partial")
+    two_days_ago = time.time() - 2 * 86400.0
+    os.utime(old, (two_days_ago, two_days_ago))
+    os.utime(other, (two_days_ago, two_days_ago))
+
+    part = archive._part_path(target)
+
+    assert not old.exists()
+    assert recent.exists() and other.exists()
+    assert part.parent == tmp_path and part.name.startswith("library.npz.")
+    assert part.name.endswith(".part") and not part.exists()

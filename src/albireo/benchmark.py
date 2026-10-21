@@ -825,6 +825,10 @@ def run_benchmark(config: BenchmarkConfig, *, progress: bool = True) -> Benchmar
     write_population(directory / "population.json", list(config.systems))
     library = _resolve_library(config.library)
     stars, records = _build_stars(config, library, progress=progress)
+    mh_bounds = tuple(dict(library.bounds)["mh"])
+    # The pipeline loads the library by name. Released here, this copy and the projections
+    # and interpolators kept for it are freed before the pipeline runs.
+    del library
     manifest = _manifest(config, stars, records)
     text = json.dumps(manifest, indent=1)
     (directory / "manifest.json").write_text(text, encoding="utf-8")
@@ -865,7 +869,7 @@ def run_benchmark(config: BenchmarkConfig, *, progress: bool = True) -> Benchmar
             output=directory,
             # The name, not the loaded library: every worker loads it by name.
             library=config.library,
-            mh=tuple(dict(library.bounds)["mh"]),
+            mh=mh_bounds,
             analysis=_analysis(config),
         )
         # The benchmark reads the products on disk and never the live objects, which a

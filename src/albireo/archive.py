@@ -37,6 +37,7 @@ needs no additional dependency.
 from __future__ import annotations
 
 import datetime
+import glob
 import http.client
 import json
 import math
@@ -155,6 +156,10 @@ def _with_retries[T](what: str, call: Callable[[], T], attempts: int = 5) -> T:
     raise AssertionError("unreachable")
 
 
+_STALE_PART_SECONDS = 86400.0
+"""Age above which a temporary file of a write is taken to belong to a stopped writer."""
+
+
 def _part_path(path: pathlib.Path) -> pathlib.Path:
     """A temporary name beside ``path`` that no other writer uses.
 
@@ -162,7 +167,19 @@ def _part_path(path: pathlib.Path) -> pathlib.Path:
     record listed twice) each write their own temporary file. With a shared ``.part`` name
     the second writer truncates the first one's file, and on Windows a file held open by
     one writer cannot be renamed by the other.
+
+    A writer that is stopped during a write leaves its temporary file, which no later
+    write reuses. The temporary files of ``path`` not modified for
+    :data:`_STALE_PART_SECONDS` are therefore removed here; a write in progress modifies
+    its file as it writes. A file that cannot be removed (held open on Windows) is kept.
     """
+    cutoff = time.time() - _STALE_PART_SECONDS
+    for stale in path.parent.glob(f"{glob.escape(path.name)}.*.part"):
+        try:
+            if stale.stat().st_mtime < cutoff:
+                stale.unlink()
+        except OSError:
+            pass
     return path.with_name(f"{path.name}.{os.getpid()}-{uuid.uuid4().hex[:12]}.part")
 
 
