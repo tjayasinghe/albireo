@@ -145,7 +145,7 @@ _BALMER_AIR = (6562.8, 4861.3, 4340.5, 4101.7, 3970.1, 3889.0, 3835.4, 3797.9, 3
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class ApfWavelengths:
     """A wavelength solution: the air wavelength of every pixel of every order.
 
@@ -251,7 +251,7 @@ def is_apf_exposure(header: Mapping, shape: Sequence[int]) -> bool:
     return version == "apf" or "DECKRNAM" in header
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class ApfExposure:
     """One CPS-extracted exposure: its counts and header.
 
@@ -546,7 +546,7 @@ def _merge_orders(waves, fluxes, ivars, rows):
     return wave, flux, ivar
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class ApfSpectrum:
     """An exposure extracted by :func:`extract`: merged, blaze-removed, not normalised.
 
@@ -793,7 +793,7 @@ def apf_barycentric(header: Mapping, *, path: str = "") -> tuple[float, float, s
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class RefinedWavelengths:
     """The result of :func:`refine_wavelengths`.
 

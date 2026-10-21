@@ -262,6 +262,13 @@ def test_the_rows_and_a_declared_width_are_checked(files):
         apf.extract(exposure, SOLUTION, zero_point=float("nan"), lsf=5.0, rows=(50,))
 
 
+def test_the_result_classes_compare_by_identity():
+    solution = apf.ApfWavelengths(SOLUTION)
+    assert solution == solution
+    assert solution != apf.ApfWavelengths(SOLUTION), "a bool, not an array of comparisons"
+    assert isinstance(hash(solution), int)
+
+
 def test_an_exposure_through_the_iodine_cell_is_refused_or_masked(files):
     exposure = apf.read_apf_exposure(files["iodine"])
     assert exposure.iodine_in

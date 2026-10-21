@@ -64,6 +64,18 @@ def test_the_packaged_list():
         assert ((lines.wave > lo) & (lines.wave < hi)).sum() >= 5
 
 
+def test_the_packaged_list_is_shared_and_read_only():
+    lines = telluric_lines()
+    with pytest.raises(ValueError, match="read-only"):
+        lines.depth[0] = 0.0
+    copy = lines.select(np.ones(len(lines), dtype=bool))
+    copy.depth[0] = 0.0  # a selection is the caller's own
+    assert telluric_lines().depth[0] > 0.0
+    # Equality is identity: comparing the arrays field by field raised in an earlier version.
+    assert lines == telluric_lines() and lines != copy
+    assert hash(lines) == hash(telluric_lines())
+
+
 def test_the_model_is_a_sum_of_lines():
     lines = telluric_lines()
     assert np.all(telluric_model(np.linspace(5000.0, 6200.0, 1000)) == 0.0)

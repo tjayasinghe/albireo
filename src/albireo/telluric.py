@@ -76,7 +76,7 @@ _STEP_KMS = 0.25
 _LINE_FILE = Path(__file__).resolve().parent / "data_files" / "telluric_lines_air.csv"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class TelluricLines:
     """A telluric line list.
 
@@ -138,7 +138,7 @@ class TelluricLines:
 def _packaged_lines() -> TelluricLines:
     with _LINE_FILE.open(encoding="utf-8") as handle:
         rows = list(csv.DictReader(line for line in handle if not line.startswith("#")))
-    return TelluricLines(
+    lines = TelluricLines(
         wave=np.array([float(r["wave_air"]) for r in rows]),
         depth=np.array([float(r["depth"]) for r in rows]),
         fwhm_kms=np.array([float(r["fwhm_kms"]) for r in rows]),
@@ -147,10 +147,24 @@ def _packaged_lines() -> TelluricLines:
         band=np.array([r["band"].strip() for r in rows]),
         source=f"albireo packaged list ({_LINE_FILE.name})",
     )
+    # One object serves every caller in the process, so its arrays are read-only.
+    for column in (
+        lines.wave,
+        lines.depth,
+        lines.fwhm_kms,
+        lines.centre_err_kms,
+        lines.isolated,
+        lines.band,
+    ):
+        column.flags.writeable = False
+    return lines
 
 
 def telluric_lines() -> TelluricLines:
-    """The packaged telluric line list (183 O2 and H2O lines, 6276-7410 A, air)."""
+    """The packaged telluric line list (183 O2 and H2O lines, 6276-7410 A, air).
+
+    Every call returns the same object; its arrays are read-only.
+    """
     return _packaged_lines()
 
 
