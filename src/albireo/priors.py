@@ -27,6 +27,7 @@ weighted by their center pixel, so a profile is indexed like the spectrum it reg
 
 from __future__ import annotations
 
+import operator
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -278,24 +279,35 @@ class SmoothnessPrior:
         and the scalar sets the strength. :func:`window_profile` builds one. Curvature
         rows take the weight of their center pixel, so ``tau_profile`` is indexed like
         the spectrum.
+    half_bandwidth
+        Half-bandwidth of each per-component precision block: 2, that of
+        ``D2^T D2``. The likelihood assembles a band at least this wide. It is carried
+        through ``jax.jit`` and other pytree transformations as static data.
 
     Raises
     ------
     ValueError
-        If ``tau`` and ``eta`` differ in shape, or a profile has the wrong shape or the
-        two profiles disagree on the pixel count.
+        If ``tau`` and ``eta`` differ in shape, a profile has the wrong shape, the two
+        profiles disagree on the pixel count, or ``half_bandwidth`` is below 2.
     """
 
     tau: jax.Array
     eta: jax.Array
     tau_profile: jax.Array | None = None
     eta_profile: jax.Array | None = None
+    half_bandwidth: int = 2
 
     def __post_init__(self):
         tau = jnp.atleast_1d(jnp.asarray(self.tau, dtype=jnp.float64))
         eta = jnp.atleast_1d(jnp.asarray(self.eta, dtype=jnp.float64))
         if tau.shape != eta.shape:
             raise ValueError("tau and eta must have the same shape")
+        half_bandwidth = operator.index(self.half_bandwidth)
+        if half_bandwidth < 2:
+            raise ValueError(
+                f"half_bandwidth must be at least 2, that of D2^T D2; got {half_bandwidth}"
+            )
+        object.__setattr__(self, "half_bandwidth", half_bandwidth)
         object.__setattr__(self, "tau", tau)
         object.__setattr__(self, "eta", eta)
         n_pix = None
@@ -327,8 +339,6 @@ class SmoothnessPrior:
             if p is not None:
                 return int(p.shape[1])
         return None
-
-    half_bandwidth: int = 2  # of each per-component precision block
 
     def curvature_weights(self, n_pixels: int):
         """Per-row curvature weights, shape ``(n_comp, n_pixels - 2)``.
@@ -385,8 +395,10 @@ class SmoothnessPrior:
         return out
 
     def tree_flatten(self):
-        return (self.tau, self.eta, self.tau_profile, self.eta_profile), None
+        # The half-bandwidth is static data, so a value other than the default survives
+        # `jax.jit` and every other pytree transformation.
+        return (self.tau, self.eta, self.tau_profile, self.eta_profile), self.half_bandwidth
 
     @classmethod
     def tree_unflatten(cls, aux, children):
-        return cls(*children)
+        return cls(*children, half_bandwidth=aux)
