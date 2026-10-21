@@ -1,5 +1,7 @@
 """Tests for the fixed-parameter forward model (adjoints, grouping, frames, masks)."""
 
+import dataclasses
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -73,6 +75,45 @@ def test_grouping_by_instrument():
     assert by_name["A"].epoch_indices == (0, 2)
     assert by_name["B"].epoch_indices == (1,)
     assert problem.natural_half_bandwidth > 0
+
+
+def test_groups_of_one_instrument_share_its_lsf_bank():
+    """Epochs of one instrument on different native grids form one group per grid.
+
+    The LSF bank depends only on the instrument's widths, its anchors and the model grid,
+    so the groups hold one array. An anchored bank is ``(grid.n, 2r + 1)``, and archival
+    data with per-exposure grids has one group per epoch.
+    """
+    ds, _ = make_dataset()
+    relabelled = ab.Dataset(
+        tuple(dataclasses.replace(e, instrument="A", lsf_sigma_kms=None) for e in ds),
+        frame=ds.frame,
+    )
+    problem = make_problem(
+        relabelled,
+        lsf_sigma_v={"A": [5.0, 7.0]},
+        lsf_anchors_angstrom={"A": (4500.0, 4530.0)},
+    )
+    assert [g.instrument for g in problem.groups] == ["A", "A"]
+    a, b = problem.groups
+    assert a.kernel.shape == (GRID.n, b.kernel.shape[-1])
+    assert a.kernel is b.kernel
+    assert a.lsf_anchor_wave == b.lsf_anchor_wave == (4500.0, 4530.0)
+
+
+def test_unit_continuum_is_the_rebin_coverage():
+    """``EpochGroup.base`` is ``R 1``; build_problem reads it from the coverage."""
+    ds, _ = make_dataset()
+    for g in make_problem(ds).groups:
+        r_one = np.asarray(g.rebin(jnp.ones(GRID.n)))
+        assert np.array_equal(np.asarray(g.base), r_one)
+
+
+def test_every_public_swap_is_exported():
+    import albireo.forward
+
+    swaps = {name for name in dir(albireo.forward) if name.startswith("with_")}
+    assert swaps <= set(albireo.forward.__all__)
 
 
 def test_topocentric_shift_composition():

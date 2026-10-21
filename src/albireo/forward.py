@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import warnings
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from functools import partial
 
@@ -64,11 +64,13 @@ __all__ = [
     "rhs",
     "weighted_data_terms",
     "with_ar1",
+    "with_data",
     "with_jitter",
     "with_light_fractions",
     "with_lsf",
     "with_nebular_amplitudes",
     "with_response",
+    "with_shifts",
     "with_velocities",
 ]
 
@@ -495,7 +497,7 @@ def _warn_if_data_extends_past_grid(instrument, dataset, idx, covered) -> None:
     )
 
 
-def _epoch_groups(dataset: Dataset, per_epoch: Sequence[str] = ()) -> list[tuple[str, list[int]]]:
+def _epoch_groups(dataset: Dataset, per_epoch: Collection[str] = ()) -> list[tuple[str, list[int]]]:
     """Partition epoch indices into ``(instrument, indices)`` sharing one native grid.
 
     A group shares static operators, so it is one instrument and one wavelength array
@@ -754,6 +756,11 @@ def build_problem(
     _warn_if_widths_pooled(dataset, lsf_sigma_v)
 
     groups = []
+    # One profile bank per instrument (and per declared width for a PER_EPOCH one): a
+    # bank depends only on the instrument's widths, anchors and the model grid, so the
+    # groups of one instrument share the array. An anchored bank is (grid.n, 2r + 1),
+    # and archival data with per-exposure wavelength arrays has one group per epoch.
+    banks: dict[tuple[str, float | None], tuple[jax.Array, tuple[float, ...]]] = {}
     for instrument, idx in _epoch_groups(dataset, per_epoch):
         if instrument not in lsf_sigma_v:
             raise ValueError(f"no LSF width supplied for instrument {instrument!r}")
@@ -783,8 +790,14 @@ def build_problem(
         _warn_if_row_support_is_an_artifact(instrument, wave_native, per_row, row_support)
         _warn_if_data_extends_past_grid(instrument, dataset, idx, covered)
 
-        kernel, anchor_wave = _lsf_bank(instrument, sigma_v, lsf_anchors_angstrom, lsf_h3, grid)
-        base = np.asarray(rebin(jnp.ones(grid.n)))  # R 1 (= coverage)
+        bank_key = (instrument, dataset[idx[0]].lsf_sigma_kms if instrument in per_epoch else None)
+        if bank_key not in banks:
+            banks[bank_key] = _lsf_bank(instrument, sigma_v, lsf_anchors_angstrom, lsf_h3, grid)
+        kernel, anchor_wave = banks[bank_key]
+        # R 1, the rebinned unit continuum, is the coverage: both sum each row's overlap
+        # fractions in the order of the sparse entries, so they are equal to the bit.
+        # Reading the coverage avoids an eager segment_sum per group.
+        base = coverage
 
         z_rows, w_rows, r_rows, gap_rows = [], [], [], []
         ar_step = 0
