@@ -2484,6 +2484,7 @@ def test_zero_points_no_search_window_can_hold_are_dropped_and_the_epochs_measur
     differential, as when the label fit has not measured its offsets, and the orbit fit has
     one systemic velocity per component.
     """
+    from albireo.facade import _ZeroPointWindowError
     from albireo.pipeline import _measure_epoch_velocities
 
     dataset, truth, grid = toy
@@ -2507,7 +2508,7 @@ def test_zero_points_no_search_window_can_hold_are_dropped_and_the_epochs_measur
         def measure_velocities(self, *, templates, light):
             self.calls.append([t.v_zero_kms for t in templates])
             if any(t.v_zero_kms is not None for t in templates):
-                raise ValueError(
+                raise _ZeroPointWindowError(
                     "component 'B': the default search window (-95.000, +25.000) km/s "
                     "misses its own fitted velocities"
                 )
@@ -2537,13 +2538,15 @@ def test_zero_points_no_search_window_can_hold_are_dropped_and_the_epochs_measur
 
 
 def test_a_failure_the_zero_points_did_not_cause_leaves_them_in_the_record(toy, tmp_path):
-    """A failure that the measurement without zero points repeats is raised as it was.
+    """A failure of another kind is raised at once, without a measurement without zero points.
 
     Dropping the zero points is the remedy for a search window that cannot hold every
-    component. A failure of another kind (too few pixels, an LSF the correlation refuses)
-    recurs without them, and the record then keeps the adopted zero points, with no flag
-    naming them as dropped.
+    component (``_ZeroPointWindowError``). A failure of another kind (too few pixels, an
+    LSF the correlation refuses) is not measured again: before, every ``ValueError`` was
+    retried, at the cost of a second correlation that failed in the same way. The record
+    keeps the adopted zero points, with no flag naming them as dropped.
     """
+    from albireo.facade import _ZeroPointWindowError
     from albireo.pipeline import _measure_epoch_velocities
 
     dataset, truth, grid = toy
@@ -2572,7 +2575,7 @@ def test_a_failure_the_zero_points_did_not_cause_leaves_them_in_the_record(toy, 
     fit = _Fit()
     with pytest.raises(ValueError, match="12 usable pixels"):
         _measure_epoch_velocities(ctx, fit, pinned, [0.62, 0.38])
-    assert fit.calls == [[-60.0, 35.0], [None, None]]
+    assert fit.calls == [[-60.0, 35.0]], "an unrelated failure was measured again"
     assert not ctx.flags, ctx.flags
     assert ctx.zero_points == adopted
 
@@ -2582,7 +2585,7 @@ def test_a_failure_the_zero_points_did_not_cause_leaves_them_in_the_record(toy, 
     class _FailsAfterTheDrop:
         def measure_velocities(self, *, templates, light):
             if any(t.v_zero_kms is not None for t in templates):
-                raise ValueError("component 'B': the default search window misses it")
+                raise _ZeroPointWindowError("component 'B': the default search window misses it")
             raise ValueError("epoch 3: 12 usable pixels, fewer than the correlation needs")
 
     other = _context(star, tmp_path / "after_the_drop")
@@ -3252,3 +3255,59 @@ def test_the_velocity_stage_keeps_the_star_where_no_amplitude_is_positive(toy, t
     assert fit.calls == ["global", "free"] and table is free and used is templates
     assert len(ctx.flags) == 1 and "not positive at any epoch" in ctx.flags[0]
     assert ctx.zero_points is None, "no zero point was dropped for it"
+
+
+# The second message of todcor._global_light: no epoch has enough weighted pixels, which
+# says nothing about the templates.
+_TOO_FEW_PIXELS = (
+    "no epoch has the 8 weighted pixels that the free pass needs for its 3 parameters (the "
+    "most at one epoch is 5), so the light fractions are not measured: pass "
+    "light=<fractions> to hold them"
+)
+
+
+def test_a_light_pass_short_of_pixels_is_reported_by_its_own_message(toy, tmp_path):
+    """The flag repeats the correlation's reason and does not blame the templates."""
+    import sys
+
+    from albireo.pipeline import _measure_epoch_velocities
+
+    unmeasured = sys.modules["albireo.todcor"]._LightNotMeasured
+    dataset, truth, grid = toy
+    templates = _StubFit(("A", "B")).templates()
+    free = replace(_velocity_table(), light_mode="free per epoch")
+
+    class _Fit:
+        def measure_velocities(self, *, templates, light):
+            if light == "global":
+                raise unmeasured(_TOO_FEW_PIXELS)
+            return free
+
+    ctx = _context(_star(dataset, truth, grid, name="few_pixels"), tmp_path / "few_pixels")
+    table, _ = _measure_epoch_velocities(ctx, _Fit(), templates, "global")
+    assert table is free
+    (flag,) = ctx.flags
+    assert "8 weighted pixels" in flag and "do not describe the components" not in flag, flag
+
+
+def test_a_template_table_short_of_pixels_names_the_pixels_not_the_templates(
+    toy, library, tmp_path, monkeypatch
+):
+    """The bootstrap's error passes the correlation's own reason through."""
+    import sys
+
+    from albireo.facade import LSF
+    from albireo.pipeline import _library_table
+
+    module = sys.modules["albireo.todcor"]
+
+    def unmeasured(*args, **kwargs):
+        raise module._LightNotMeasured(_TOO_FEW_PIXELS)
+
+    monkeypatch.setattr(module, "todcor", unmeasured)
+    dataset, truth, grid = toy
+    ctx = _context(_star(dataset, truth, grid, name="few"), tmp_path / "few", library=library)
+    with pytest.raises(ValueError, match="8 weighted pixels") as raised:
+        _library_table(ctx, dataset, {"TOY": LSF(5.5)}, library, "bootstrap")
+    assert "declare starting temperatures closer" not in str(raised.value)
+    assert "'few': bootstrap" in str(raised.value)

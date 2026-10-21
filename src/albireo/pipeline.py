@@ -96,6 +96,7 @@ from albireo.facade import (
     Star,
     Telluric,
     _smoothness_of,
+    _ZeroPointWindowError,
 )
 from albireo.forward import PER_EPOCH, declared_lsf_widths
 from albireo.grids import LogGrid
@@ -1995,8 +1996,19 @@ def _load_dataset(ctx: _Context) -> tuple[Dataset, dict[str, float]]:
         paths = star.spectra
         if star.bloem is not None:
             paths = _fetch_bloem(ctx)
+        options: dict[str, Any] = {}
+        if settings.region is not None:
+            options["region"] = settings.region
+        if settings.smooth_angstrom is not None:
+            options["smooth_angstrom"] = settings.smooth_angstrom
+        # With a region, each file is cut on reading to the padded range that to_epoch
+        # keeps, so that one full-band file at a time is held. The epochs are identical bit
+        # for bit, and so is each file's coverage of the region.
         raws = read_raw_spectra(
-            paths, instrument=star.instrument, read_kwargs=ctx.config.read_kwargs
+            paths,
+            instrument=star.instrument,
+            read_kwargs=ctx.config.read_kwargs,
+            epoch_kwargs=dict(options) if settings.region is not None else None,
         )
         # The widest header width per instrument is kept for the log line. The model
         # uses each epoch's own width (a PER_EPOCH declaration), not this number.
@@ -2004,12 +2016,12 @@ def _load_dataset(ctx: _Context) -> tuple[Dataset, dict[str, float]]:
             sigma = raw.lsf_sigma_kms
             if sigma is not None:
                 header_lsf[raw.instrument] = max(float(sigma), header_lsf.get(raw.instrument, 0.0))
-        log(f"read {len(raws)} files; first: {raws[0].summary()}")
-        options: dict[str, Any] = {}
-        if settings.region is not None:
-            options["region"] = settings.region
-        if settings.smooth_angstrom is not None:
-            options["smooth_angstrom"] = settings.smooth_angstrom
+        cut = (
+            " (each cut on reading to the region and its padding)"
+            if settings.region is not None
+            else ""
+        )
+        log(f"read {len(raws)} files{cut}; first: {raws[0].summary()}")
         if settings.mask:
             options["mask"] = list(settings.mask)
         if settings.region is not None:
@@ -2048,7 +2060,9 @@ def _fetch_bloem(ctx: _Context) -> str:
     target = ctx.star.bloem
     directory = ctx.directory / "spectra"
     ctx.log(f"resolving BLOeM {target} and fetching its public epochs into {directory}")
-    star = archive.resolve_bloem(str(target))
+    # Only the source id is needed. The multiplicity class is not read, so its table is
+    # not queried, and an empty or renamed class table does not stop the star.
+    star = archive.resolve_bloem(str(target), with_classification=False)
     records = archive.bloem_spectra(star, public_only=True)
     if not records:
         raise ValueError(f"no public BLOeM spectra for {target}")
@@ -2508,6 +2522,17 @@ def _checked_velocities(star: StarConfig, dataset: Dataset, values: np.ndarray) 
     return values
 
 
+def _templates_unmeasured(error: Exception) -> bool:
+    """Whether a ``_LightNotMeasured`` reports templates with no positive amplitudes.
+
+    :func:`albireo.todcor` raises it in two cases: no epoch gives a positive amplitude to
+    every template, which says that the templates do not describe the components, and no
+    epoch has the weighted pixels that the free pass needs, which says nothing about them.
+    The message names a positive amplitude in the first case only.
+    """
+    return "positive amplitude" in str(error)
+
+
 def _library_table(ctx: _Context, dataset: Dataset, lsf, library, purpose: str):
     """A velocity table from library templates at the declared starting labels.
 
@@ -2610,6 +2635,14 @@ def _library_table(ctx: _Context, dataset: Dataset, lsf, library, purpose: str):
             noise_correlation=_noise_values(settings, dataset),
         )
     except _LightNotMeasured as error:
+        if not _templates_unmeasured(error):
+            # Too few weighted pixels at every epoch: the templates are not the cause.
+            raise ValueError(
+                f"star {star.name!r}: {purpose}: the correlation against library templates "
+                f"at the starting labels does not measure the light fractions ({error}). A "
+                "star with a declared period and declared light fractions needs no template "
+                "table"
+            ) from error
         raise ValueError(
             f"star {star.name!r}: {purpose}: the correlation against library templates at "
             "the starting labels gives no epoch with a positive amplitude for every "
@@ -4387,11 +4420,11 @@ def _measure_epoch_velocities(ctx: _Context, fit: Fit, templates: list, lights):
     95 km/s apart, on velocities spanning 60. The zero points are then dropped rather than
     the star. The velocities stay differential, as when the label fit's offsets are
     rejected (:func:`_disowned_zero_points`), and the orbit fit has one systemic velocity
-    per component. A failure with no zero point to drop is re-raised, and so is one that
-    the measurement without zero points repeats (same type and message): it does not
-    concern the zero points, so they are kept in the record and no flag names them. A
-    different failure of the measurement without zero points is raised from the first one,
-    and the record and the flags state that the zero points were dropped.
+    per component. Only that failure (:class:`albireo.facade._ZeroPointWindowError`) is
+    measured again. Any other is re-raised at once: it does not concern the zero points,
+    so they are kept in the record and no flag names them. A failure of the measurement
+    without zero points is raised from the first one, and the record and the flags state
+    that the zero points were dropped.
 
     Where the amplitudes are fitted freely (``lights`` is ``"global"``) and no epoch gives
     positive ones, there is no amplitude to hold. The table is then measured with the
@@ -4407,12 +4440,19 @@ def _measure_epoch_velocities(ctx: _Context, fit: Fit, templates: list, lights):
     def measure(pair, notes: list[str]):
         try:
             return fit.measure_velocities(templates=pair, light=lights)
-        except _LightNotMeasured:
-            notes.append(
-                "the freely fitted template amplitudes are not positive at any epoch, so none "
-                "is held: the table has the amplitudes of each epoch, which are not light "
-                "fractions, and the templates do not describe the components"
-            )
+        except _LightNotMeasured as error:
+            if _templates_unmeasured(error):
+                notes.append(
+                    "the freely fitted template amplitudes are not positive at any epoch, so "
+                    "none is held: the table has the amplitudes of each epoch, which are not "
+                    "light fractions, and the templates do not describe the components"
+                )
+            else:
+                notes.append(
+                    f"the free pass did not measure the light fractions ({error}), so none is "
+                    "held: the table has the amplitudes of each epoch, which are not light "
+                    "fractions"
+                )
             return fit.measure_velocities(templates=pair, light="free")
 
     # The flags of a measurement are raised once it is known which measurement the table
@@ -4421,7 +4461,11 @@ def _measure_epoch_velocities(ctx: _Context, fit: Fit, templates: list, lights):
     try:
         table = measure(templates, notes)
     except ValueError as exc:
-        if not any(t.v_zero_kms is not None for t in templates):
+        # Only the search window that the zero points leave empty is resolved by dropping
+        # them. Any other failure is raised as it is, without a second measurement.
+        if not isinstance(exc, _ZeroPointWindowError) or not any(
+            t.v_zero_kms is not None for t in templates
+        ):
             for note in notes:
                 ctx.flag(note)
             raise
@@ -4432,11 +4476,6 @@ def _measure_epoch_velocities(ctx: _Context, fit: Fit, templates: list, lights):
         try:
             table = measure(dropped, retried)
         except ValueError as retry_exc:
-            if type(retry_exc) is type(exc) and str(retry_exc) == str(exc):
-                # The same failure without the zero points: they did not cause it.
-                for note in notes:
-                    ctx.flag(note)
-                raise exc from None
             # The zero points were dropped and the measurement without them failed for
             # another reason. That failure is the one raised, and the record states the drop.
             _record_dropped_zero_points(ctx, exc, retried)
@@ -4801,13 +4840,11 @@ def _describe_noise(dis: Disentangler) -> dict[str, Any]:
     declared = dis.noise_correlation
     if declared is None:
         return {"kind": "diagonal"}
-    if isinstance(declared, Spec):
+    # A Fixed correlation is held, as a number is, and is reported by its value.
+    held = dis._declared_noise_correlation()
+    if held is None:
         return {"kind": "ar1", "correlation": "fitted", "prior": _describe_spec(declared)}
-    values = dis.noise_correlation_per_epoch()
-    by_instrument: dict[str, float] = {}
-    for epoch, phi in zip(dis.dataset, values, strict=True):
-        by_instrument.setdefault(epoch.instrument, float(phi))
-    return {"kind": "ar1", "correlation": by_instrument}
+    return {"kind": "ar1", "correlation": held}
 
 
 def _noise_words(dis: Disentangler) -> str:
@@ -6001,16 +6038,26 @@ def _star_directories(directory: Path, stars: Sequence[StarConfig]) -> dict[str,
     earlier star took it. Names are compared without regard to case, because ``Alpha`` and
     ``alpha`` are one directory on the case-insensitive filesystems of Windows and macOS.
     """
+    names = _directory_names([star.name for star in stars])
+    return {name: directory / sub for name, sub in names.items()}
+
+
+def _directory_names(names: Sequence[str]) -> dict[str, str]:
+    """The sub-directory name of each star of a batch, the names in declaration order.
+
+    :func:`_star_directories` without the parent directory. A caller that reads a batch's
+    products, such as :mod:`albireo.benchmark`, finds each star's directory with it.
+    """
     taken: set[str] = set()
     out = {}
-    for star in stars:
-        base = _safe_name(star.name)
+    for name in names:
+        base = _safe_name(name)
         candidate, k = base, 1
         while candidate.casefold() in taken:
             k += 1
             candidate = f"{base}_{k}"
         taken.add(candidate.casefold())
-        out[star.name] = directory / candidate
+        out[name] = candidate
     return out
 
 

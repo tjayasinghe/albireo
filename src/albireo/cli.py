@@ -191,7 +191,14 @@ def _cmd_fetch(args) -> int:
     status = 0
     for target in args.targets:
         try:
-            star = archive.resolve_bloem(target)
+            try:
+                star = archive.resolve_bloem(target)
+            except RuntimeError as exc:
+                # The class is printed only. An empty or renamed class table, or a failed
+                # query for it, leaves the star unclassified. A failure of the identifier
+                # query recurs here and is reported for the target.
+                star = archive.resolve_bloem(target, with_classification=False)
+                print(f"{target}: binary class not available ({exc})", file=sys.stderr)
             records = archive.bloem_spectra(star, public_only=True)
         except Exception as exc:
             print(f"{target}: {type(exc).__name__}: {exc}", file=sys.stderr)
