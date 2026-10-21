@@ -7,7 +7,13 @@ network, no astropy, and no matplotlib, and that the result is a usable
 
 from __future__ import annotations
 
+import hashlib
+import http.client
+import io
 import json
+import threading
+import time
+import urllib.request
 
 import numpy as np
 import pytest
@@ -149,4 +155,163 @@ def test_a_corrupted_download_is_rejected_rather_than_cached(monkeypatch, tmp_pa
         examples._fetch(example, progress=False)
     # No file remains that a later run would load as a valid cache entry.
     assert not (tmp_path / "examples" / "fake.npz").exists()
-    assert not (tmp_path / "examples" / "fake.npz.part").exists()
+    assert not list((tmp_path / "examples").glob("*.part"))
+
+
+def _fixture_example(payload: bytes, sha256: str | None) -> examples._Example:
+    return examples._Example(
+        name="fake",
+        description="fixture",
+        packaged=False,
+        filename="fake.npz",
+        citation="none",
+        url="https://example.invalid/fake.npz",
+        sha256=sha256,
+        n_bytes=len(payload),
+    )
+
+
+def test_two_writers_of_one_example_do_not_share_a_temporary_file(monkeypatch, tmp_path):
+    """Pipeline workers fetch the same uncached download at the same time.
+
+    With one fixed ``.part`` name the second writer held the file the first one was
+    renaming: on Windows the rename failed, and elsewhere the second writer lost its file.
+    The second writer here keeps its temporary file open until the first has finished.
+    """
+    monkeypatch.setenv("ALBIREO_DATA_DIR", str(tmp_path))
+    payload = b"the example bytes"
+    example = _fixture_example(payload, hashlib.sha256(payload).hexdigest())
+    holding, release = threading.Event(), threading.Event()
+
+    def fake_download(url, destination, attempts=4):
+        if threading.current_thread().name == "second":
+            with destination.open("wb") as handle:
+                handle.write(payload)
+                handle.flush()
+                holding.set()
+                release.wait(10.0)
+        else:
+            holding.wait(10.0)
+            destination.write_bytes(payload)
+
+    monkeypatch.setattr(examples, "_download_with_retries", fake_download)
+    outcomes: dict[str, object] = {}
+
+    def fetch():
+        name = threading.current_thread().name
+        try:
+            outcomes[name] = examples._fetch(example, progress=False)
+        except Exception as exc:
+            outcomes[name] = exc
+        finally:
+            if name == "first":
+                release.set()
+
+    threads = [threading.Thread(target=fetch, name=name) for name in ("first", "second")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(20.0)
+
+    path = tmp_path / "examples" / "fake.npz"
+    assert outcomes == {"first": path, "second": path}, outcomes
+    assert path.read_bytes() == payload
+    assert not list(path.parent.glob("*.part"))
+
+
+def test_an_example_without_a_digest_is_downloaded_once(monkeypatch, tmp_path):
+    monkeypatch.setenv("ALBIREO_DATA_DIR", str(tmp_path))
+    calls = []
+
+    def fake_download(url, destination, attempts=4):
+        calls.append(url)
+        destination.write_bytes(b"unverified")
+
+    monkeypatch.setattr(examples, "_download_with_retries", fake_download)
+    example = _fixture_example(b"unverified", None)
+    first = examples._fetch(example, progress=False)
+    assert examples._fetch(example, progress=False) == first
+    assert len(calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# the download helper shared with albireo.library
+# ---------------------------------------------------------------------------
+
+
+class _Response(io.BytesIO):
+    """Minimal stand-in for urlopen's context manager."""
+
+    def __init__(self, payload: bytes, headers: dict, error: Exception | None = None):
+        super().__init__(payload)
+        self.headers = headers
+        self.error = error
+
+    def read(self, *args):
+        if self.error is not None:
+            raise self.error
+        return super().read(*args)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+
+@pytest.fixture
+def no_backoff(monkeypatch):
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+
+
+def test_a_truncated_download_is_retried_and_never_written(monkeypatch, tmp_path, no_backoff):
+    """http.client ends a cut body with an empty read, not an error.
+
+    A wavelength-grid file cut this way loaded as a shorter grid, and the library cache
+    kept it on every later run.
+    """
+    calls = []
+
+    def fake(*a, **k):
+        calls.append(1)
+        return _Response(b"16 bytes of data", {"Content-Length": "100000"})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    destination = tmp_path / "grid.txt"
+    with pytest.raises(RuntimeError, match="truncated download"):
+        examples._download_with_retries("https://example.invalid/grid.txt", destination)
+    assert len(calls) == 4
+    assert not destination.exists()
+    assert not list(tmp_path.iterdir()), "no temporary file may be left behind"
+
+
+def test_a_cut_chunked_download_is_retried(monkeypatch, tmp_path, no_backoff):
+    """A cut chunked body raises http.client.IncompleteRead, which is not an OSError."""
+    calls = []
+
+    def fake(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            return _Response(b"", {}, error=http.client.IncompleteRead(b"partial"))
+        return _Response(b"complete", {"Content-Length": "8"})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    destination = tmp_path / "shard.txt.gz"
+    examples._download_with_retries("https://example.invalid/shard.txt.gz", destination)
+    assert destination.read_bytes() == b"complete"
+    assert [p.name for p in tmp_path.iterdir()] == ["shard.txt.gz"]
+
+
+def test_a_local_file_error_is_not_retried(monkeypatch, tmp_path, no_backoff):
+    """A local error (here a missing directory) is reported at once, not after backoff."""
+    calls = []
+
+    def fake(*a, **k):
+        calls.append(1)
+        return _Response(b"complete", {"Content-Length": "8"})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    with pytest.raises(FileNotFoundError):
+        examples._download_with_retries("https://example.invalid/x", tmp_path / "no" / "x")
+    assert len(calls) == 1

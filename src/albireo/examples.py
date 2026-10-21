@@ -20,14 +20,12 @@ import hashlib
 import json
 import os
 import sys
-import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
+from albireo.archive import _part_path, _transfer, _with_retries
 from albireo.data import Dataset, EpochData
 
 __all__ = [
@@ -252,7 +250,8 @@ def clear_example_cache(name: str | None = None) -> list[Path]:
 
 def _fetch(example: _Example, progress: bool) -> Path:
     path = _cache_path(example)
-    if path.is_file() and _sha256(path) == example.sha256:
+    # An entry with no recorded digest cannot be verified, so a present file is used as is.
+    if path.is_file() and (example.sha256 is None or _sha256(path) == example.sha256):
         return path
 
     if example.url is None:  # pragma: no cover - registry bug, not a user error
@@ -263,52 +262,51 @@ def _fetch(example: _Example, progress: bool) -> Path:
         size = f" ({example.n_bytes / 1e6:.1f} MB)" if example.n_bytes else ""
         print(f"albireo: downloading example {example.name!r}{size} to {path.parent}")
 
-    # Written to a .part file and moved into place only after the digest matches, so an
-    # interrupted download cannot be mistaken for a cached one.
-    tmp = path.with_name(path.name + ".part")
-    _download_with_retries(example.url, tmp)
-
-    digest = _sha256(tmp)
-    if example.sha256 and digest != example.sha256:
+    # Written to a temporary file unique to this call and moved into place only after the
+    # digest matches, so an interrupted download cannot be mistaken for a cached one, and
+    # two processes fetching the same example do not write one file.
+    tmp = _part_path(path)
+    try:
+        _download_with_retries(example.url, tmp)
+        digest = _sha256(tmp)
+        if example.sha256 and digest != example.sha256:
+            raise RuntimeError(
+                f"downloaded example {example.name!r} has SHA-256 {digest}, expected "
+                f"{example.sha256}. The download was corrupted, or the hosted file changed; "
+                "please open an issue."
+            )
+        try:
+            os.replace(tmp, path)
+        except PermissionError:
+            # On Windows a file that another process holds open cannot be replaced. That
+            # process downloaded and verified the same file, so its copy is kept.
+            if not path.is_file():
+                raise
+    finally:
         tmp.unlink(missing_ok=True)
-        raise RuntimeError(
-            f"downloaded example {example.name!r} has SHA-256 {digest}, expected "
-            f"{example.sha256}. The download was corrupted, or the hosted file changed; "
-            "please open an issue."
-        )
-    tmp.replace(path)
     return path
 
 
 def _download_with_retries(url: str, destination: Path, attempts: int = 4) -> None:
-    """Fetch ``url`` to ``destination``, retrying transient failures with backoff."""
-    transient = (urllib.error.URLError, TimeoutError, ConnectionError, OSError)
-    delay = 2.0
-    last: Exception | None = None
-    for attempt in range(1, attempts + 1):
-        try:
-            request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-            with (
-                urllib.request.urlopen(request, timeout=120.0) as response,
-                destination.open("wb") as handle,
-            ):
-                while chunk := response.read(1 << 20):
-                    handle.write(chunk)
-            return
-        except urllib.error.HTTPError as exc:
-            # A 404 or 403 is not transient; only 429 and 5xx responses are retried.
-            if exc.code != 429 and exc.code < 500:
-                destination.unlink(missing_ok=True)
-                raise
-            last = exc
-        except transient as exc:
-            last = exc
-        if attempt == attempts:
-            destination.unlink(missing_ok=True)
-            raise RuntimeError(f"downloading {url} failed after {attempts} attempts: {last!r}")
-        print(f"  retry {attempt}/{attempts - 1}: {last}", file=sys.stderr)
-        time.sleep(delay)
-        delay *= 2
+    """Fetch ``url`` to ``destination``, retrying transient failures with backoff.
+
+    The transfer is written to a temporary file beside ``destination`` that is unique to
+    this call, checked against the ``Content-Length`` the server declares, and renamed to
+    ``destination`` only when complete. On failure the temporary file is removed and
+    ``destination`` is not created: a client error (4xx other than 429) raises its
+    ``HTTPError``, and transient network errors raise ``RuntimeError`` after ``attempts``
+    tries. Local file-system errors are not retried.
+    """
+    tmp = _part_path(destination)
+    try:
+        _with_retries(
+            f"downloading {url}",
+            lambda: _transfer(url, tmp, timeout=120.0, user_agent=_USER_AGENT),
+            attempts,
+        )
+        os.replace(tmp, destination)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def _sha256(path: Path) -> str:

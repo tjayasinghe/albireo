@@ -11,11 +11,15 @@ returns a valid HTTP response. Both would give a wrong result downstream with no
 so both raise.
 """
 
+import http.client
 import io
 import json
+import ssl
+import threading
 import urllib.error
 import urllib.request
 
+import numpy as np
 import pytest
 
 import albireo as ab
@@ -97,6 +101,36 @@ def test_adql_string_literals_reject_embedded_quotes():
         archive.spectra_query(instrument="FER'OS")
 
 
+def test_numpy_coordinates_are_written_as_numbers():
+    """Under NumPy 2 the repr of np.float64(1.5) is 'np.float64(1.5)', which is not ADQL.
+
+    Coordinates from astropy (``SkyCoord.ra.deg``) or from a table are NumPy scalars, so
+    every such cone search was rejected by the service. Python floats keep their exact form.
+    """
+    expected = "INTERSECTS(s_region, CIRCLE('ICRS',274.28139,-56.02337,0.05))=1"
+    from_floats = archive.spectra_query(ra_deg=274.28139, dec_deg=-56.02337, radius_deg=0.05)
+    from_numpy = archive.spectra_query(
+        ra_deg=np.float64(274.28139), dec_deg=np.float64(-56.02337), radius_deg=np.float64(0.05)
+    )
+    assert expected in from_floats
+    assert from_numpy == from_floats
+    assert "np." not in from_numpy
+
+
+@pytest.mark.parametrize(
+    ("ra", "dec", "radius", "message"),
+    [
+        (float("nan"), 2.0, 0.05, "must be finite"),
+        (1.0, float("inf"), 0.05, "must be finite"),
+        (1.0, 95.0, 0.05, r"\[-90, 90\]"),
+        (1.0, 2.0, float("inf"), "radius_deg must be positive"),
+    ],
+)
+def test_a_cone_outside_the_sky_is_refused(ra, dec, radius, message):
+    with pytest.raises(ValueError, match=message):
+        archive.spectra_query(ra_deg=ra, dec_deg=dec, radius_deg=radius)
+
+
 # -- the truncation guard ----------------------------------------------------
 
 
@@ -122,6 +156,20 @@ def test_query_reports_a_non_table_response_with_the_query(monkeypatch):
     with pytest.raises(RuntimeError, match="not an ESO result table") as exc:
         archive.query("SELECT nonsense FROM nowhere")
     assert "SELECT nonsense FROM nowhere" in str(exc.value)
+
+
+def test_the_error_message_is_read_from_the_query_status():
+    """A self-closing INFO before the error must not put the next element's markup in it."""
+    document = (
+        '<VOTABLE><RESOURCE type="results"><INFO name="provider" value="ESO"/>\n'
+        '<INFO name="QUERY_STATUS" value="ERROR">Column foo unknown</INFO>'
+        "</RESOURCE></VOTABLE>"
+    )
+    assert archive._votable_message(document) == "Column foo unknown"
+    # Without a QUERY_STATUS element, the first INFO or DESCRIPTION with text is used.
+    other = "<VOTABLE><DESCRIPTION>service is down</DESCRIPTION></VOTABLE>"
+    assert archive._votable_message(other) == "service is down"
+    assert archive._votable_message("<html>plain</html>") == "<html>plain</html>"
 
 
 def test_query_returns_typed_records(monkeypatch):
@@ -258,6 +306,178 @@ def test_progress_is_reported_per_file(tmp_path, monkeypatch):
 
 def test_download_of_nothing_is_not_an_error(tmp_path):
     assert archive.download([], tmp_path) == []
+
+
+class _BrokenResponse(_FakeResponse):
+    """A response whose body cannot be read: the connection fails after the headers."""
+
+    def __init__(self, error: Exception):
+        super().__init__(b"", {"Content-Length": "4096"})
+        self.error = error
+
+    def read(self, *args):
+        raise self.error
+
+
+def test_a_dropped_tls_connection_fails_its_record_not_the_batch(tmp_path, monkeypatch):
+    """ssl.SSLError is an OSError, not a URLError, and escaped the per-record handling.
+
+    The whole call then raised: no status lines, no manifest, and every .part file left.
+    """
+    monkeypatch.setattr(archive.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda *a, **k: _BrokenResponse(ssl.SSLEOFError(8, "EOF occurred in violation")),
+    )
+    statuses = archive.download([_record("ADP.a"), _record("ADP.b")], tmp_path, jobs=1)
+
+    assert [s.split()[0] for s in statuses] == ["FAIL", "FAIL"]
+    assert "5 attempts" in statuses[0], "a TLS error is transient and is retried"
+    manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    assert [r["status"] for r in manifest["records"]] == ["FAIL", "FAIL"]
+    assert not list(tmp_path.glob("*.part"))
+
+
+def test_a_cut_chunked_body_is_retried(tmp_path, monkeypatch):
+    """A chunked body cut short raises http.client.IncompleteRead, which is transient."""
+    monkeypatch.setattr(archive.time, "sleep", lambda _seconds: None)
+    payload = b"SIMPLE  =" + b" " * 2039
+    calls = []
+
+    def fake(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            return _BrokenResponse(http.client.IncompleteRead(b"SIMPLE"))
+        return _FakeResponse(payload, {"Content-Length": str(len(payload))})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    (status,) = archive.download([_record("ADP.a")], tmp_path, jobs=1)
+    assert status.startswith("got"), status
+    assert len(calls) == 2
+    assert (tmp_path / "ADP.a.fits").read_bytes() == payload
+
+
+def test_a_record_listed_twice_is_downloaded_once(tmp_path, monkeypatch):
+    """Two threads writing one product raced on its .part file and aborted the batch."""
+    payload = b"x" * 2048
+    calls = []
+
+    def fake(*a, **k):
+        calls.append(1)
+        return _FakeResponse(payload, {"Content-Length": str(len(payload))})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    seen = []
+    records = [_record("ADP.d"), _record("ADP.e"), _record("ADP.d")]
+    statuses = archive.download(
+        records, tmp_path, jobs=2, progress=lambda done, total, line: seen.append(done)
+    )
+
+    assert len(calls) == 2
+    assert [s.split()[1] for s in statuses] == ["ADP.d", "ADP.e", "ADP.d"]
+    assert statuses[0] == statuses[2] and statuses[0].startswith("got")
+    assert sorted(seen) == [1, 2, 3], "progress still counts every record"
+    manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["n_records"] == 3
+
+
+def test_an_error_page_is_not_saved_as_a_product(tmp_path, monkeypatch):
+    """A login or error page served with status 200 can exceed the 1 kB size threshold."""
+    page = b"\n<!DOCTYPE html><html><body>" + b"Please log in. " * 200 + b"</body></html>"
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda *a, **k: _FakeResponse(page, {"Content-Length": str(len(page))}),
+    )
+    (status,) = archive.download([_record("ADP.a")], tmp_path, jobs=1)
+    assert status.startswith("FAIL") and "not a data product" in status, status
+    assert not (tmp_path / "ADP.a.fits").exists()
+    assert not list(tmp_path.glob("*.part"))
+
+
+def test_an_interrupt_cancels_the_queued_files(tmp_path, monkeypatch):
+    """The executor's exit waited for every queued file before an interrupt took effect."""
+    payload = b"x" * 2048
+    calls = []
+    gate = threading.Event()
+
+    def fake(*a, **k):
+        calls.append(1)
+        if len(calls) > 1:
+            gate.wait(10.0)
+        return _FakeResponse(payload, {"Content-Length": str(len(payload))})
+
+    class Stop(Exception):
+        pass
+
+    def progress(done, total, line):
+        # The worker may have taken the second file, which then waits on the gate. The gate
+        # opens shortly after the interrupt, by which time the queued files must have been
+        # cancelled.
+        threading.Timer(0.3, gate.set).start()
+        raise Stop
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    records = [_record(f"ADP.{i}") for i in range(10)]
+    with pytest.raises(Stop):
+        archive.download(records, tmp_path, jobs=1, progress=progress)
+    # The first file, and at most the one the worker had already taken.
+    assert len(calls) <= 2
+    assert not (tmp_path / "manifest.json").exists()
+
+
+# -- BLOeM, offline ----------------------------------------------------------
+
+
+def test_bloem_spectra_queries_the_survey_collection_by_gaia_id(monkeypatch):
+    seen = []
+    monkeypatch.setattr(archive, "query", lambda adql, **kwargs: seen.append(adql) or [])
+    star = ab.BloemTarget(bloem_id="1-002", gaia_dr3="4690503998385774848", ra_deg=1, dec_deg=2)
+    assert archive.bloem_spectra(star) == []
+    assert seen == [
+        f"SELECT {', '.join(archive.DEFAULT_COLUMNS)}\nFROM ivoa.ObsCore\nWHERE "
+        "dataproduct_type='spectrum'\n  AND obs_collection='GIRAFFE'\n"
+        "  AND target_name='4690503998385774848'\n  AND proposal_id LIKE '112.25R7%'\n"
+        "ORDER BY t_min"
+    ]
+
+
+def _fake_vizier(classification_rows):
+    """A VizieR stand-in: two catalogue rows, and the given classification rows."""
+    issued = []
+
+    def rows(adql, **kwargs):
+        issued.append(adql)
+        if archive._BLOEM_BINARY_TABLE in adql:
+            return list(classification_rows)
+        return [
+            {"ID": "1-001 ", "GaiaDR3": 1, "RA_ICRS": 1.0, "DE_ICRS": -72.0, "SpTypenew": "B1"},
+            {"ID": "1-002 ", "GaiaDR3": 2, "RA_ICRS": 1.1, "DE_ICRS": -72.1, "SpTypenew": "B2"},
+        ]
+
+    return rows, issued
+
+
+def test_an_empty_classification_table_is_reported_and_not_cached(monkeypatch):
+    """An empty table blamed the caller's class ("have []") and was fetched on every call."""
+    monkeypatch.setattr(archive, "_BINARY_CLASS_CACHE", None)
+    rows, issued = _fake_vizier([])
+    monkeypatch.setattr(archive, "_vizier_rows", rows)
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="returned no rows"):
+            archive.bloem_catalogue(binary_class="SB2")
+    assert sum(archive._BLOEM_BINARY_TABLE in q for q in issued) == 2
+
+
+def test_the_classification_table_is_fetched_once(monkeypatch):
+    monkeypatch.setattr(archive, "_BINARY_CLASS_CACHE", None)
+    rows, issued = _fake_vizier([{"BLOeM": "1-2", "Bin": "SB2 "}])
+    monkeypatch.setattr(archive, "_vizier_rows", rows)
+    (sb2,) = archive.bloem_catalogue(binary_class="SB2")
+    assert (sb2.bloem_id, sb2.gaia_dr3, sb2.binary_class) == ("1-002", "2", "SB2")
+    assert archive.bloem_catalogue()[0].binary_class is None
+    assert sum(archive._BLOEM_BINARY_TABLE in q for q in issued) == 1
 
 
 # -- the live archive --------------------------------------------------------

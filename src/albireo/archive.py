@@ -37,14 +37,19 @@ needs no additional dependency.
 from __future__ import annotations
 
 import datetime
+import http.client
 import json
+import math
+import os
 import pathlib
+import ssl
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Sequence
+import uuid
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
@@ -102,10 +107,18 @@ def _user_agent() -> str:
 
 
 # The ESO endpoints refuse or drop connections under load often enough that a bare urlopen
-# fails a few times in a 50-file run, so transfers are retried. OSError is excluded from
+# fails a few times in a 50-file run, so transfers are retried. A connection cut while the
+# body is read raises ssl.SSLError on a TLS stream and http.client.IncompleteRead (an
+# HTTPException) on a chunked one; both are retried. OSError in general is excluded from
 # this tuple: it would cover local disk errors (a full filesystem on the .part write) and
 # retry them five times before reporting them as network failures.
-_TRANSIENT = (urllib.error.URLError, TimeoutError, ConnectionError)
+_TRANSIENT = (
+    urllib.error.URLError,
+    TimeoutError,
+    ConnectionError,
+    ssl.SSLError,
+    http.client.HTTPException,
+)
 
 
 class _TapQueryError(Exception):
@@ -116,8 +129,12 @@ class _TapQueryError(Exception):
         self.body = body
 
 
-def _with_retries[T](what: str, call: Callable[[], T], attempts: int = 5, quiet: bool = False) -> T:
-    """Run ``call``, retrying transient network failures with exponential backoff."""
+def _with_retries[T](what: str, call: Callable[[], T], attempts: int = 5) -> T:
+    """Run ``call``, retrying transient network failures with exponential backoff.
+
+    Shared by the archive client and by :mod:`albireo.examples`, whose download helper
+    :mod:`albireo.library` uses for the synthetic-spectrum shards.
+    """
     delay = 2.0
     last: Exception | None = None
     for attempt in range(1, attempts + 1):
@@ -132,11 +149,46 @@ def _with_retries[T](what: str, call: Callable[[], T], attempts: int = 5, quiet:
             last = exc
         if attempt == attempts:
             raise RuntimeError(f"{what} failed after {attempts} attempts: {last!r}") from last
-        if not quiet:
-            print(f"    retry {attempt}/{attempts - 1} for {what}: {last}", file=sys.stderr)
+        print(f"    retry {attempt}/{attempts - 1} for {what}: {last}", file=sys.stderr)
         time.sleep(delay)
         delay *= 2
     raise AssertionError("unreachable")
+
+
+def _part_path(path: pathlib.Path) -> pathlib.Path:
+    """A temporary name beside ``path`` that no other writer uses.
+
+    Concurrent writers of one file (pipeline workers fetching the same library, or one
+    record listed twice) each write their own temporary file. With a shared ``.part`` name
+    the second writer truncates the first one's file, and on Windows a file held open by
+    one writer cannot be renamed by the other.
+    """
+    return path.with_name(f"{path.name}.{os.getpid()}-{uuid.uuid4().hex[:12]}.part")
+
+
+def _transfer(url: str, destination: pathlib.Path, *, timeout: float, user_agent: str) -> int:
+    """Stream ``url`` into ``destination`` and return the number of bytes written.
+
+    A body whose length differs from its ``Content-Length`` raises ``ConnectionError``,
+    which :func:`_with_retries` retries. ``http.client`` ends a cut body with an empty read
+    rather than an error, so without the comparison a truncated file would be written as if
+    complete.
+    """
+    request = urllib.request.Request(url, headers={"User-Agent": user_agent})
+    with (
+        urllib.request.urlopen(request, timeout=timeout) as response,
+        destination.open("wb") as handle,
+    ):
+        declared = response.headers.get("Content-Length")
+        written = 0
+        while chunk := response.read(1 << 20):
+            handle.write(chunk)
+            written += len(chunk)
+    if declared is not None and str(declared).strip().isdigit() and written != int(declared):
+        raise ConnectionError(
+            f"truncated download: got {written} bytes, Content-Length said {declared}"
+        )
+    return written
 
 
 @dataclass(frozen=True)
@@ -203,7 +255,9 @@ def spectra_query(
         Cone search in ICRS degrees. Give both coordinates or neither. Expressed as
         ``INTERSECTS(s_region, CIRCLE(...))``: ``s_region`` is a bare point for 1-D
         products, so the ``CONTAINS(POINT(...), ...)`` form in ESO's examples returns
-        nothing.
+        nothing. Any real scalar is accepted, including NumPy scalars such as
+        ``SkyCoord.ra.deg``; the values must be finite, with ``dec_deg`` in [-90, 90] and
+        ``radius_deg`` positive.
     instrument
         ``instrument_name``, uppercase and unhyphenated as the archive stores it:
         ``FEROS``, ``HARPS``, ``UVES``, ``XSHOOTER``, ``GIRAFFE``, ``ESPRESSO``.
@@ -229,11 +283,17 @@ def spectra_query(
         raise ValueError("give both ra_deg and dec_deg, or neither")
     where = ["dataproduct_type='spectrum'"]
     if ra_deg is not None and dec_deg is not None:
-        if not radius_deg > 0:
-            raise ValueError(f"radius_deg must be positive; got {radius_deg}")
-        where.append(
-            f"INTERSECTS(s_region, CIRCLE('ICRS',{ra_deg!r},{dec_deg!r},{radius_deg!r}))=1"
-        )
+        # Converted to Python floats before formatting. Under NumPy 2 the repr of a NumPy
+        # scalar is 'np.float64(274.28)', which is not ADQL; the repr of a float is its
+        # shortest round-trip decimal form.
+        ra, dec, radius = float(ra_deg), float(dec_deg), float(radius_deg)
+        if not (radius > 0 and math.isfinite(radius)):
+            raise ValueError(f"radius_deg must be positive and finite; got {radius_deg}")
+        if not (math.isfinite(ra) and math.isfinite(dec)):
+            raise ValueError(f"ra_deg and dec_deg must be finite; got {ra_deg}, {dec_deg}")
+        if not -90.0 <= dec <= 90.0:
+            raise ValueError(f"dec_deg must lie in [-90, 90]; got {dec_deg}")
+        where.append(f"INTERSECTS(s_region, CIRCLE('ICRS',{ra!r},{dec!r},{radius!r}))=1")
     if instrument is not None:
         where.append(f"instrument_name='{_quote(instrument)}'")
     if programme is not None:
@@ -249,6 +309,11 @@ def spectra_query(
             "unconstrained search would ask the archive for every spectrum it holds "
             "(2.4 million and counting). Give coordinates, an instrument, or a programme."
         )
+    return _obscore_adql(where, columns)
+
+
+def _obscore_adql(where: Sequence[str], columns: Sequence[str]) -> str:
+    """An ObsCore query from its constraints, ordered by observation start."""
     return (
         f"SELECT {', '.join(columns)}\nFROM ivoa.ObsCore\nWHERE "
         + "\n  AND ".join(where)
@@ -387,18 +452,29 @@ def _tap_rows(
 
 
 def _votable_message(document: str) -> str:
-    """The human-readable part of a VOTable error document, or a truncated dump of it."""
+    """The human-readable part of a VOTable error document, or a truncated dump of it.
+
+    The text of the ``INFO`` element named ``QUERY_STATUS`` is preferred, since the TAP
+    standard puts the error message there; otherwise the first ``INFO`` or ``DESCRIPTION``
+    with text. Self-closing elements carry no text and are skipped.
+    """
+    fallback = None
     for tag in ("INFO", "DESCRIPTION"):
         start = document.find(f"<{tag}")
         while start != -1:
             open_end = document.find(">", start)
-            close = document.find(f"</{tag}>", open_end)
-            if open_end != -1 and close != -1:
+            if open_end == -1:
+                break
+            opening = document[start:open_end]
+            close = -1 if opening.endswith("/") else document.find(f"</{tag}>", open_end)
+            if close != -1:
                 text = document[open_end + 1 : close].strip()
-                if text:
+                if text and "QUERY_STATUS" in opening:
                     return text
+                if text and fallback is None:
+                    fallback = text
             start = document.find(f"<{tag}", open_end)
-    return document[:400]
+    return document[:400] if fallback is None else fallback
 
 
 def _download_one(record: ArchiveRecord, outdir: pathlib.Path, force: bool, timeout: float) -> str:
@@ -414,37 +490,40 @@ def _download_one(record: ArchiveRecord, outdir: pathlib.Path, force: bool, time
             if size > 0:
                 return f"skip  {record.dp_id}  ({size / 1e6:.1f} MB already present)"
 
-    tmp = path.with_name(path.name + ".part")
-
-    def fetch() -> None:
-        request = urllib.request.Request(record.url, headers={"User-Agent": _user_agent()})
-        with (
-            urllib.request.urlopen(request, timeout=timeout) as response,
-            tmp.open("wb") as handle,
-        ):
-            declared = response.headers.get("Content-Length")
-            written = 0
-            while chunk := response.read(1 << 20):
-                handle.write(chunk)
-                written += len(chunk)
-            # A transfer cut cleanly is still a valid HTTP response; without this check a
-            # truncated FITS file would be written as if complete.
-            if declared is not None and written != int(declared):
-                raise ConnectionError(
-                    f"truncated download: got {written} bytes, Content-Length said {declared}"
-                )
-
+    tmp = _part_path(path)
+    user_agent = _user_agent()
     try:
-        _with_retries(record.dp_id, fetch)
-    except (RuntimeError, urllib.error.HTTPError) as exc:
-        tmp.unlink(missing_ok=True)
+        size = _with_retries(
+            record.dp_id,
+            lambda: _transfer(record.url, tmp, timeout=timeout, user_agent=user_agent),
+        )
+        problem = _not_a_product(tmp, size)
+        if problem is not None:
+            return f"FAIL  {record.dp_id}  {problem}"
+        os.replace(tmp, path)
+    except Exception as exc:
+        # Every failure, including a local one, becomes this record's status line, so one
+        # bad transfer neither aborts the batch nor prevents the manifest.
         return f"FAIL  {record.dp_id}  {type(exc).__name__}: {exc}"
-    size = tmp.stat().st_size
-    if size < 1024:
+    finally:
         tmp.unlink(missing_ok=True)
-        return f"FAIL  {record.dp_id}  suspiciously small response ({size} bytes)"
-    tmp.replace(path)
     return f"got   {record.dp_id}  {size / 1e6:.1f} MB"
+
+
+def _not_a_product(path: pathlib.Path, size: int) -> str | None:
+    """Why a downloaded file cannot be an archive product, or None when it may be one.
+
+    A product is a FITS file (``SIMPLE``) or a compressed one. An error or login page
+    served with status 200 begins with markup or JSON, and is rejected even when it is
+    larger than the size threshold.
+    """
+    if size < 1024:
+        return f"suspiciously small response ({size} bytes)"
+    with path.open("rb") as handle:
+        head = handle.read(64).removeprefix(b"\xef\xbb\xbf").lstrip()
+    if head[:1] in (b"<", b"{"):
+        return f"the response is a document, not a data product (it begins {head[:16]!r})"
+    return None
 
 
 def download(
@@ -462,7 +541,9 @@ def download(
     Each file is written to a ``.part`` temporary and renamed atomically, so an
     interrupted run leaves no half-written FITS file under the final name. Re-running
     skips files already present. Downloads are checked against ``Content-Length`` where
-    the server sends it, since a cleanly truncated transfer otherwise looks like success.
+    the server sends it, since a cleanly truncated transfer otherwise looks like success,
+    and a response that begins with markup or JSON (an error page) is rejected. A record
+    listed more than once is downloaded once.
 
     Parameters
     ----------
@@ -497,20 +578,33 @@ def download(
         return []
 
     results: list[str] = [""] * len(records)
+    # A product listed twice (two overlapping query results concatenated, for instance) is
+    # downloaded once and its status copied to every position, so that two threads never
+    # write the same file.
+    positions: dict[str, list[int]] = {}
+    for index, record in enumerate(records):
+        positions.setdefault(record.dp_id, []).append(index)
     done = 0
     with ThreadPoolExecutor(max_workers=max(1, int(jobs))) as pool:
         futures = {
-            pool.submit(_download_one, record, outdir, force, timeout): index
-            for index, record in enumerate(records)
+            pool.submit(_download_one, records[indices[0]], outdir, force, timeout): indices
+            for indices in positions.values()
         }
-        # Completion order, so `progress` reports each file as it finishes; `results` is
-        # indexed back into input order.
-        for future in as_completed(futures):
-            index = futures[future]
-            results[index] = future.result()
-            done += 1
-            if progress is not None:
-                progress(done, len(records), results[index])
+        try:
+            # Completion order, so `progress` reports each file as it finishes; `results`
+            # is indexed back into input order.
+            for future in as_completed(futures):
+                status = future.result()
+                for index in futures[future]:
+                    results[index] = status
+                    done += 1
+                    if progress is not None:
+                        progress(done, len(records), status)
+        except BaseException:
+            # On an interrupt, or an error raised by `progress`, the files not yet started
+            # are cancelled. The executor's exit would otherwise wait for every queued file.
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
 
     if manifest:
         payload = {
@@ -547,6 +641,8 @@ BLOEM_FOLLOWUP_PROGRAMME = "115.28A9"
 # VizieR table names contain slashes and must be double-quoted in ADQL.
 _BLOEM_CATALOGUE_TABLE = '"J/A+A/690/A289/tablea2"'  # 929 rows: the identifier cross-match
 _BLOEM_BINARY_TABLE = '"J/A+A/698/A41/tabled1"'  # 309 rows: the B-star binary classes
+# The cross-match columns a BloemTarget is built from.
+_BLOEM_CATALOGUE_COLUMNS = "ID, GaiaDR3, RA_ICRS, DE_ICRS, SpTypenew"
 
 
 @dataclass(frozen=True)
@@ -655,28 +751,48 @@ def _vizier_rows(adql: str, *, maxrec: int = 5000, timeout: float = 180.0) -> li
     return _tap_rows(adql, url=VIZIER_SYNC_URL, maxrec=maxrec, timeout=timeout, service="VizieR")
 
 
-_BINARY_CLASS_CACHE: dict[str, str] = {}
+_BINARY_CLASS_CACHE: dict[str, str] | None = None
 
 
 def _binary_classes(timeout: float) -> dict[str, str]:
     """``{bloem_id: class}`` from the B-star multiplicity table, fetched at most once.
 
     Cached for the process: the 309-row published table does not change, and without the
-    cache every :func:`resolve_bloem` in a loop over targets would fetch it again.
+    cache every :func:`resolve_bloem` in a loop over targets would fetch it again. An empty
+    result raises rather than being cached, as for the identifier table.
     """
-    if _BINARY_CLASS_CACHE:
+    global _BINARY_CLASS_CACHE
+    if _BINARY_CLASS_CACHE is not None:
         return _BINARY_CLASS_CACHE
     rows = _vizier_rows(
         f"SELECT BLOeM, Bin FROM {_BLOEM_BINARY_TABLE}", maxrec=5000, timeout=timeout
     )
+    if not rows:
+        raise RuntimeError(
+            f"VizieR returned no rows for {_BLOEM_BINARY_TABLE}. The table has 309; an "
+            "empty result means the table was renamed or the service is degraded."
+        )
     out: dict[str, str] = {}
     for row in rows:
         identifier = _clean(row.get("BLOeM"))
         label = _clean(row.get("Bin"))
         if identifier and label:
             out[normalize_bloem_id(identifier)] = label
-    _BINARY_CLASS_CACHE.update(out)
+    _BINARY_CLASS_CACHE = out
     return out
+
+
+def _bloem_target(row: dict, identifier: str, classes: Mapping[str, str]) -> BloemTarget:
+    """A :class:`BloemTarget` from one row of the identifier cross-match."""
+    return BloemTarget(
+        bloem_id=identifier,
+        gaia_dr3=_gaia_id(row.get("GaiaDR3"), f"BLOeM {identifier}"),
+        ra_deg=float(row["RA_ICRS"]),
+        dec_deg=float(row["DE_ICRS"]),
+        spectral_type=_clean(row.get("SpTypenew")),
+        binary_class=classes.get(identifier),
+        row=row,
+    )
 
 
 def bloem_catalogue(
@@ -726,8 +842,7 @@ def bloem_catalogue(
     59
     """
     rows = _vizier_rows(
-        "SELECT ID, GaiaDR3, RA_ICRS, DE_ICRS, SpTypenew "
-        f"FROM {_BLOEM_CATALOGUE_TABLE} ORDER BY ID",
+        f"SELECT {_BLOEM_CATALOGUE_COLUMNS} FROM {_BLOEM_CATALOGUE_TABLE} ORDER BY ID",
         maxrec=5000,
         timeout=timeout,
     )
@@ -738,20 +853,9 @@ def bloem_catalogue(
         )
     classes = _binary_classes(timeout) if (with_classification or binary_class is not None) else {}
 
-    targets = []
-    for row in rows:
-        identifier = normalize_bloem_id(_clean(row.get("ID")))
-        targets.append(
-            BloemTarget(
-                bloem_id=identifier,
-                gaia_dr3=_gaia_id(row.get("GaiaDR3"), f"BLOeM {identifier}"),
-                ra_deg=float(row["RA_ICRS"]),
-                dec_deg=float(row["DE_ICRS"]),
-                spectral_type=_clean(row.get("SpTypenew")),
-                binary_class=classes.get(identifier),
-                row=row,
-            )
-        )
+    targets = [
+        _bloem_target(row, normalize_bloem_id(_clean(row.get("ID"))), classes) for row in rows
+    ]
     if binary_class is not None:
         wanted = str(binary_class).strip().lower()
         targets = [t for t in targets if (t.binary_class or "").lower() == wanted]
@@ -799,7 +903,7 @@ def resolve_bloem(
     """
     identifier = normalize_bloem_id(target)
     rows = _vizier_rows(
-        "SELECT ID, GaiaDR3, RA_ICRS, DE_ICRS, SpTypenew "
+        f"SELECT {_BLOEM_CATALOGUE_COLUMNS} "
         f"FROM {_BLOEM_CATALOGUE_TABLE} WHERE ID = '{_quote(identifier)}'",
         maxrec=16,
         timeout=timeout,
@@ -809,17 +913,8 @@ def resolve_bloem(
             f"no BLOeM target is called {identifier!r}. The survey has 929 stars in 8 fields, "
             "numbered like '1-001' to '8-117'; bloem_catalogue() lists them."
         )
-    row = rows[0]
     classes = _binary_classes(timeout) if with_classification else {}
-    return BloemTarget(
-        bloem_id=identifier,
-        gaia_dr3=_gaia_id(row.get("GaiaDR3"), f"BLOeM {identifier}"),
-        ra_deg=float(row["RA_ICRS"]),
-        dec_deg=float(row["DE_ICRS"]),
-        spectral_type=_clean(row.get("SpTypenew")),
-        binary_class=classes.get(identifier),
-        row=row,
-    )
+    return _bloem_target(rows[0], identifier, classes)
 
 
 def bloem_spectra(
@@ -892,12 +987,7 @@ def bloem_spectra(
     if programme is not None:
         prefix = _like_prefix(programme.rstrip("%"), "a programme prefix")
         where.append(f"proposal_id LIKE '{_quote(prefix)}%'")
-    adql = (
-        f"SELECT {', '.join(DEFAULT_COLUMNS)}\nFROM ivoa.ObsCore\nWHERE "
-        + "\n  AND ".join(where)
-        + "\nORDER BY t_min"
-    )
-    records = query(adql, maxrec=maxrec, timeout=timeout)
+    records = query(_obscore_adql(where, DEFAULT_COLUMNS), maxrec=maxrec, timeout=timeout)
     if public_only:
         records = [r for r in records if not _is_proprietary(r)]
     return records
