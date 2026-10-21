@@ -32,6 +32,7 @@ from albireo.benchmark import (
 )
 from albireo.facade import Between, Fixed, Known
 from albireo.gaia import (
+    RVS_DR3_MEAN,
     RVS_DR4_EPOCH,
     RVS_SPANS,
     GostTransits,
@@ -511,6 +512,169 @@ def test_collect_summarize_and_report_from_written_results(systems, tmp_path):
         assert (tmp_path / "figures" / "rv_curves_orbit.png").is_file()
         assert "rv_curves_orbit" in text
     assert "Failed stars" in text
+
+
+def _write_run(directory, systems, tiers, *, simulation=None, results=None):
+    """A benchmark directory as run_benchmark leaves it, with canned results."""
+    write_population(directory / "population.json", systems)
+    names = [f"{s.name}__{t}" for s in systems for t in tiers]
+    manifest = {
+        "title": "test benchmark",
+        "tiers": [TIERS[t].__dict__ for t in tiers],
+        "settings": {"seed": 0, "min_transits": 10},
+        "n_systems": len(systems),
+        "n_planned": len(names),
+        "stars": names,
+        "skipped_transits": [],
+        "simulation": simulation or {s.name: {"snr_epoch": 20.0} for s in systems},
+    }
+    (directory / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    for name in names:
+        system = next(s for s in systems if name.startswith(f"{s.name}__"))
+        result = (results or {}).get(name) or _fake_result(system, name.rsplit("__", 1)[1])
+        (directory / name).mkdir()
+        (directory / name / "result.json").write_text(json.dumps(result), encoding="utf-8")
+
+
+def test_relative_errors_of_an_exchanged_pair_use_the_semi_amplitude_compared(systems, tmp_path):
+    """The pipeline compares a pair recovered in the other order against the exchanged truth."""
+    system = systems[1]
+    exchanged = _fake_result(system, "orbit")
+    exchanged["truth"]["components_exchanged"] = True
+    exchanged["truth"]["k_table"] = {"A": 0.01 * system.k2, "B": 0.01 * system.k1}
+    exchanged["truth"]["k_disentangling"] = {"A": 0.02 * system.k2, "B": 0.02 * system.k1}
+    _write_run(tmp_path, [system], ["orbit"], results={f"{system.name}__orbit": exchanged})
+    (row,) = collect(tmp_path)
+    assert row["exchanged"] is True and system.k1 != system.k2
+    assert row["k_A_rel"] == pytest.approx(0.01) and row["k_B_rel"] == pytest.approx(0.01)
+    assert row["k_A_rel_dis"] == pytest.approx(0.02) and row["k_B_rel_dis"] == pytest.approx(0.02)
+
+
+def test_the_gost_epoch_count_sets_the_combined_signal_to_noise(systems, tmp_path):
+    """Under the GOST cadence the forecast, not the record's n_transits, sets the epochs."""
+    simulation = {s.name: {"snr_epoch": 20.0, "n_epochs": 7} for s in systems[:1]}
+    _write_run(tmp_path, systems[:1], ["orbit"], simulation=simulation)
+    (row,) = collect(tmp_path)
+    assert row["n_transits"] == systems[0].n_transits and row["n_epochs"] == 7
+    assert row["snr_total"] == pytest.approx(20.0 * np.sqrt(7.0))
+
+
+@pytest.mark.skipif(not HAS_MPL, reason="needs matplotlib")
+def test_the_population_figure_shows_every_system_without_an_oracle_tier(
+    systems, tmp_path, monkeypatch
+):
+    """The eclipsing tier runs one of the three systems; the population has three."""
+    from matplotlib.axes import Axes
+
+    from albireo.benchmark import _write_figures
+
+    _write_run(tmp_path, systems, ["eclipsing", "orbit"])
+    rows = [r for r in collect(tmp_path) if r["tier"] == "orbit" or r["eclipsing"]]
+    assert {r["tier"] for r in rows} == {"eclipsing", "orbit"}
+    sizes = []
+    original = Axes.hist
+
+    def hist(self, values, *args, **kwargs):
+        sizes.append(len(values))
+        return original(self, values, *args, **kwargs)
+
+    monkeypatch.setattr(Axes, "hist", hist)
+    _write_figures(tmp_path, rows, ["eclipsing", "orbit"])
+    # The population figure's three histograms come first.
+    assert sizes[:3] == [3, 3, 3]
+
+
+@pytest.mark.skipif(not HAS_MPL, reason="needs matplotlib")
+def test_the_report_leaves_the_sessions_backend_alone(systems, tmp_path):
+    """A notebook that runs the benchmark keeps its inline backend."""
+    import matplotlib
+    import matplotlib.pyplot  # a session that already uses pyplot
+
+    _write_run(tmp_path, systems[:1], ["orbit"])
+    before = matplotlib.get_backend()
+    try:
+        matplotlib.use("pdf")
+        write_report(tmp_path)
+        assert matplotlib.get_backend().lower() == "pdf"
+    finally:
+        matplotlib.use(before)
+    assert (tmp_path / "figures" / "k_recovery.png").is_file()
+
+
+def test_simulate_system_checks_its_options(systems, library):
+    with pytest.raises(ValueError, match="resolving_power"):
+        simulate_system(systems[0], library=library, resolving_power="per_transit")
+
+
+def test_a_gost_cadence_without_epochs_spans_the_products_release(systems, library, monkeypatch):
+    """A DR3 product simulated on its own takes its GOST epochs within the DR3 span."""
+    system = systems[0]
+    key = (round(system.ra_deg, 6), round(system.dec_deg, 6))
+    monkeypatch.setattr("albireo.benchmark.gost_transits", _canned_forecast({key: 60}))
+    dataset = simulate_system(system, library=library, product=RVS_DR3_MEAN, cadence="gost")[0]
+    start, span = RVS_SPANS["dr3"]
+    assert np.all((dataset.bjd >= start) & (dataset.bjd <= start + span))
+    assert dataset.n_epochs >= 10
+
+
+def _fake_benchmark(systems, library, tmp_path, monkeypatch):
+    """run_benchmark with a pipeline that writes canned results; returns it and the stars run."""
+    ran: list[str] = []
+    by_name = {s.name: s for s in systems}
+
+    def run_pipeline(pipeline, jobs, progress):
+        for star in pipeline.stars:
+            system, tier = star.name.rsplit("__", 1)
+            directory = tmp_path / star.name
+            directory.mkdir(exist_ok=True)
+            result = json.dumps(_fake_result(by_name[system], tier))
+            (directory / "result.json").write_text(result, encoding="utf-8")
+            ran.append(star.name)
+
+    monkeypatch.setattr("albireo.benchmark.run_pipeline", run_pipeline)
+    monkeypatch.setattr("albireo.benchmark._write_figures", lambda *a, **k: {})
+    monkeypatch.setattr("albireo.benchmark._write_rv_figures", lambda *a, **k: {})
+
+    def run(**changes):
+        ran.clear()
+        options = {"output": tmp_path, "systems": systems, "library": library, "tiers": ("orbit",)}
+        return run_benchmark(BenchmarkConfig(**{**options, **changes}), progress=False)
+
+    return run, ran
+
+
+def test_the_run_returns_the_summary_it_wrote(systems, library, tmp_path, monkeypatch):
+    run, ran = _fake_benchmark(systems, library, tmp_path, monkeypatch)
+    first = run()
+    assert ran == [f"{s.name}__orbit" for s in systems]
+    assert "epoch_velocities" in first.summary
+    assert first.summary == json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+    assert first.rows == collect(tmp_path)
+
+
+def test_resume_reruns_the_stars_whose_simulation_or_settings_changed(
+    systems, library, tmp_path, monkeypatch
+):
+    """The seeds count the planned systems, so a new min_transits renumbers them."""
+    run, ran = _fake_benchmark(systems, library, tmp_path, monkeypatch)
+    run()
+    assert ran == [f"{s.name}__orbit" for s in systems]
+    run(jobs=2)
+    assert ran == []
+    # systems[0] has 14 transits: without it the others are simulated with other seeds.
+    with pytest.warns(RuntimeWarning, match="are run again"):
+        run(min_transits=15)
+    assert ran == [f"{s.name}__orbit" for s in systems[1:]]
+    stale = tmp_path / f"{systems[1].name}__orbit" / "result.stale.json"
+    assert stale.is_file()
+    run(min_transits=15)
+    assert ran == []
+    # A result written before the key was recorded is dated by the previous manifest.
+    for system in systems[1:]:
+        (tmp_path / f"{system.name}__orbit" / "benchmark_key.json").unlink()
+    with pytest.warns(RuntimeWarning, match="are run again"):
+        run(min_transits=15, max_steps=50)
+    assert ran == [f"{s.name}__orbit" for s in systems[1:]]
 
 
 @pytest.mark.slow

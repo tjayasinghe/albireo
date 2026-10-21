@@ -38,7 +38,9 @@ import json
 import math
 import os
 import platform
+import sys
 import time
+import warnings
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -65,7 +67,14 @@ from albireo.gaia import (
 )
 from albireo.grids import LogGrid
 from albireo.kepler import radial_velocity
-from albireo.pipeline import Analysis, ComponentConfig, PipelineConfig, StarConfig, run_pipeline
+from albireo.pipeline import (
+    Analysis,
+    ComponentConfig,
+    PipelineConfig,
+    StarConfig,
+    _safe_name,  # the pipeline's directory name for a star, where collect finds its result
+    run_pipeline,
+)
 from albireo.population import BinarySystem, population_summary, read_population, write_population
 
 __all__ = [
@@ -325,7 +334,12 @@ class BenchmarkConfig:
         ``"dr4"`` for the epoch product and for any other, whose span is 66
         (:data:`albireo.gaia.RVS_SPANS`).
         """
-        return "dr3" if str(self.product.name).startswith("dr3") else "dr4"
+        return _release(self.product)
+
+
+def _release(product: RVSProduct) -> str:
+    """``"dr3"`` for a DR3 product, else ``"dr4"`` (:attr:`BenchmarkConfig.release`)."""
+    return "dr3" if str(product.name).startswith("dr3") else "dr4"
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +370,9 @@ def system_transit_times(
     system's position (:func:`albireo.gaia.gost_transits`, cached under ``cache_dir()``)
     and restricts it to the release span, to the CCD rows the RVS covers and to the
     fraction that reaches the ground (:func:`albireo.gaia.rvs_transit_times_from_gost`).
-    The number of epochs is then the service's, not the record's.
+    The number of epochs is then the service's, not the record's. ``release`` sets the span
+    of the GOST cadence only; the scanning-law cadence places its epochs over the DR4 span
+    (:func:`albireo.gaia.rvs_transit_times`) for either release.
 
     Raises
     ------
@@ -407,12 +423,22 @@ def simulate_system(
     were compared on. The component spectra differ in the last pixels of the unrounded
     grid, where its rotation kernel met the zero-filled end (``docs/benchmarks.md``).
 
+    Without ``bjd``, a GOST cadence takes its epochs over the span of the release the
+    product belongs to (:attr:`BenchmarkConfig.release`).
+
     Returns
     -------
     (Dataset, RVSTruth, LogGrid, list of arrays)
         The delivered dataset, the truth record, the model grid and the two component
         deviation spectra on it.
+
+    Raises
+    ------
+    ValueError
+        If ``resolving_power`` is not ``"nominal"`` or ``"per-transit"``.
     """
+    if resolving_power not in ("nominal", "per-transit"):
+        raise ValueError("resolving_power must be 'nominal' or 'per-transit'")
     library = _resolve_library(library)
     labels1, labels2 = system.labels
     if grid is None:
@@ -428,7 +454,7 @@ def simulate_system(
         library, [labels1, labels2], grid, vsini_kms=[system.vsini1, system.vsini2]
     )
     if bjd is None:
-        bjd = system_transit_times(system, cadence=cadence, seed=seed)
+        bjd = system_transit_times(system, cadence=cadence, seed=seed, release=_release(product))
     bjd = np.asarray(bjd, dtype=np.float64)
     r_ep = (
         rvs_transit_resolving_powers(bjd.size, seed=seed)
@@ -453,11 +479,6 @@ def simulate_system(
         seed=seed,
     )
     return dataset, truth, grid, components
-
-
-def _bounds(library) -> dict[str, tuple[float, float]]:
-    library = _resolve_library(library)
-    return dict(library.bounds)
 
 
 def _label_prior(value: float, half_width: float, bounds: tuple[float, float]):
@@ -622,15 +643,19 @@ def build_stars(
     recorded with ``skipped`` set. Under the GOST cadence, whose epoch count is the
     service's, the minimum-transit rule is applied at this point.
     """
-    library = _resolve_library(config.library)
-    bounds = _bounds(library)
+    return _build_stars(config, _resolve_library(config.library), progress=progress)
+
+
+def _build_stars(
+    config: BenchmarkConfig, library, *, progress: bool
+) -> tuple[list[StarConfig], dict[str, dict[str, Any]]]:
+    """:func:`build_stars` with the library already resolved."""
+    bounds = dict(library.bounds)
     stars: list[StarConfig] = []
     records: dict[str, dict[str, Any]] = {}
-    plan = _planned(config)
-    systems = []
-    for system, _ in plan:
-        if system not in systems:
-            systems.append(system)
+    # The planned systems in the order of config.systems; names are unique.
+    planned = {system.name for system, _ in _planned(config)}
+    systems = [system for system in config.systems if system.name in planned]
     t0 = time.perf_counter()
     for index, system in enumerate(systems):
         seed = config.seed * 100_003 + index
@@ -754,6 +779,9 @@ def _manifest(config: BenchmarkConfig, stars, records) -> dict[str, Any]:
             "fast": config.fast,
             "seed": config.seed,
             "jobs": config.jobs,
+            # The Analysis overrides, in a JSON form (a value JSON cannot hold is recorded
+            # by its repr).
+            "analysis": json.loads(json.dumps(dict(config.analysis), default=repr, sort_keys=True)),
         },
         "windows": {k: [list(w) for w in v] for k, v in config.windows.items()},
         "n_systems": len(config.systems),
@@ -770,34 +798,70 @@ def run_benchmark(config: BenchmarkConfig, *, progress: bool = True) -> Benchmar
     With ``resume`` (the default) stars whose ``result.json`` already exists in
     ``output`` are not rerun, so an interrupted benchmark continues where it stopped.
     :func:`write_report` regenerates the report at any time.
+
+    Beside each result the benchmark records what the result depends on: the system, its
+    simulation seed, the product, library, cadence and resolving power, the tier and the
+    analysis settings. A result recorded under other values, from a run with other tiers,
+    another ``min_transits`` (which renumbers the seeds) or other settings, is run again
+    with a warning. A star that is run again has its earlier ``result.json`` renamed
+    ``result.stale.json`` first, so that a failed rerun leaves no result from another run
+    in the report.
     """
     t0 = time.perf_counter()
     directory = Path(config.output)
     directory.mkdir(parents=True, exist_ok=True)
+    # The previous run's declarations are read before they are overwritten; they date the
+    # results written before the benchmark recorded a key beside each one.
+    previous = (
+        _read_json(directory / "manifest.json"),
+        _population_records(directory / "population.json"),
+    )
     write_population(directory / "population.json", list(config.systems))
-    stars, records = build_stars(config, progress=progress)
+    library = _resolve_library(config.library)
+    stars, records = _build_stars(config, library, progress=progress)
     manifest = _manifest(config, stars, records)
-    (directory / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
+    text = json.dumps(manifest, indent=1)
+    (directory / "manifest.json").write_text(text, encoding="utf-8")
+    population = _population_records(directory / "population.json")
+    keys = {star.name: _run_key(json.loads(text), population, star.name) for star in stars}
 
     todo = stars
     if config.resume:
-        todo = [s for s in stars if not _result_path(directory, s.name).is_file()]
+        stale, confirmed = _check_results(directory, keys, previous)
+        todo = [
+            s for s in stars if s.name in stale or not _result_path(directory, s.name).is_file()
+        ]
         if progress and len(todo) < len(stars):
             print(f"resuming: {len(stars) - len(todo)} of {len(stars)} stars already have results")
+        if stale:
+            warnings.warn(
+                f"{len(stale)} stars have results from a run with other settings, another "
+                "simulation seed or another system, and are run again: "
+                f"{', '.join(stale[:6])}{' ...' if len(stale) > 6 else ''}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        for name in confirmed:
+            _write_key(directory, name, keys[name])
+    for star in todo:
+        result = _result_path(directory, star.name)
+        if result.is_file():
+            result.replace(result.with_name("result.stale.json"))
+        _write_key(directory, star.name, keys[star.name])
     if todo:
-        library = config.library
-        bounds = _bounds(library)
         pipeline = PipelineConfig(
             stars=todo,
             output=directory,
-            library=library,
-            mh=tuple(bounds["mh"]),
+            # The name, not the loaded library: every worker loads it by name.
+            library=config.library,
+            mh=tuple(dict(library.bounds)["mh"]),
             analysis=_analysis(config),
         )
         run_pipeline(pipeline, jobs=config.jobs, progress=progress)
-    rows = collect(directory)
-    summary = summarize(rows)
-    report = write_report(directory, title=config.title) if rows else None
+    if stars:
+        report, rows, summary = _write_report(directory, title=config.title)
+    else:
+        report, rows, summary = None, [], summarize([])
     return BenchmarkRun(
         directory=directory,
         rows=rows,
@@ -807,15 +871,106 @@ def run_benchmark(config: BenchmarkConfig, *, progress: bool = True) -> Benchmar
     )
 
 
-def _safe_name(name: str) -> str:
-    import re
-
-    cleaned = re.sub(r"[^\w.-]+", "_", name.strip()).strip("._")
-    return cleaned or "star"
-
-
 def _result_path(directory: Path, name: str) -> Path:
     return directory / _safe_name(name) / "result.json"
+
+
+# The file beside a star's result that records what the result depends on.
+_KEY_FILE = "benchmark_key.json"
+# Manifest settings that do not change a star's result: the worker count, the transit
+# minimum (which selects the systems; the seeds it renumbers are compared directly), and
+# the declared width summarized over the planned stars.
+_KEY_IGNORED_SETTINGS = frozenset({"jobs", "min_transits", "lsf_sigma_kms"})
+
+
+def _read_json(path: Path) -> Any:
+    """The parsed contents of a JSON file, or ``None`` if it is missing or unreadable."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _population_records(path: Path) -> dict[str, Any]:
+    """The records of ``population.json`` by system name, in their JSON form."""
+    records = _read_json(path)
+    if not isinstance(records, list):
+        return {}
+    return {r["name"]: r for r in records if isinstance(r, Mapping) and "name" in r}
+
+
+def _run_key(manifest: Mapping[str, Any], population: Mapping[str, Any], name: str) -> dict:
+    """What the result of star ``name`` depends on, as a manifest and a population give it.
+
+    The values are in their JSON form, so that a key read back from a file compares equal
+    to one built from the files of the current run.
+    """
+    system, tier = name.rsplit("__", 1)
+    settings = manifest.get("settings") or {}
+    return {
+        "system": population.get(system),
+        "seed": _get(manifest, "simulation", system, "seed"),
+        "product": manifest.get("product"),
+        "library": manifest.get("library"),
+        "cadence": manifest.get("cadence"),
+        "resolving_power": manifest.get("resolving_power"),
+        "windows": manifest.get("windows"),
+        "tier": next((t for t in manifest.get("tiers", []) if t.get("name") == tier), None),
+        "settings": {k: v for k, v in settings.items() if k not in _KEY_IGNORED_SETTINGS},
+    }
+
+
+def _keys_differ(old: Mapping[str, Any], new: Mapping[str, Any]) -> bool:
+    """Whether two run keys disagree on a quantity both record.
+
+    A quantity that one of them does not record, as in a manifest or a population written
+    by an earlier version, is not compared; nor is a field of a record that only one of
+    them has.
+    """
+    for field, value in new.items():
+        before = old.get(field)
+        if before is None or value is None:
+            continue
+        if isinstance(before, Mapping) and isinstance(value, Mapping):
+            if any(k in before and before[k] != v for k, v in value.items()):
+                return True
+        elif before != value:
+            return True
+    return False
+
+
+def _check_results(
+    directory: Path, keys: Mapping[str, dict], previous: tuple[Any, Mapping[str, Any]]
+) -> tuple[list[str], list[str]]:
+    """The planned stars whose result is stale, and those confirmed from the last manifest.
+
+    A result is compared with the key recorded beside it. A result with no key, written
+    before the benchmark recorded one, is compared with the key the previous manifest and
+    population give, if they planned the star, and is kept otherwise.
+    """
+    old_manifest, old_population = previous
+    stale: list[str] = []
+    confirmed: list[str] = []
+    for name, key in keys.items():
+        if not _result_path(directory, name).is_file():
+            continue
+        recorded = _read_json(directory / _safe_name(name) / _KEY_FILE)
+        legacy = not isinstance(recorded, Mapping)
+        if legacy:
+            if not isinstance(old_manifest, Mapping) or name not in old_manifest.get("stars", []):
+                continue
+            recorded = _run_key(old_manifest, old_population, name)
+        if _keys_differ(recorded, key):
+            stale.append(name)
+        elif legacy:
+            confirmed.append(name)
+    return stale, confirmed
+
+
+def _write_key(directory: Path, name: str, key: Mapping[str, Any]) -> None:
+    path = directory / _safe_name(name) / _KEY_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(key, indent=1), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -832,123 +987,162 @@ def _get(mapping, *keys, default=None):
     return value
 
 
+def _read_run(directory) -> tuple[Path, dict[str, Any], dict[str, BinarySystem]]:
+    """The run directory, its manifest, and its systems by name."""
+    directory = Path(directory)
+    systems = {s.name: s for s in read_population(directory / "population.json")}
+    manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+    return directory, manifest, systems
+
+
+def _read_result(directory: Path, name: str) -> dict[str, Any] | None:
+    """A star's parsed ``result.json``, or ``None`` if it has none."""
+    path = _result_path(directory, name)
+    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+
+
 def collect(directory) -> list[dict[str, Any]]:
     """One row per planned star: the injected values, the recovered values, and the metrics.
 
     Reads ``population.json``, ``manifest.json`` and every star's ``result.json`` in
     ``directory``. Stars without a result are rows with ``status = "missing"``.
     """
-    directory = Path(directory)
-    systems = {s.name: s for s in read_population(directory / "population.json")}
-    manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+    directory, manifest, systems = _read_run(directory)
     records = manifest.get("simulation", {})
-    rows = []
+    return [
+        _star_row(directory, name, systems, records, _read_result(directory, name))
+        for name in manifest["stars"]
+    ]
+
+
+def _collect_all(
+    directory: Path, manifest: Mapping[str, Any], systems: Mapping[str, BinarySystem]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The rows of :func:`collect` and of :func:`collect_velocities`, each result read once."""
+    records = manifest.get("simulation", {})
+    rows: list[dict[str, Any]] = []
+    velocity_rows: list[dict[str, Any]] = []
     for name in manifest["stars"]:
-        system_name, tier_name = name.rsplit("__", 1)
-        system = systems[system_name]
-        record = records.get(system_name, {})
-        row: dict[str, Any] = {
-            "star": name,
-            "system": system_name,
-            "tier": tier_name,
-            "source": system.source,
-            "eclipsing": bool(system.eclipsing),
-            "period": system.period,
-            "ecc": system.ecc,
-            "k1": system.k1,
-            "k2": system.k2,
-            "q": system.q,
-            "gamma": system.gamma,
-            "light_ratio": system.light_ratio,
-            "teff1": system.teff1,
-            "teff2": system.teff2,
-            "vsini1": system.vsini1,
-            "vsini2": system.vsini2,
-            "grvs": system.grvs,
-            "n_transits": system.n_transits,
-            "snr_epoch": record.get("snr_epoch", float(rvs_snr_per_pixel(system.grvs))),
-            "snr_total": record.get("snr_epoch", float(rvs_snr_per_pixel(system.grvs)))
-            * math.sqrt(system.n_transits),
-            "max_separation_kms": system.max_separation_kms,
-            "separation_over_fwhm": system.max_separation_kms / (2.3548 * rvs_lsf_sigma_kms()),
-            "baseline_days": record.get("baseline_days"),
-            "lag1": record.get("lag1"),
-        }
-        path = _result_path(directory, name)
-        if not path.is_file():
-            error = path.with_name("error.txt")
-            if error.is_file():
-                # The pipeline writes the traceback and no result for a failed star.
-                tail = [line for line in error.read_text(encoding="utf-8").splitlines() if line]
-                row["status"] = "failed"
-                row["error"] = tail[-1] if tail else "failed"
-            else:
-                row["status"] = "missing"
-            rows.append(row)
-            continue
-        report = json.loads(path.read_text(encoding="utf-8"))
-        row["status"] = report.get("status", "ok")
-        row["error"] = report.get("error")
-        row["seconds"] = _get(report, "seconds", "total")
-        row["flags"] = list(report.get("flags", []))
-        row["n_flags"] = len(row["flags"])
-        row["z_rms"] = _get(report, "disentangling", "z_rms")
-        row["k_scan_used"] = _get(report, "disentangling", "k_scan", "used")
-        row["k_scan_gain"] = _get(report, "disentangling", "k_scan", "gain_nats")
-        row["noise_model"] = _get(report, "declaration", "noise_model", "kind")
-        row["exchanged"] = bool(_get(report, "truth", "components_exchanged") or False)
-        row["n_usable"] = _get(report, "velocities", "n_usable")
-        row["absolute"] = _get(report, "velocities", "absolute_all")
-        truth = report.get("truth") or {}
+        report = _read_result(directory, name)
+        rows.append(_star_row(directory, name, systems, records, report))
+        velocity_rows.extend(_star_velocity_rows(name, systems, report))
+    return rows, velocity_rows
+
+
+def _star_row(
+    directory: Path,
+    name: str,
+    systems: Mapping[str, BinarySystem],
+    records: Mapping[str, Any],
+    report: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """The row of :func:`collect` for one star, from its parsed result or ``None``."""
+    system_name, tier_name = name.rsplit("__", 1)
+    system = systems[system_name]
+    record = records.get(system_name, {})
+    # The epochs simulated: the record's transits, except under the GOST cadence, whose
+    # forecast sets the count (build_stars records it).
+    n_epochs = record.get("n_epochs", system.n_transits)
+    row: dict[str, Any] = {
+        "star": name,
+        "system": system_name,
+        "tier": tier_name,
+        "source": system.source,
+        "eclipsing": bool(system.eclipsing),
+        "period": system.period,
+        "ecc": system.ecc,
+        "k1": system.k1,
+        "k2": system.k2,
+        "q": system.q,
+        "gamma": system.gamma,
+        "light_ratio": system.light_ratio,
+        "teff1": system.teff1,
+        "teff2": system.teff2,
+        "vsini1": system.vsini1,
+        "vsini2": system.vsini2,
+        "grvs": system.grvs,
+        "n_transits": system.n_transits,
+        "n_epochs": n_epochs,
+        "snr_epoch": record.get("snr_epoch", float(rvs_snr_per_pixel(system.grvs))),
+        "snr_total": record.get("snr_epoch", float(rvs_snr_per_pixel(system.grvs)))
+        * math.sqrt(n_epochs),
+        "max_separation_kms": system.max_separation_kms,
+        "separation_over_fwhm": system.max_separation_kms / (2.3548 * rvs_lsf_sigma_kms()),
+        "baseline_days": record.get("baseline_days"),
+        "lag1": record.get("lag1"),
+    }
+    if report is None:
+        error = _result_path(directory, name).with_name("error.txt")
+        if error.is_file():
+            # The pipeline writes the traceback and no result for a failed star.
+            tail = [line for line in error.read_text(encoding="utf-8").splitlines() if line]
+            row["status"] = "failed"
+            row["error"] = tail[-1] if tail else "failed"
+        else:
+            row["status"] = "missing"
+        return row
+    row["status"] = report.get("status", "ok")
+    row["error"] = report.get("error")
+    row["seconds"] = _get(report, "seconds", "total")
+    row["flags"] = list(report.get("flags", []))
+    row["n_flags"] = len(row["flags"])
+    row["z_rms"] = _get(report, "disentangling", "z_rms")
+    row["k_scan_used"] = _get(report, "disentangling", "k_scan", "used")
+    row["k_scan_gain"] = _get(report, "disentangling", "k_scan", "gain_nats")
+    row["noise_model"] = _get(report, "declaration", "noise_model", "kind")
+    row["exchanged"] = bool(_get(report, "truth", "components_exchanged") or False)
+    row["n_usable"] = _get(report, "velocities", "n_usable")
+    row["absolute"] = _get(report, "velocities", "absolute_all")
+    truth = report.get("truth") or {}
+    # The pipeline compares a pair recovered in the other order against the exchanged
+    # truth, so each difference is divided by the semi-amplitude it was taken from.
+    if row["exchanged"]:
+        k_true = {"A": system.k2, "B": system.k1}
+    else:
         k_true = {"A": system.k1, "B": system.k2}
-        for comp in ("A", "B"):
-            d = _get(truth, "k_table", comp)
-            row[f"k_{comp}_rel"] = None if d is None else d / k_true[comp]
-            row[f"k_{comp}_pull"] = _get(truth, "k_table_pull", comp)
-            d = _get(truth, "k_disentangling", comp)
-            row[f"k_{comp}_rel_dis"] = None if d is None else d / k_true[comp]
-            row[f"v_rms_{comp}"] = _get(truth, "velocity_rms", comp)
-            row[f"v_pull_{comp}"] = _get(truth, "velocity_pull_rms", comp)
-            row[f"v_rms_kep_{comp}"] = _get(truth, "velocity_rms_keplerian", comp)
-            row[f"gamma_err_{comp}"] = _get(truth, "gamma", comp)
-            row[f"gamma_pull_{comp}"] = _get(truth, "gamma_pull", comp)
-            row[f"spec_corr_{comp}"] = _get(truth, "spectra", comp, "corr")
-            row[f"spec_rms_{comp}"] = _get(truth, "spectra", comp, "rms")
-            row[f"spec_pull_{comp}"] = _get(truth, "spectra", comp, "pull_rms")
-            for window in ("ca_triplet", "metal"):
-                row[f"ew_{window}_{comp}"] = _get(
-                    truth, "spectra", comp, "windows", window, "ratio"
-                )
-            for label in ("teff", "logg", "mh", "vsini"):
-                row[f"{label}_err_{comp}"] = _get(truth, "labels", comp, label)
-                row[f"{label}_pull_{comp}"] = _get(truth, "labels", comp, f"{label}_pull")
-            row[f"light_err_{comp}"] = _get(truth, "light_label_fit", comp)
-            row[f"light_declared_err_{comp}"] = _get(truth, "light_declared", comp)
-        period_diff = _get(truth, "period")
-        row["period_rel"] = None if period_diff is None else 1.0 + period_diff / system.period
-        row["period_pull"] = _get(truth, "elements_table_pull", "period")
-        row["ecc_err"] = _get(truth, "elements_table", "ecc")
-        row["ecc_pull"] = _get(truth, "elements_table_pull", "ecc")
-        # The argument of periastron is undefined for a circular orbit; below e = 0.05 the
-        # comparison would measure a direction set by the noise.
-        eccentric = float(system.ecc) >= 0.05
-        row["omega_err_deg"] = _get(truth, "elements_table", "omega_deg") if eccentric else None
-        row["omega_pull"] = _get(truth, "elements_table_pull", "omega_deg") if eccentric else None
-        t_conj = _get(truth, "elements_table", "t_conj")
-        row["t_conj_err_phase"] = None if t_conj is None else t_conj / system.period
-        row["t_conj_pull"] = _get(truth, "elements_table_pull", "t_conj")
-        row["ecc_err_dis"] = _get(truth, "elements_disentangling", "ecc")
-        boot = _get(report, "bootstrap", "period")
-        row["bootstrap_period_rel"] = None if boot is None else boot / system.period - 1.0
-        row["period_recovered"] = (
-            None if boot is None else bool(abs(row["bootstrap_period_rel"]) < 0.02)
-        )
-        dchi2 = _get(report, "velocities", "delta_chi2", "B")
-        row["detected_B"] = (
-            None if not dchi2 else float(np.mean(np.asarray(dchi2, dtype=float) > 25.0))
-        )
-        rows.append(row)
-    return rows
+    for comp in ("A", "B"):
+        d = _get(truth, "k_table", comp)
+        row[f"k_{comp}_rel"] = None if d is None else d / k_true[comp]
+        row[f"k_{comp}_pull"] = _get(truth, "k_table_pull", comp)
+        d = _get(truth, "k_disentangling", comp)
+        row[f"k_{comp}_rel_dis"] = None if d is None else d / k_true[comp]
+        row[f"v_rms_{comp}"] = _get(truth, "velocity_rms", comp)
+        row[f"v_pull_{comp}"] = _get(truth, "velocity_pull_rms", comp)
+        row[f"v_rms_kep_{comp}"] = _get(truth, "velocity_rms_keplerian", comp)
+        row[f"gamma_err_{comp}"] = _get(truth, "gamma", comp)
+        row[f"gamma_pull_{comp}"] = _get(truth, "gamma_pull", comp)
+        row[f"spec_corr_{comp}"] = _get(truth, "spectra", comp, "corr")
+        row[f"spec_rms_{comp}"] = _get(truth, "spectra", comp, "rms")
+        row[f"spec_pull_{comp}"] = _get(truth, "spectra", comp, "pull_rms")
+        for window in ("ca_triplet", "metal"):
+            row[f"ew_{window}_{comp}"] = _get(truth, "spectra", comp, "windows", window, "ratio")
+        for label in ("teff", "logg", "mh", "vsini"):
+            row[f"{label}_err_{comp}"] = _get(truth, "labels", comp, label)
+            row[f"{label}_pull_{comp}"] = _get(truth, "labels", comp, f"{label}_pull")
+        row[f"light_err_{comp}"] = _get(truth, "light_label_fit", comp)
+        row[f"light_declared_err_{comp}"] = _get(truth, "light_declared", comp)
+    period_diff = _get(truth, "period")
+    row["period_rel"] = None if period_diff is None else 1.0 + period_diff / system.period
+    row["period_pull"] = _get(truth, "elements_table_pull", "period")
+    row["ecc_err"] = _get(truth, "elements_table", "ecc")
+    row["ecc_pull"] = _get(truth, "elements_table_pull", "ecc")
+    # The argument of periastron is undefined for a circular orbit; below e = 0.05 the
+    # comparison would measure a direction set by the noise.
+    eccentric = float(system.ecc) >= 0.05
+    row["omega_err_deg"] = _get(truth, "elements_table", "omega_deg") if eccentric else None
+    row["omega_pull"] = _get(truth, "elements_table_pull", "omega_deg") if eccentric else None
+    t_conj = _get(truth, "elements_table", "t_conj")
+    row["t_conj_err_phase"] = None if t_conj is None else t_conj / system.period
+    row["t_conj_pull"] = _get(truth, "elements_table_pull", "t_conj")
+    row["ecc_err_dis"] = _get(truth, "elements_disentangling", "ecc")
+    boot = _get(report, "bootstrap", "period")
+    row["bootstrap_period_rel"] = None if boot is None else boot / system.period - 1.0
+    row["period_recovered"] = (
+        None if boot is None else bool(abs(row["bootstrap_period_rel"]) < 0.02)
+    )
+    dchi2 = _get(report, "velocities", "delta_chi2", "B")
+    row["detected_B"] = None if not dchi2 else float(np.mean(np.asarray(dchi2, dtype=float) > 25.0))
+    return row
 
 
 def collect_velocities(directory) -> list[dict[str, Any]]:
@@ -960,64 +1154,65 @@ def collect_velocities(directory) -> list[dict[str, Any]]:
     Keplerian at the epoch (differential, without a systemic velocity). The phase is
     folded on the injected ephemeris.
     """
-    directory = Path(directory)
-    systems = {s.name: s for s in read_population(directory / "population.json")}
-    manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+    directory, manifest, systems = _read_run(directory)
     rows: list[dict[str, Any]] = []
     for name in manifest["stars"]:
-        path = _result_path(directory, name)
-        if not path.is_file():
-            continue
-        report = json.loads(path.read_text(encoding="utf-8"))
-        if report.get("status", "ok") != "ok" or not report.get("velocities"):
-            continue
-        system_name, tier_name = name.rsplit("__", 1)
-        system = systems[system_name]
-        table = report["velocities"]
-        if not table.get("bjd") or not table.get("names"):
-            continue  # a report written without the per-epoch columns
-        truth = report.get("truth") or {}
-        v_true = truth.get("epoch_velocities_true") or {}
-        keplerian = _get(report, "disentangling", "velocities") or {}
-        exchanged = bool(truth.get("components_exchanged") or False)
-        bjd = np.asarray(table["bjd"], dtype=float)
-        phase = ((bjd - system.t_conj) / system.period) % 1.0
-        for j in range(bjd.size):
-            for comp in table["names"]:
-                v = table["velocity"][comp][j]
-                sigma = table["sigma"][comp][j]
-                injected = None if comp not in v_true else v_true[comp][j]
-                residual = None if injected is None or v is None else float(v) - float(injected)
-                pull = (
-                    None
-                    if residual is None or sigma is None or not float(sigma) > 0.0
-                    else residual / float(sigma)
-                )
-                rows.append(
-                    {
-                        "star": name,
-                        "system": system_name,
-                        "tier": tier_name,
-                        "component": comp,
-                        "epoch": j,
-                        "bjd": float(bjd[j]),
-                        "phase": float(phase[j]),
-                        "v_kms": v,
-                        "sigma_kms": sigma,
-                        "good": bool(table["good"][j]),
-                        "blended": bool(table["blended"][j]),
-                        "delta_chi2": table["delta_chi2"][comp][j],
-                        "light": table["light"][comp][j],
-                        "absolute": bool(table["absolute"][comp]),
-                        "v_true_kms": injected,
-                        "residual_kms": residual,
-                        "pull": pull,
-                        "v_keplerian_dis_kms": None
-                        if comp not in keplerian
-                        else keplerian[comp][j],
-                        "exchanged": exchanged,
-                    }
-                )
+        rows.extend(_star_velocity_rows(name, systems, _read_result(directory, name)))
+    return rows
+
+
+def _star_velocity_rows(
+    name: str, systems: Mapping[str, BinarySystem], report: Mapping[str, Any] | None
+) -> list[dict[str, Any]]:
+    """The rows of :func:`collect_velocities` for one star, from its parsed result."""
+    if report is None or report.get("status", "ok") != "ok" or not report.get("velocities"):
+        return []
+    system_name, tier_name = name.rsplit("__", 1)
+    system = systems[system_name]
+    table = report["velocities"]
+    if not table.get("bjd") or not table.get("names"):
+        return []  # a report written without the per-epoch columns
+    truth = report.get("truth") or {}
+    v_true = truth.get("epoch_velocities_true") or {}
+    keplerian = _get(report, "disentangling", "velocities") or {}
+    exchanged = bool(truth.get("components_exchanged") or False)
+    bjd = np.asarray(table["bjd"], dtype=float)
+    phase = ((bjd - system.t_conj) / system.period) % 1.0
+    rows: list[dict[str, Any]] = []
+    for j in range(bjd.size):
+        for comp in table["names"]:
+            v = table["velocity"][comp][j]
+            sigma = table["sigma"][comp][j]
+            injected = None if comp not in v_true else v_true[comp][j]
+            residual = None if injected is None or v is None else float(v) - float(injected)
+            pull = (
+                None
+                if residual is None or sigma is None or not float(sigma) > 0.0
+                else residual / float(sigma)
+            )
+            rows.append(
+                {
+                    "star": name,
+                    "system": system_name,
+                    "tier": tier_name,
+                    "component": comp,
+                    "epoch": j,
+                    "bjd": float(bjd[j]),
+                    "phase": float(phase[j]),
+                    "v_kms": v,
+                    "sigma_kms": sigma,
+                    "good": bool(table["good"][j]),
+                    "blended": bool(table["blended"][j]),
+                    "delta_chi2": table["delta_chi2"][comp][j],
+                    "light": table["light"][comp][j],
+                    "absolute": bool(table["absolute"][comp]),
+                    "v_true_kms": injected,
+                    "residual_kms": residual,
+                    "pull": pull,
+                    "v_keplerian_dis_kms": None if comp not in keplerian else keplerian[comp][j],
+                    "exchanged": exchanged,
+                }
+            )
     return rows
 
 
@@ -1205,6 +1400,22 @@ def _style_axes(ax) -> None:
     ax.title.set_color(_INK)
 
 
+def _pyplot():
+    """``matplotlib.pyplot``, selecting the Agg backend only if pyplot is not yet in use.
+
+    Switching the backend of a session that already uses pyplot (a notebook, an IPython
+    shell) would stop its figures from being shown. The figures are written to PNG files,
+    which every backend renders with Agg.
+    """
+    import matplotlib
+
+    if "matplotlib.pyplot" not in sys.modules:
+        matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    return plt
+
+
 def _write_figures(
     directory: Path, rows: Sequence[Mapping[str, Any]], tiers: Sequence[str]
 ) -> dict[str, Path]:
@@ -1212,10 +1423,7 @@ def _write_figures(
 
     if importlib.util.find_spec("matplotlib") is None:
         return {}
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    plt = _pyplot()
 
     figures: dict[str, Path] = {}
     ok = [r for r in rows if r.get("status") == "ok"]
@@ -1231,9 +1439,9 @@ def _write_figures(
     def column(subset, key):
         return np.array([np.nan if r.get(key) is None else float(r[key]) for r in subset])
 
-    # 1. The population as drawn (one row per system; the first tier's rows suffice).
-    first = tiers[0] if tiers else None
-    systems = [r for r in rows if r["tier"] == first] if first else rows
+    # 1. The population as drawn: one row per system, from whichever tiers ran it. The
+    #    system's columns are the same in every tier's row.
+    systems = list({r["system"]: r for r in rows}.values())
     if systems:
         fig, axes = plt.subplots(1, 4, figsize=(14, 3.2))
         ecl = [r for r in systems if r["eclipsing"]]
@@ -1315,7 +1523,8 @@ def _write_figures(
             sub = [r for r in ok if r["tier"] == tier]
             for i, (key, label) in enumerate(
                 (
-                    ("n_transits", "RVS transits"),
+                    # The epochs simulated, which a GOST cadence takes from the forecast.
+                    ("n_epochs", "RVS transits"),
                     ("separation_over_fwhm", "largest separation / LSF FWHM"),
                 )
             ):
@@ -1484,16 +1693,18 @@ def _write_rv_figures(
     velocity_rows: Sequence[Mapping[str, Any]],
     systems: Mapping[str, BinarySystem],
     tiers: Sequence[str],
+    epochs: Mapping[str, int] | None = None,
 ) -> dict[str, Path]:
-    """Phase-folded epoch velocities against the injected orbit, one panel per system."""
+    """Phase-folded epoch velocities against the injected orbit, one panel per system.
+
+    ``epochs`` gives each system's number of simulated epochs for the panel titles; the
+    record's ``n_transits`` is used where it gives none.
+    """
     import importlib.util
 
     if importlib.util.find_spec("matplotlib") is None or not velocity_rows:
         return {}
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    plt = _pyplot()
 
     figures: dict[str, Path] = {}
     fig_dir = directory / "figures"
@@ -1549,7 +1760,8 @@ def _write_rv_figures(
                     )
             ax.set_title(
                 f"{name}  P {system.period:.3g} d  G_RVS {system.grvs:.1f}  "
-                f"n {system.n_transits}" + ("  (exchanged)" if exchanged else ""),
+                f"n {(epochs or {}).get(name, system.n_transits)}"
+                + ("  (exchanged)" if exchanged else ""),
                 fontsize=7,
             )
             ax.set_xlim(0.0, 1.0)
@@ -1597,21 +1809,26 @@ def write_report(directory, *, title: str | None = None) -> Path:
     metric) and ``summary.json`` (the per-tier statistics). Can be re-run on a finished or
     partial benchmark at any time.
     """
-    directory = Path(directory)
-    manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
-    systems = read_population(directory / "population.json")
-    rows = collect(directory)
+    return _write_report(directory, title=title)[0]
+
+
+def _write_report(
+    directory, *, title: str | None
+) -> tuple[Path, list[dict[str, Any]], dict[str, Any]]:
+    """:func:`write_report`, returning also the rows and the summary written."""
+    directory, manifest, systems = _read_run(directory)
+    rows, velocity_rows = _collect_all(directory, manifest, systems)
     summary = summarize(rows)
     tiers = [t for t in _TIER_ORDER if t in summary["tiers"]] + [
         t for t in summary["tiers"] if t not in _TIER_ORDER
     ]
     _write_csv(directory / "rows.csv", rows)
-    velocity_rows = collect_velocities(directory)
     summary["epoch_velocities"] = summarize_velocities(velocity_rows)
     _write_csv(directory / "velocities.csv", velocity_rows)
     (directory / "summary.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")
     figures = _write_figures(directory, rows, tiers)
-    figures.update(_write_rv_figures(directory, velocity_rows, {s.name: s for s in systems}, tiers))
+    epochs = {r["system"]: r["n_epochs"] for r in rows}
+    figures.update(_write_rv_figures(directory, velocity_rows, systems, tiers, epochs))
     title = title or manifest.get("title") or "albireo on Gaia RVS double-lined binaries"
     settings = manifest.get("settings", {})
 
@@ -1653,7 +1870,7 @@ def write_report(directory, *, title: str | None = None) -> Path:
     lines.append("## The population")
     lines.append("")
     lines.append("```")
-    lines.append(population_summary(systems))
+    lines.append(population_summary(list(systems.values())))
     lines.append("```")
     lines.append("")
     skipped = manifest.get("skipped_transits", [])
@@ -1817,8 +2034,7 @@ def write_report(directory, *, title: str | None = None) -> Path:
         def num(digits):
             return lambda v: "n/a" if v is None else f"{float(v):.{digits}g}"
 
-        vrow("systems, epochs measured", "n_epochs", lambda v: "n/a" if v is None else str(v))
-        lines[-1] = (
+        lines.append(
             "| systems, epochs measured | "
             + " | ".join(
                 f"{entries[t]['n_systems']}, {entries[t]['n_epochs']}" for t in velocity_tiers
@@ -1880,4 +2096,4 @@ def write_report(directory, *, title: str | None = None) -> Path:
     lines.append("")
     path = directory / "report.md"
     path.write_text("\n".join(lines), encoding="utf-8")
-    return path
+    return path, rows, summary
