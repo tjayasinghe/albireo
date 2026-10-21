@@ -323,9 +323,21 @@ def test_ar1_noise_is_the_recursion():
     The recursion runs in scipy.signal.lfilter. Its direct form forms the same product
     ``phi * x_(i-1)`` and the same sum as the loop, so on x86-64 builds, which do not
     contract the multiply-add, the draws are equal bit for bit and a simulation keeps
-    its recorded values.
+    its recorded values. A build that contracts it to a fused multiply-add (arm64) may
+    differ by about one unit in the last place per step. Those errors decay as
+    ``phi**k``, so elsewhere the comparison allows ``1e-11``, about ten times the
+    accumulated bound at ``phi = 0.999``.
     """
+    import platform
+
     from albireo.simulate import _ar1_noise
+
+    if platform.machine().lower() in {"x86_64", "amd64"}:
+        check = np.testing.assert_array_equal
+    else:
+
+        def check(got, want):
+            np.testing.assert_allclose(got, want, rtol=0.0, atol=1e-11)
 
     n = 4000
     for phi in (0.3, -0.7, 0.95, 0.999):
@@ -336,7 +348,7 @@ def test_ar1_noise_is_the_recursion():
             innov = np.sqrt(1.0 - phi**2)
             for i in range(1, n):
                 want[i] = phi * want[i - 1] + innov * eps[i]
-            np.testing.assert_array_equal(_ar1_noise(np.random.default_rng(seed), n, phi), want)
+            check(_ar1_noise(np.random.default_rng(seed), n, phi), want)
     white = _ar1_noise(np.random.default_rng(4), 50, 0.0)
     np.testing.assert_array_equal(white, np.random.default_rng(4).normal(0.0, 1.0, 50))
 

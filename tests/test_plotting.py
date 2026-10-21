@@ -256,6 +256,15 @@ def test_plot_light_fractions_draws_a_constant_ratio_at_every_epoch(orbit):
         np.testing.assert_allclose(y, constant[:, c].mean())
 
 
+def test_plot_light_fractions_keeps_rejecting_one_epoch_against_several_times():
+    """Per-epoch light for one epoch is not a constant ratio and is not broadcast."""
+    one_epoch = np.random.default_rng(7).dirichlet([8.0, 5.0], size=(25, 1))
+    with pytest.raises(ValueError, match="same size"):
+        plotting.plot_light_fractions({"light": one_epoch}, bjd=np.arange(4.0))
+    _, ax = plotting.plot_light_fractions({"light": one_epoch}, bjd=np.array([2.5]))
+    assert all(np.asarray(ct.lines[0].get_ydata()).size == 1 for ct in ax.containers)
+
+
 # ---------------------------------------------------------------------------
 # detection
 # ---------------------------------------------------------------------------

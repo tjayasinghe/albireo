@@ -506,11 +506,12 @@ def plot_light_fractions(samples, *, bjd=None, period=None, t_conj=None, ax=None
     fig, ax = (ax.figure, ax) if ax is not None else plt.subplots(figsize=(7.2, 4.0))
 
     light = np.asarray(samples["light"] if isinstance(samples, dict) else samples, dtype=float)
-    if light.ndim == 2:  # constant light ratio: (n_draws, n_comp)
+    constant = light.ndim == 2  # constant light ratio: (n_draws, n_comp)
+    if constant:
         light = light[:, None, :]
     mean, sd = light.mean(axis=0), light.std(axis=0)
     n_epochs, n_comp = mean.shape
-    if n_epochs == 1 and bjd is not None:
+    if constant and bjd is not None:
         # A constant ratio is one value for every epoch, drawn at each epoch's time.
         n_epochs = np.atleast_1d(np.asarray(bjd)).size
         mean = np.broadcast_to(mean, (n_epochs, n_comp))
