@@ -299,24 +299,92 @@ def test_gost_reads_its_cache_before_the_network_and_says_where_it_looked(
     assert "objvissap_ra10_dec-30_t56800-60800_n10000.vot" in str(error.value)
 
 
+def _votable_with_rows(rows: str) -> bytes:
+    """A minimal VOTable with t_start, t_stop and ccd_row columns."""
+    return (
+        '<?xml version="1.0"?><VOTABLE xmlns="http://www.ivoa.net/xml/VOTable/v1.3">'
+        '<RESOURCE type="results"><TABLE><FIELD name="t_start" datatype="double"/>'
+        '<FIELD name="t_stop" datatype="double"/><FIELD name="ccd_row" datatype="int"/>'
+        f"<DATA><TABLEDATA>{rows}</TABLEDATA></DATA></TABLE></RESOURCE></VOTABLE>"
+    ).encode()
+
+
 def test_an_unreadable_cache_file_is_fetched_again_or_named(offline_gost, tmp_path, monkeypatch):
-    """A truncated cache file is replaced from the network, or named when offline."""
+    """A truncated cache file is set aside and fetched again, or named when offline."""
     cached = tmp_path / "gost" / "objvissap_ra45_dec+20_t56800-60800_n10000.vot"
+    aside = cached.with_name(cached.name + ".unreadable")
+    truncated = GOST_FIXTURE.read_bytes()[:4000]  # an interrupted write
     cached.parent.mkdir(parents=True)
-    cached.write_bytes(GOST_FIXTURE.read_bytes()[:4000])  # an interrupted write
-    transits = gost_transits(45.0, 20.0, **GOST_QUERY)
-    assert len(transits) == 142 and len(offline_gost) == 1
-    assert cached.read_bytes() == GOST_FIXTURE.read_bytes()
-    assert sorted(p.name for p in cached.parent.iterdir()) == [cached.name]  # no partial file
+    cached.write_bytes(truncated)
 
     def refuse(url, *, timeout):
         raise urllib.error.URLError("no route to host")
 
-    cached.write_bytes(GOST_FIXTURE.read_bytes()[:4000])
-    monkeypatch.setattr(gaia_module, "_fetch_gost", refuse)
-    with pytest.raises(RuntimeError, match="cannot be read") as error:
+    with (
+        monkeypatch.context() as patch,
+        pytest.raises(RuntimeError, match="cannot be read") as error,
+    ):
+        patch.setattr(gaia_module, "_fetch_gost", refuse)
         gost_transits(45.0, 20.0, **GOST_QUERY)
     assert str(cached) in str(error.value)
+    assert cached.read_bytes() == truncated and not aside.exists()
+
+    with pytest.warns(UserWarning, match=r"renamed to .*\.unreadable"):
+        transits = gost_transits(45.0, 20.0, **GOST_QUERY)
+    assert len(transits) == 142 and len(offline_gost) == 1
+    assert cached.read_bytes() == GOST_FIXTURE.read_bytes()
+    assert aside.read_bytes() == truncated  # kept, not deleted
+    assert sorted(p.name for p in cached.parent.iterdir()) == [cached.name, aside.name]
+
+
+def test_a_well_formed_cached_table_is_read_or_refused_but_never_replaced(offline_gost, tmp_path):
+    """A table placed in the cache by hand is the caller's: it is used as it stands, and an
+    unusable one raises an error that names it, while the network is available."""
+    cached = tmp_path / "gost" / "objvissap_ra45_dec+20_t56800-60800_n10000.vot"
+    cached.parent.mkdir(parents=True)
+    full = _votable_with_rows(
+        "<TR><TD>57000.0</TD><TD>57000.001</TD><TD>4</TD></TR>"
+        "<TR><TD>57001.0</TD><TD>57001.001</TD><TD>6</TD></TR>"
+        "<TR><TD>57002.0</TD><TD>57002.001</TD><TD>5</TD></TR>"
+    )
+    cached.write_bytes(full)
+    transits = gost_transits(45.0, 20.0, **GOST_QUERY)
+    assert len(transits) == 3 and len(offline_gost) == 0
+    np.testing.assert_array_equal(transits.ccd_row, [4, 6, 5])
+
+    gap = _votable_with_rows(
+        "<TR><TD>57000.0</TD><TD>57000.001</TD><TD>4</TD></TR>"
+        "<TR><TD>57001.0</TD><TD>57001.001</TD><TD></TD></TR>"
+        "<TR><TD>57002.0</TD><TD>57002.001</TD><TD>5</TD></TR>"
+    )
+    cached.write_bytes(gap)
+    with pytest.raises(ValueError, match="CCD row is empty in 1 of 3 rows") as error:
+        gost_transits(45.0, 20.0, **GOST_QUERY)
+    assert str(cached) in str(error.value)
+    assert len(offline_gost) == 0
+    assert cached.read_bytes() == gap
+    assert sorted(p.name for p in cached.parent.iterdir()) == [cached.name]
+
+
+def test_a_cache_file_held_open_elsewhere_is_kept(tmp_path, monkeypatch):
+    """On Windows a file another process holds open cannot be replaced; the existing copy
+    is kept and no partial file is left. Without an existing copy the error is raised."""
+    path = tmp_path / "gost" / "response.vot"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"first")
+
+    def held_open(source, target):
+        raise PermissionError(13, "Access is denied", str(target))
+
+    monkeypatch.setattr(gaia_module.os, "replace", held_open)
+    gaia_module._write_atomically(path, b"second")
+    assert path.read_bytes() == b"first"
+    assert [p.name for p in path.parent.iterdir()] == [path.name]
+
+    missing = tmp_path / "gost" / "other.vot"
+    with pytest.raises(PermissionError):
+        gaia_module._write_atomically(missing, b"second")
+    assert [p.name for p in path.parent.iterdir()] == [path.name]
 
 
 def test_an_interrupted_cache_write_leaves_no_file_under_the_name(
@@ -336,23 +404,14 @@ def test_an_interrupted_cache_write_leaves_no_file_under_the_name(
 
 def test_an_empty_ccd_row_is_refused_rather_than_cast():
     """A row column with an empty cell is an error, as an unreadable field of view is."""
-
-    def table(rows: str) -> bytes:
-        return (
-            '<?xml version="1.0"?><VOTABLE xmlns="http://www.ivoa.net/xml/VOTable/v1.3">'
-            '<RESOURCE type="results"><TABLE><FIELD name="t_start" datatype="double"/>'
-            '<FIELD name="t_stop" datatype="double"/><FIELD name="ccd_row" datatype="int"/>'
-            f"<DATA><TABLEDATA>{rows}</TABLEDATA></DATA></TABLE></RESOURCE></VOTABLE>"
-        ).encode()
-
-    full = table(
+    full = _votable_with_rows(
         "<TR><TD>57000.0</TD><TD>57000.001</TD><TD>4</TD></TR>"
         "<TR><TD>57001.0</TD><TD>57001.001</TD><TD>6</TD></TR>"
         "<TR><TD>57002.0</TD><TD>57002.001</TD><TD>5</TD></TR>"
     )
     parsed = gaia_module._parse_gost(full, ra_deg=0.0, dec_deg=0.0, source="test")
     np.testing.assert_array_equal(parsed.ccd_row, [4, 6, 5])
-    gap = table(
+    gap = _votable_with_rows(
         "<TR><TD>57000.0</TD><TD>57000.001</TD><TD>4</TD></TR>"
         "<TR><TD>57001.0</TD><TD>57001.001</TD><TD></TD></TR>"
         "<TR><TD>57002.0</TD><TD>57002.001</TD><TD>5</TD></TR>"

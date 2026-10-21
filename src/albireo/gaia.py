@@ -54,6 +54,7 @@ import os
 import urllib.error
 import urllib.parse
 import urllib.request
+import warnings
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -867,6 +868,14 @@ def _strip_namespace(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
+class _NotXMLError(ValueError):
+    """A response, or a cached file, that is not well-formed XML.
+
+    A file truncated by an interrupted write raises this error. A well-formed table with
+    unusable content raises a plain :class:`ValueError`, so that the two can be told apart.
+    """
+
+
 def _votable_table(payload: bytes):
     """Field names, field units and rows of the first VOTable table that has fields.
 
@@ -878,7 +887,7 @@ def _votable_table(payload: bytes):
     try:
         root = ElementTree.fromstring(payload)
     except ElementTree.ParseError as error:
-        raise ValueError(
+        raise _NotXMLError(
             f"the response is not XML ({error}); the service answers some bad queries with "
             "an HTML page"
         ) from error
@@ -995,10 +1004,12 @@ def gost_transits(
     One GET against :data:`GOST_ENDPOINT` with :mod:`urllib`, parsed with
     :mod:`xml.etree`, cached raw under ``cache_dir() / "gost"`` under a name built from
     every parameter of the query, with the position and the window to four decimals. The
-    cache is read before the network, so a repeated position is fetched once. A cached
-    file that cannot be parsed, such as one truncated by an interrupted write of an
-    earlier version, is fetched again and replaced. The file is written under its name
-    only when it is complete.
+    cache is read before the network, so a repeated position is fetched once. The file is
+    written under its name only when it is complete. A cached file that is not well-formed
+    XML, such as one truncated by an interrupted write of an earlier version, is fetched
+    again; the old file is renamed with the suffix ``.unreadable`` and a warning names it.
+    A cached file that is well-formed but not a usable table, such as a table with an empty
+    CCD row, raises an error that names it and is left unchanged.
 
     The forecast uses the routine nominal scanning law, not the attitude as flown. The
     manual (§7) states that GOST "will compute the transit crossing the FoVs based on the
@@ -1042,6 +1053,9 @@ def gost_transits(
     RuntimeError
         If the request fails and nothing readable is cached; the message names the
         endpoint and the cache path the response would have been written to.
+    ValueError
+        If the cached file is well-formed XML but not a usable table; the message names
+        the file.
 
     Examples
     --------
@@ -1056,9 +1070,13 @@ def gost_transits(
     if cache and path.is_file():
         try:
             return _parse_gost(path.read_bytes(), ra_deg=ra_deg, dec_deg=dec_deg, source=url)
-        except ValueError as error:
-            # A truncated or foreign file: fetched again below and replaced.
+        except _NotXMLError as error:
+            # A truncated or foreign file: fetched again below and set aside, not deleted.
             unreadable = error
+        except ValueError as error:
+            # Well-formed but unusable, such as a table built by hand with an empty CCD
+            # row. Such a file was placed there on purpose, so it is reported, not replaced.
+            raise ValueError(f"the cached response {path} cannot be used: {error}") from error
     try:
         payload = _fetch_gost(url, timeout=timeout)
     except (urllib.error.URLError, OSError, TimeoutError) as error:
@@ -1077,6 +1095,23 @@ def gost_transits(
     # read back on every later call.
     transits = _parse_gost(payload, ra_deg=ra_deg, dec_deg=dec_deg, source=url)
     if cache:
+        if unreadable is not None:
+            aside = path.with_name(f"{path.name}.unreadable")
+            try:
+                os.replace(path, aside)
+            except FileNotFoundError:
+                pass  # set aside by another process since it was read
+            except PermissionError:
+                # Windows refuses to rename a file that another process holds open. The
+                # file is left in place and a later call fetches the response again.
+                return transits
+            else:
+                warnings.warn(
+                    f"the cached response {path} could not be read ({unreadable}); it was "
+                    f"renamed to {aside.name} and replaced by a new response",
+                    UserWarning,
+                    stacklevel=2,
+                )
         _write_atomically(path, payload)
     return transits
 
@@ -1085,13 +1120,20 @@ def _write_atomically(path: Path, payload: bytes) -> None:
     """Write ``payload`` to ``path`` through a temporary file in the same directory.
 
     The file appears under its name only when it is complete, so an interrupted write
-    leaves no truncated file for a later call to read.
+    leaves no truncated file for a later call to read. On Windows the name cannot be
+    replaced while another process holds the existing file open. In :func:`gost_transits`
+    such a file was written by another process for the same query, so it is kept and the
+    new copy is discarded.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     partial = path.with_name(f"{path.name}.{os.getpid()}.part")
     try:
         partial.write_bytes(payload)
-        os.replace(partial, path)
+        try:
+            os.replace(partial, path)
+        except PermissionError:
+            if not path.is_file():
+                raise
     finally:
         partial.unlink(missing_ok=True)
 
