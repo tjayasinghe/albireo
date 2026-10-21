@@ -81,6 +81,7 @@ from albireo.todcor import (
     _LightNotMeasured,
     _lsf_key,
     _minimize_box_quadratic,
+    _pad_grid,
     _prepare_epoch,
     _resolve_correlation,
     _resolve_light,
@@ -658,7 +659,10 @@ class _Objective:
                     self.lsf_anchors,
                     epoch_sigma_kms=key[1],
                 )
-            out[key] = jnp.asarray(stack)
+            # Padded to a bucket of grid lengths, as in todcor, so that the projection
+            # (_epoch_columns) is compiled once per bucket rather than once per grid. A
+            # template column beyond the grid reads zero either way.
+            out[key] = jnp.asarray(_pad_grid(stack))
         return out
 
     # -- one epoch -----------------------------------------------------------
