@@ -141,7 +141,14 @@ def _cmd_run(args) -> int:
         print(f"{path}: {exc}", file=sys.stderr)
         return 1
     config = _apply_run_options(config, args)
-    run = run_pipeline(config, jobs=_jobs(args.jobs), stars=args.stars, progress=not args.quiet)
+    # The command reads only the written products, so no star's live objects are kept.
+    run = run_pipeline(
+        config,
+        jobs=_jobs(args.jobs),
+        stars=args.stars,
+        progress=not args.quiet,
+        keep_live=False,
+    )
     if args.quiet:
         print(run.summary())
     return 0 if not run.failures else 2
@@ -159,7 +166,7 @@ def _cmd_demo(args) -> int:
         "velocity is recovered.",
         flush=True,
     )
-    run = run_pipeline(config, jobs=_jobs(args.jobs), progress=not args.quiet)
+    run = run_pipeline(config, jobs=_jobs(args.jobs), progress=not args.quiet, keep_live=False)
     if args.quiet:
         print(run.summary())
     for result in run.results.values():

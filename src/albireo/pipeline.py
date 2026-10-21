@@ -60,10 +60,12 @@ import csv
 import dataclasses
 import datetime as _dt
 import gc
+import hashlib
 import importlib.util
 import json
 import math
 import multiprocessing
+import numbers
 import os
 import re
 import sys
@@ -131,40 +133,52 @@ def _spec(value: Any, what: str) -> Spec | None:
     """Coerce a config value into a prior spec of :mod:`albireo.facade`.
 
     ``None`` stays ``None`` (the stage's default applies). A number is ``Fixed``, a
-    two-element list is ``Between``, and a mapping with ``value`` and ``sigma`` is
-    ``Known``. A :class:`~albireo.facade.Spec` passes through, so the Python API accepts
-    specs too.
+    two-element list or a mapping with ``lo`` and ``hi`` is ``Between`` (with ``lo <
+    hi``), and a mapping with ``value`` and ``sigma`` is ``Known`` (with a finite value
+    and a finite positive sigma). A :class:`~albireo.facade.Spec` passes through, so the
+    Python API accepts specs too.
     """
     if value is None or isinstance(value, Spec):
         return value
-    if isinstance(value, bool):
+    if isinstance(value, bool | np.bool_):
         raise TypeError(f"{what}: a boolean is not a prior")
-    if isinstance(value, int | float | np.floating):
+    if isinstance(value, numbers.Real):
         return Fixed(float(value))
     if isinstance(value, Mapping):
         if "value" in value and "sigma" in value:
-            return Known(float(value["value"]), float(value["sigma"]))
+            centre, sigma = float(value["value"]), float(value["sigma"])
+            if not (math.isfinite(centre) and math.isfinite(sigma) and sigma > 0.0):
+                raise ValueError(
+                    f"{what}: a Gaussian needs a finite value and a finite positive sigma; "
+                    f"got value {centre}, sigma {sigma}"
+                )
+            return Known(centre, sigma)
         if "lo" in value and "hi" in value:
-            return Between(float(value["lo"]), float(value["hi"]))
+            return Between(*_range_bounds(value["lo"], value["hi"], what))
         raise ValueError(f"{what}: a table must carry value/sigma (Known) or lo/hi (Between)")
     if isinstance(value, list | tuple | np.ndarray) and len(value) == 2:
-        lo, hi = float(value[0]), float(value[1])
-        if not hi > lo:
-            raise ValueError(f"{what}: a range needs lo < hi; got [{lo}, {hi}]")
-        return Between(lo, hi)
+        return Between(*_range_bounds(value[0], value[1], what))
     raise TypeError(
         f"{what}: expected a number (fixed), a two-element range [lo, hi], a table with "
         f"value and sigma, or a façade spec; got {type(value).__name__}"
     )
 
 
+def _range_bounds(lo: Any, hi: Any, what: str) -> tuple[float, float]:
+    """The bounds of a declared range as floats, refused unless ``lo < hi``."""
+    lo, hi = float(lo), float(hi)
+    if not hi > lo:
+        raise ValueError(f"{what}: a range needs lo < hi; got [{lo}, {hi}]")
+    return lo, hi
+
+
 def _lsf(value: Any, key: str) -> LSF:
     """Coerce a per-instrument LSF declaration."""
     if isinstance(value, LSF):
         return value
-    if isinstance(value, bool):
+    if isinstance(value, bool | np.bool_):
         raise TypeError(f"lsf[{key!r}]: a boolean is not a line-spread function")
-    if isinstance(value, int | float | np.floating):
+    if isinstance(value, numbers.Real):
         return LSF(sigma_kms=float(value))
     if isinstance(value, str) and value == PER_EPOCH:
         return LSF.per_epoch()
@@ -197,8 +211,9 @@ class ComponentConfig:
         star) instead takes the fractions from a correlation against library templates,
         as the amplitudes fitted to the templates in the well-detected epochs
         (``light="global"`` of :func:`albireo.todcor`). This measurement is recorded in
-        the report and flagged. It needs a library, and on the ``period = "search"`` route
-        it reuses the bootstrap's table.
+        the report and flagged. It needs a library and a declared ``period`` (a range, a
+        value or ``"search"``). On the ``period = "search"`` route it reuses the
+        bootstrap's table. A star with declared ``velocities`` must declare the fractions.
     teff, logg, vsini
         Label priors for the template-identification stage, in K, cgs dex and km/s: a
         number to hold, a ``[lo, hi]`` range, or ``None`` for the library's own range
@@ -206,8 +221,9 @@ class ComponentConfig:
         solution provides it.
     k
         Optional semi-amplitude prior for this component in km/s, overriding the star's
-        ``k_min``/``k_max``. Every component must use the same kind (all ranges, or all
-        values).
+        ``k_min``/``k_max``. Every component of a star with a declared ``period`` must use
+        the same kind: ranges (an undeclared ``k`` counts as the range ``[k_min, k_max]``),
+        held values, or Gaussians. A mixture is refused when the configuration is read.
     smoothness_tau0
         Starting value of this component's smoothness hyperparameter. A rotationally
         broadened star needs a much larger value than a sharp-lined one.
@@ -480,6 +496,68 @@ class Analysis:
 
 _ANALYSIS_KEYS = frozenset(f.name for f in dataclasses.fields(Analysis))
 _MEASURE = "measure"
+_K_KINDS = {Between: "a range", Fixed: "a held value", Known: "a Gaussian"}
+
+
+def _check_k_kinds(name: str, components: Sequence[ComponentConfig]) -> None:
+    """Refuse semi-amplitude priors of different kinds across the components of a star.
+
+    The semi-amplitudes are one vector-valued site of the disentangling, which takes one
+    distribution family. A component without ``k`` takes the range ``[k_min, k_max]``.
+    """
+    kinds = {}
+    for c in components:
+        spec = _spec(c.k, f"component {c.name!r}: k")
+        kind = Between if spec is None else type(spec)
+        kinds[c.name] = _K_KINDS.get(kind, kind.__name__)
+    if len(set(kinds.values())) > 1:
+        listed = ", ".join(f"{n} {kind}" for n, kind in kinds.items())
+        raise ValueError(
+            f"star {name!r}: the semi-amplitude priors (k) mix kinds ({listed}; a component "
+            "without k takes the range [k_min, k_max]). The semi-amplitudes are one site of "
+            "the disentangling and take one kind: give every component a range [lo, hi], a "
+            "held value, or a Gaussian {value, sigma}."
+        )
+
+
+def _ecc_limit(settings: Analysis) -> float:
+    """The eccentricity bound :func:`_declare` passes to the ``Disentangler``."""
+    return 0.95 if settings.circular else max(settings.ecc_max, 0.05)
+
+
+def _star_settings(star: StarConfig, base: Analysis) -> Analysis:
+    """A star's settings (:meth:`StarConfig.settings`), with the star named on failure."""
+    try:
+        return star.settings(base)
+    except (TypeError, ValueError) as error:
+        raise type(error)(f"star {star.name!r}: {error}") from None
+
+
+def _check_declared_ecc(star: StarConfig, settings: Analysis) -> None:
+    """Refuse a declared eccentricity above the bound the disentangling will be given.
+
+    The ``Disentangler`` rejects a range whose upper bound exceeds its ``ecc_max`` when the
+    model is first built, and a held value above it has zero prior density. The check is
+    made before the star's data are read, so that the star fails at once and the message
+    names the setting to change.
+    """
+    if star.period is None:
+        return
+    ecc = _spec(star.ecc, f"star {star.name!r}: ecc")
+    if isinstance(ecc, Between):
+        declared = float(np.asarray(ecc.hi))
+    elif isinstance(ecc, Fixed):
+        declared = float(np.asarray(ecc.value))
+    else:
+        return
+    limit = _ecc_limit(settings)
+    if declared > limit:
+        raise ValueError(
+            f"star {star.name!r}: the declared eccentricity reaches {declared:g}, above the "
+            f"bound {limit:g} the disentangling is given (ecc_max, or 0.95 with circular = "
+            f"true). Set ecc_max for this star to at least {declared:g} (at most 0.95), or "
+            "lower the declared eccentricity."
+        )
 
 
 @dataclass(frozen=True)
@@ -509,9 +587,11 @@ class StarConfig:
         range, or a number to hold it. Default ``None``: the conjunction phase is located
         by a scan over one period before the fit.
     ecc
-        The eccentricity: a number to hold it (with ``omega``), or ``[0, hi]`` for a
-        range. Default ``None``: ``[0, ecc_max]`` from the settings, or held at zero when
-        ``circular`` is set.
+        The eccentricity: a number in ``[0, 1)`` to hold it (with ``omega``), or ``[0,
+        hi]`` for a range. Default ``None``: ``[0, ecc_max]`` from the settings, or held at
+        zero when ``circular`` is set. A held value or ``hi`` above the settings' bound
+        (``ecc_max``, or 0.95 with ``circular``) fails the star before its data are read,
+        with a message naming the setting to raise.
     omega
         The argument of periastron of the first component in radians, needed only with
         a held non-zero ``ecc``.
@@ -598,7 +678,7 @@ class StarConfig:
                     "it has no default."
                 )
         object.__setattr__(self, "components", components)
-        t_conj = _spec(self.t_conj, f"star {name!r}: t_conj")
+        _spec(self.t_conj, f"star {name!r}: t_conj")
         ecc = _spec(self.ecc, f"star {name!r}: ecc")
         if isinstance(ecc, Known):
             raise ValueError(
@@ -607,16 +687,27 @@ class StarConfig:
             )
         if isinstance(ecc, Between) and float(np.asarray(ecc.lo)) != 0.0:
             raise ValueError(f"star {name!r}: an ecc range must start at 0")
+        if isinstance(ecc, Fixed) and not 0.0 <= float(np.asarray(ecc.value)) < 1.0:
+            raise ValueError(
+                f"star {name!r}: a held ecc must lie in [0, 1); got {float(np.asarray(ecc.value))}"
+            )
         omega = _spec(self.omega, f"star {name!r}: omega")
         if isinstance(ecc, Fixed) and float(np.asarray(ecc.value)) > 0.0 and omega is None:
             raise ValueError(f"star {name!r}: a held non-zero ecc needs omega (radians) as well")
-        del t_conj
         if (self.period is None) == (self.velocities is None):
             raise ValueError(
                 f"star {name!r}: declare exactly one of period= and velocities=. A period "
                 "([lo, hi], a value, or 'search') fits a Keplerian; a velocity table fits "
                 "the free per-epoch table instead."
             )
+        if self.velocities is not None and any(measured):
+            raise ValueError(
+                f"star {name!r}: light = 'measure' needs a declared period. The velocity "
+                "route takes the per-epoch velocities as given and measures no template "
+                "table, so declare the light fractions instead."
+            )
+        if self.period is not None:
+            _check_k_kinds(name, components)
         if self.period is not None and not (
             isinstance(self.period, str) and self.period.lower() == "search"
         ):
@@ -703,6 +794,9 @@ class PipelineConfig:
         if isinstance(self.analysis, Mapping):
             object.__setattr__(self, "analysis", Analysis(**dict(self.analysis)))
         for star in stars:
+            # A per-star value that the settings reject is reported here, naming the star,
+            # rather than when that star is reached in the batch.
+            _star_settings(star, self.analysis)
             if star.searching and self.library is None:
                 raise ValueError(
                     f"star {star.name!r} declares period = 'search', which bootstraps the "
@@ -722,8 +816,16 @@ class PipelineConfig:
         raise KeyError(f"no star called {name!r}; this batch has {[s.name for s in self.stars]}")
 
     def without_stars(self) -> PipelineConfig:
-        """The shared part alone, as sent to each worker process at initialization."""
-        return replace(self, stars=(self.stars[0],))
+        """The shared part alone, as sent to each worker process at initialization.
+
+        A configuration holds at least one star, so the first is kept as a placeholder
+        without its data: an in-memory dataset and the injected truth would otherwise be
+        copied into every worker in addition to the copy sent with each star's task.
+        """
+        placeholder = replace(
+            self.stars[0], spectra="(not sent to the workers)", dataset=None, bloem=None, truth=None
+        )
+        return replace(self, stars=(placeholder,))
 
     def to_dict(self) -> dict[str, Any]:
         """A JSON-able echo of the declaration, for the run manifest."""
@@ -911,8 +1013,8 @@ logg = 3.6
 # medium = "air"
 # [[stars.components]]
 # name = "A"
-# light = "measure"             # on the "search" route only: the fractions the library
-#                               # templates receive in the bootstrap correlation
+# light = "measure"             # with a declared period ("search" or a range) only: the
+#                               # fractions the library templates receive in a correlation
 """
 
 
@@ -954,7 +1056,13 @@ def _resolve_path(value: Any, base_dir: Path | None) -> Any:
     if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", value):
         return value
     candidate = Path(value)
-    return value if candidate.is_absolute() else os.fspath(base_dir / candidate)
+    if candidate.is_absolute():
+        return value
+    # A path under the home directory ("~/data/*.fits") is expanded, not joined.
+    expanded = candidate.expanduser()
+    if expanded.is_absolute():
+        return os.fspath(expanded)
+    return os.fspath(base_dir / candidate)
 
 
 def config_from_dict(data: Mapping[str, Any], *, base_dir: str | os.PathLike | None = None):
@@ -1117,7 +1225,8 @@ class StarResult:
         On failure, the exception and its traceback.
     live
         On an in-process run only: the :class:`~albireo.Fit`, the velocity table, the
-        label match, the orbit and the posterior, keyed by name. ``None`` from a worker.
+        label match, the orbit and the posterior, keyed by name. ``None`` from a worker,
+        for a failed star, and from :func:`run_pipeline` with ``keep_live=False``.
     """
 
     name: str
@@ -1178,7 +1287,12 @@ class PipelineRun:
                 continue
             orbit = result.report.get("orbit") or {}
             k = orbit.get("k") or {}
-            k_text = ", ".join(f"K_{n} {v:.2f}" for n, v in k.items()) if k else "no orbit"
+            # A value that was not finite is null in the report.
+            k_text = (
+                ", ".join(f"K_{n} " + ("nan" if v is None else f"{v:.2f}") for n, v in k.items())
+                if k
+                else "no orbit"
+            )
             period = orbit.get("period")
             period_text = f"P {period:.5f} d, " if period else ""
             flags = f", {len(result.flags)} flag(s)" if result.flags else ""
@@ -1271,18 +1385,22 @@ def _version() -> str:
 
 
 def _jsonable(value: Any) -> Any:
-    """Numpy and JAX values as plain Python, recursively, for ``json.dumps``."""
+    """Numpy and JAX values as plain Python, recursively, for ``json.dumps``.
+
+    A value that is not finite becomes ``None`` (``null``), whatever its type, so that the
+    reports are strict JSON.
+    """
     if isinstance(value, Mapping):
         return {str(k): _jsonable(v) for k, v in value.items()}
     if isinstance(value, list | tuple):
         return [_jsonable(v) for v in value]
     if isinstance(value, np.generic):
-        return value.item()
+        return _jsonable(value.item())
     if hasattr(value, "__array__") and not isinstance(value, str):
         array = np.asarray(value)
         if array.ndim == 0:
-            return array.item()
-        return array.tolist()
+            return _jsonable(array.item())
+        return _jsonable(array.tolist())
     if isinstance(value, Path):
         return os.fspath(value)
     if isinstance(value, float) and not math.isfinite(value):
@@ -1391,13 +1509,34 @@ def run_star(
 def _run_star_guarded(
     star: StarConfig, config: PipelineConfig, directory: Path, *, progress: bool, keep_live: bool
 ) -> StarResult:
+    """Run one star and record a failure instead of raising it.
+
+    Without ``keep_live`` the star's live objects are dropped, and the cycle collector is
+    run so that they are released before the next star. A compiled model refers to itself
+    through the jitted bound methods it holds, so reference counting alone does not free it.
+    """
+    result = _run_star_recorded(star, config, directory, progress=progress, keep_live=keep_live)
+    if not keep_live:
+        gc.collect()
+    return result
+
+
+# The files that state a star's outcome: a result and its summary, or the traceback.
+_STATUS_FILES = ("result.json", "summary.txt", "error.txt")
+
+
+def _run_star_recorded(
+    star: StarConfig, config: PipelineConfig, directory: Path, *, progress: bool, keep_live: bool
+) -> StarResult:
     directory.mkdir(parents=True, exist_ok=True)
     log_path = directory / "log.txt"
     if log_path.exists():
         log_path.unlink()
     log = _Log(star.name, log_path, progress)
-    settings = star.settings(config.analysis)
-    ctx = _Context(star=star, config=config, settings=settings, directory=directory, log=log)
+    _remove_previous_products(star, directory, log)
+    # The star's own settings are built inside the guard: a star run with a configuration
+    # that did not validate it (run_star) is then recorded as failed like any other.
+    ctx = _Context(star=star, config=config, settings=config.analysis, directory=directory, log=log)
     t0 = time.perf_counter()
     with warnings.catch_warnings():
         warnings.simplefilter("always")
@@ -1405,11 +1544,20 @@ def _run_star_guarded(
             f"{category.__name__}: {message}"
         )
         try:
+            ctx.settings = _star_settings(star, config.analysis)
+            _check_declared_ecc(star, ctx.settings)
             report, summary, live = _run_stages(ctx)
+            ctx.seconds["total"] = time.perf_counter() - t0
+            report, summary = _write_star_report(ctx, report, summary)
         except Exception as exc:
             ctx.seconds["total"] = time.perf_counter() - t0
             text = traceback.format_exc()
             log(f"FAILED: {type(exc).__name__}: {exc}")
+            # A failed star has a traceback and no result, even where the failure came
+            # after its result was written.
+            for name in _STATUS_FILES:
+                with contextlib.suppress(OSError):
+                    (directory / name).unlink(missing_ok=True)
             (directory / "error.txt").write_text(text, encoding="utf-8")
             return StarResult(
                 name=star.name,
@@ -1422,17 +1570,6 @@ def _run_star_guarded(
                 error=f"{type(exc).__name__}: {exc}",
                 traceback=text,
             )
-    ctx.seconds["total"] = time.perf_counter() - t0
-    report["seconds"] = dict(ctx.seconds)
-    report["flags"] = list(ctx.flags)
-    report["warnings"] = list(log.warnings)
-    ctx.files["log"] = os.fspath(log_path)
-    ctx.files["report"] = os.fspath(directory / "result.json")
-    ctx.files["summary"] = os.fspath(directory / "summary.txt")
-    report["files"] = dict(ctx.files)
-    (directory / "result.json").write_text(json.dumps(_jsonable(report), indent=2), "utf-8")
-    summary = summary + "\n\n" + _files_block(ctx.files)
-    (directory / "summary.txt").write_text(summary + "\n", encoding="utf-8")
     log(f"done in {ctx.seconds['total']:.1f} s")
     return StarResult(
         name=star.name,
@@ -1442,10 +1579,67 @@ def _run_star_guarded(
         flags=list(ctx.flags),
         warnings=list(log.warnings),
         files=dict(ctx.files),
-        report=_jsonable(report),
+        report=report,
         summary=summary,
         live=live if keep_live else None,
     )
+
+
+def _write_star_report(
+    ctx: _Context, report: dict[str, Any], summary: str
+) -> tuple[dict[str, Any], str]:
+    """Write ``result.json`` and ``summary.txt``; return the JSON-able report and the text."""
+    directory = ctx.directory
+    report["seconds"] = dict(ctx.seconds)
+    report["flags"] = list(ctx.flags)
+    report["warnings"] = list(ctx.log.warnings)
+    ctx.files["log"] = os.fspath(ctx.log.path)
+    ctx.files["report"] = os.fspath(directory / "result.json")
+    ctx.files["summary"] = os.fspath(directory / "summary.txt")
+    report["files"] = dict(ctx.files)
+    report = _jsonable(report)
+    (directory / "result.json").write_text(json.dumps(report, indent=2), "utf-8")
+    summary = summary + "\n\n" + _files_block(ctx.files)
+    (directory / "summary.txt").write_text(summary + "\n", encoding="utf-8")
+    return report, summary
+
+
+def _remove_previous_products(star: StarConfig, directory: Path, log: _Log) -> None:
+    """Remove what an earlier run of this star wrote into ``directory``.
+
+    The status files are always removed, and so is every product that the earlier
+    ``result.json`` lists under ``files``, where it lies directly in ``directory``. A
+    re-run therefore leaves no earlier result beside a new traceback, and no earlier
+    traceback or product beside a new result: a stage this run does not reach leaves no
+    file. Nothing else is removed, in particular not the ``spectra`` sub-directory into
+    which a BLOeM star's epochs are fetched, and not a velocity file the star declares as
+    an input.
+    """
+    listed: list[Path] = []
+    previous = directory / "result.json"
+    if previous.is_file():
+        try:
+            files = json.loads(previous.read_text(encoding="utf-8")).get("files") or {}
+            listed = [Path(p) for p in files.values() if isinstance(p, str)]
+        except (OSError, ValueError, AttributeError):
+            listed = []
+    root = directory.resolve()
+    protected = {root / "log.txt"}
+    if isinstance(star.velocities, str | os.PathLike):
+        protected.add(Path(star.velocities).resolve())
+    removed = 0
+    for path in [*(directory / name for name in _STATUS_FILES), *listed]:
+        resolved = path.resolve()
+        if resolved.parent != root or resolved in protected or not resolved.is_file():
+            continue
+        try:
+            resolved.unlink()
+        except OSError as error:
+            log(f"could not remove {resolved.name} of an earlier run: {error}")
+            continue
+        removed += 1
+    if removed:
+        log(f"removed {removed} file(s) written by an earlier run of this star")
 
 
 def _run_stages(ctx: _Context) -> tuple[dict[str, Any], str, dict[str, Any]]:
@@ -1456,6 +1650,8 @@ def _run_stages(ctx: _Context) -> tuple[dict[str, Any], str, dict[str, Any]]:
     ]
     report: dict[str, Any] = {"star": star.name, "albireo": _version(), "status": "ok"}
     live: dict[str, Any] = {}
+    # The declaration's own light fractions, before a measurement replaces them.
+    light_measured = star.measures_light
 
     # 1. the epochs
     with ctx.stage("read"):
@@ -1469,13 +1665,19 @@ def _run_stages(ctx: _Context) -> tuple[dict[str, Any], str, dict[str, Any]]:
     report["dataset"] = _describe_dataset(dataset, lsf)
     live["dataset"] = dataset
 
-    # 2. the library, if any
+    # 2. the library, where a stage will use it. The semi-amplitude starts of the
+    # known-period route need it only when a template can be rendered, which needs the
+    # wavelength medium.
     library = None
+    k_start_table = (
+        star.period is not None
+        and not star.searching
+        and not star.measures_light
+        and any(c.k is None for c in star.components)
+        and dataset[0].medium is not None
+    )
     if ctx.config.library is not None and (
-        star.labels
-        or star.searching
-        or star.measures_light
-        or any(c.k is None for c in star.components)
+        star.labels or star.searching or star.measures_light or k_start_table
     ):
         with ctx.stage("library"):
             library = _resolve_library(ctx.config.library, log)
@@ -1510,10 +1712,8 @@ def _run_stages(ctx: _Context) -> tuple[dict[str, Any], str, dict[str, Any]]:
             sections.append(measured["text"])
             report["light"] = measured["report"]
             live["light"] = measured["objects"]
-            table_orbit = _table_orbit(ctx, measured["objects"]["table"], star, settings)
-            starts = _k_starts(ctx, table_orbit, star, settings)
-            elements = _element_starts(ctx, table_orbit, star, settings)
-        elif library is not None and any(c.k is None for c in star.components):
+            starts, elements = _starts_from_table(ctx, measured["objects"]["table"], star)
+        elif ctx.config.library is not None and any(c.k is None for c in star.components):
             # A semi-amplitude is a range and a library is available, so a template table
             # at the declared period provides the starting values, at a cost of a few
             # seconds. The table was not requested, so where it cannot be rendered the star
@@ -1538,9 +1738,7 @@ def _run_stages(ctx: _Context) -> tuple[dict[str, Any], str, dict[str, Any]]:
                         )
                     else:
                         _write_template_table(ctx, table, "semi-amplitude start")
-                        table_orbit = _table_orbit(ctx, table, star, settings)
-                        starts = _k_starts(ctx, table_orbit, star, settings)
-                        elements = _element_starts(ctx, table_orbit, star, settings)
+                        starts, elements = _starts_from_table(ctx, table, star)
         orbit_spec = _declared_orbit(star, settings, starts=starts, elements=elements)
 
     # 4. disentangle
@@ -1614,7 +1812,10 @@ def _run_stages(ctx: _Context) -> tuple[dict[str, Any], str, dict[str, Any]]:
         # the amplitude that reproduces the epochs with these templates (docs/math.md §9.1).
         lights = [s.light for s in dis.stars]
         amplitudes = _template_light(ctx, fit, lights)
-        light_source = "global re-measure" if isinstance(amplitudes, str) else "declared"
+        if isinstance(amplitudes, str):
+            light_source = "global re-measure"
+        else:
+            light_source = "measured (correlation)" if light_measured else "declared"
         table, templates = _measure_epoch_velocities(ctx, fit, templates, amplitudes)
         if isinstance(amplitudes, str) and table.light_mode == "free per epoch":
             light_source = "free per epoch"  # no epoch gave positive amplitudes to hold
@@ -1801,65 +2002,90 @@ def _fetch_bloem(ctx: _Context) -> str:
 
 
 def _with_medium(dataset: Dataset, medium: str) -> Dataset:
-    epochs = tuple(
-        EpochData(
-            wave=e.wave,
-            flux=e.flux,
-            ivar=e.ivar,
-            bjd=e.bjd,
-            v_bary=e.v_bary,
-            instrument=e.instrument,
-            mask=e.mask,
-            medium=medium,
-        )
-        for e in dataset
-    )
-    return Dataset(epochs, frame=dataset.frame)
+    """The dataset with every epoch's wavelength medium declared, every other field kept."""
+    from albireo.preprocess import _replace
+
+    return Dataset(tuple(_replace(e, medium=medium) for e in dataset), frame=dataset.frame)
+
+
+def _distinct_grids(epochs: Sequence[EpochData]) -> int:
+    """The number of distinct wavelength arrays, counted by digest rather than by copy."""
+    return len({hashlib.blake2b(np.ascontiguousarray(e.wave).data).digest() for e in epochs})
 
 
 def _try_share_grid(dataset: Dataset, log: _Log) -> Dataset:
-    """Collapse sub-pixel per-exposure grids onto one, when that is exact."""
+    """Collapse sub-pixel per-exposure grids onto one, when that is exact.
+
+    Each instrument is aligned on its own (:func:`albireo.preprocess.share_wavelength_grid`
+    aligns within an instrument and never across). An instrument whose exposures are
+    genuinely different wavelength solutions (APF's, each with its own drift) keeps one
+    grid per exposure, and the others are still aligned.
+    """
     from albireo.preprocess import share_wavelength_grid
 
-    try:
-        shared = share_wavelength_grid(list(dataset))
-    except ValueError:
+    epochs = list(dataset)
+    out = list(epochs)
+    changed = False
+    for key in dataset.instruments:
+        members = [j for j, e in enumerate(epochs) if e.instrument == key]
+        try:
+            shared = share_wavelength_grid([epochs[j] for j in members])
+        except ValueError as error:
+            if len(members) > 1:
+                log(f"instrument {key!r}: per-exposure wavelength grids kept ({error})")
+            continue
+        for j, epoch in zip(members, shared, strict=True):
+            out[j] = epoch
+        changed = True
+        before = _distinct_grids([epochs[j] for j in members])
+        after = _distinct_grids(shared)
+        if after < before:
+            log(
+                f"relabelled {before} per-exposure wavelength grids of {key!r} onto {after} "
+                "(sub-pixel, exact)"
+            )
+    if not changed:
         return dataset
-    before = len({e.wave.tobytes() for e in dataset})
-    after = len({e.wave.tobytes() for e in shared})
-    if after < before:
-        log(f"relabelled {before} per-exposure wavelength grids onto {after} (sub-pixel, exact)")
-    return Dataset(shared, frame=dataset.frame)
+    return Dataset(tuple(out), frame=dataset.frame)
 
 
 def _resolve_lsf(ctx: _Context, dataset: Dataset, header_lsf: Mapping[str, float]):
+    """The line-spread function of every instrument of the dataset.
+
+    A width declared on the star, then one declared for the batch, is used. Otherwise,
+    when every epoch of the instrument declares its own width (a file's resolving power,
+    or :attr:`albireo.EpochData.lsf_sigma_kms` of an in-memory epoch), the instrument is
+    modelled per epoch. ``header_lsf`` holds the widths the files declared, for the log.
+    """
     out: dict[str, LSF] = {}
     for key in dataset.instruments:
         if key in ctx.star.lsf:
             out[key] = _lsf(ctx.star.lsf[key], key)
         elif key in ctx.config.lsf:
             out[key] = _lsf(ctx.config.lsf[key], key)
-        elif (
-            key in header_lsf
-            and not np.isnan(dataset.lsf_sigma_kms[[e.instrument == key for e in dataset]]).any()
-        ):
+        elif not np.isnan(dataset.lsf_sigma_kms[[e.instrument == key for e in dataset]]).any():
             out[key] = LSF.per_epoch()
             widths = declared_lsf_widths(dataset, key)
             detail = ", ".join(f"{s:.3f} km/s x{len(idx)}" for s, idx in widths.items())
-            ctx.log(
-                f"instrument {key!r}: LSF width taken per epoch from the files' own "
-                f"resolving power (the SPEC_RES header, or an instrument reader) ({detail})"
+            source = (
+                "the files' own resolving power (the SPEC_RES header, or an instrument reader)"
+                if key in header_lsf
+                else "the widths the epochs declare (EpochData.lsf_sigma_kms)"
             )
+            ctx.log(f"instrument {key!r}: LSF width taken per epoch from {source} ({detail})")
         else:
             raise ValueError(
-                f"no line-spread function for instrument {key!r} and its files do not all "
+                f"no line-spread function for instrument {key!r} and its epochs do not all "
                 f"declare a resolving power. Add [instrument.{key}] with resolving_power or "
                 "sigma_kms to the configuration (or lsf={...} on the star)."
             )
     return out
 
 
-_LIBRARY_CACHE: dict[str, Any] = {}
+# The library loaded last, so that the stars of a batch (which share one library) load it
+# once. One entry is kept: a session that moves to another library releases the first, and
+# a library file is keyed by its modification time and size, so a rebuilt file is reloaded.
+_LIBRARY_CACHE: dict[tuple, Any] = {}
 
 
 def _resolve_library(spec: Any, log: _Log):
@@ -1867,19 +2093,27 @@ def _resolve_library(spec: Any, log: _Log):
 
     if isinstance(spec, SpectralLibrary):
         return spec
-    key = os.fspath(spec)
-    if key in _LIBRARY_CACHE:
-        return _LIBRARY_CACHE[key]
-    if key in library_names():
-        log(f"loading library {key!r} (downloaded and cached on first use)")
-        library = fetch_library(key, progress=True)
-    elif Path(key).is_file():
-        log(f"loading library from {key}")
-        library = load_library(key)
+    name = os.fspath(spec)
+    registered = name in library_names()
+    if registered:
+        key: tuple = (name,)
+    elif Path(name).is_file():
+        stat = Path(name).stat()
+        key = (name, stat.st_mtime_ns, stat.st_size)
     else:
         raise ValueError(
-            f"library {key!r} is neither a registered name ({library_names()}) nor a file"
+            f"library {name!r} is neither a registered name ({library_names()}) nor a file"
         )
+    if key in _LIBRARY_CACHE:
+        return _LIBRARY_CACHE[key]
+    # The previous library is released before the next is read, so that two are not held.
+    _LIBRARY_CACHE.clear()
+    if registered:
+        log(f"loading library {name!r} (downloaded and cached on first use)")
+        library = fetch_library(name, progress=True)
+    else:
+        log(f"loading library from {name}")
+        library = load_library(name)
     _LIBRARY_CACHE[key] = library
     return library
 
@@ -1949,6 +2183,22 @@ def _table_orbit(ctx: _Context, table, star: StarConfig, settings: Analysis):
         )
         return None
     return orbit
+
+
+def _starts_from_table(
+    ctx: _Context, table, star: StarConfig
+) -> tuple[list[float | None] | None, tuple[float, float] | None]:
+    """The semi-amplitude and element starts from a template table at the declared period.
+
+    The orbit fitted to the table (:func:`_table_orbit`) gives both, by
+    :func:`_k_starts` and :func:`_element_starts`. Each is ``None`` where the table gave
+    no usable value.
+    """
+    settings = ctx.settings
+    table_orbit = _table_orbit(ctx, table, star, settings)
+    starts = _k_starts(ctx, table_orbit, star, settings)
+    elements = _element_starts(ctx, table_orbit, star, settings)
+    return starts, elements
 
 
 def _element_starts(
@@ -2320,8 +2570,11 @@ def _table_light_fractions(table) -> np.ndarray | None:
     return measured / measured.sum()
 
 
-def _apply_measured_light(ctx: _Context, table) -> np.ndarray:
-    """Replace the star's ``"measure"`` fractions by the table's held amplitudes."""
+def _apply_measured_light(ctx: _Context, table, *, flag: bool = True) -> np.ndarray:
+    """Replace the star's ``"measure"`` fractions by the table's held amplitudes.
+
+    With ``flag`` the measurement is recorded as a flag (:func:`_flag_measured_light`).
+    """
     star = ctx.star
     measured = _table_light_fractions(table)
     if measured is None:
@@ -2337,13 +2590,33 @@ def _apply_measured_light(ctx: _Context, table) -> np.ndarray:
             replace(c, light=float(l)) for c, l in zip(star.components, measured, strict=True)
         ],
     )
-    ctx.flag(
-        "light fractions measured by correlation against library templates rather than "
-        "declared: "
-        + ", ".join(f"{c.name} {l:.3f}" for c, l in zip(star.components, measured, strict=True))
-        + " (the amplitudes the templates received; a template mismatch moves them)"
-    )
+    if flag:
+        _flag_measured_light(ctx, measured)
     return measured
+
+
+def _flag_measured_light(ctx: _Context, measured, compared=None) -> None:
+    """Flag the light fractions measured by correlation, once per star.
+
+    ``compared``, where given and different, are the fractions under which the candidate
+    periods of the bootstrap were compared, measured from another candidate's table.
+    """
+    names = [c.name for c in ctx.star.components]
+
+    def listed(values) -> str:
+        return ", ".join(f"{n} {float(v):.3f}" for n, v in zip(names, values, strict=True))
+
+    text = (
+        "light fractions measured by correlation against library templates rather than "
+        f"declared: {listed(measured)} (the amplitudes the templates received; a template "
+        "mismatch moves them)"
+    )
+    if compared is not None and not np.array_equal(np.asarray(compared), np.asarray(measured)):
+        text += (
+            f". The candidate periods were compared under {listed(compared)}, measured from "
+            "the table of the lowest chi-square candidate"
+        )
+    ctx.flag(text)
 
 
 def _measure_light(ctx: _Context, dataset: Dataset, lsf, library) -> dict[str, Any]:
@@ -2401,6 +2674,10 @@ def _bootstrap_spec(
     replace the table's as the starting values. They are ignored where the table's
     semi-amplitudes are kept, since the Gaussian around them is a prior and not a start.
 
+    A semi-amplitude prior the star declares (``k`` of a component) is kept in both
+    declarations, as on the known-period route (:func:`_k_prior`). The table's values then
+    start the undeclared components only, and no Gaussian is centred on them.
+
     Returns the declaration and the phrase describing its semi-amplitudes.
     """
     star, settings = ctx.star, ctx.settings
@@ -2409,9 +2686,34 @@ def _bootstrap_spec(
     starts: list[float | None] = [
         None if d else float(k) for k, d in zip(k_boot, degenerate, strict=True)
     ]
+    declared = [c.name for c in star.components if c.k is not None]
     if comparison:
         k_spec = _k_prior(star, settings, starts=starts)
         k_text = f"K within {settings.k_min:g}-{settings.k_max:g}, started from the table"
+    elif declared:
+        # The declared priors are kept. A declared range the table's value lies outside is
+        # flagged, since the two disagree; an undeclared component outside the settings'
+        # range is not a measurement and is started from the others, as in _k_prior.
+        outside = []
+        for c, k in zip(star.components, k_boot, strict=True):
+            prior = _spec(c.k, f"component {c.name!r}: k")
+            if isinstance(prior, Between) and not (
+                np.isfinite(k) and float(np.asarray(prior.lo)) <= k <= float(np.asarray(prior.hi))
+            ):
+                outside.append(c.name)
+        if outside:
+            ctx.flag(
+                f"bootstrap semi-amplitudes {np.round(k_boot, 1).tolist()} km/s fall outside "
+                f"the range declared for {outside}: the disentangling keeps the declared "
+                "priors"
+            )
+        if k_starts is not None:
+            starts = [float(k) for k in k_starts]
+        k_spec = _k_prior(star, settings, starts=starts)
+        k_text = (
+            f"K as declared for {declared}, otherwise within {settings.k_min:g}-"
+            f"{settings.k_max:g} started from the bootstrap"
+        )
     elif degenerate.any():
         # A component the correlation could not follow (a faint secondary, an exchanged
         # twin) gives a semi-amplitude of zero or of thousands of km/s, and a Gaussian
@@ -2459,14 +2761,65 @@ def _bootstrap_spec(
 def _coarse_marginal(scanner: Disentangler, init: Mapping[str, Any]) -> float:
     """The coarse declaration's marginal log-likelihood at ``init``, in nats.
 
-    This is the fallback for a candidate whose declaration has nothing to scan (a declared
-    conjunction and a declared semi-amplitude for every component). Like the scans, it
-    includes no prior: :meth:`albireo.inference.MarginalOrbitModel.log_likelihood` is the
-    marginal of the data over the spectra alone, and the priors over the orbital
-    parameters enter only through the numpyro model the optimizer runs.
+    The comparison of candidate periods evaluates every candidate's table orbit with it
+    (:func:`_table_orbit_trial`), and the starting point of a candidate whose declaration
+    has nothing to scan (a declared conjunction and a declared semi-amplitude for every
+    component). Like the scans, it includes no prior:
+    :meth:`albireo.inference.MarginalOrbitModel.log_likelihood` is the marginal of the data
+    over the spectra alone, and the priors over the orbital parameters enter only through
+    the numpyro model the optimizer runs.
     """
     theta = {**dict(init), **dict(scanner.fixed)}
     return float(scanner.model.log_likelihood(theta))
+
+
+def _finite_max(values) -> float:
+    """The largest finite value, or ``nan`` when none is finite."""
+    values = np.asarray(values, dtype=float)
+    finite = values[np.isfinite(values)]
+    return float(np.max(finite)) if finite.size else float("nan")
+
+
+def _coarse_model_key(scanner: Disentangler) -> tuple:
+    """What a coarse model of the period comparison depends on that a candidate can change.
+
+    The candidates of one comparison share the dataset, the line-spread functions, the
+    components and the noise model (they come from the star and its settings). The
+    candidate's orbit declaration enters the model only through the velocity budget, the
+    model grid it sets, and the eccentricity bound. The light fractions are included as a
+    check.
+    """
+    grid = scanner.grid
+    return (
+        float(grid.x0),
+        float(grid.dx),
+        int(grid.n),
+        float(scanner.velocity_budget.total),
+        float(scanner.effective_ecc_max),
+        tuple(float(s.light) for s in scanner.stars),
+    )
+
+
+def _share_coarse_model(scanner: Disentangler, shared: tuple | None) -> tuple:
+    """Give a candidate's coarse declaration the compiled model of an earlier candidate.
+
+    :class:`albireo.inference.MarginalOrbitModel` takes no orbital parameter at
+    construction, only the grid, the velocity bound and the eccentricity bound, and every
+    marginal likelihood it returns is a function of the parameters it is called with. A
+    model built for one candidate therefore returns, bit for bit, what a model built for
+    another candidate with the same key (:func:`_coarse_model_key`) would. Sharing it
+    avoids building the model and compiling its marginal likelihood and its
+    semi-amplitude sweeps again for every candidate. Only the model is shared: the
+    starting values and the fixed sites remain the candidate's own.
+
+    ``shared`` is ``None`` or the ``(key, model)`` pair of an earlier candidate; the pair
+    to keep for the next candidate is returned.
+    """
+    key = _coarse_model_key(scanner)
+    if shared is not None and shared[0] == key:
+        scanner._built["model"] = shared[1]
+        return shared
+    return key, scanner.model
 
 
 def _table_orbit_trial(init: Mapping[str, Any], orbit, spec: Orbit, settings: Analysis) -> dict:
@@ -2544,8 +2897,12 @@ def _decide_period_by_disentangling(ctx: _Context, dataset: Dataset, lsf, ranked
 
     The prior-amplitude profile and the second scan pass of :meth:`albireo.Disentangler.fit`
     are not run. They refine a fit within a basin, and this comparison only selects the
-    basin. Each candidate's declaration, which holds a compiled model, is released once
-    its value is known.
+    basin. The candidates' coarse declarations differ only in their starting values, so
+    they share one compiled model (:func:`_share_coarse_model`), which is released after
+    the last candidate.
+
+    A candidate whose marginal likelihood is not finite at any trial ranks below every
+    finite one, and the comparison flags it.
 
     ``None`` is returned when the comparison does not apply: fewer than two distinct
     candidates, or ``period_decision_candidates`` below two.
@@ -2559,6 +2916,7 @@ def _decide_period_by_disentangling(ctx: _Context, dataset: Dataset, lsf, ranked
         "disentangling's marginal likelihood on the coarse grid"
     )
     entries: list[dict[str, Any]] = []
+    shared = None
     for rank, (orbit, _) in enumerate(ranked[:n]):
         started = time.perf_counter()
         log(
@@ -2568,6 +2926,7 @@ def _decide_period_by_disentangling(ctx: _Context, dataset: Dataset, lsf, ranked
         spec, _ = _bootstrap_spec(ctx, orbit, comparison=True)
         dis = _declare(ctx, dataset, lsf, spec, None)
         scanner = dis._scan_declaration()
+        shared = _share_coarse_model(scanner, shared)
         init = dict(dis.init)
         # The candidate's own table orbit is evaluated before the scans move the start.
         trial = _table_orbit_trial(init, orbit, spec, settings)
@@ -2585,11 +2944,10 @@ def _decide_period_by_disentangling(ctx: _Context, dataset: Dataset, lsf, ranked
         else:
             # This is the value at the best phase for the starting semi-amplitudes, the
             # number the semi-amplitude scan reports as its start value and the only one
-            # available when there is no semi-amplitude to scan.
+            # available when there is no semi-amplitude to scan. A trial whose value is not
+            # finite is left out of the maximum.
             value = (
-                float(np.max(np.asarray(scan.values, dtype=float)))
-                if scan is not None
-                else _coarse_marginal(scanner, init)
+                _finite_max(scan.values) if scan is not None else _coarse_marginal(scanner, init)
             )
             k_best = [float(v) for v in np.atleast_1d(np.asarray(init["k"], dtype=float))]
             declared_t = init.get("t_conj", dis.fixed.get("t_conj", np.nan))
@@ -2597,7 +2955,7 @@ def _decide_period_by_disentangling(ctx: _Context, dataset: Dataset, lsf, ranked
             moved = False
         scan_value = value
         scored_at = "scans"
-        if np.isfinite(at_table) and at_table > value:
+        if np.isfinite(at_table) and (at_table > value or not np.isfinite(value)):
             # The chosen candidate's final declaration is built from its table orbit
             # (_bootstrap_spec), so no scanned semi-amplitude replaces the table's start.
             value = float(at_table)
@@ -2638,7 +2996,21 @@ def _decide_period_by_disentangling(ctx: _Context, dataset: Dataset, lsf, ranked
         )
         del scanner, dis, amp, scan
         gc.collect()
-    order = sorted(range(len(entries)), key=lambda i: entries[i]["value_nats"], reverse=True)
+    del shared
+    gc.collect()
+    unscored = [e["period"] for e in entries if not np.isfinite(e["value_nats"])]
+    if unscored:
+        ctx.flag(
+            "the disentangling's marginal likelihood was not finite for the candidate "
+            f"period(s) {[round(p, 5) for p in unscored]} d at any trial, so they rank last "
+            "in the comparison"
+        )
+
+    def ranking(i: int) -> float:
+        value = entries[i]["value_nats"]
+        return value if np.isfinite(value) else -np.inf
+
+    order = sorted(range(len(entries)), key=ranking, reverse=True)
     chosen, runner_up = order[0], order[1]
     margin = entries[chosen]["value_nats"] - entries[runner_up]["value_nats"]
     over_table = entries[chosen]["value_nats"] - entries[0]["value_nats"]
@@ -2786,8 +3158,10 @@ def _bootstrap(ctx: _Context, dataset: Dataset, lsf, library):
     ranked = record["ranked"]
     # The light fractions, when they are measured rather than declared, must be available
     # before any declaration can be built. They are measured from the table the chi-square
-    # chose, and again from the chosen one when the comparison selects another.
-    measured_light = _apply_measured_light(ctx, table) if star.measures_light else None
+    # chose, and again from the chosen one when the comparison selects another. One flag
+    # records both, once the period is decided.
+    measured_light = _apply_measured_light(ctx, table, flag=False) if star.measures_light else None
+    compared_light = measured_light
     reason = (
         "period_decision_candidates disabled"
         if settings.period_decision_candidates < 2
@@ -2807,7 +3181,9 @@ def _bootstrap(ctx: _Context, dataset: Dataset, lsf, library):
         if chosen_table is not table:
             table = chosen_table
             if star.measures_light:
-                measured_light = _apply_measured_light(ctx, table)
+                measured_light = _apply_measured_light(ctx, table, flag=False)
+    if measured_light is not None:
+        _flag_measured_light(ctx, measured_light, compared=compared_light)
     swapped = int(table.settings.get("reassigned_by_orbit", 0))
     if swapped:
         ctx.flag(
@@ -5179,6 +5555,7 @@ def run_pipeline(
     jobs: int | str | None = 1,
     stars: Sequence[str] | None = None,
     progress: bool = True,
+    keep_live: bool = True,
 ) -> PipelineRun:
     """Run every star of a configuration and write the batch products.
 
@@ -5188,13 +5565,21 @@ def run_pipeline(
         A :class:`PipelineConfig`, the path of a TOML file, or the dictionary form.
     jobs
         Worker processes. ``1`` (default) runs in this process and keeps the live objects
-        on each :class:`StarResult`. ``"auto"`` or ``0`` uses ``cpu_count // 4``. Any
-        larger number runs that many stars at a time, each with its threads capped so the
-        workers do not oversubscribe the machine.
+        on each :class:`StarResult` (see ``keep_live``). ``"auto"`` or ``0`` uses
+        ``cpu_count // 4``. Any larger number runs that many stars at a time, each with its
+        threads capped so the workers do not oversubscribe the machine.
     stars
         Run only these names.
     progress
         Print one line per stage per star.
+    keep_live
+        With ``jobs = 1``, keep each star's live objects on its :class:`StarResult`
+        (default). They include the :class:`~albireo.Fit` with its compiled model and the
+        label match with its sufficient statistics, tens of MB per star on a short window
+        and up to about a GB on an echelle star, so a batch that keeps them holds every
+        star's at once. ``False`` releases them after each star, and the memory of the
+        batch is then that of one star. The ``albireo`` command passes ``False``. Workers
+        never return live objects.
 
     Returns
     -------
@@ -5217,8 +5602,8 @@ def run_pipeline(
     eight 2.5x. Capping each worker's XLA and BLAS threads at ``cpu_count // jobs`` made
     no measurable difference on that benchmark (``docs/benchmarks.md``). A worker
     returns a plain-data :class:`StarResult`. The live objects (the :class:`~albireo.Fit`,
-    the velocity table, the label match) are kept only on an in-process run, since they
-    hold compiled JAX programs that cannot be pickled.
+    the velocity table, the label match) are kept only on an in-process run with
+    ``keep_live``, since they hold compiled JAX programs that cannot be pickled.
     """
     if isinstance(config, str | os.PathLike):
         config = load_config(config)
@@ -5253,7 +5638,7 @@ def run_pipeline(
     if n_jobs == 1:
         for star in selected:
             results[star.name] = _run_star_guarded(
-                star, config, subdirs[star.name], progress=progress, keep_live=True
+                star, config, subdirs[star.name], progress=progress, keep_live=keep_live
             )
     else:
         env = _thread_environment(n_jobs)

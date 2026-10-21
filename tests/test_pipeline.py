@@ -457,7 +457,18 @@ def test_the_written_spectra_can_be_read_back(quick_run):
     assert np.all(err > 0)
 
 
-def test_a_batch_records_a_failure_without_stopping(toy, library, tmp_path):
+def test_a_batch_records_a_failure_without_stopping(toy, library, tmp_path, monkeypatch):
+    """A failed star is recorded and the next one runs, and no star's objects are kept.
+
+    With ``keep_live=False`` (as the ``albireo`` command runs) each star's live objects
+    are released before the next star starts: the first star's ``Fit``, which holds a
+    compiled model, is no longer reachable when the second star's stages begin.
+    """
+    import gc
+    import weakref
+
+    import albireo.pipeline as pipeline_module
+
     dataset, truth, grid = toy
     good = _star(dataset, truth, grid, name="good", labels=False)
     # The Disentangler interface rejects this declaration at fit time: an eccentricity
@@ -469,7 +480,19 @@ def test_a_batch_records_a_failure_without_stopping(toy, library, tmp_path):
     config = PipelineConfig(
         stars=[good, bad], output=tmp_path, analysis=Analysis(fast=True, plots=False, max_steps=3)
     )
-    run = run_pipeline(config, progress=False)
+    real_stages, fits, alive_at_start = pipeline_module._run_stages, [], []
+
+    def stages(ctx):
+        alive_at_start.append([ref() is not None for ref in fits])
+        report, summary, live = real_stages(ctx)
+        fits.append(weakref.ref(live["fit"]))
+        return report, summary, live
+
+    monkeypatch.setattr(pipeline_module, "_run_stages", stages)
+    run = run_pipeline(config, progress=False, keep_live=False)
+    gc.collect()
+    assert alive_at_start == [[], [False]], "the first star's Fit was released before the next"
+    assert all(r.live is None for r in run.results.values())
     assert set(run.results) == {"good", "bad"}
     assert run.results["good"].ok
     assert not run.results["bad"].ok and "bad" in run.failures
@@ -510,6 +533,7 @@ def test_selecting_stars_by_name(toy, tmp_path):
     config = PipelineConfig(stars=stars, output=tmp_path, analysis=Analysis(fast=True, plots=False))
     run = run_pipeline(config, stars=["two"], progress=False)
     assert list(run.results) == ["two"]
+    assert run.results["two"].live["fit"] is not None, "an in-process run keeps them by default"
     with pytest.raises(KeyError, match="unknown star"):
         run_pipeline(config, stars=["three"], progress=False)
 
@@ -1786,7 +1810,12 @@ def test_the_disentangling_decides_among_the_best_candidate_periods(toy, tmp_pat
             return self.best_value - self.start_value
 
     class _FakeDis:
-        """Only what the comparison uses: a coarse copy, a model, a phase scan, a K scan."""
+        """Only what the comparison uses: a coarse copy, a model, a phase scan, a K scan.
+
+        The grid, budget, eccentricity bound and lights are the key under which the
+        candidates share a coarse model. Each fake keeps its own ``model`` attribute, so
+        the values here stay those of each candidate.
+        """
 
         def __init__(self, spec):
             centre = 0.5 * (float(spec.period.lo) + float(spec.period.hi))
@@ -1794,6 +1823,11 @@ def test_the_disentangling_decides_among_the_best_candidate_periods(toy, tmp_pat
             self.init = {"k": np.array([10.0, 20.0]), "t_conj": 2455000.0}
             self.fixed = {}
             self.model = SimpleNamespace(log_likelihood=self._at_table_orbit)
+            self.grid = SimpleNamespace(x0=8.5, dx=1e-5, n=500)
+            self.velocity_budget = SimpleNamespace(total=250.0)
+            self.effective_ecc_max = 0.5
+            self.stars = (SimpleNamespace(light=0.62), SimpleNamespace(light=0.38))
+            self._built = {}
 
         def _at_table_orbit(self, theta):
             trials.append({key: np.asarray(value) for key, value in theta.items()})
@@ -2019,6 +2053,7 @@ def test_a_semi_amplitude_start_no_medium_allows_is_skipped_and_not_a_failure(
     assert result.ok, result.error
     assert any("semi-amplitude starts skipped" in f for f in result.flags), result.flags
     assert "k-start" not in result.seconds, "the stage was skipped, not run"
+    assert "library" not in result.seconds, "no stage of this star uses the library"
 
 
 def test_a_template_table_that_measures_no_light_stops_only_the_routes_that_asked_for_it(
@@ -2938,6 +2973,34 @@ def test_the_velocity_stage_records_where_the_amplitudes_came_from(toy, tmp_path
     ctx, report, fit = run((400.0, 141452.0), "moved")
     assert report["velocities"]["light_source"] == "global re-measure"
     assert fit.measured[1] == "global"
+
+    # Fractions measured by correlation before the disentangling are held as declared to
+    # it, and the report says where they came from.
+    def measure(ctx_, dataset_, lsf_, library_):
+        ctx_.star = replace(
+            ctx_.star,
+            components=[
+                replace(c, light=v) for c, v in zip(ctx_.star.components, LIGHT, strict=True)
+            ],
+        )
+        return {"text": "  measured", "report": {}, "objects": {"table": measured}}
+
+    monkeypatch.setattr(pipeline_module, "_resolve_library", lambda *args, **kwargs: object())
+    monkeypatch.setattr(pipeline_module, "_measure_light", measure)
+    monkeypatch.setattr(pipeline_module, "_write_template_table", lambda *args, **kwargs: None)
+    monkeypatch.setattr(pipeline_module, "_table_orbit", lambda *args, **kwargs: None)
+    star = replace(
+        _star(dataset, truth, grid, name="measured"),
+        truth=None,
+        labels=False,
+        components=[ComponentConfig("A", "measure"), ComponentConfig("B", "measure")],
+    )
+    ctx = _context(star, tmp_path / "measured", Analysis(plots=False), library="stub")
+    fit = _StubFit(("A", "B"), lights=LIGHT, taus=(400.0, 400.0), table=measured)
+    monkeypatch.setattr(pipeline_module, "_declare", lambda *args, **kwargs: fit.dis)
+    report, _text, _live = _run_stages(ctx)
+    assert report["velocities"]["light_source"] == "measured (correlation)"
+    assert fit.measured[1] == list(LIGHT)
 
 
 def test_the_velocity_stage_keeps_the_star_where_no_amplitude_is_positive(toy, tmp_path):
