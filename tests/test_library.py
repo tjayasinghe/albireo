@@ -1234,13 +1234,23 @@ def test_a_failed_download_cancels_the_queued_ones(offline_registry, monkeypatch
     """An error other than a 404 ends the build without first running every queued
     download, each of which would retry with a back-off on a network that is down.
 
-    The download that starts after the failure is held until the error has reached the
-    caller, so that the count does not depend on how quickly the build reacts. Without the
-    cancellation the build waits for that download, which is released by its timeout, and
-    then runs the 16 queued after it.
+    The download that starts after the failure is held until the queued downloads are
+    cancelled, so that the count does not depend on how quickly the build reacts; the build
+    then waits for it to finish, as for any download in progress. Without the cancellation
+    the held download is released by its timeout and the 16 queued after it run.
     """
     import threading
+    from concurrent.futures import ThreadPoolExecutor
 
+    released = threading.Event()
+
+    class Pool(ThreadPoolExecutor):
+        def shutdown(self, wait=True, *, cancel_futures=False):
+            if cancel_futures:
+                released.set()
+            super().shutdown(wait=wait, cancel_futures=cancel_futures)
+
+    monkeypatch.setattr(lib_mod, "ThreadPoolExecutor", Pool)
     entry, _ = offline_registry
     many = dataclasses.replace(
         entry, axes={"teff": [5000.0, 5250.0, 5500.0], "logg": [4.0, 4.5, 5.0], "mh": [0.0, 0.25]}
@@ -1248,7 +1258,6 @@ def test_a_failed_download_cancels_the_queued_ones(offline_registry, monkeypatch
     monkeypatch.setitem(lib_mod._LIBRARIES, "test-grid", many)
     wave = np.linspace(4000.0, 7000.0, 400)
     calls: list[str] = []
-    released = threading.Event()
     finished = threading.Event()
 
     def failing(url, destination, attempts=4):
