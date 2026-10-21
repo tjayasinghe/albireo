@@ -620,14 +620,26 @@ def test_a_gost_cadence_without_epochs_spans_the_products_release(systems, libra
 
 
 def _fake_benchmark(systems, library, tmp_path, monkeypatch):
-    """run_benchmark with a pipeline that writes canned results; returns it and the stars run."""
+    """run_benchmark with a pipeline that writes canned results; returns it and the stars run.
+
+    The canned results are written where the pipeline writes them: the directories are
+    assigned over the whole batch (``_star_directories``) and only the selected stars run.
+    ``run.calls`` records the arguments of each call.
+    """
+    from albireo.pipeline import _star_directories
+
     ran: list[str] = []
+    calls: list[dict] = []
     by_name = {s.name: s for s in systems}
 
-    def run_pipeline(pipeline, jobs, progress):
+    def run_pipeline(pipeline, *, jobs, progress, stars=None, **options):
+        calls.append({"planned": [s.name for s in pipeline.stars], "stars": stars, **options})
+        directories = _star_directories(tmp_path, pipeline.stars)
         for star in pipeline.stars:
+            if stars is not None and star.name not in stars:
+                continue
             system, tier = star.name.rsplit("__", 1)
-            directory = tmp_path / star.name
+            directory = directories[star.name]
             directory.mkdir(exist_ok=True)
             result = json.dumps(_fake_result(by_name[system], tier))
             (directory / "result.json").write_text(result, encoding="utf-8")
@@ -639,9 +651,11 @@ def _fake_benchmark(systems, library, tmp_path, monkeypatch):
 
     def run(**changes):
         ran.clear()
+        calls.clear()
         options = {"output": tmp_path, "systems": systems, "library": library, "tiers": ("orbit",)}
         return run_benchmark(BenchmarkConfig(**{**options, **changes}), progress=False)
 
+    run.calls = calls
     return run, ran
 
 
@@ -710,6 +724,83 @@ def test_the_manifest_is_parsed_once_for_every_key(systems, library, tmp_path, m
     run(tiers=("orbit", "blind"))
     assert len(ran) == len(manifests) == 2 * len(systems)
     assert len(set(manifests)) == 1
+
+
+def test_the_pipeline_runs_the_selected_stars_of_the_whole_batch_without_live_objects(
+    systems, library, tmp_path, monkeypatch
+):
+    """The benchmark reads the products on disk, never the live objects of a star."""
+    run, ran = _fake_benchmark(systems, library, tmp_path, monkeypatch)
+    planned = [f"{s.name}__orbit" for s in systems]
+    run()
+    (call,) = run.calls
+    assert call["planned"] == planned and call["stars"] == planned
+    assert call["keep_live"] is False and call["release_compiled"] is False
+    # A resumed run selects the star to repeat from the same batch, so that the pipeline
+    # assigns it the directory a run of the whole batch gives it.
+    (tmp_path / planned[1] / "result.json").unlink()
+    run()
+    (call,) = run.calls
+    assert call["planned"] == planned and call["stars"] == [planned[1]] == ran
+
+
+def test_stars_whose_names_differ_only_in_case_are_collected_from_their_own_directories(
+    systems, library, tmp_path, monkeypatch
+):
+    """The pipeline gives the second of two such stars a suffix; collect must find it there."""
+    first = systems[0]
+    twin = BinarySystem.from_dict({**systems[1].to_dict(), "name": first.name.swapcase()})
+    assert twin.name.casefold() == first.name.casefold() and twin.k1 != first.k1
+    run, ran = _fake_benchmark([first, twin], library, tmp_path, monkeypatch)
+    rows = {row["system"]: row for row in run().rows}
+    assert (tmp_path / f"{twin.name}__orbit_2" / "result.json").is_file()
+    for system in (first, twin):
+        row = rows[system.name]
+        assert row["status"] == "ok", row
+        # Its own result: the canned difference is 1% of the system's own K1.
+        assert row["k_A_rel"] == pytest.approx(0.01), (system.name, row["k_A_rel"])
+    run()
+    assert ran == [], "a resumed run found both results"
+
+
+def test_the_scanning_law_cadence_spans_the_release_of_the_product(systems):
+    """A DR3 transit count belongs to 34 months; it was spread over DR4's 66."""
+    from albireo.gaia import rvs_transit_times
+
+    system = systems[1]
+    start, span = RVS_SPANS["dr3"]
+    dr3 = system_transit_times(system, release="dr3", seed=4)
+    assert dr3.size == system.n_transits
+    assert np.all((dr3 >= start) & (dr3 <= start + span))
+    # The DR4 product of every recorded run: the same epochs as before, bit for bit.
+    dr4 = rvs_transit_times(system.n_transits, seed=4)
+    np.testing.assert_array_equal(system_transit_times(system, seed=4), dr4)
+    np.testing.assert_array_equal(system_transit_times(system, seed=4, release="dr4"), dr4)
+
+
+def test_a_component_is_compared_with_the_injected_star_it_was_matched_to():
+    """With the pair recovered in the other order, A is compared with the secondary."""
+    from albireo.benchmark import _injected_compared
+
+    row = {"k1": 30.0, "k2": 55.0, "teff1": 5200.0, "teff2": 4400.0, "exchanged": False}
+    assert [_injected_compared(row, c, "teff") for c in "AB"] == [5200.0, 4400.0]
+    row["exchanged"] = True
+    assert [_injected_compared(row, c, "teff") for c in "AB"] == [4400.0, 5200.0]
+    assert [_injected_compared(row, c, "k") for c in "AB"] == [55.0, 30.0]
+
+
+def test_the_velocity_panels_of_equal_periods_are_ordered_by_name():
+    from types import SimpleNamespace
+
+    from albireo.benchmark import _by_period
+
+    systems = {
+        "b": SimpleNamespace(period=3.0),
+        "a": SimpleNamespace(period=3.0),
+        "c": SimpleNamespace(period=1.0),
+    }
+    for names in (["b", "a", "c"], ["a", "b", "c"], {"c", "b", "a"}):
+        assert _by_period(names, systems) == ["c", "a", "b"]
 
 
 @pytest.mark.slow

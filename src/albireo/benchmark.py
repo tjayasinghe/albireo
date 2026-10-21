@@ -72,7 +72,7 @@ from albireo.pipeline import (
     ComponentConfig,
     PipelineConfig,
     StarConfig,
-    _safe_name,  # the pipeline's directory name for a star, where collect finds its result
+    _directory_names,  # the pipeline's directory of each star, where collect finds its result
     run_pipeline,
 )
 from albireo.population import BinarySystem, population_summary, read_population, write_population
@@ -330,7 +330,7 @@ class BenchmarkConfig:
 
     @property
     def release(self) -> str:
-        """The release the product belongs to, which sets the span of a GOST cadence.
+        """The release the product belongs to, which sets the span of the cadence.
 
         ``"dr3"`` for the mean-spectrum product, whose data span is 34 months, and
         ``"dr4"`` for the epoch product and for any other, whose span is 66
@@ -377,8 +377,8 @@ def system_transit_times(
     and restricts it to the release span, to the CCD rows the RVS covers and to the
     fraction that reaches the ground (:func:`albireo.gaia.rvs_transit_times_from_gost`).
     The number of epochs is then the service's, not the record's. ``release`` sets the span
-    of the GOST cadence only; the scanning-law cadence places its epochs over the DR4 span
-    (:func:`albireo.gaia.rvs_transit_times`) for either release.
+    of both: the scanning-law cadence places its epochs over the data span of the release
+    (:func:`albireo.gaia.rvs_transit_times`), 34 months for DR3 and 66 for DR4.
 
     Raises
     ------
@@ -399,7 +399,7 @@ def system_transit_times(
             )
         transits = gost_transits(float(system.ra_deg), float(system.dec_deg))
         return rvs_transit_times_from_gost(transits, release=release, seed=seed)
-    return rvs_transit_times(system.n_transits, seed=seed)
+    return rvs_transit_times(system.n_transits, release=release, seed=seed)
 
 
 def simulate_system(
@@ -429,8 +429,8 @@ def simulate_system(
     were compared on. The component spectra differ in the last pixels of the unrounded
     grid, where its rotation kernel met the zero-filled end (``docs/benchmarks.md``).
 
-    Without ``bjd``, a GOST cadence takes its epochs over the span of the release the
-    product belongs to (:attr:`BenchmarkConfig.release`).
+    Without ``bjd``, the scanning-law and GOST cadences take their epochs over the span of
+    the release the product belongs to (:attr:`BenchmarkConfig.release`).
 
     Returns
     -------
@@ -833,13 +833,12 @@ def run_benchmark(config: BenchmarkConfig, *, progress: bool = True) -> Benchmar
     # Parsed per star, the cost would grow as the square of the number of stars.
     written = json.loads(text)
     keys = {star.name: _run_key(written, population, star.name) for star in stars}
+    paths = _star_paths(directory, [star.name for star in stars])
 
     todo = stars
     if config.resume:
-        stale, confirmed = _check_results(directory, keys, previous)
-        todo = [
-            s for s in stars if s.name in stale or not _result_path(directory, s.name).is_file()
-        ]
+        stale, confirmed = _check_results(paths, keys, previous)
+        todo = [s for s in stars if s.name in stale or not _result_path(paths, s.name).is_file()]
         if progress and len(todo) < len(stars):
             print(f"resuming: {len(stars) - len(todo)} of {len(stars)} stars already have results")
         if stale:
@@ -851,22 +850,36 @@ def run_benchmark(config: BenchmarkConfig, *, progress: bool = True) -> Benchmar
                 stacklevel=2,
             )
         for name in confirmed:
-            _write_key(directory, name, keys[name])
+            _write_key(paths[name], keys[name])
     for star in todo:
-        result = _result_path(directory, star.name)
+        result = _result_path(paths, star.name)
         if result.is_file():
             result.replace(result.with_name("result.stale.json"))
-        _write_key(directory, star.name, keys[star.name])
+        _write_key(paths[star.name], keys[star.name])
     if todo:
         pipeline = PipelineConfig(
-            stars=todo,
+            # Every planned star, of which only those to run are selected: the pipeline
+            # assigns the directories over the whole batch, so each star is written where
+            # _star_paths finds it, whichever stars a resumed run repeats.
+            stars=stars,
             output=directory,
             # The name, not the loaded library: every worker loads it by name.
             library=config.library,
             mh=tuple(dict(library.bounds)["mh"]),
             analysis=_analysis(config),
         )
-        run_pipeline(pipeline, jobs=config.jobs, progress=progress)
+        # The benchmark reads the products on disk and never the live objects, which a
+        # batch would otherwise hold for every star at once. The programs JAX compiled are
+        # kept between stars, as before, so that no star compiles them again; workers
+        # (jobs > 1) keep theirs in any case.
+        run_pipeline(
+            pipeline,
+            jobs=config.jobs,
+            stars=[star.name for star in todo],
+            progress=progress,
+            keep_live=False,
+            release_compiled=False,
+        )
     if stars:
         report, rows, summary = _write_report(directory, title=config.title)
     else:
@@ -880,8 +893,19 @@ def run_benchmark(config: BenchmarkConfig, *, progress: bool = True) -> Benchmar
     )
 
 
-def _result_path(directory: Path, name: str) -> Path:
-    return directory / _safe_name(name) / "result.json"
+def _star_paths(directory: Path, names: Sequence[str]) -> dict[str, Path]:
+    """The directory of each planned star, the names in the order of the manifest.
+
+    The pipeline names a star's directory after the star, with a suffix ``_2``, ``_3``,
+    ... where an earlier star of the batch took the name, compared without regard to case
+    (:func:`albireo.pipeline._star_directories`). The benchmark runs its planned stars as
+    one batch in this order, so the same assignment finds each star's products.
+    """
+    return {name: directory / sub for name, sub in _directory_names(names).items()}
+
+
+def _result_path(paths: Mapping[str, Path], name: str) -> Path:
+    return paths[name] / "result.json"
 
 
 # The file beside a star's result that records what the result depends on.
@@ -961,21 +985,22 @@ def _json_values_differ(a: Any, b: Any) -> bool:
 
 
 def _check_results(
-    directory: Path, keys: Mapping[str, dict], previous: tuple[Any, Mapping[str, Any]]
+    paths: Mapping[str, Path], keys: Mapping[str, dict], previous: tuple[Any, Mapping[str, Any]]
 ) -> tuple[list[str], list[str]]:
     """The planned stars whose result is stale, and those confirmed from the last manifest.
 
-    A result is compared with the key recorded beside it. A result with no key, written
-    before the benchmark recorded one, is compared with the key the previous manifest and
-    population give, if they planned the star, and is kept otherwise.
+    ``paths`` is each star's directory (:func:`_star_paths`). A result is compared with the
+    key recorded beside it. A result with no key, written before the benchmark recorded
+    one, is compared with the key the previous manifest and population give, if they
+    planned the star, and is kept otherwise.
     """
     old_manifest, old_population = previous
     stale: list[str] = []
     confirmed: list[str] = []
     for name, key in keys.items():
-        if not _result_path(directory, name).is_file():
+        if not _result_path(paths, name).is_file():
             continue
-        recorded = _read_json(directory / _safe_name(name) / _KEY_FILE)
+        recorded = _read_json(paths[name] / _KEY_FILE)
         legacy = not isinstance(recorded, Mapping)
         if legacy:
             if not isinstance(old_manifest, Mapping) or name not in old_manifest.get("stars", []):
@@ -988,8 +1013,8 @@ def _check_results(
     return stale, confirmed
 
 
-def _write_key(directory: Path, name: str, key: Mapping[str, Any]) -> None:
-    path = directory / _safe_name(name) / _KEY_FILE
+def _write_key(star_directory: Path, key: Mapping[str, Any]) -> None:
+    path = star_directory / _KEY_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(key, indent=1), encoding="utf-8")
 
@@ -1016,9 +1041,9 @@ def _read_run(directory) -> tuple[Path, dict[str, Any], dict[str, BinarySystem]]
     return directory, manifest, systems
 
 
-def _read_result(directory: Path, name: str) -> dict[str, Any] | None:
+def _read_result(paths: Mapping[str, Path], name: str) -> dict[str, Any] | None:
     """A star's parsed ``result.json``, or ``None`` if it has none."""
-    path = _result_path(directory, name)
+    path = _result_path(paths, name)
     return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
 
 
@@ -1030,8 +1055,9 @@ def collect(directory) -> list[dict[str, Any]]:
     """
     directory, manifest, systems = _read_run(directory)
     records = manifest.get("simulation", {})
+    paths = _star_paths(directory, manifest["stars"])
     return [
-        _star_row(directory, name, systems, records, _read_result(directory, name))
+        _star_row(paths, name, systems, records, _read_result(paths, name))
         for name in manifest["stars"]
     ]
 
@@ -1041,17 +1067,18 @@ def _collect_all(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """The rows of :func:`collect` and of :func:`collect_velocities`, each result read once."""
     records = manifest.get("simulation", {})
+    paths = _star_paths(directory, manifest["stars"])
     rows: list[dict[str, Any]] = []
     velocity_rows: list[dict[str, Any]] = []
     for name in manifest["stars"]:
-        report = _read_result(directory, name)
-        rows.append(_star_row(directory, name, systems, records, report))
+        report = _read_result(paths, name)
+        rows.append(_star_row(paths, name, systems, records, report))
         velocity_rows.extend(_star_velocity_rows(name, systems, report))
     return rows, velocity_rows
 
 
 def _star_row(
-    directory: Path,
+    paths: Mapping[str, Path],
     name: str,
     systems: Mapping[str, BinarySystem],
     records: Mapping[str, Any],
@@ -1093,7 +1120,7 @@ def _star_row(
         "lag1": record.get("lag1"),
     }
     if report is None:
-        error = _result_path(directory, name).with_name("error.txt")
+        error = _result_path(paths, name).with_name("error.txt")
         if error.is_file():
             # The pipeline writes the traceback and no result for a failed star.
             tail = [line for line in error.read_text(encoding="utf-8").splitlines() if line]
@@ -1117,10 +1144,7 @@ def _star_row(
     truth = report.get("truth") or {}
     # The pipeline compares a pair recovered in the other order against the exchanged
     # truth, so each difference is divided by the semi-amplitude it was taken from.
-    if row["exchanged"]:
-        k_true = {"A": system.k2, "B": system.k1}
-    else:
-        k_true = {"A": system.k1, "B": system.k2}
+    k_true = {comp: _injected_compared(row, comp, "k") for comp in ("A", "B")}
     for comp in ("A", "B"):
         d = _get(truth, "k_table", comp)
         row[f"k_{comp}_rel"] = None if d is None else d / k_true[comp]
@@ -1166,6 +1190,21 @@ def _star_row(
     return row
 
 
+def _injected_compared(row: Mapping[str, Any], component: str, quantity: str) -> Any:
+    """The injected value of ``quantity`` that ``component`` (A or B) was compared with.
+
+    The row holds the injected values by star, such as ``k1`` and ``teff1`` for the
+    primary and ``k2`` and ``teff2`` for the secondary. The pipeline compares a pair
+    recovered in the other order (``exchanged``) against the exchanged truth, so
+    component A is then compared with the secondary, and every difference in the row
+    refers to that star.
+    """
+    index = ("A", "B").index(component)
+    if row.get("exchanged"):
+        index = 1 - index
+    return row.get(f"{quantity}{index + 1}")
+
+
 def collect_velocities(directory) -> list[dict[str, Any]]:
     """Every measured epoch velocity of the run, one row per star, epoch and component.
 
@@ -1176,9 +1215,10 @@ def collect_velocities(directory) -> list[dict[str, Any]]:
     folded on the injected ephemeris.
     """
     directory, manifest, systems = _read_run(directory)
+    paths = _star_paths(directory, manifest["stars"])
     rows: list[dict[str, Any]] = []
     for name in manifest["stars"]:
-        rows.extend(_star_velocity_rows(name, systems, _read_result(directory, name)))
+        rows.extend(_star_velocity_rows(name, systems, _read_result(paths, name)))
     return rows
 
 
@@ -1650,8 +1690,11 @@ def _write_figures(
                 alpha=0.85,
                 edgecolors="none",
             )
+            # The Teff of the injected star that A was compared with: the secondary's
+            # where the pair was recovered in the other order.
+            compared = [_injected_compared(r, "A", "teff") for r in sub]
             axes[2].scatter(
-                column(sub, "teff1"),
+                np.array([np.nan if v is None else float(v) for v in compared]),
                 column(sub, "teff_err_A"),
                 s=14,
                 color=colour,
@@ -1668,8 +1711,8 @@ def _write_figures(
         axes[1].set_ylabel("correlation of recovered and true primary spectrum")
         axes[1].set_ylim(0.0, 1.02)
         axes[2].axhline(0.0, color=_MUTED, linewidth=0.8)
-        axes[2].set_xlabel("true Teff of the primary [K]")
-        axes[2].set_ylabel("fitted - true Teff, primary [K]")
+        axes[2].set_xlabel("true Teff of the star compared with A [K]")
+        axes[2].set_ylabel("fitted - true Teff, A [K]")
         for ax in axes:
             ax.legend(fontsize=8, frameon=False)
             _style_axes(ax)
@@ -1709,6 +1752,15 @@ def _write_figures(
     return figures
 
 
+def _by_period(names, systems: Mapping[str, BinarySystem]) -> list[str]:
+    """System names ordered by period, and by name among equal periods.
+
+    The panels of the velocity figures follow this order, which therefore does not depend
+    on the iteration order of a set of names.
+    """
+    return sorted(names, key=lambda name: (systems[name].period, name))
+
+
 def _write_rv_figures(
     directory: Path,
     velocity_rows: Sequence[Mapping[str, Any]],
@@ -1733,7 +1785,7 @@ def _write_rv_figures(
     dense = np.linspace(0.0, 1.0, 300)
     for tier in tiers:
         sub = [r for r in velocity_rows if r["tier"] == tier]
-        names = sorted({r["system"] for r in sub}, key=lambda n: systems[n].period)
+        names = _by_period({r["system"] for r in sub}, systems)
         if not names:
             continue
         n_cols = min(4, len(names))

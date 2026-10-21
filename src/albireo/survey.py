@@ -1331,12 +1331,7 @@ def run_survey(
             report(_run_chunk([records[i] for i in indices], indices, config.to_dict(), str(path)))
         return directory
 
-    single = {
-        "XLA_FLAGS": "--xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=1",
-        "OMP_NUM_THREADS": "1",
-        "OPENBLAS_NUM_THREADS": "1",
-        "MKL_NUM_THREADS": "1",
-    }
+    single = _single_thread_environment()
     saved = {key: os.environ.get(key) for key in single}
     os.environ.update(single)
     try:
@@ -1371,6 +1366,26 @@ def run_survey(
             else:
                 os.environ[key] = value
     return directory
+
+
+def _single_thread_environment() -> dict[str, str]:
+    """Environment variables for the survey's worker processes, one thread of each pool.
+
+    ``OMP_NUM_THREADS``, ``OPENBLAS_NUM_THREADS`` and ``MKL_NUM_THREADS`` cap each worker's
+    BLAS and OpenMP threads at one. XLA's own CPU thread pool is not capped: no
+    ``XLA_FLAGS`` entry sizes it. The bare token ``intra_op_parallelism_threads=1`` set
+    here before was a TensorFlow session option that XLA's flag parser ignores, and the
+    dashed form aborts the process as an unknown flag. ``--xla_cpu_multi_thread_eigen=false``
+    is added to the caller's ``XLA_FLAGS`` unless these already name that flag. It runs
+    XLA's Eigen kernels on one thread, and a JAX 0.11 process had the same number of
+    threads with and without it. The pipeline's workers receive the same flag
+    (:func:`albireo.pipeline._thread_environment`).
+    """
+    env = {"OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"}
+    flags = os.environ.get("XLA_FLAGS", "")
+    if "xla_cpu_multi_thread_eigen" not in flags:
+        env["XLA_FLAGS"] = f"{flags} --xla_cpu_multi_thread_eigen=false".strip()
+    return env
 
 
 def _machine() -> str:
