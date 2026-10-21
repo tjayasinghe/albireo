@@ -20,6 +20,7 @@ from albireo.rvorbit import (
     fit_rv_ephemeris,
     fit_rv_orbit,
     reassign_by_orbit,
+    relativistic_add,
 )
 from albireo.todcor import VelocityTable
 
@@ -1224,12 +1225,33 @@ def test_starting_values_outside_the_domain_of_the_fit_are_refused():
     for k in ([28.0, 50.0, 1.0], [[28.0, 50.0], [28.0, 50.0]]):
         with pytest.raises(ValueError, match="one starting semi-amplitude for each of the 2"):
             fit_rv_orbit(table, period=P, k=k)
+    # A value that is not a number keeps NumPy's own message, and a nan is refused before
+    # SciPy reports it as a start outside the bounds.
+    with pytest.raises(ValueError, match="could not convert"):
+        fit_rv_orbit(table, period=P, k=["a", "b"])
+    for k in ([28.0, float("nan")], float("inf")):
+        with pytest.raises(ValueError, match="semi-amplitudes k must be finite"):
+            fit_rv_orbit(table, period=P, k=k)
     # One value is taken for every component, and a circular fit has no eccentricity start.
     for k in (28.0, [28.0]):
         assert fit_rv_orbit(table, period=P, k=k, max_iterations=1).k.tolist() == [28.0, 28.0]
     assert fit_rv_orbit(table, period=P, ecc=0.0, circular=True).ecc == 0.0
     # A start within the box away from the axes is accepted.
     assert fit_rv_orbit(table, period=P, ecc=0.95, omega=0.8).n_parameters == 7
+
+
+def test_relativistic_addition_is_the_sum_of_rapidities():
+    """The composition law of log-wavelength shifts: rapidities add.
+
+    ``relativistic_add`` is not in ``__all__`` but is rendered on the API page, so it is
+    kept and tested as public.
+    """
+    from albireo.grids import C_KMS
+
+    v = np.array([-250.0, 0.0, 30.0, 1.0e4])
+    u = np.array([40.0, -12.0, 30.0, 2.0e5])
+    expected = C_KMS * np.tanh(np.arctanh(v / C_KMS) + np.arctanh(u / C_KMS))
+    np.testing.assert_allclose(relativistic_add(v, u), expected, rtol=1e-12, atol=1e-12)
 
 
 def test_an_error_that_is_not_positive_does_not_enter_the_search_or_the_fit():

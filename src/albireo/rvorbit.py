@@ -62,7 +62,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from albireo.grids import _EPOCH_BLOCK, _in_epoch_blocks
+from albireo.grids import _EPOCH_BLOCK, C_KMS, _in_epoch_blocks
 from albireo.kepler import (
     _NEWTON_ITERATIONS,
     _t_peri_from_t_conj_numpy,
@@ -1043,8 +1043,8 @@ def fit_rv_orbit(
         Optional starting values; defaults are derived from the table (``t_conj`` from a
         scan over phase, ``ecc`` = 0.1, ``omega`` = 0, and ``k`` as described below).
         Unless the fit is circular, ``ecc`` must lie in ``(0, 1)`` and the start
-        ``(sqrt(e) cos w, sqrt(e) sin w)`` within the bounds of the fit. ``k`` is one value
-        per component, or one value for all.
+        ``(sqrt(e) cos w, sqrt(e) sin w)`` within the bounds of the fit. ``k`` is one finite
+        value per component, or one value for all.
 
         The default starting semi-amplitude of a component is half the range of its own
         usable velocities, which is ``K`` at any eccentricity once the phases are covered.
@@ -1141,13 +1141,16 @@ def fit_rv_orbit(
 
     # Starting values.
     if k is not None:
+        k_given = np.asarray(k, dtype=np.float64)
         try:
-            k0 = np.broadcast_to(np.asarray(k, dtype=np.float64), (n_comp,)).copy()
+            k0 = np.broadcast_to(k_given, (n_comp,)).copy()
         except ValueError:
             raise ValueError(
                 f"k must hold one starting semi-amplitude for each of the {n_comp} "
-                f"component(s) fitted; got shape {np.shape(k)}"
+                f"component(s) fitted; got shape {k_given.shape}"
             ) from None
+        if not np.all(np.isfinite(k0)):
+            raise ValueError(f"the starting semi-amplitudes k must be finite; got {k0}")
     else:
         k0 = np.array([_semi_amplitude_start(y[i, mask[i]]) for i in range(n_comp)])
     k0 = np.maximum(k0, 1e-3)
@@ -2355,8 +2358,9 @@ def _kepler_newton(ecc_anomaly, m, ecc: float) -> np.ndarray:
     The result is that of the full count of steps, bit for bit, without taking every one.
     Each step is the same elementwise function of the iterate, so once an iterate equals
     the one two steps earlier at every element, the iterates alternate between the last
-    two and the final one is known. In floating point the iterates settle into such a
-    fixed point or pair of values after 6 to 10 of the 15 steps.
+    two and the final one is known. On the grid of :func:`_relative_curves` the iterates
+    settle into such a fixed point or pair of values after 6 to 10 of the 15 steps. Where
+    they do not settle, every step is taken.
     """
     previous = None
     for done in range(1, _NEWTON_ITERATIONS + 1):
@@ -2535,3 +2539,13 @@ def _exchanged(table, swap):
         alternative_covariance=exchange_covariance(table.alternative_covariance),
         settings={**dict(table.settings), "reassigned_by_orbit": int(swap.sum())},
     )
+
+
+def relativistic_add(v_kms, u_kms):
+    """Relativistic addition of two velocities, the composition law of log-wavelength shifts.
+
+    See ``docs/math.md`` §7.6.
+    """
+    b1 = np.asarray(v_kms, dtype=np.float64) / C_KMS
+    b2 = np.asarray(u_kms, dtype=np.float64) / C_KMS
+    return C_KMS * (b1 + b2) / (1.0 + b1 * b2)
