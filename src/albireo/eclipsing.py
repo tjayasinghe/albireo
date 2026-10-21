@@ -109,6 +109,10 @@ ECLIPTIC_LATITUDE_SHARES = (0.119, 0.124, 0.129, 0.147, 0.180, 0.170, 0.088, 0.0
 
 _TRACKS_FILE = Path(__file__).parent / "data_files" / "mist_v1.2_solar_tracks.npz"
 _MBOL_SUN = 4.74
+# The DR4 span of the transit counts here and of SurveyConfig.span_days. The constant of
+# the same name in albireo.gaia, the default span of rvs_transit_times, is still 1998 d;
+# it is to become 2005 d at the next re-run of the benchmark, and one constant can then
+# serve both modules.
 _DR4_SPAN_DAYS = 2005.0  # 2014-07-25 to 2020-01-20
 _DR4_START_BJD = 2456863.94
 
@@ -254,10 +258,14 @@ class StellarTracks:
             x0, x1 = track_age[rows, k], track_age[rows, k + 1]
             f = np.clip((la - x0) / np.maximum(x1 - x0, 1e-9), 0.0, 1.0)
             alive = (n_valid >= 2) & (la <= track_age[rows, np.maximum(n_valid - 1, 0)])
+            # Only the points k and k + 1 of the interpolated track are read, so only they
+            # are interpolated in mass.
+            w1 = w[:, 0]
             for key in ("log_r", "log_teff", "log_l"):
                 table = getattr(self, key)
-                column = (1.0 - w) * table[lo] + w * table[hi]
-                value = (1.0 - f) * column[rows, k] + f * column[rows, k + 1]
+                c0 = (1.0 - w1) * table[lo, k] + w1 * table[hi, k]
+                c1 = (1.0 - w1) * table[lo, k + 1] + w1 * table[hi, k + 1]
+                value = (1.0 - f) * c0 + f * c1
                 out[key][chunk] = np.where(alive, value, np.nan)
             point = (1.0 - f) * self.eep[k] + f * self.eep[k + 1]
             out["eep"][chunk] = np.where(alive, point, np.nan)
@@ -351,6 +359,12 @@ def limb_darkening(teff, band: str = "rvs"):
 
 
 _RING_NODES, _RING_WEIGHTS = np.polynomial.legendre.leggauss(48)
+_RING_SIN = np.sin(0.5 * math.pi * _RING_NODES)
+_RING_QUADRATURE = 0.5 * math.pi * _RING_WEIGHTS * np.cos(0.5 * math.pi * _RING_NODES)
+# Configurations per block of the (n, 48) quadrature arrays: 0.4 MB per array, which a
+# processor cache holds. On 10^5 configurations the blocks take a third of the time of
+# one array of the whole, and the call a thirtieth of the memory.
+_RING_BLOCK = 1024
 
 
 def _disc_light(x, u):
@@ -395,25 +409,41 @@ def hidden_fraction(separation, r_back, r_front, u=0.0):
     whole = np.clip((rf - d) / rb, 0.0, 1.0)
     lower = np.clip(np.abs(d - rf) / rb, 0.0, 1.0)
     upper = np.clip((d + rf) / rb, 0.0, 1.0)
-    centre = 0.5 * (upper + lower)[..., None]
-    half = 0.5 * np.clip(upper - lower, 0.0, None)[..., None]
-    phi = 0.5 * math.pi * _RING_NODES
-    x = centre + half * np.sin(phi)  # fractional radius of the ring
-    dd, ff = (d / rb)[..., None], (rf / rb)[..., None]
-    numerator = x**2 + dd**2 - ff**2
-    denominator = 2.0 * x * dd
-    with np.errstate(invalid="ignore", divide="ignore"):
-        cos_alpha = np.where(
-            denominator > 0.0,
-            numerator / np.where(denominator > 0.0, denominator, 1.0),
-            np.where(numerator < 0.0, -1.0, 1.0),
-        )
-    alpha = np.arccos(np.clip(cos_alpha, -1.0, 1.0))
-    intensity = 1.0 - u[..., None] * (1.0 - np.sqrt(np.clip(1.0 - x**2, 0.0, None)))
-    weights = 0.5 * math.pi * _RING_WEIGHTS * np.cos(phi)
-    partial = np.sum(intensity * x * alpha / math.pi * weights, axis=-1) * half[..., 0]
+    centre = 0.5 * (upper + lower)
+    half = 0.5 * np.clip(upper - lower, 0.0, None)
+    partial = _partial_rings(centre, half, d / rb, rf / rb, u)
     hidden = (_disc_light(whole, u) + partial) / _disc_light(1.0, u)
     return np.clip(hidden, 0.0, 1.0)
+
+
+def _partial_rings(centre, half, dd, ff, u):
+    """The light of the rings hidden in part, by the quadrature of :func:`hidden_fraction`.
+
+    The arguments are arrays of one shape: the centre and the half-width of the range of
+    fractional ring radii, the separation and the radius of the nearer disc in units of
+    the farther disc's radius, and the limb darkening. Each configuration is summed over
+    its own 48 nodes, so the configurations are evaluated in blocks of ``_RING_BLOCK``,
+    which bounds the memory of the ``(n, 48)`` arrays and leaves every value unchanged.
+    """
+    shape = np.shape(centre)
+    centre, half, dd, ff, u = (np.ravel(a) for a in (centre, half, dd, ff, u))
+    out = np.empty(centre.size)
+    for start in range(0, centre.size, _RING_BLOCK):
+        block = slice(start, start + _RING_BLOCK)
+        c, h = centre[block, None], half[block, None]
+        x = c + h * _RING_SIN  # fractional radius of the ring
+        numerator = x**2 + dd[block, None] ** 2 - ff[block, None] ** 2
+        denominator = 2.0 * x * dd[block, None]
+        with np.errstate(invalid="ignore", divide="ignore"):
+            cos_alpha = np.where(
+                denominator > 0.0,
+                numerator / np.where(denominator > 0.0, denominator, 1.0),
+                np.where(numerator < 0.0, -1.0, 1.0),
+            )
+        alpha = np.arccos(np.clip(cos_alpha, -1.0, 1.0))
+        intensity = 1.0 - u[block, None] * (1.0 - np.sqrt(np.clip(1.0 - x**2, 0.0, None)))
+        out[block] = np.sum(intensity * x * alpha / math.pi * _RING_QUADRATURE, axis=-1) * h[:, 0]
+    return out.reshape(shape)
 
 
 def eclipse_light(system: BinarySystem, bjd, *, band: str = "rvs", third_light: float = 0.0):
@@ -432,7 +462,7 @@ def eclipse_light(system: BinarySystem, bjd, *, band: str = "rvs", third_light: 
     system
         The binary. Its ``light_ratio`` is the flux ratio out of eclipse.
     bjd
-        Epoch times.
+        Epoch times: a scalar or a one-dimensional array. A scalar is one epoch.
     band
         The band of the limb darkening, ``"rvs"`` or ``"rp"``.
     third_light
@@ -451,7 +481,9 @@ def eclipse_light(system: BinarySystem, bjd, *, band: str = "rvs", third_light: 
     """
     if not 0.0 <= third_light < 1.0:
         raise ValueError(f"third_light must lie in [0, 1); got {third_light}")
-    bjd = np.asarray(bjd, dtype=np.float64)
+    bjd = np.atleast_1d(np.asarray(bjd, dtype=np.float64))
+    if bjd.ndim != 1:
+        raise ValueError(f"bjd must be a scalar or one-dimensional; got shape {bjd.shape}")
     nu = true_anomaly_numpy(bjd, period=system.period, t_peri=system.t_peri, ecc=system.ecc)
     angle = nu + system.omega
     radius = system.a_rsun * (1.0 - system.ecc**2) / (1.0 + system.ecc * np.cos(nu))
@@ -953,26 +985,30 @@ def _draw_class(rng, n, teff_range, config, tracks, companions, libraries, *, ba
     """``n`` systems of one temperature class, by rejection on the weights.
 
     Candidates are drawn in batches and each carries its own uniform deviate. After every
-    batch the bound is the largest weight of the pool so far, a candidate is accepted
+    batch the bound is the largest weight of the candidates so far, a candidate is accepted
     where its deviate is below its weight over the bound, and the draw ends when ``n`` are
     accepted. The first ``n`` in the order drawn are returned.
+
+    The bound never decreases, so a candidate rejected after one batch is rejected after
+    every later one. Only the accepted candidates are therefore kept between batches.
     """
     window = _class_window(tracks, teff_range, config["logg_min"], config["max_age_yr"])
-    pool: dict[str, list[np.ndarray]] = {}
+    kept: dict[str, np.ndarray] | None = None
+    bound = 0.0
     for _ in range(400):
         candidates = _draw_candidates(
             rng, batch, window, teff_range, config, tracks, companions, libraries
         )
-        for key, value in candidates.items():
-            pool.setdefault(key, []).append(value)
-        weight = np.concatenate(pool["weight"])
-        accepted = np.concatenate(pool["u"]) < weight / weight.max()
-        if int(accepted.sum()) >= n:
-            index = np.flatnonzero(accepted)[:n]
-            merged = {key: np.concatenate(value)[index] for key, value in pool.items()}
-            merged["pool_size"] = int(weight.size)
-            merged["acceptance"] = float(accepted.mean())
-            return merged
+        if candidates["weight"].size:
+            bound = max(bound, float(candidates["weight"].max()))
+        if kept is not None:
+            candidates = {key: np.concatenate([kept[key], candidates[key]]) for key in kept}
+        if bound > 0.0:
+            accepted = candidates["u"] < candidates["weight"] / bound
+            candidates = {key: value[accepted] for key, value in candidates.items()}
+        kept = candidates
+        if kept["weight"].size >= n:
+            return {key: value[:n] for key, value in kept.items()}
     raise RuntimeError(f"fewer than {n} systems accepted for the temperatures {teff_range}")
 
 
@@ -1062,8 +1098,12 @@ def draw_eclipsing_population(
     n_per_cell
         Systems per cell.
     seed
-        Seed. A class has its own generator, so the systems of one class do not depend on
-        the other classes or on ``n_per_cell`` of another call beyond their number.
+        Seed. Each class has its own generator, seeded by ``seed`` and the position of the
+        class in ``classes``, and the simulation seeds of its systems follow from ``seed``,
+        that position and the number of systems per class. The systems of a class
+        therefore do not depend on the draws of the other classes. They change when the
+        classes are reordered, when a class is drawn at another position (alone, for
+        example), and when ``n_per_cell`` or the number of G_RVS bins changes.
     libraries
         The :class:`LibrarySet` of the spectra. Default: the three BOSZ boxes of the
         registry, which must be in the cache or are downloaded.
@@ -1168,7 +1208,7 @@ def draw_eclipsing_population(
                     cell,
                     grvs,
                     system_seed,
-                    {key: value[k] for key, value in drawn.items() if np.ndim(value) == 1},
+                    {key: value[k] for key, value in drawn.items()},
                     {key: value[k] for key, value in extra.items()},
                 )
             )

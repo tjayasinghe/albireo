@@ -116,6 +116,21 @@ def test_a_total_eclipse_hides_all_the_light_and_no_overlap_hides_none():
     assert ec.hidden_fraction(0.0, 1.0, 0.4, 0.6) > ec.hidden_fraction(0.0, 1.0, 0.4, 0.0)
     # Vectorised over every argument.
     assert ec.hidden_fraction(np.zeros((3, 2)), 1.0, np.full(2, 0.5), 0.2).shape == (3, 2)
+    assert isinstance(ec.hidden_fraction(0.3, 1.0, 0.5, 0.5), np.float64)
+
+
+def test_the_hidden_fraction_does_not_depend_on_its_blocks(monkeypatch):
+    rng = np.random.default_rng(4)
+    rb, rf = rng.uniform(0.05, 3.0, size=(2, 3001))
+    d = rng.uniform(-0.1, 1.1, size=3001) * (rb + rf)
+    u = rng.uniform(0.0, 0.8, size=3001)
+    blocked = ec.hidden_fraction(d, rb, rf, u)
+    monkeypatch.setattr(ec, "_RING_BLOCK", 7)
+    np.testing.assert_array_equal(ec.hidden_fraction(d, rb, rf, u), blocked)
+    monkeypatch.setattr(ec, "_RING_BLOCK", 10**6)
+    np.testing.assert_array_equal(ec.hidden_fraction(d, rb, rf, u), blocked)
+    grid = ec.hidden_fraction(d[:3000].reshape(60, 50), rb[:3000].reshape(60, 50), 1.0, 0.3)
+    np.testing.assert_array_equal(grid.ravel(), ec.hidden_fraction(d[:3000], rb[:3000], 1.0, 0.3))
 
 
 def test_the_roche_radius_and_the_pseudo_synchronous_rate():
@@ -176,6 +191,21 @@ def test_a_third_light_dilutes_the_pair_and_is_not_eclipsed():
         ec.eclipse_light(system, times, third_light=1.0)
 
 
+def test_a_scalar_epoch_is_one_epoch():
+    """A scalar time gives the shapes of one epoch, and the two stars are not mixed."""
+    system = _system()
+    for t in (system.t_conj, system.t_conj + 0.25 * system.period):
+        for third in (0.0, 0.2):
+            scalar = ec.eclipse_light(system, t, third_light=third)
+            one = ec.eclipse_light(system, np.array([t]), third_light=third)
+            assert scalar["fractions"].shape == (3 if third else 2, 1)
+            assert scalar["visible"].shape == (2, 1) and scalar["flux"].shape == (1,)
+            for key, value in one.items():
+                np.testing.assert_array_equal(scalar[key], value, err_msg=key)
+    with pytest.raises(ValueError, match="one-dimensional"):
+        ec.eclipse_light(system, np.full((2, 3), system.t_conj))
+
+
 @pytest.mark.parametrize("ecc,omega", [(0.0, 0.0), (0.3, 0.8), (0.3, 4.0)])
 def test_the_eclipse_duration_against_the_sampled_orbit(ecc, omega):
     system = _system(ecc=ecc, omega=omega, incl=math.radians(87.0), period=6.0)
@@ -228,6 +258,33 @@ def test_the_tracks_return_nan_outside_the_table():
     grid = tracks.at(np.array([[1.0], [1.01], [1.02]]), np.array([1e9, 3e9]))
     assert grid["teff"].shape == (3, 2)
     assert np.all(np.diff(grid["teff"], axis=0) > 0.0)
+
+
+def test_the_tracks_interpolate_the_two_points_of_the_interpolated_track():
+    """``at`` reads two points of the track interpolated in mass, and interpolates only
+    those: the values are those of the whole interpolated track, bit for bit."""
+    tracks = ec.StellarTracks.load()
+    rng = np.random.default_rng(2)
+    m = 10 ** rng.uniform(np.log10(0.08), np.log10(7.0), 5000)
+    a = rng.uniform(0.0, 13e9, 5000)
+    got = tracks.at(m, a)
+    inside = (m >= tracks.mass[0]) & (m <= tracks.mass[-1]) & (a > 0.0)
+    lm, la = np.log10(m[inside]), np.log10(a[inside])
+    log_mass = np.log10(tracks.mass)
+    hi = np.clip(np.searchsorted(log_mass, lm, side="right"), 1, log_mass.size - 1)
+    lo = hi - 1
+    w = ((lm - log_mass[lo]) / (log_mass[hi] - log_mass[lo]))[:, None]
+    track_age = (1.0 - w) * tracks.log_age[lo] + w * tracks.log_age[hi]
+    n_valid = np.isfinite(track_age).sum(axis=1)
+    rows = np.arange(lm.size)
+    k = np.clip((track_age <= la[:, None]).sum(axis=1) - 1, 0, np.maximum(n_valid - 2, 0))
+    x0, x1 = track_age[rows, k], track_age[rows, k + 1]
+    f = np.clip((la - x0) / np.maximum(x1 - x0, 1e-9), 0.0, 1.0)
+    alive = (n_valid >= 2) & (la <= track_age[rows, np.maximum(n_valid - 1, 0)])
+    column = (1.0 - w) * tracks.log_r[lo] + w * tracks.log_r[hi]
+    log_r = np.where(alive, (1.0 - f) * column[rows, k] + f * column[rows, k + 1], np.nan)
+    np.testing.assert_array_equal(got["radius"][inside], 10.0**log_r)
+    assert np.isfinite(got["radius"]).sum() > 1000 and np.isnan(got["radius"][~inside]).all()
 
 
 # ---------------------------------------------------------------------------
@@ -385,6 +442,47 @@ def test_the_draw_validates_its_arguments(boxes):
         ec.draw_eclipsing_population(1, libraries=boxes, q_min=0.05)
     with pytest.raises(ValueError, match="twin_shape"):
         ec.draw_eclipsing_population(1, libraries=boxes, twin_shape="step")
+
+
+def test_the_rejection_keeps_the_candidates_that_the_whole_pool_accepts(boxes):
+    """Only the accepted candidates are kept between batches. The bound never decreases,
+    so the systems are those of the rejection on every candidate drawn."""
+    tracks = ec.StellarTracks.load()
+    config = {
+        "logg_min": 3.5,
+        "max_age_yr": 1e10,
+        "min_depth_mag": 0.04,
+        "n_photometric_transits": 93.0,
+        "mh": (-0.1, 0.2),
+    }
+    companions = ec._CompanionDistributions(
+        (0.3, float(tracks.mass[-1])), (0.2, 500.0), 0.1, (0.3, 0.85, "ramp")
+    )
+    teff_range, n, batch = (5300.0, 6000.0), 40, 2000
+    got = ec._draw_class(
+        np.random.default_rng(3), n, teff_range, config, tracks, companions, boxes, batch=batch
+    )
+    rng = np.random.default_rng(3)
+    window = ec._class_window(tracks, teff_range, config["logg_min"], config["max_age_yr"])
+    pool: dict[str, list] = {}
+    bounds = []
+    while True:
+        drawn = ec._draw_candidates(
+            rng, batch, window, teff_range, config, tracks, companions, boxes
+        )
+        for key, value in drawn.items():
+            pool.setdefault(key, []).append(value)
+        weight = np.concatenate(pool["weight"])
+        bounds.append(weight.max())
+        accepted = np.concatenate(pool["u"]) < weight / weight.max()
+        if accepted.sum() >= n:
+            break
+    # The bound grew twice during the draw.
+    assert len(set(bounds)) > 2
+    index = np.flatnonzero(accepted)[:n]
+    assert sorted(got) == sorted(pool)
+    for key, parts in pool.items():
+        np.testing.assert_array_equal(got[key], np.concatenate(parts)[index], err_msg=key)
 
 
 # ---------------------------------------------------------------------------
