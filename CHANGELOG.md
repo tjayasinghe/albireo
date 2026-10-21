@@ -635,11 +635,14 @@ This file records what changed. The reasons are recorded elsewhere:
     mass matrix change with it. NUTS chains from the new mass matrix therefore differ from
     earlier ones, by at most 1e-8 posterior standard deviations over the 300 iterations
     tested; longer chains, such as those of the recorded summaries, were not rerun.
-  - *Solver and band assembly (bit-identical, 1126 arrays compared).* The loop bodies of the
-    solver and the assembly are module-level functions, so a repeated eager call reuses its
-    compiled programs: twenty evaluations of the marginal, its standard deviations and four
-    draws take 0.8 s and 2 MB instead of 12.7 s and 554 MB. `build_problem` gives the
-    exposure groups of an instrument one LSF bank (4.8 MB instead of 96 MB on 20 groups).
+  - *Solver and band assembly (bit-identical on the paths the package calls).* Of 1126
+    arrays compared, one differs: a direct call of `selected_inverse_cotangent` with
+    Python-float cotangents, by 1.8e-15 absolute; its only caller passes arrays. The loop
+    bodies of the solver and the assembly are module-level functions, so a repeated eager
+    call reuses its compiled programs: twenty evaluations of the marginal, its standard
+    deviations and four draws take 0.8 s and 2 MB instead of 12.7 s and 554 MB.
+    `build_problem` gives the exposure groups of an instrument one LSF bank (4.8 MB instead
+    of 96 MB on 20 groups).
   - *The `Disentangler` (bit-identical except the scan's trial values).* The semi-amplitude
     scan runs through one compiled sweep in chunks of 16 trials, halved until a chunk fits
     in 1 GiB: its first call takes 1.5 to 2.0 s instead of 3.5 to 4.0 s on the packaged
@@ -658,10 +661,11 @@ This file records what changed. The reasons are recorded elsewhere:
   - *`sensitivity_forecast` (last bits in `p_eff`).* The subspace iteration no longer
     compiles on every call, the prior is factored once instead of three times, and `p_eff`
     comes from the Takahashi sweep of the pointwise band, within 1.2e-13 relative of the
-    earlier value on the designs of `examples/08_forecast.py` (3e-13 with jitter, AR(1)
-    noise or a telluric component). A repeated forecast of the example takes 1.3 s instead
-    of 3.9 s. `tests/test_forecast.py`, with its 40 earlier tests, runs in 50 s with 1,311
-    compilations and 2.9 GB, against 117 s, 2,371 and 4.7 GB.
+    earlier value on the designs of `examples/08_forecast.py` and within 7.4e-13 on eight
+    configurations of the test fixture, among them jitter with AR(1) noise, a telluric
+    component, one stellar component and `half_bandwidth=40`. A repeated forecast of the
+    example takes 1.3 s instead of 3.9 s. `tests/test_forecast.py`, with its 40 earlier
+    tests, runs in 50 s with 1,311 compilations and 2.9 GB, against 117 s, 2,371 and 4.7 GB.
   - *The pipeline and other modules (bit-identical except where stated).* The candidate
     periods of `period = "search"` share one compiled coarse model (26.6 s instead of 39.9 s
     for four candidates), and a star's products share one solve of the marginal. The peak of
@@ -674,10 +678,11 @@ This file records what changed. The reasons are recorded elsewhere:
   `release_compiled`, by default `not keep_live`, calls `jax.clear_caches()` before the next
   star, which also clears the caches of other JAX code in the process. `albireo run` and
   `albireo demo` pass `keep_live=False`. Over five simulated stars without the label stage,
-  the resident memory stayed between 0.61 and 0.69 GB instead of rising from 1.95 to
-  3.94 GB, and each star took 40 to 47 s instead of 26 to 34 s, since its programs were
-  compiled again; the products were identical bit for bit. The cost with the label stage and
-  on real data has not been measured.
+  all with the live objects released, the resident memory stayed between 0.61 and 0.69 GB
+  with the compiled programs released and rose from 1.95 to 3.94 GB without. With them
+  released each star took 40 to 47 s instead of 26 to 34 s, since its programs were
+  compiled again, and the products were identical bit for bit. The cost with the label
+  stage and on real data has not been measured.
 - **The reports of the pipeline.** `result.json` and `results.json` write a non-finite NumPy
   or JAX value as `null`, as for a Python float, where they wrote `NaN` and `Infinity`,
   which strict JSON readers reject; `results.csv` writes an empty cell.
@@ -686,16 +691,37 @@ This file records what changed. The reasons are recorded elsewhere:
   on some systems of the blind tier of the Gaia RVS benchmark.
 - **Pipeline configurations are checked when they are read.** `PipelineConfig` raises an
   error naming the star for a value that a stage would reject: a reversed `region`, `k_min`
-  above `k_max`, semi-amplitude priors of different kinds within one star, a held
-  eccentricity outside [0, 1), `light = "measure"` with declared `velocities`, an empty
-  `{lo, hi}` range or a `{value, sigma}` prior with a sigma that is not positive and finite.
-  These cases failed after the library load and the bootstrap, or inside numpyro.
+  above `k_max`, semi-amplitude priors of different kinds within one star (a component
+  without `k` counts as a range), a held eccentricity outside [0, 1), `light = "measure"`
+  with declared `velocities`, an empty `{lo, hi}` range or a `{value, sigma}` prior with a
+  sigma that is not positive and finite. These cases failed after the library load and the
+  bootstrap, or inside numpyro.
 - **Wavelength grids and threads of the pipeline.** The grids are shared per instrument. An
   instrument with distinct wavelength solutions per exposure, such as APF, no longer keeps
   every other instrument on per-exposure grids; for a star that combines the two, the other
   instrument's wavelengths move by at most 0.05 km/s and its epochs are trimmed to their
   common overlap. The worker environment no longer sets `intra_op_parallelism_threads`, a
   token that XLA ignores: the BLAS and OpenMP threads are capped and XLA's are not.
+- **The line-spread function of an in-memory dataset in the pipeline.** An instrument of a
+  star given as `StarConfig(dataset=...)`, with no LSF declared for it and with every epoch
+  declaring `EpochData.lsf_sigma_kms`, is modelled per epoch, as an instrument whose files
+  declare a resolving power already was. Before, such a star raised an error. The adoption
+  is flagged, since the widths can be nominal rather than delivered: `gaia.deliver`
+  declares the nominal RVS width of 11.07 km/s by default, narrower than the 11.60 km/s of
+  a line delivered on the DR4 grid (`rvs_delivered_sigma_kms`, D65). Declare `lsf` on the
+  star or under `[instrument.<key>]` where the widths are not the delivered ones.
+- **Smaller changes of the pipeline and the `Disentangler`.**
+  - A failed star that wrote products before the failure, such as a template table, lists
+    them in `products.json`, and a re-run of the star removes them.
+  - A configuration path that is `~` or begins with `~/` is expanded. A file name that
+    begins with a tilde is read from the configuration's directory, as before.
+  - The library is loaded only when a stage uses it. The pipeline keeps one library in
+    memory, and a library file is read again when its modification time or size changes.
+  - `Disentangler.noise_correlation_per_epoch()` returns the held value for a `Fixed`
+    correlation instead of `None`.
+  - `Smoothness` raises an error for a non-positive or non-finite `tau0`, `eta0` or
+    `sigma`, and the bounds of a fitted `noise_correlation=Between(lo, hi)` must lie within
+    [-1, 1].
 - **`LabelMatch.libraries` holds a record of each library without its flux.** The record has
   the label names, nodes, medium, metadata, resolving power and `bounds`. The projected
   flux, which the interpolator also holds, was a second copy of 0.26 GB at 455 nodes and
@@ -745,13 +771,17 @@ This file records what changed. The reasons are recorded elsewhere:
 - **New keyword arguments and attributes.** `Problem.half_bandwidth_bound(..., ar1=True)`,
   `Fit.free_velocities(tol=...)`, `Fit.max_steps`, `rvs_transit_times(release=...)`,
   `query_gaia_sb2(order="random")` and `read_raw_spectra(epoch_kwargs=...)`.
-  `RawSpectrum.quality` keeps the integer type of the file's flag column, and
-  `Disentangler.detection_limit()` raises a `TypeError` for an argument that the declaration
-  supplies.
+  `RawSpectrum.quality` keeps the integer type of the file's flag column.
+  `Disentangler.detection_limit(block_size=...)` overrides the declaration's `block_size`,
+  where it raised `TypeError` when both were set, and an argument that the declaration
+  supplies raises a `TypeError` that names it.
 - **The pixel-locking warning of `todcor`** is set by the width of the convolved lines,
-  `max(sigma_inst, sigma_kms)`, instead of the width that the LSF adds in quadrature: a
-  template of 4.9 km/s against an LSF of 5 km/s no longer raises it. The default
-  `coarse_step` is unchanged.
+  `max(sigma_inst, sigma_kms)`, instead of the width that the LSF adds in quadrature. On a
+  grid of 1.5 km/s per pixel a template of 4.9 km/s against an LSF of 5 km/s no longer
+  raises it (0.66 pixel before, lines 3.3 pixels wide now), and a template broader than the
+  LSF on too coarse a grid now raises it. With `lsf_sigma_v=None` the width is the
+  templates' own `sigma_kms`; before, the warning was not raised. The default `coarse_step`
+  is unchanged.
 - **The period comparison of `period = "search"` also values each candidate at its own
   table orbit (D75).** The comparison scored each candidate by the best its coarse scans
   reached. The scans hold the period at the table's value and the eccentricity at its
@@ -1129,8 +1159,14 @@ This file records what changed. The reasons are recorded elsewhere:
   was read as topocentric. A FITS `-LOG` axis overflowed, a natural-logarithm axis (HERMES)
   gave 2.6e8 Å and `DC-FLAG = -1` gave 10 to 1000 Å; each is read as defined or raises an
   error. A date-only `DATE-OBS` was read as midnight; the time is taken from `TIME-OBS`,
-  `UTSTART`, `UT-START` or `UT`. Sexagesimal site, `RA` and `DEC` keywords are read. Linear
-  and `DC-FLAG = 1` axes are unchanged.
+  `UTSTART`, `UT-START` or `UT`, and without one of them the reader raises an error that
+  advises `bjd=`. Sexagesimal site, `RA` and `DEC` keywords are read. Linear and
+  `DC-FLAG = 1` axes whose wavelengths lie between 100 Å and 1e6 Å are read as before; an
+  axis with wavelengths outside that range, such as one in metres without `CUNIT1`, raises
+  an error that names `wave_scale=`. A binary table whose wavelength and flux columns
+  differ in length raises an error that names them; before, the reader fell back to the
+  image HDUs and could read another array of the file, such as a VARIANCE image, as the
+  spectrum.
 - **Saved results.** A fit read back with `load_fit`, such as the pipeline's `fit.npz`,
   lacked `MAPResult.potential_trace` and returned `potential_fall() == (nan, 0)`; the trace
   is stored. A `MarginalResult` read back without its precision could not be saved again.
@@ -1146,8 +1182,9 @@ This file records what changed. The reasons are recorded elsewhere:
 - **Truncated and concurrent downloads.** The helper with which `albireo.examples` and
   `albireo.library` fetch files did not check the body against its `Content-Length`, so a
   truncated BOSZ shard or wavelength grid was kept as complete. Each transfer is checked and
-  written to a temporary file of its own, which two pipeline workers no longer share. Caches
-  built before this change are not checked again.
+  written to a temporary file of its own. A library shard then passes through the fixed name
+  `<name>.part` before its final rename, so two workers that fetch the same shard can still
+  collide in a short window. Caches built before this change are not checked again.
 - **`albireo.archive`.** An `ssl.SSLError` or `http.client.IncompleteRead` during `download`
   escaped the per-record handling, so no `manifest.json` was written; each failure is that
   record's `FAIL` line, and a record listed twice is downloaded once. `spectra_query` wrote
@@ -1165,8 +1202,10 @@ This file records what changed. The reasons are recorded elsewhere:
   takes the path and is unchanged bit for bit.
 - **The checks of a `velocities=` declaration** tested the declared table, while the model
   removes one zero point per star, so a table that differed between the stars only by a
-  constant passed, although after centring it is the cold start that fails (D42). Both
-  checks use the centred table, with a tolerance of 1e-9 of its largest velocity.
+  constant passed, although after centring it is the cold start that fails (D42). The
+  cold-start check and the warning for velocities inside the LSF width both use the centred
+  table, with a tolerance of 1e-9 of its largest velocity, so per-star offsets no longer
+  hide an unresolved pattern from the warning.
 - **Semi-amplitude specifications for several stars.** `Orbit(k=Between(10, 90))` with two
   stars built a scalar `k` site, which failed at the first likelihood evaluation, and
   `k=40.0` raised `TypeError`; a single-valued specification for two or more stars raises an
@@ -1184,7 +1223,8 @@ This file records what changed. The reasons are recorded elsewhere:
 - **One-star label fits.** `match_labels` raised an error for every one-star declaration
   with the default `ScalarDilution`, whose factor started on the upper bound of its prior,
   and the pipeline flagged such stars "labels failed". For a declared light of 1 or more the
-  prior extends to twice the declared light.
+  prior extends to twice the declared light. In the pipeline such a star now has labels, and
+  the label fit sets the zero point of its template, as for a pair.
 - **The warm start and the draws of the label fit.** `refit_draws` started each draw from
   the warm-start node, and on the test problem 40 to 60 steps left even a draw equal to the
   data 10 and 32 K short of the optimum in Teff, so the spread included the optimizer's
@@ -1247,23 +1287,30 @@ This file records what changed. The reasons are recorded elsewhere:
 - **The comparison of an exchanged simulated pair with its injected values.** Where the
   components come out in the other order, `result.json` compares them with the injected
   values in that order, but the orbital elements were not exchanged, so
-  `elements_disentangling`, `elements_table` and their pulls reported about 180 degrees in
-  `omega_deg` on an eccentric orbit and 0.39 to 0.5 of a phase in `t_conj`. The exchanged
-  values carry `omega + pi` and the other conjunction. The rows "abs(d t_conj) [phase]" of
-  the Gaia RVS benchmark in `docs/benchmarks.md`, whose orbit and blind tiers had 5 to 26
-  per cent of their systems exchanged, and the tables of
-  `docs/tutorials/gaia-rvs-benchmark.ipynb` include these offsets and were not recomputed.
+  `elements_disentangling`, `elements_table` and their pulls reported an error of about
+  180 degrees in `omega_deg` on an eccentric orbit, and an error in `t_conj` equal to the
+  phase between the two conjunctions (0.5 on a circular orbit, 0.39 at e = 0.3 in the case
+  tested). The exchanged values carry `omega + pi` and the other conjunction. The rows
+  "abs(d t_conj) [phase]" of the Gaia RVS benchmark in `docs/benchmarks.md`, whose orbit and
+  blind tiers had 5 to 26 per cent of their systems exchanged, and the tables of
+  `docs/tutorials/gaia-rvs-benchmark.ipynb` include these errors and were not recomputed.
 - **Semi-amplitude errors of exchanged pairs in the Gaia RVS benchmark.**
   `benchmark.collect` divided the semi-amplitude differences of an exchanged pair by the
   unexchanged injected semi-amplitudes, so each relative error was off by about q or 1/q.
   The rows "abs(dK1 / K1)", "abs(dK2 / K2)" and "K1 and K2 within 5%" in
-  `docs/benchmarks.md` include the exchanged runs of the orbit and blind tiers; the size of
-  the effect was not computed, because the per-system rows of those runs were not available.
+  `docs/benchmarks.md`, whose orbit and blind tiers include exchanged runs, and the tables
+  of `docs/tutorials/gaia-rvs-benchmark.ipynb`, whose twin pair is exchanged under the
+  `orbit` tier, include these errors. The size of the effect was not computed; the
+  per-system rows of the runs in `docs/benchmarks.md` were not available.
 - **Resumed and GOST runs of the Gaia RVS benchmark.** A resume kept any existing
   `result.json`, although the noise seed of a system depends on the planned set, so a change
   of tiers or of `min_transits` mixed results simulated with other noise. A result recorded
   under other settings (`benchmark_key.json`) is run again with a warning, and the earlier
-  one is kept as `result.stale.json`.
+  one is kept as `result.stale.json`. Under the GOST cadence, `snr_total` and the figures
+  use the number of epochs simulated (`n_epochs`, a new column of `rows.csv`) instead of
+  the system's number of transits, and `simulate_system` without `bjd` restricts the GOST
+  transits to the span of the product's release, where it took the DR4 span for every
+  product.
 - **The argument of periastron of an exchanged catalogue pair.** Where a catalogue lists the
   less massive star first, the adapters of `albireo.population` exchange the components, and
   the new component 1 kept the other star's `omega`, which mirrors its velocity curve. It
