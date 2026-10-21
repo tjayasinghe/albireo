@@ -237,6 +237,51 @@ def test_another_number_of_epochs_compiles_nothing(sb2, fixed_table, compilation
     assert compilations(measure_subsets) == 0
 
 
+def test_another_template_grid_length_compiles_nothing(sb2, fixed_table, compilations):
+    # The convolution and the terms were compiled once per length of the template grid,
+    # and the stars of a batch each have their own grid. The grid is padded with zeros to a
+    # multiple of 1024 pixels, which changes no value.
+    dataset, _, _ = sb2
+    other = ab.LogGrid.from_wavelength_range(5000.0, 5062.0, dv_kms=1.5)
+    assert other.n != GRID.n and -(-other.n // 1024) == -(-GRID.n // 1024)
+    templates = [
+        Template(n, other, c, v_zero_kms=0.0)
+        for n, c in zip("AB", components(grid=other), strict=True)
+    ]
+    assert compilations(lambda: todcor(dataset, templates, light=LIGHT, **COMMON)) == 0
+
+
+def test_the_held_pass_of_global_light_reuses_the_free_pass(sb2, monkeypatch):
+    """The second pass of ``light="global"`` takes the inner products from the first.
+
+    They do not depend on the amplitudes. The table is the same bit for bit as with every
+    term recomputed, which a budget of zero bytes forces.
+    """
+    import importlib
+
+    module = importlib.import_module("albireo.todcor")
+    dataset, _, templates = sb2
+    original = module._epoch_terms
+    calls = []
+
+    def counted(*args, **kwargs):
+        calls.append((np.asarray(args[4]).tobytes(), np.asarray(args[6]).tobytes()))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(module, "_epoch_terms", counted)
+    table = todcor(dataset, templates, light="global", **COMMON)
+    assert len(calls) == len(set(calls))  # no epoch is evaluated twice at the same shifts
+    monkeypatch.setattr(module, "_REUSE_BYTES", 0)
+    calls.clear()
+    recomputed = todcor(dataset, templates, light="global", **COMMON)
+    assert len(calls) > len(set(calls))
+    for name in ("velocity", "sigma", "covariance", "light", "chi2", "margin", "delta_chi2"):
+        np.testing.assert_array_equal(getattr(table, name), getattr(recomputed, name))
+    np.testing.assert_array_equal(
+        table.settings["first_pass_light"], recomputed.settings["first_pass_light"]
+    )
+
+
 def test_the_detection_statistic_is_large_for_both_stars(fixed_table):
     assert np.all(fixed_table.delta_chi2 > 1e3)
     assert np.all(fixed_table.r_squared > 0.9)
@@ -309,6 +354,45 @@ def test_global_light_is_an_error_where_the_templates_fit_as_a_difference():
     np.testing.assert_allclose(free.light, _col([1.5, -0.5], free), atol=0.05)
     with pytest.raises(_LightNotMeasured, match="templates closer to the components"):
         todcor(dataset, templates, light="global", **COMMON)
+
+
+@pytest.mark.parametrize(
+    ("n_weighted", "nuisance_order", "message"),
+    [
+        (5, 0, "epoch 8: only 5 weighted pixels"),
+        # The free pass has two more parameters and needs ten pixels, the held pass eight.
+        (9, 3, "no light fractions were measured for instrument 'b'"),
+    ],
+)
+def test_an_instrument_without_a_measured_epoch_is_skipped_under_global_light(
+    sb2, n_weighted, nuisance_order, message
+):
+    """An instrument whose every epoch has too few pixels for the free pass has no light.
+
+    Its epochs are skipped, as an epoch with too few pixels is skipped under any light.
+    Before, the instrument raised the error of templates that measure no light, and with
+    a pixel count between the needs of the two passes the held pass raised a KeyError.
+    """
+    dataset, _, templates = sb2
+    first = dataset[0]
+    ivar = np.zeros_like(first.ivar)
+    ivar[400 : 400 + n_weighted] = first.ivar[400 : 400 + n_weighted]
+    sparse = EpochData(
+        wave=first.wave,
+        flux=first.flux,
+        ivar=ivar,
+        bjd=first.bjd + 30.0,
+        v_bary=first.v_bary,
+        instrument="b",
+    )
+    extended = Dataset([*dataset.epochs, sparse], frame=dataset.frame)
+    options = {"v_range": (-150.0, 150.0), "nuisance_order": nuisance_order, "light": "global"}
+    with pytest.warns(UserWarning, match=message):
+        table = todcor(extended, templates, lsf_sigma_v={"a": 5.0, "b": 5.0}, **options)
+    reference = todcor(dataset, templates, lsf_sigma_v={"a": 5.0}, **options)
+    assert set(table.settings["global_light"]) == {"a"}
+    np.testing.assert_allclose(table.velocity[:, :8], reference.velocity, rtol=0, atol=1e-12)
+    assert np.all(np.isnan(table.velocity[:, 8])) and table.n_pixels[8] == n_weighted
 
 
 def test_free_scale_reports_the_normalization_and_the_same_velocities(sb2, fixed_table):
@@ -786,6 +870,32 @@ def test_an_advancing_fine_window_reports_a_shift_it_evaluated():
     )
     assert table.refined[0] and table.good[0] and not table.at_edge[0, 0]
     assert abs(_pixels(table.velocity[0, 0]) - best) <= 1.0
+
+
+@pytest.mark.parametrize(
+    ("copies", "top", "step"),
+    [([(1, 0.5), (7, 1.0)], 4, 2), ([(2, 0.5), (9, 1.0)], 6, 3)],
+)
+def test_a_range_shorter_than_the_refinement_window_bounds_the_shift(copies, top, step):
+    """The refinement does not search past the end of a range shorter than its window.
+
+    The window holds ``2 (step + 2) + 1`` shifts. Placed at the start of a shorter range it
+    reaches past the end, where a deeper copy lies here. That copy was reported, without a
+    flag, as the velocity, about 3 pixels beyond the range.
+    """
+    dataset = _copies_epochs([copies], seed=2)
+    v_range = (float(GRID.pixels_to_velocity(-0.5)), float(GRID.pixels_to_velocity(top + 0.5)))
+    table = todcor(
+        dataset,
+        [Template("A", GRID, NARROW, v_zero_kms=0.0)],
+        v_range=v_range,
+        coarse_step=step,
+        **ONE_TEMPLATE,
+    )
+    shift = _pixels(table.velocity[0, 0])
+    assert table.good[0] and not table.at_edge[0, 0]
+    assert 0.0 <= shift <= top
+    assert abs(shift - copies[0][0]) < 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -1316,6 +1426,22 @@ def test_template_and_argument_validation(sb2):
         todcor_surface(dataset, 0, templates[:1], **COMMON)
 
 
+@pytest.mark.parametrize("light", ["free", "global"])
+def test_a_template_without_lines_over_the_data_is_named_when_the_light_is_solved(sb2, light):
+    """A template that is zero over the data leaves its amplitude undetermined at every shift.
+
+    The error names the epoch and the template. Before, NumPy's ``All-NaN slice
+    encountered`` was raised. With the light held, the chi-square stays defined.
+    """
+    dataset, _, templates = sb2
+    two = Dataset(dataset.epochs[:2], frame=dataset.frame)
+    empty = [templates[0], Template("Z", GRID, np.zeros(GRID.n), v_zero_kms=0.0)]
+    with pytest.raises(ValueError, match=r"epoch 0: .*\['Z'\] are zero over the epoch's weighted"):
+        todcor(two, empty, light=light, **COMMON)
+    held = todcor(two, empty, light=LIGHT, **COMMON)
+    assert np.all(np.isfinite(held.velocity[0]))
+
+
 def test_a_template_broader_than_the_instrument_warns_and_is_used_unbroadened(sb2):
     dataset, _, templates = sb2
     broad = [Template("A", GRID, t.deviation, sigma_kms=5.0, v_zero_kms=0.0) for t in templates[:1]]
@@ -1363,6 +1489,51 @@ def test_a_narrow_grid_warns_about_its_margins(sb2):
         todcor(dataset, templates, light=LIGHT, **COMMON)
 
 
+@pytest.mark.parametrize("v_bary", [28.0, -28.0])
+def test_the_margin_check_includes_the_barycentric_offset(v_bary):
+    """The shifts searched at a topocentric epoch are offset by its barycentric velocity.
+
+    The grid here covers +-160 km/s, the search +-150 km/s, and the barycentric offset of
+    28 km/s takes the searched shifts 10 pixels past one end. Only the spread of the
+    offsets over the epochs was checked, which is zero for one epoch.
+    """
+    import warnings
+
+    wave = np.arange(5008.0, 5052.0, 0.05)
+    noise = np.random.default_rng(0).normal(0.0, 0.001, wave.size)
+    epoch = EpochData(
+        wave=wave, flux=1.0 + noise, ivar=np.full(wave.size, 1e6), bjd=0.0, v_bary=v_bary
+    )
+    one = Dataset([epoch], frame="topocentric")
+    grid = ab.LogGrid.covering(one, 1.5, v_margin_kms=160.0, extra_pixels=0)
+    (deviation,) = components(grid=grid, seeds=(21,))
+    template = [Template("A", grid, deviation, v_zero_kms=0.0)]
+    with pytest.warns(UserWarning, match="too narrow"):
+        todcor(one, template, light=[1.0], v_range=(-150.0, 150.0), lsf_sigma_v=None)
+    still = Dataset([epoch], frame="barycentric")  # the same offset, not applied
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", message=".*too narrow")
+        todcor(still, template, light=[1.0], v_range=(-150.0, 150.0), lsf_sigma_v=None)
+
+
+def test_the_pixel_locking_warning_is_set_by_the_width_of_the_lines(sb2):
+    """The ripple depends on the width of the convolved lines, ``max(sigma_inst, sigma_t)``.
+
+    The warning was set by the width added in quadrature. A template of 4.9 km/s against an
+    LSF of 5 km/s raised it at 0.66 pixel, although its lines are 3.3 pixels wide.
+    """
+    import warnings
+
+    dataset, _, templates = sb2
+    nearly = [Template(t.name, GRID, t.deviation, sigma_kms=4.9, v_zero_kms=0.0) for t in templates]
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", message=".*pixel-locking")
+        todcor(dataset, nearly, light=LIGHT, **COMMON)
+    sharp = {"v_range": (-150.0, 150.0), "lsf_sigma_v": {"a": 2.5}}
+    with pytest.warns(UserWarning, match=r"1\.67 template pixels wide \(sigma\)"):
+        todcor(dataset, templates, light=LIGHT, **sharp)
+
+
 def test_batch_records_failures_and_writes_one_table_per_star(sb2, tmp_path):
     dataset, _, templates = sb2
     other = ab.LogGrid.from_wavelength_range(5000.0, 5060.0, dv_kms=2.0)
@@ -1384,6 +1555,26 @@ def test_batch_records_failures_and_writes_one_table_per_star(sb2, tmp_path):
     with pytest.raises(ValueError, match="different grids"):
         todcor_batch(
             {"s3": dataset}, broken, on_error="raise", progress=False, light=LIGHT, **COMMON
+        )
+
+
+def test_batch_records_a_star_without_templates(sb2):
+    """A star missing from a mapping of templates is a failure of that star alone."""
+    dataset, _, templates = sb2
+    two = Dataset(dataset.epochs[:3], frame=dataset.frame)
+    batch = todcor_batch(
+        {"s1": two, "s2": two}, {"s1": templates}, progress=False, light=LIGHT, **COMMON
+    )
+    assert set(batch.tables) == {"s1"}
+    assert batch.failures == {"s2": "ValueError: templates has no entry for this star"}
+    with pytest.raises(ValueError, match=r"no entry for the star\(s\) \['s2'\]"):
+        todcor_batch(
+            {"s1": two, "s2": two},
+            {"s1": templates},
+            on_error="raise",
+            progress=False,
+            light=LIGHT,
+            **COMMON,
         )
 
 

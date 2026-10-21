@@ -97,8 +97,12 @@ __all__ = [
 ]
 
 _ROW_BUCKET = 1024
+_GRID_BUCKET = 1024  # template-grid lengths are padded to a multiple of this (`_pad_grid`)
 _SHIFT_CHUNK = 32
 _EPS = 1e-12
+# The largest number of bytes of inner products the free pass of light="global" keeps for
+# the held pass (`_Reuse`).
+_REUSE_BYTES = 256 * 2**20
 # The largest number of local minima refined per epoch: of the coarse surface at full
 # resolution, and of each fine window below a pixel (see `_candidate_minima`). A fine
 # window is moved at most `_WINDOW_MOVES` times while its minimum is on its edge.
@@ -374,6 +378,20 @@ def _templates_share_grid(templates: Sequence[Template]) -> LogGrid:
 # ---------------------------------------------------------------------------
 
 
+def _project_shifted(t, d, rows, cols, vals, n_out: int):
+    """The template ``t`` at the integer shifts ``d``, projected onto the native pixels.
+
+    The template is gathered at ``cols - d`` and weighted by the rebin values, and the
+    rows are summed. A column shifted off the template grid reads zero. Traced inside
+    :func:`_epoch_terms` and :func:`_epoch_columns`; returns ``(n_out, d.size)``.
+    """
+    n_grid = t.shape[0]
+    idx = cols[:, None] - d[None, :]
+    ok = (idx >= 0) & (idx < n_grid)
+    contrib = vals[:, None] * jnp.where(ok, t[jnp.clip(idx, 0, n_grid - 1)], 0.0)
+    return jax.ops.segment_sum(contrib, rows, num_segments=n_out)
+
+
 @partial(jax.jit, static_argnames=("chunk",))
 def _epoch_terms(t_stack, rows, cols, vals, z, w, deltas, basis, chunk: int):
     """All inner products between the data and the shifted, projected templates.
@@ -387,20 +405,16 @@ def _epoch_terms(t_stack, rows, cols, vals, z, w, deltas, basis, chunk: int):
     template-nuisance cross terms, and the data scalars (``docs/math.md`` §10.1).
 
     A shifted template projected onto the native grid is one gather of the template at
-    ``cols - delta`` weighted by the rebin values, so all shifts are built by one
-    segment-sum per chunk of shifts. The chunking bounds the ``nnz x n_shift`` temporary.
+    ``cols - delta`` weighted by the rebin values (:func:`_project_shifted`), so all shifts
+    are built by one segment-sum per chunk of shifts. The chunking bounds the
+    ``nnz x n_shift`` temporary.
     """
     n_out = z.shape[0]
-    n_grid = t_stack.shape[1]
-
-    def columns(t, d_chunk):
-        idx = cols[:, None] - d_chunk[None, :]
-        ok = (idx >= 0) & (idx < n_grid)
-        contrib = vals[:, None] * jnp.where(ok, t[jnp.clip(idx, 0, n_grid - 1)], 0.0)
-        return jax.ops.segment_sum(contrib, rows, num_segments=n_out)
 
     def all_columns(t, d):
-        pieces = jax.lax.map(lambda dc: columns(t, dc), d.reshape(-1, chunk))
+        pieces = jax.lax.map(
+            lambda dc: _project_shifted(t, dc, rows, cols, vals, n_out), d.reshape(-1, chunk)
+        )
         return jnp.transpose(pieces, (1, 0, 2)).reshape(n_out, -1)
 
     a = jax.vmap(all_columns)(t_stack, deltas)  # (n_tmpl, n_out, n_shift)
@@ -653,6 +667,12 @@ def _stencil(center: np.ndarray, lower: np.ndarray, upper: np.ndarray, h: float)
     return np.stack([x.reshape(-1) for x in mesh], axis=1)
 
 
+def _minimize_unit_interval(g0: float, h0: float) -> tuple[float, float]:
+    """Minimize ``g0 x + h0 x^2 / 2`` over ``[0, 1]``; ``(x, value)``."""
+    x = min(max(-g0 / h0, 0.0), 1.0) if h0 > _EPS else (0.0 if g0 > 0.0 else 1.0)
+    return x, g0 * x + 0.5 * h0 * x * x
+
+
 def _minimize_box_quadratic(g: np.ndarray, hess: np.ndarray) -> tuple[np.ndarray, float]:
     """Minimize the convex ``g.x + x.H.x/2`` over the unit box exactly; ``(x, value)``.
 
@@ -665,9 +685,8 @@ def _minimize_box_quadratic(g: np.ndarray, hess: np.ndarray) -> tuple[np.ndarray
     """
     n = g.size
     if n == 1:
-        g0, h0 = float(g[0]), float(hess[0, 0])
-        x = min(max(-g0 / h0, 0.0), 1.0) if h0 > _EPS else (0.0 if g0 > 0.0 else 1.0)
-        return np.array([x]), g0 * x + 0.5 * h0 * x * x
+        x, value = _minimize_unit_interval(float(g[0]), float(hess[0, 0]))
+        return np.array([x]), value
     scale = float(np.prod(np.clip(np.diag(hess), 0.0, None)))
     if scale > 0.0 and np.linalg.det(hess) > 1e-12 * scale:
         x = np.linalg.solve(hess, -g)
@@ -678,10 +697,18 @@ def _minimize_box_quadratic(g: np.ndarray, hess: np.ndarray) -> tuple[np.ndarray
     for axis in range(n):
         rest = keep[keep != axis]
         for bound in (0.0, 1.0):
-            # On the facet x[axis] = bound the gradient gains H[rest, axis] * bound.
-            sub_x, sub_value = _minimize_box_quadratic(
-                g[rest] + hess[rest, axis] * bound, hess[np.ix_(rest, rest)]
-            )
+            # On the facet x[axis] = bound the gradient gains H[rest, axis] * bound. A
+            # facet of a square is a segment, minimized in scalars.
+            if n == 2:
+                other = int(rest[0])
+                x_other, sub_value = _minimize_unit_interval(
+                    float(g[other] + hess[other, axis] * bound), float(hess[other, other])
+                )
+                sub_x = np.array([x_other])
+            else:
+                sub_x, sub_value = _minimize_box_quadratic(
+                    g[rest] + hess[rest, axis] * bound, hess[np.ix_(rest, rest)]
+                )
             value = sub_value + g[axis] * bound + 0.5 * hess[axis, axis] * bound * bound
             if value < best_value:
                 best_x = np.empty(n)
@@ -750,7 +777,7 @@ def _profiled(terms: _Terms, pos, amps, mode: str):
     return terms.chi2(pos, amps)
 
 
-def _refine(terms: _Terms, start: np.ndarray, amps, mode: str):
+def _refine(terms: _Terms, start: np.ndarray, amps, mode: str, upper=None):
     """Sub-pixel minimum reached from the integer point ``start`` of the fine window.
 
     Every unit cell touching the position is minimized exactly with the amplitudes held,
@@ -765,10 +792,12 @@ def _refine(terms: _Terms, start: np.ndarray, amps, mode: str):
     converges.
 
     The descent stops at the boundary of the window, where the caller moves the window
-    (:func:`_refine_at`). Falls back to ``start``, flagged as unrefined, if ``start`` is
-    itself on that boundary.
+    (:func:`_refine_at`). ``upper`` is the last position the descent may reach, per
+    template: the end of the window by default, or the end of the requested range where
+    that lies inside the window. Falls back to ``start``, flagged as unrefined, if
+    ``start`` is itself on that boundary.
     """
-    hi = terms.n_shift - 1
+    hi = np.full(terms.n_tmpl, terms.n_shift - 1) if upper is None else np.asarray(upper)
     pos = start.astype(np.float64)
     if np.any(start <= 0) or np.any(start >= hi):
         chi2, a, _ = _profiled(terms, pos, amps, mode)
@@ -779,8 +808,8 @@ def _refine(terms: _Terms, start: np.ndarray, amps, mode: str):
         base = np.floor(pos).astype(int)
         on_face = pos == base
         axes = [
-            sorted({int(np.clip(c - 1, 0, hi - 1)), int(np.clip(c, 0, hi - 1))}) if face else [c]
-            for c, face in zip(base.tolist(), on_face.tolist(), strict=True)
+            sorted({min(max(c - 1, 0), h - 1), min(max(c, 0), h - 1)}) if face else [c]
+            for c, face, h in zip(base.tolist(), on_face.tolist(), hi.tolist(), strict=True)
         ]
         best = None
         for corner in itertools.product(*axes):
@@ -906,15 +935,7 @@ def _epoch_columns(t_stack, rows, cols, vals, w, deltas):
     as pixel vectors. The Jacobian of the model at the solution is assembled from them.
     """
     n_out = w.shape[0]
-    n_grid = t_stack.shape[1]
-
-    def columns(t, d):
-        idx = cols[:, None] - d[None, :]
-        ok = (idx >= 0) & (idx < n_grid)
-        contrib = vals[:, None] * jnp.where(ok, t[jnp.clip(idx, 0, n_grid - 1)], 0.0)
-        return jax.ops.segment_sum(contrib, rows, num_segments=n_out)
-
-    return jax.vmap(columns)(t_stack, deltas)
+    return jax.vmap(lambda t, d: _project_shifted(t, d, rows, cols, vals, n_out))(t_stack, deltas)
 
 
 def _ar1_apply(x: np.ndarray, phi: float) -> np.ndarray:
@@ -1065,7 +1086,8 @@ def _convolved_templates(
                 rows.append(t.deviation)
             else:
                 kernel = gaussian_kernel(s / grid.dv_kms)
-                rows.append(np.asarray(convolve_spectrum(jnp.asarray(t.deviation), kernel)))
+                padded = jnp.asarray(_pad_grid(t.deviation))
+                rows.append(np.asarray(convolve_spectrum(padded, kernel))[: grid.n])
         else:
             anchor_wave = tuple(float(x) for x in anchors)
             if sigma.size == 1:
@@ -1080,6 +1102,38 @@ def _convolved_templates(
             profiles = gaussian_lsf_profiles(sigma_px, anchor_wave, grid.wave)
             rows.append(np.asarray(convolve_varying(jnp.asarray(t.deviation), profiles)))
     return np.stack(rows), float(narrowest / grid.dv_kms if np.isfinite(narrowest) else 0.0)
+
+
+def _pad_grid(array: np.ndarray) -> np.ndarray:
+    """``array`` padded with zeros along its last axis to a multiple of `_GRID_BUCKET`.
+
+    Outside ``jit`` the convolution of a template and :func:`_epoch_terms` are compiled
+    once per length of the template grid, and the stars of a batch can each have their own
+    grid. The zeros change no value. The convolution is zero-padded at the grid's end
+    already, and a shifted template that reaches past the end reads zeros either way
+    (verified bit for bit).
+    """
+    n = array.shape[-1]
+    widths = [(0, 0)] * (array.ndim - 1) + [(0, _round_up(n, _GRID_BUCKET) - n)]
+    return np.pad(array, widths)
+
+
+def _line_width_px(templates: Sequence[Template], grid: LogGrid, key, lsf_sigma_v) -> float:
+    """The narrowest line width of the templates at an instrument's resolution, in pixels.
+
+    The instrument LSF is applied in quadrature above each template's own width, so the
+    lines of a convolved template are ``max(sigma_inst, sigma_kms)`` wide (the narrowest
+    width over the anchors of a wavelength-dependent LSF). Without declared widths the
+    templates are at the instruments' resolution, and their own ``sigma_kms`` is the
+    width. ``key`` is the epoch's :func:`_lsf_key`.
+    """
+    if lsf_sigma_v is None:
+        width = min(t.sigma_kms for t in templates)
+    else:
+        declared = lsf_sigma_v[key[0]] if key[1] is None else key[1]
+        instrument = float(np.min(np.asarray(declared, dtype=np.float64)))
+        width = min(max(instrument, t.sigma_kms) for t in templates)
+    return width / grid.dv_kms
 
 
 def _chebyshev_basis(n: int, order: int | None) -> np.ndarray:
@@ -1097,8 +1151,7 @@ def _round_up(n: int, multiple: int) -> int:
 class _EpochWork:
     """One epoch's static arrays, padded to bucketed shapes for the jitted terms."""
 
-    index: int
-    instrument: str
+    index: int  # the epoch's position in the dataset
     bary_pix: float
     z: jax.Array
     w: jax.Array
@@ -1130,7 +1183,6 @@ def _prepare_epoch(index: int, epoch: EpochData, grid: LogGrid, nuisance_order) 
     basis[:n_native] = _chebyshev_basis(n_native, nuisance_order)
     return _EpochWork(
         index=index,
-        instrument=epoch.instrument,
         bary_pix=float(np.asarray(grid.velocity_to_pixels(epoch.v_bary))),
         z=jnp.asarray(np.pad(z, (0, n_pad - n_native))),
         w=jnp.asarray(np.pad(w, (0, n_pad - n_native))),
@@ -1152,6 +1204,68 @@ def _terms_numpy(out, n_shift: int) -> _Terms:
         pwz=np.asarray(pwz),
         zwz=float(zwz),
     )
+
+
+@dataclass
+class _Reuse:
+    """The work of one :func:`todcor` call that its two passes share.
+
+    ``light="global"`` measures every epoch twice, with the amplitudes free and then held
+    at the global fractions. The convolved templates and the inner products of
+    :func:`_epoch_terms` do not depend on the amplitudes, which enter only the chi-square
+    grids, so the held pass takes them from the free pass. The terms are kept up to
+    ``budget`` bytes and recomputed beyond it, which gives the same values bit for bit.
+    A coarse Gram tensor takes ``8 n_tmpl^2 n_coarse^2`` bytes per epoch (72 MB at 1504
+    coarse shifts), so a long dataset of wide searches does not hold every epoch's terms.
+    """
+
+    budget: int = 0
+    templates: tuple | None = None
+    terms: dict = field(default_factory=dict)
+    nbytes: int = 0
+    # Whether new terms are kept. The held pass, the last to use them, takes and removes.
+    record: bool = True
+
+    def take(self, key):
+        return self.terms.get(key) if self.record else self.terms.pop(key, None)
+
+    def keep(self, key, value) -> None:
+        if not self.record:
+            return
+        out, terms = value
+        size = sum(int(x.nbytes) for x in out) * (1 if terms is None else 2)
+        if self.nbytes + size <= self.budget:
+            self.terms[key] = value
+            self.nbytes += size
+
+
+def _terms_at(stack, work: _EpochWork, deltas: np.ndarray, reuse, n_shift: int | None = None):
+    """:func:`_epoch_terms` of one epoch at the integer shifts ``deltas``, ``(out, terms)``.
+
+    ``terms`` is the NumPy copy of the first ``n_shift`` shifts (:func:`_terms_numpy`), or
+    ``None`` without ``n_shift``. Both are taken from ``reuse`` (a :class:`_Reuse`) where
+    it holds them.
+    """
+    key = (work.index, deltas.shape, deltas.tobytes())
+    if reuse is not None:
+        value = reuse.take(key)
+        if value is not None:
+            return value
+    out = _epoch_terms(
+        stack,
+        work.rows,
+        work.cols,
+        work.vals,
+        work.z,
+        work.w,
+        jnp.asarray(deltas),
+        work.basis,
+        chunk=_SHIFT_CHUNK,
+    )
+    value = (out, None if n_shift is None else _terms_numpy(out, n_shift))
+    if reuse is not None:
+        reuse.keep(key, value)
+    return value
 
 
 def _velocity_from_shift(grid: LogGrid, shift, frame: str, bary_pix: float):
@@ -1597,7 +1711,8 @@ def _check_margins(grid: LogGrid, dataset: Dataset, shift_lo: float, shift_hi: f
             f"the template grid is {short:.0f} pixels too narrow for the velocity range "
             "searched: a template shifted to the edge of the range runs off the grid and "
             "zero-fills part of the data. Build the grid with LogGrid.covering(dataset, ..., "
-            "v_margin_kms=<the largest |velocity| searched>).",
+            "v_margin_kms=<the largest |velocity| searched, plus the barycentric motion for "
+            "topocentric data>).",
             stacklevel=3,
         )
 
@@ -1612,11 +1727,16 @@ def _global_light(first: VelocityTable) -> dict[str, np.ndarray]:
     blend best as a difference, with one amplitude negative, at every epoch of a pair that
     is never resolved. Before D68 the median was then taken over those epochs, and the
     held fractions, one of them negative, left every epoch of the table on a ridge.
+
+    An instrument none of whose epochs was measured (each had too few weighted pixels)
+    has no entry, and the held pass skips its epochs.
     """
     out = {}
     instruments = sorted(set(first.instrument))
     for inst in instruments:
         here = np.array([i == inst for i in first.instrument])
+        if not np.any(here & np.all(np.isfinite(first.light), axis=0)):
+            continue
         with np.errstate(invalid="ignore"):
             positive = here & np.all(np.isfinite(first.light) & (first.light > 0.0), axis=0)
             sel = positive & first.good & np.all(first.delta_chi2 > 9.0, axis=0)
@@ -1682,8 +1802,8 @@ def todcor(
         much (:meth:`LogGrid.covering`); otherwise a warning reports the shortfall.
     light
         Treatment of the templates' amplitudes, i.e. their light fractions.
-        ``"global"`` (default) fits them freely in every epoch, takes the weighted median
-        over the well-detected, unblended epochs of each instrument, and re-measures with
+        ``"global"`` (default) fits them freely in every epoch, takes the median over the
+        well-detected, unblended epochs of each instrument, and re-measures with
         them held fixed. A per-epoch light ratio is noisy, and a ratio fitted at a blended
         phase is not a measurement. ``"free"`` reports the per-epoch fit itself. An
         amplitude of that fit can be negative: templates that do not describe the
@@ -1827,7 +1947,9 @@ def todcor(
 
     if mode == "global":
         # The first pass supplies the light fractions only, so it does not search for the
-        # second minima that the blend flag of the table needs.
+        # second minima that the blend flag of the table needs. The second pass reuses the
+        # work that does not depend on the amplitudes (`_Reuse`).
+        reuse = _Reuse(budget=_REUSE_BYTES)
         first = _run(
             dataset,
             templates,
@@ -1844,8 +1966,10 @@ def todcor(
             phi_of,
             progress,
             blend=False,
+            reuse=reuse,
         )
         per_instrument = _global_light(first)
+        reuse.record = False
         table = _run(
             dataset,
             templates,
@@ -1861,6 +1985,7 @@ def todcor(
             scale,
             phi_of,
             progress,
+            reuse=reuse,
         )
         settings = dict(table.settings)
         settings["first_pass_light"] = first.light
@@ -1881,6 +2006,39 @@ def todcor(
         scale,
         phi_of,
         progress,
+    )
+
+
+def _check_defined(surface: np.ndarray, gram, valid_count, epoch_index: int, names) -> None:
+    """Raise where the coarse chi-square is NaN at every shift inside the range searched.
+
+    With the amplitudes solved, a template whose projected columns are zero over the
+    epoch's weighted pixels makes the normal matrix singular at every shift, and the
+    chi-square is undefined there. Such a template has no lines in the epoch's wavelength
+    range, or is on another wavelength scale. With the amplitudes held the chi-square
+    stays defined and that component is not measured. A surface with no shift inside the
+    range at all (``valid_count`` zero) is not an error: the epoch is flagged ``at_edge``.
+    """
+    in_range = surface[tuple(slice(0, max(int(c), 0)) for c in valid_count)]
+    if in_range.size == 0 or not np.isnan(in_range.flat[0]) or not np.all(np.isnan(in_range)):
+        return
+    gram = np.asarray(gram)
+    empty = [
+        name
+        for i, name in enumerate(names)
+        if not np.any(np.diagonal(gram[i, i])[: max(int(valid_count[i]), 0)])
+    ]
+    cause = (
+        f"the projected template(s) {empty} are zero over the epoch's weighted pixels at "
+        "every shift searched (no lines in its wavelength range, or another wavelength "
+        "medium), so their amplitudes are not determined"
+        if empty
+        else "the normal equations of the amplitudes are singular at every shift searched"
+    )
+    raise ValueError(
+        f"epoch {epoch_index}: the chi-square is undefined at every shift searched, because "
+        f"{cause}. Hold the light fractions (light=<fractions>) or use templates with "
+        "lines in this range"
     )
 
 
@@ -1922,11 +2080,12 @@ def _refine_at(
     work: _EpochWork,
     amps,
     amp_mode: str,
-    window: tuple[np.ndarray, np.ndarray],
+    window: tuple[np.ndarray, np.ndarray, np.ndarray],
     radius: int,
     n_fine: int,
     n_fine_raw: int,
     blend: tuple[float, float],
+    reuse: _Reuse | None = None,
 ):
     """The refined minimum of one epoch's chi-square reached from the integer shifts ``centre``.
 
@@ -1937,9 +2096,11 @@ def _refine_at(
     surface, and the lowest of these is kept. While the lowest point of the window is on
     its edge, an integer shift or the position a refinement reached, the minimum there is
     not bracketed, and the window is centred on that point and evaluated again, up to
-    ``_WINDOW_MOVES`` times. The window is kept inside ``window``, the shift range the
-    coarse pass searched, so that no reported velocity lies outside the requested
-    ``v_range``.
+    ``_WINDOW_MOVES`` times. ``window`` holds, per template, the lowest and the highest
+    start of the window and the last shift of the range the coarse pass searched. The
+    window is kept inside that range. Where the range is shorter than the window, the
+    shifts beyond its end are not searched, and a minimum at its end is on the edge. No
+    reported velocity therefore lies outside the requested ``v_range``.
 
     Returns the solution and the minima found. The solution is ``(chi2, position,
     amplitudes, refined, evaluated_start, fine, terms, edge)``. ``position`` is in pixels
@@ -1954,10 +2115,10 @@ def _refine_at(
     solution and the solution among them. Each window is also refined from its local minima
     that can lie within the blend threshold of its lowest (``blend`` sets that threshold,
     :func:`_blend_slack`), so that a second minimum inside the window of the first is
-    recorded.
+    recorded. The terms of each window are taken from ``reuse`` where it holds them.
     """
     n_tmpl = centre.shape[0]
-    window_lo, window_hi = window
+    window_lo, window_hi, range_end = window
     last = n_fine_raw - 1
     inside = None  # the lowest refined minimum inside a window, with that window's terms
     found = []  # every refined minimum inside a window, in the form of the solution
@@ -1967,18 +2128,7 @@ def _refine_at(
         fine = np.stack([evaluated_start[i] + np.arange(n_fine) for i in range(n_tmpl)]).astype(
             np.int32
         )
-        out = _epoch_terms(
-            stack,
-            work.rows,
-            work.cols,
-            work.vals,
-            work.z,
-            work.w,
-            jnp.asarray(fine),
-            work.basis,
-            chunk=_SHIFT_CHUNK,
-        )
-        terms = _terms_numpy(out, n_fine_raw)
+        out, terms = _terms_at(stack, work, fine, reuse, n_fine_raw)
         if amps is None:
             fine_surface = np.asarray(_chi2_grid_free(*out))
         else:
@@ -1986,6 +2136,20 @@ def _refine_at(
                 _chi2_grid_fixed(*out, jnp.asarray(amps), free_scale=amp_mode == "scale")
             )
         fine_surface = fine_surface[(slice(0, n_fine_raw),) * n_tmpl]
+        # The last position of the window inside the requested range, per template. It is
+        # the end of the window unless the range is shorter than the window.
+        upper = np.minimum(last, range_end - evaluated_start)
+        if np.any(upper < last):
+            fine_surface = np.array(fine_surface)
+            for i in range(n_tmpl):
+                index = [slice(None)] * n_tmpl
+                index[i] = slice(int(upper[i]) + 1, None)
+                fine_surface[tuple(index)] = np.inf
+        if np.all(np.isnan(fine_surface)):
+            raise ValueError(
+                f"epoch {work.index}: the chi-square is undefined at every shift of the "
+                "refinement window (the normal equations of the amplitudes are singular)"
+            )
         # The integer shifts do not resolve which of two basins inside the window is the
         # lower, and a basin need not contain a local minimum of the integer shifts, so
         # the refinement starts from each candidate and, in the first window, from the
@@ -1996,19 +2160,19 @@ def _refine_at(
         asked = centre - evaluated_start
         if (
             attempt == 0
-            and np.all((asked >= 0) & (asked <= last))
+            and np.all((asked >= 0) & (asked <= upper))
             and not any(np.array_equal(asked, start) for start in starts)
         ):
             starts.append(asked)
         lowest = None
         for start in starts:
-            result = _refine(terms, start, amps, amp_mode)
+            result = _refine(terms, start, amps, amp_mode, upper)
             lowest = _lower_of(lowest, result)
-            if result[3] and np.all((result[1] > 0.0) & (result[1] < last)):
+            if result[3] and np.all((result[1] > 0.0) & (result[1] < upper)):
                 bracketed = (*result, evaluated_start, fine, terms, edge)
                 inside = _lower_of(inside, bracketed)
                 found.append(bracketed)
-        on_edge = (lowest[1] <= 0.0) | (lowest[1] >= last)
+        on_edge = (lowest[1] <= 0.0) | (lowest[1] >= upper)
         if not on_edge.any():
             break
         fine_start = np.clip(
@@ -2143,6 +2307,7 @@ def _run(
     phi_of,
     progress,
     blend: bool = True,
+    reuse: _Reuse | None = None,
 ) -> VelocityTable:
     n_tmpl = len(templates)
     names = tuple(t.name for t in templates)
@@ -2152,38 +2317,52 @@ def _run(
     amp_mode = "free" if mode == "free" else ("scale" if scale == "free" else "fixed")
 
     # The templates are convolved once per instrument (per declared width, for a PER_EPOCH
-    # instrument). The narrowest sigma sets the coarse step.
-    convolved: dict[tuple, np.ndarray] = {}
-    narrowest_px = np.inf
+    # instrument). The narrowest sigma sets the coarse step. The stacks are padded with
+    # zeros to a bucketed length for the jitted terms; the line strengths of the
+    # exchanged-pair weights come from the stacks as convolved.
     epoch_keys = [_lsf_key(epoch, lsf_sigma_v) for epoch in dataset]
-    for key in dict.fromkeys(epoch_keys):
-        stack, sigma_px = _convolved_templates(
-            templates, grid, key[0], lsf_sigma_v, lsf_anchors_angstrom, epoch_sigma_kms=key[1]
-        )
-        convolved[key] = stack
-        narrowest_px = min(narrowest_px, sigma_px)
-    if not np.isfinite(narrowest_px):
-        narrowest_px = 0.0
+    if reuse is not None and reuse.templates is not None:
+        stacks, strength, narrowest_px = reuse.templates
+    else:
+        stacks, strength = {}, {}
+        narrowest_px = np.inf
+        for key in dict.fromkeys(epoch_keys):
+            stack, sigma_px = _convolved_templates(
+                templates, grid, key[0], lsf_sigma_v, lsf_anchors_angstrom, epoch_sigma_kms=key[1]
+            )
+            stacks[key] = jnp.asarray(_pad_grid(stack))
+            strength[key] = np.abs(stack).sum(axis=1)
+            narrowest_px = min(narrowest_px, sigma_px)
+        if not np.isfinite(narrowest_px):
+            narrowest_px = 0.0
+        if reuse is not None:
+            reuse.templates = (stacks, strength, narrowest_px)
     if coarse_step is None:
         coarse_step = max(1, math.floor(narrowest_px))
     if coarse_step < 1:
         raise ValueError("coarse_step must be at least 1")
-    if 0.0 < narrowest_px < 2.0:
+    line_px = min(_line_width_px(templates, grid, key, lsf_sigma_v) for key in stacks)
+    if 0.0 < line_px < 2.0:
         warnings.warn(
-            f"the narrowest instrument LSF is {narrowest_px:.2f} template pixels wide; the "
-            "shift interpolation's pixel-locking ripple is of order 0.1/sigma_px^2 pixels, so "
-            "build the template grid at least three pixels per LSF sigma for sub-pixel accuracy",
+            f"the narrowest lines of the templates at the instrument resolution are "
+            f"{line_px:.2f} template pixels wide (sigma); the shift interpolation's "
+            "pixel-locking ripple is of order 0.1/sigma_px^2 pixels, so build the template "
+            "grid at least three pixels per LSF sigma for sub-pixel accuracy",
             stacklevel=3,
         )
-    stacks = {key: jnp.asarray(stack) for key, stack in convolved.items()}
 
     # Shift ranges in log-wavelength pixels (barycentric); composed per epoch below.
     xi_lo = np.asarray(log_doppler_shift(ranges[:, 0], relativistic=relativistic)) / grid.dx
     xi_hi = np.asarray(log_doppler_shift(ranges[:, 1], relativistic=relativistic)) / grid.dx
     # In blocks of epochs: outside jit the conversion is compiled once per array length.
     bary_all = _in_epoch_blocks(grid.velocity_to_pixels, dataset.v_bary)
-    bary_span = (bary_all.max() - bary_all.min()) if frame == "topocentric" else 0.0
-    _check_margins(grid, dataset, float(xi_lo.min() - bary_span), float(xi_hi.max() + bary_span))
+    # The shifts searched at an epoch are xi - bary, so over the dataset they run from
+    # xi_lo - max(bary) to xi_hi - min(bary).
+    if frame == "topocentric":
+        shift_lo, shift_hi = xi_lo.min() - bary_all.max(), xi_hi.max() - bary_all.min()
+    else:
+        shift_lo, shift_hi = xi_lo.min(), xi_hi.max()
+    _check_margins(grid, dataset, float(shift_lo), float(shift_hi))
     n_coarse = math.ceil((xi_hi - xi_lo).max() / coarse_step) + 1
     n_coarse = _round_up(n_coarse, _SHIFT_CHUNK)
     radius = coarse_step + 2
@@ -2218,6 +2397,16 @@ def _run(
         if work.n_good < max(8, n_par + 2):
             warnings.warn(f"epoch {j}: only {work.n_good} weighted pixels; skipped", stacklevel=3)
             continue
+        if mode == "global" and epoch.instrument not in amplitudes:
+            # The free pass, which has more parameters and so needs more pixels, measured
+            # no epoch of this instrument (`_global_light`).
+            warnings.warn(
+                f"epoch {j}: no light fractions were measured for instrument "
+                f"{epoch.instrument!r}, whose epochs all had too few weighted pixels for the "
+                "free pass; skipped",
+                stacklevel=3,
+            )
+            continue
         dof = max(work.n_good - n_par, 1)
         threshold = _blend_threshold(dof, errors) if blend else (0.0, 0.0)
         bary = work.bary_pix if frame == "topocentric" else 0.0
@@ -2233,17 +2422,7 @@ def _run(
         deltas = np.stack(
             [starts[i] + coarse_step * np.arange(n_coarse) for i in range(n_tmpl)]
         ).astype(np.int32)
-        out = _epoch_terms(
-            stacks[epoch_keys[j]],
-            work.rows,
-            work.cols,
-            work.vals,
-            work.z,
-            work.w,
-            jnp.asarray(deltas),
-            work.basis,
-            chunk=_SHIFT_CHUNK,
-        )
+        out, _ = _terms_at(stacks[epoch_keys[j]], work, deltas, reuse)
         valid_count = np.array(
             [min(n_coarse, (ends[i] - starts[i]) // coarse_step + 1) for i in range(n_tmpl)]
         )
@@ -2258,6 +2437,7 @@ def _run(
             index = [slice(None)] * n_tmpl
             index[i] = slice(int(valid_count[i]), None)
             surface[tuple(index)] = np.inf
+        _check_defined(surface, out[1], valid_count, j, names)
         # The coarse stride does not resolve which of two basins of similar depth is the
         # lower, so every coarse minimum that can be the lowest (`_candidate_minima`) is
         # refined and the lowest refined chi-square is the solution. The first candidate
@@ -2269,11 +2449,12 @@ def _run(
             work,
             amps,
             amp_mode,
-            (starts, np.maximum(starts, ends - (n_fine_raw - 1))),
+            (starts, np.maximum(starts, ends - (n_fine_raw - 1)), ends),
             radius,
             n_fine,
             n_fine_raw,
             threshold,
+            reuse,
         )
         best = None
         minima = []  # every refined minimum of the epoch: its chi-square and its shifts
@@ -2297,10 +2478,9 @@ def _run(
         # the sampling bound of the lowest coarse minimum, are above the minimum found by
         # more than the blend threshold: the lines do not overlap there, and the exchanged
         # pair is a basin of its own that the coarse minima cover.
-        strength = np.abs(convolved[epoch_keys[j]]).sum(axis=1)
         allowance = 2.0 * (float(surface[tuple(coarse_starts[0])]) - floors[0])
         for i, k in itertools.combinations(range(n_tmpl), 2):
-            weights = np.asarray(best[2], dtype=np.float64) * strength
+            weights = np.asarray(best[2], dtype=np.float64) * strength[epoch_keys[j]]
             if not (np.all(np.isfinite(weights[[i, k]])) and np.all(weights[[i, k]] > 0.0)):
                 continue
             exchanged = _exchanged_shifts(best[4] + best[1], weights, i, k)
@@ -2526,17 +2706,7 @@ def todcor_surface(
     n_shift = int(((ends - starts) // step).max()) + 1
     n_pad = _round_up(n_shift, _SHIFT_CHUNK)
     deltas = np.stack([starts[i] + step * np.arange(n_pad) for i in range(2)]).astype(np.int32)
-    out = _epoch_terms(
-        jnp.asarray(stack),
-        work.rows,
-        work.cols,
-        work.vals,
-        work.z,
-        work.w,
-        jnp.asarray(deltas),
-        work.basis,
-        chunk=_SHIFT_CHUNK,
-    )
+    out, _ = _terms_at(jnp.asarray(_pad_grid(stack)), work, deltas, None)
     if fixed is None:
         surface = np.asarray(_chi2_grid_free(*out))[:n_shift, :n_shift]
     else:
@@ -2629,11 +2799,20 @@ def todcor_batch(
     """
     if on_error not in ("record", "raise"):
         raise ValueError("on_error must be 'record' or 'raise'")
+    per_star_templates = isinstance(templates, Mapping)
+    missing = [star for star in datasets if per_star_templates and star not in templates]
+    if missing and on_error == "raise":
+        raise ValueError(f"templates has no entry for the star(s) {missing}")
     tables: dict[str, VelocityTable] = {}
     failures: dict[str, str] = {}
     seconds: dict[str, float] = {}
     for star, dataset in datasets.items():
-        per_star = templates[star] if isinstance(templates, Mapping) else templates
+        if star in missing:
+            failures[star] = "ValueError: templates has no entry for this star"
+            if progress:
+                print(f"{star}: FAILED (no templates)")
+            continue
+        per_star = templates[star] if per_star_templates else templates
         t0 = time.perf_counter()
         try:
             tables[star] = todcor(dataset, per_star, **kwargs)
