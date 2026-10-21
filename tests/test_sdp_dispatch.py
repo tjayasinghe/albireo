@@ -152,7 +152,7 @@ def write_sdp(
     for name, _tutyp, _tucd, unit, values in columns:
         array = shorthand[values] if isinstance(values, str) else np.asarray(values)
         integer = np.issubdtype(array.dtype, np.integer)
-        code = "J" if integer else "D"
+        code = "B" if array.dtype == np.uint8 else "J" if integer else "D"
         if n_rows > 1:
             fits_columns.append(fits.Column(name=name, format=code, unit=unit, array=array))
         else:
@@ -538,6 +538,20 @@ def test_a_flag_column_keeps_its_integer_type(tmp_path):
     raw = read_spectrum(write_sdp(tmp_path / "i.fits", layout, lo=435.0, step=0.005))
     assert raw.quality.dtype == np.dtype(np.int32)
     assert np.array_equal(raw.bad_pixels, quality != 0)
+
+
+def test_a_one_byte_flag_column_is_copied_out_of_the_table(tmp_path):
+    """A one-byte column needs no conversion, and a view of it holds the whole table buffer."""
+    quality = np.zeros(3000, dtype=np.uint8)
+    quality[10:20] = 4
+    layout = [*BLOEM[:3], ("QUAL_REDUCED", QUAL_V2, "meta.code.qual", "", quality)]
+    raw = read_spectrum(write_sdp(tmp_path / "b.fits", layout, lo=435.0, step=0.005))
+    assert raw.quality.dtype == np.dtype(np.uint8)
+    assert np.array_equal(raw.bad_pixels, quality != 0)
+    root = raw.quality
+    while isinstance(root.base, np.ndarray):
+        root = root.base
+    assert root.base is None and root.nbytes == raw.quality.nbytes
 
 
 def test_wavelengths_padded_with_nan_are_left_out(tmp_path):

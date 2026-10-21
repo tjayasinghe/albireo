@@ -48,6 +48,7 @@ Requires ``astropy`` (``pip install "albireo[io]"``); the rest of albireo does n
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import glob
 import math
@@ -623,8 +624,10 @@ def _read_bintable(hdulist, path: str, wave_scale: float | None) -> _TableRead |
         cell = np.asarray(values[0] if vector else values)
         if keep_integer and np.issubdtype(cell.dtype, np.integer):
             # A flag column is kept in its own integer type, in native byte order: as
-            # float64 it would take eight bytes per pixel, as much as the flux.
-            return cell.astype(cell.dtype.newbyteorder("="), copy=False).ravel()
+            # float64 it would take eight bytes per pixel, as much as the flux. The copy is
+            # needed for a one-byte column, which needs no conversion: a view would keep
+            # the whole table buffer, flux and errors included, in memory.
+            return np.array(cell, dtype=cell.dtype.newbyteorder("=")).ravel()
         return np.asarray(cell, dtype=np.float64).ravel()
 
     wave = read(wave_col)
@@ -872,7 +875,10 @@ def _observatory_location(header, path: str):
     The site coordinates may be numbers or sexagesimal strings (``LONGITUD = '111:36:00'``)
     and are read as east-positive degrees. Some observatories write a west-positive
     longitude, which the value does not reveal; for such files pass ``bjd=`` and
-    ``v_bary=`` to :func:`read_spectrum`. A value that cannot be parsed counts as absent.
+    ``v_bary=`` to :func:`read_spectrum`. A longitude or latitude that cannot be parsed
+    counts as absent. An elevation that cannot be parsed is taken as 0 m with a warning;
+    for a site below 5 km this changes the BJD by less than 20 microseconds and the
+    barycentric velocity by less than 0.4 m/s.
     """
     from astropy import units as u
     from astropy.coordinates import EarthLocation
@@ -883,17 +889,10 @@ def _observatory_location(header, path: str):
     lat = _degrees(
         _header_get(header, ("ESO TEL GEOLAT", "GEOLAT", "OBS-LAT", "LATITUDE", "TELLAT"))
     )
-    elev = _header_get(
-        header, ("ESO TEL GEOELEV", "GEOELEV", "OBS-ELEV", "ALTITUDE", "TELALT"), 0.0
-    )
-    try:
-        height = float(elev)
-    except (TypeError, ValueError):
-        height = 0.0
     try:
         if lon is not None and lat is not None:
             return EarthLocation.from_geodetic(
-                lon=lon * u.deg, lat=lat * u.deg, height=height * u.m
+                lon=lon * u.deg, lat=lat * u.deg, height=_site_height(header, path) * u.m
             )
         x = header.get("OBSGEO-X")
         y = header.get("OBSGEO-Y")
@@ -903,6 +902,24 @@ def _observatory_location(header, path: str):
     except (TypeError, ValueError):
         return None
     return None
+
+
+def _site_height(header, path: str) -> float:
+    """The site elevation in metres; 0 when the header gives none or an unreadable one."""
+    found = _header_lookup(header, ("ESO TEL GEOELEV", "GEOELEV", "OBS-ELEV", "ALTITUDE", "TELALT"))
+    if found is None:
+        return 0.0
+    try:
+        return float(found[1])
+    except (TypeError, ValueError):
+        warnings.warn(
+            f"{path}: the site elevation {found[0]} = {found[1]!r} is not a number of "
+            "metres and is taken as 0 m. For a site below 5 km this changes the BJD by less "
+            "than 20 microseconds and the barycentric velocity by less than 0.4 m/s.",
+            RuntimeWarning,
+            stacklevel=6,
+        )
+        return 0.0
 
 
 def _sexagesimal(value: object) -> float | None:
@@ -1005,7 +1022,14 @@ def _date_obs_mjd_utc(date_obs: object, header, path: str) -> tuple[float, str]:
         if clock is not None:
             hours, minutes, seconds = clock.groups()
             stamp = f"{text}T{int(hours):02d}:{minutes}:{seconds}"
-            return float(Time(stamp, format="isot", scale="utc").mjd), f"DATE-OBS + {key}"
+            try:
+                return float(Time(stamp, format="isot", scale="utc").mjd), f"DATE-OBS + {key}"
+            except ValueError as error:
+                # An hour of 24 or more, or a minute of 60 or more, matches the pattern.
+                raise ValueError(
+                    f"{path}: DATE-OBS = {date_obs!r} and {key} = {value!r} do not form a "
+                    "valid UTC time. Pass bjd= to read_spectrum with the mid-exposure time."
+                ) from error
     raise ValueError(
         f"{path}: DATE-OBS = {date_obs!r} gives the date of the observation but not the time, "
         f"and none of {', '.join(_START_TIME_KEYS)} gives it as hh:mm:ss. Read as midnight, "
@@ -1736,13 +1760,18 @@ def _read_many(
     raws: list[RawSpectrum] = []
     owners: list[int] = []  # the file each recorded warning came from, by index
     caught: list = []
+    failed = True
     try:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             for index, path in enumerate(paths):
                 raw = read_spectrum(path, instrument=instrument, frame=frame, **options)
                 raws.append(raw if trim_to is None else _trimmed(raw, trim_to))
+                # Released before the next file is read, so that a cut spectrum's full
+                # arrays are not held while the next file's are loaded.
+                del raw
                 owners.extend([index] * (len(caught) - len(owners)))
+        failed = False
     finally:
         owners.extend([len(raws)] * (len(caught) - len(owners)))
         collapsed: dict[tuple, list] = {}
@@ -1759,7 +1788,13 @@ def _read_many(
                 message = (
                     f"{first}\n(the same for {len(files) - 1} more of the {len(paths)} files.)"
                 )
-            warnings.warn(message, category, stacklevel=3)
+            if failed:
+                # Under a filter that turns warnings into errors, a warning raised here
+                # would replace the exception of the failing file.
+                with contextlib.suppress(Warning):
+                    warnings.warn(message, category, stacklevel=3)
+            else:
+                warnings.warn(message, category, stacklevel=3)
     return raws
 
 

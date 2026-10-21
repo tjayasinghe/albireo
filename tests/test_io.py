@@ -365,6 +365,20 @@ def test_the_warnings_of_earlier_files_survive_a_file_that_fails(tmp_path):
             read_raw_spectra([str(good), str(empty)])
 
 
+def test_a_warning_filter_raising_errors_leaves_the_failure_in_place(tmp_path):
+    """Raised by the filter, an earlier file's warning would replace the failing file's error."""
+    good = write_eso_phase3(tmp_path / "a.fits", specsys=None)
+    empty = tmp_path / "b.fits"
+    fits.PrimaryHDU().writeto(empty)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(ValueError, match="no 1-D spectrum found"):
+            read_raw_spectra([str(good), str(empty)])
+        # Without a failure the filter applies to the collapsed warnings as before.
+        with pytest.raises(RuntimeWarning, match="no SPECSYS"):
+            read_raw_spectra([str(good)])
+
+
 def test_cutting_to_the_region_as_the_files_are_read_leaves_the_epochs_unchanged(tmp_path):
     """Only the padded region is kept from each file, and every epoch is the same bit for bit."""
     for k, t in enumerate((53243.5, 53200.5)):

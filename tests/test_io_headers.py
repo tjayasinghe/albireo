@@ -141,6 +141,13 @@ def test_a_date_without_any_time_is_refused(tmp_path):
     assert read_spectrum(path, bjd=2453245.75).bjd == 2453245.75
 
 
+def test_a_clock_time_past_the_end_of_the_day_is_refused_with_advice(tmp_path):
+    """'24:00:00' matches hh:mm:ss, and astropy's own error does not say what to pass."""
+    path = write_image(tmp_path / "t.fits", MJD_OBS=None, DATE_OBS="2004-08-28", UT="24:00:00")
+    with pytest.raises(ValueError, match=r"do not form a valid UTC time\. Pass bjd="):
+        read_spectrum(path)
+
+
 # -- the site and the target ----------------------------------------------------
 
 
@@ -160,6 +167,17 @@ def test_a_sexagesimal_site_is_read(tmp_path):
     assert text.v_bary_source == "computed with astropy"
     assert abs(text.bjd - numeric.bjd) * 86400.0 < 1e-3
     assert text.v_bary == pytest.approx(numeric.v_bary, abs=1e-6)
+
+
+def test_an_unreadable_site_elevation_is_taken_as_zero_with_a_warning(tmp_path):
+    """'2335 m' is not a number; the elevation moves the BJD by microseconds only."""
+    cards = {"HIERARCH ESO DRS BARYCORR": None, "HIERARCH ESO TEL GEOELEV": None}
+    sea_level = read_spectrum(write_image(tmp_path / "z.fits", **cards))
+    with pytest.warns(RuntimeWarning, match="site elevation ALTITUDE = '2335 m'"):
+        unit = read_spectrum(write_image(tmp_path / "u.fits", ALTITUDE="2335 m", **cards))
+    assert unit.bjd == sea_level.bjd
+    assert unit.v_bary == sea_level.v_bary
+    assert unit.v_bary_source == "computed with astropy"
 
 
 def test_sexagesimal_target_coordinates_are_read_in_hours_and_degrees(tmp_path):
