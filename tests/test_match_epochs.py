@@ -731,9 +731,10 @@ def test_a_repeated_epoch_fit_reuses_its_programs(plain, library, compilations):
     """The objective's six programs and the scan's are kept and reused by a second fit.
 
     A second fit of the same declaration, with the statistics passed, compiled ten programs
-    and took 2.9 s on this problem; it now compiles two and takes 0.5 s. The two that
-    remain are the eager scans of the band product, which ``BlockTridiagonal.matvec``
-    builds anew on every call, in the nulls of the fit.
+    and took 2.9 s on this problem. It now compiles none. The last two were the eager
+    scans of ``solver.block_cholesky`` and ``solver.selected_inverse_diag`` in the spectra
+    and errors of the disentangling (``Fit._spectra_and_std``), whose loop bodies were
+    built anew on every call.
     """
     fit, _ = plain
     stats = fit.epoch_statistics()
@@ -749,7 +750,7 @@ def test_a_repeated_epoch_fit_reuses_its_programs(plain, library, compilations):
         )
 
     run()
-    assert compilations(run) <= 2
+    assert compilations(run) == 0
 
 
 def test_an_epoch_objective_is_kept_for_one_signature():
